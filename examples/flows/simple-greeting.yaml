@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=../schema/flow.schema.json
+
+# Simple Greeting Flow
+# Demonstrates basic flow structure with validation and error handling
+
+settings:
+  start_step: greet
+  max_total_steps: 10
+
+steps:
+  greet:
+    description: "Generate a greeting message"
+    produces_data:
+      - greeting
+      - user_name
+    transitions:
+      success: validate
+      failure: error_state
+
+  validate:
+    description: "Validate the greeting was generated correctly"
+    expects_data:
+      - greeting
+      - user_name
+    produces_data:
+      - is_valid
+    transitions:
+      success: personalize
+      invalid: error_state
+      failure: error_state
+
+  personalize:
+    description: "Create personalized response"
+    expects_data:
+      - greeting
+      - user_name
+    produces_data:
+      - final_message
+    transitions:
+      success: success_state
+      failure: error_state
+
+terminal_states:
+  success_state:
+    description: "Flow completed successfully"
+    return_intent: "success"
+    return_artifacts:
+      - final_message
+      - user_name
+
+  error_state:
+    description: "Flow encountered an error"
+    return_intent: "error"
+    return_artifacts: false

@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../schema/flow.schema.json
+
+# Order Processing Workflow
+# Demonstrates a practical e-commerce order flow with inventory, payment, and shipping
+
+settings:
+  start_step: validate_order
+  max_total_steps: 20
+  timeout_ms: 120000
+
+steps:
+  validate_order:
+    description: "Validate order details"
+    expects_data:
+      - order
+    produces_data:
+      - validated_order
+      - validation_errors
+    transitions:
+      valid: check_inventory
+      invalid: order_invalid
+      failure: error_state
+
+  check_inventory:
+    description: "Check product availability"
+    expects_data:
+      - validated_order
+    produces_data:
+      - inventory_status
+      - reserved_items
+    transitions:
+      available: process_payment
+      partial: partial_availability
+      unavailable: out_of_stock
+      failure: error_state
+    retry:
+      max_attempts: 2
+      delay_ms: 500
+
+  partial_availability:
+    description: "Handle partial availability - ask user to proceed or cancel"
+    expects_data:
+      - validated_order
+      - inventory_status
+    produces_data:
+      - user_decision
+      - adjusted_order
+    transitions:
+      proceed: process_payment
+      cancel: order_cancelled
+      failure: error_state
+
+  process_payment:
+    description: "Process payment for the order"
+    expects_data:
+      - validated_order
+      - reserved_items
+    produces_data:
+      - payment_result
+      - transaction_id
+    transitions:
+      success: create_shipment
+      declined: payment_failed
+      failure: error_state
+    retry:
+      max_attempts: 3
+      delay_ms: 2000
+      backoff_multiplier: 1.5
+
+  create_shipment:
+    description: "Create shipping label and schedule pickup"
+    expects_data:
+      - validated_order
+      - transaction_id
+    produces_data:
+      - shipment_id
+      - tracking_number
+      - estimated_delivery
+    transitions:
+      success: order_complete
+      failure: shipment_error
+
+  shipment_error:
+    description: "Handle shipment creation failure - refund and notify"
+    expects_data:
+      - transaction_id
+      - validated_order
+    produces_data:
+      - refund_status
+    transitions:
+      refunded: order_refunded
+      failure: manual_intervention
+
+terminal_states:
+  order_complete:
+    description: "Order successfully processed"
+    return_intent: "success"
+    return_artifacts:
+      - transaction_id
+      - tracking_number
+      - estimated_delivery
+
+  order_invalid:
+    description: "Order validation failed"
+    return_intent: "invalid_order"
+    return_artifacts:
+      - validation_errors
+
+  out_of_stock:
+    description: "Products out of stock"
+    return_intent: "out_of_stock"
+    return_artifacts:
+      - inventory_status
+
+  order_cancelled:
+    description: "Order cancelled by user"
+    return_intent: "cancelled"
+    return_artifacts: false
+
+  payment_failed:
+    description: "Payment was declined"
+    return_intent: "payment_declined"
+    return_artifacts:
+      - payment_result
+
+  order_refunded:
+    description: "Order refunded due to shipment failure"
+    return_intent: "refunded"
+    return_artifacts:
+      - refund_status
+      - transaction_id
+
+  manual_intervention:
+    description: "Requires manual intervention"
+    return_intent: "manual_required"
+    return_artifacts:
+      - transaction_id
+      - validated_order
+
+  error_state:
+    description: "System error"
+    return_intent: "error"
+    return_artifacts: false

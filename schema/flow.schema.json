@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/yaml-flow/schema/flow.json",
+  "title": "YamlFlow Configuration",
+  "description": "Schema for yaml-flow workflow definitions",
+  "type": "object",
+  "required": ["settings", "steps", "terminal_states"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Optional flow identifier"
+    },
+    "settings": {
+      "type": "object",
+      "description": "Flow-level settings",
+      "required": ["start_step"],
+      "properties": {
+        "start_step": {
+          "type": "string",
+          "description": "Step to start execution from"
+        },
+        "max_total_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 100,
+          "description": "Maximum steps before forced termination"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Flow timeout in milliseconds"
+        }
+      },
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "object",
+      "description": "Step definitions",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/step"
+      }
+    },
+    "terminal_states": {
+      "type": "object",
+      "description": "Terminal state definitions",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/terminal_state"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "step": {
+      "type": "object",
+      "description": "Individual step configuration",
+      "required": ["transitions"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        },
+        "expects_data": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Data keys this step expects as input"
+        },
+        "produces_data": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Data keys this step produces as output"
+        },
+        "transitions": {
+          "type": "object",
+          "description": "Mapping of result -> next step name",
+          "additionalProperties": { "type": "string" },
+          "minProperties": 1
+        },
+        "retry": {
+          "$ref": "#/definitions/retry_config"
+        },
+        "circuit_breaker": {
+          "$ref": "#/definitions/circuit_breaker_config"
+        }
+      },
+      "additionalProperties": false
+    },
+    "terminal_state": {
+      "type": "object",
+      "description": "Terminal state configuration",
+      "required": ["return_intent"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        },
+        "return_intent": {
+          "type": "string",
+          "description": "Intent/status to return (e.g., 'success', 'error')"
+        },
+        "return_artifacts": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "boolean", "const": false }
+          ],
+          "description": "Data key(s) to include in result, or false to exclude"
+        },
+        "expects_data": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Data keys this terminal state expects"
+        }
+      },
+      "additionalProperties": false
+    },
+    "retry_config": {
+      "type": "object",
+      "description": "Retry configuration for step failures",
+      "required": ["max_attempts"],
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum retry attempts"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Delay between retries in ms"
+        },
+        "backoff_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Backoff multiplier (e.g., 2 for exponential)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "circuit_breaker_config": {
+      "type": "object",
+      "description": "Circuit breaker configuration for loops",
+      "required": ["max_iterations", "on_open"],
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum iterations before circuit opens"
+        },
+        "on_open": {
+          "type": "string",
+          "description": "Step to transition to when circuit opens"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

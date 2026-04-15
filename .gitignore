@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+coverage/
+.nyc_output/
+
+# Flow data (from examples)
+flow-data/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local

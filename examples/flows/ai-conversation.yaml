@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../schema/flow.schema.json
+
+# AI Conversation Flow with Validation Loop
+# Demonstrates retry logic, circuit breakers, and multi-step AI workflows
+
+settings:
+  start_step: generate_response
+  max_total_steps: 50
+  timeout_ms: 60000
+
+steps:
+  generate_response:
+    description: "Generate AI response based on user input"
+    expects_data:
+      - user_message
+      - conversation_history
+    produces_data:
+      - ai_response
+      - confidence_score
+    transitions:
+      success: validate_response
+      failure: error_state
+    retry:
+      max_attempts: 3
+      delay_ms: 1000
+      backoff_multiplier: 2
+
+  validate_response:
+    description: "Validate the AI response meets quality criteria"
+    expects_data:
+      - ai_response
+      - confidence_score
+    produces_data:
+      - validation_result
+      - validation_feedback
+    transitions:
+      valid: check_approval
+      needs_refinement: refine_response
+      failure: error_state
+
+  refine_response:
+    description: "Refine AI response based on validation feedback"
+    expects_data:
+      - ai_response
+      - validation_feedback
+      - user_message
+    produces_data:
+      - ai_response
+      - confidence_score
+    transitions:
+      success: validate_response
+      failure: error_state
+    circuit_breaker:
+      max_iterations: 3
+      on_open: max_refinements
+
+  check_approval:
+    description: "Present response and check for user approval"
+    expects_data:
+      - ai_response
+    produces_data:
+      - user_approved
+      - user_feedback
+    transitions:
+      approved: success_state
+      rejected: incorporate_feedback
+      timeout: timeout_state
+
+  incorporate_feedback:
+    description: "Incorporate user feedback into response"
+    expects_data:
+      - ai_response
+      - user_feedback
+      - user_message
+    produces_data:
+      - ai_response
+      - confidence_score
+    transitions:
+      success: validate_response
+      failure: error_state
+    circuit_breaker:
+      max_iterations: 5
+      on_open: max_feedback_loops
+
+terminal_states:
+  success_state:
+    description: "User approved the AI response"
+    return_intent: "approved"
+    return_artifacts:
+      - ai_response
+      - conversation_history
+
+  error_state:
+    description: "Flow encountered an error"
+    return_intent: "error"
+    return_artifacts: false
+
+  timeout_state:
+    description: "User did not respond in time"
+    return_intent: "timeout"
+    return_artifacts:
+      - ai_response
+
+  max_refinements:
+    description: "Maximum refinement attempts reached"
+    return_intent: "max_refinements"
+    return_artifacts:
+      - ai_response
+      - validation_feedback
+
+  max_feedback_loops:
+    description: "Maximum feedback incorporation attempts reached"
+    return_intent: "max_feedback"
+    return_artifacts:
+      - ai_response
+      - user_feedback

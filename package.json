@@ -1,0 +1,83 @@
+{
+  "name": "yaml-flow",
+  "version": "1.0.0",
+  "description": "Isomorphic workflow engine with declarative YAML flows, pluggable storage, and pure function handlers",
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "require": "./dist/core/index.cjs"
+    },
+    "./stores/memory": {
+      "types": "./dist/stores/memory.d.ts",
+      "import": "./dist/stores/memory.js",
+      "require": "./dist/stores/memory.cjs"
+    },
+    "./stores/localStorage": {
+      "types": "./dist/stores/localStorage.d.ts",
+      "import": "./dist/stores/localStorage.js",
+      "require": "./dist/stores/localStorage.cjs"
+    },
+    "./stores/file": {
+      "types": "./dist/stores/file.d.ts",
+      "import": "./dist/stores/file.js",
+      "require": "./dist/stores/file.cjs"
+    }
+  },
+  "browser": {
+    "./stores/file": false
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4"
+  },
+  "optionalDependencies": {
+    "ajv": "^8.12.0"
+  },
+  "keywords": [
+    "workflow",
+    "state-machine",
+    "yaml",
+    "flow",
+    "isomorphic",
+    "browser",
+    "nodejs",
+    "declarative"
+  ],
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
