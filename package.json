@@ -1,7 +1,7 @@
 {
   "name": "yaml-flow",
-  "version": "1.0.0",
-  "description": "Isomorphic workflow engine with declarative YAML flows, pluggable storage, and pure function handlers",
+  "version": "2.0.0",
+  "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
   "type": "module",
@@ -14,10 +14,20 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
-    "./core": {
-      "types": "./dist/core/index.d.ts",
-      "import": "./dist/core/index.js",
-      "require": "./dist/core/index.cjs"
+    "./step-machine": {
+      "types": "./dist/step-machine/index.d.ts",
+      "import": "./dist/step-machine/index.js",
+      "require": "./dist/step-machine/index.cjs"
+    },
+    "./event-graph": {
+      "types": "./dist/event-graph/index.d.ts",
+      "import": "./dist/event-graph/index.js",
+      "require": "./dist/event-graph/index.cjs"
+    },
+    "./stores": {
+      "types": "./dist/stores/index.d.ts",
+      "import": "./dist/stores/index.js",
+      "require": "./dist/stores/index.cjs"
     },
     "./stores/memory": {
       "types": "./dist/stores/memory.d.ts",

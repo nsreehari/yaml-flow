@@ -5,17 +5,17 @@
  * Data is lost when the process exits - use for testing or short-lived flows.
  */
 
-import type { FlowStore, RunState } from '../core/types.js';
+import type { StepMachineStore, StepMachineState } from '../step-machine/types.js';
 
-export class MemoryStore implements FlowStore {
-  private runs: Map<string, RunState> = new Map();
+export class MemoryStore implements StepMachineStore {
+  private runs: Map<string, StepMachineState> = new Map();
   private data: Map<string, Record<string, unknown>> = new Map();
 
-  async saveRunState(runId: string, state: RunState): Promise<void> {
+  async saveRunState(runId: string, state: StepMachineState): Promise<void> {
     this.runs.set(runId, { ...state });
   }
 
-  async loadRunState(runId: string): Promise<RunState | null> {
+  async loadRunState(runId: string): Promise<StepMachineState | null> {
     const state = this.runs.get(runId);
     return state ? { ...state } : null;
   }

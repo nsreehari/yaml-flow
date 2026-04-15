@@ -1,60 +1,71 @@
 /**
- * yaml-flow - Isomorphic Workflow Engine
- * 
- * A lightweight, universal state machine engine with declarative YAML flows 
- * and pluggable persistence.
- * 
- * @example
+ * yaml-flow — Unified Workflow Engine
+ *
+ * Two modes, one package:
+ *   - step-machine: stateful sequential executor (steps + transitions)
+ *   - event-graph:  stateless graph engine (tasks + requires/provides)
+ *
+ * Both share the same store adapters.
+ *
+ * @example Step Machine
  * ```typescript
- * import { createEngine, loadFlow, MemoryStore } from 'yaml-flow';
- * 
- * const flow = await loadFlow('./my-flow.yaml');
- * 
- * const handlers = {
- *   start: (input) => ({ result: 'success', data: { message: 'Hello!' } }),
- *   process: (input) => ({ result: 'success', data: { processed: true } }),
- * };
- * 
- * const engine = createEngine(flow, handlers);
- * const result = await engine.run({ userId: '123' });
+ * import { StepMachine } from 'yaml-flow/step-machine';
+ * const machine = new StepMachine(flow, handlers, { store });
+ * const result = await machine.run();
+ * ```
+ *
+ * @example Event Graph — Library Mode (you drive)
+ * ```typescript
+ * import { next, apply } from 'yaml-flow/event-graph';
+ * const { eligibleTasks } = next(graph, state);
+ * const newState = apply(state, { type: 'task-completed', taskName: 'fetch', timestamp: '...' }, graph);
  * ```
  */
 
-// Core exports
-export {
-  FlowEngine,
-  createEngine,
-} from './core/engine.js';
-
-export {
-  loadFlow,
-  loadFlowFromUrl,
-  loadFlowFromFile,
-  parseYaml,
-  validateFlowConfig,
-} from './core/loader.js';
-
+// ============================================================================
+// Step Machine
+// ============================================================================
+export { StepMachine, createStepMachine } from './step-machine/index.js';
+export { applyStepResult, checkCircuitBreaker, computeStepInput, extractReturnData, createInitialState } from './step-machine/index.js';
+export { loadStepFlow, validateStepFlowConfig } from './step-machine/index.js';
 export type {
-  FlowConfig,
-  FlowSettings,
-  StepConfig,
-  TerminalStateConfig,
-  RetryConfig,
-  CircuitBreakerConfig,
-  StepHandler,
-  StepInput,
-  StepContext,
-  StepResult,
-  EngineOptions,
-  FlowResult,
-  FlowStore,
-  RunState,
-  FlowEvent,
-  FlowEventType,
-  FlowEventListener,
-} from './core/types.js';
+  StepFlowConfig, StepFlowSettings, StepConfig, TerminalStateConfig,
+  RetryConfig, CircuitBreakerConfig,
+  StepHandler, StepInput, StepContext, StepResult,
+  StepMachineState, StepReducerResult, StepMachineOptions, StepMachineResult,
+  StepMachineStore, StepEventType, StepEvent, StepEventListener,
+} from './step-machine/index.js';
 
-// Store exports
+// ============================================================================
+// Event Graph
+// ============================================================================
+export {
+  next, apply, applyAll, getCandidateTasks,
+  getProvides, getRequires, getAllTasks, getTask, hasTask,
+  isNonActiveTask, isTaskCompleted, isTaskRunning,
+  isRepeatableTask, computeAvailableOutputs,
+  addDynamicTask, createDefaultTaskState, createInitialExecutionState,
+  isExecutionComplete, detectStuckState,
+  TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, CONFLICT_STRATEGIES, DEFAULTS,
+} from './event-graph/index.js';
+export type {
+  GraphConfig, GraphSettings, TaskConfig as GraphTaskConfig,
+  ExecutionState, ExecutionConfig, TaskState, StuckDetection,
+  GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent,
+  InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
+  SchedulerResult, CompletionResult,
+  TaskStatus, ExecutionStatus, CompletionStrategy, ExecutionMode, ConflictStrategy,
+} from './event-graph/index.js';
+
+// ============================================================================
+// Stores (shared)
+// ============================================================================
 export { MemoryStore } from './stores/memory.js';
 export { LocalStorageStore } from './stores/localStorage.js';
 export { FileStore } from './stores/file.js';
+
+// ============================================================================
+// Backward compat aliases (deprecated — use new names)
+// ============================================================================
+export { StepMachine as FlowEngine } from './step-machine/index.js';
+export { createStepMachine as createEngine } from './step-machine/index.js';

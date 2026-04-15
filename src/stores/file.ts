@@ -5,14 +5,14 @@
  * Stores each run as a JSON file in the specified directory.
  */
 
-import type { FlowStore, RunState } from '../core/types.js';
+import type { StepMachineStore, StepMachineState } from '../step-machine/types.js';
 
 export interface FileStoreOptions {
   /** Directory path for storing flow data */
   directory: string;
 }
 
-export class FileStore implements FlowStore {
+export class FileStore implements StepMachineStore {
   private directory: string;
   private fs: typeof import('fs/promises') | null = null;
   private path: typeof import('path') | null = null;
@@ -40,7 +40,7 @@ export class FileStore implements FlowStore {
     return this.path!.join(this.directory, `${runId}.data.json`);
   }
 
-  async saveRunState(runId: string, state: RunState): Promise<void> {
+  async saveRunState(runId: string, state: StepMachineState): Promise<void> {
     await this.ensureModules();
     await this.fs!.writeFile(
       this.runPath(runId),
@@ -49,7 +49,7 @@ export class FileStore implements FlowStore {
     );
   }
 
-  async loadRunState(runId: string): Promise<RunState | null> {
+  async loadRunState(runId: string): Promise<StepMachineState | null> {
     await this.ensureModules();
     try {
       const raw = await this.fs!.readFile(this.runPath(runId), 'utf-8');

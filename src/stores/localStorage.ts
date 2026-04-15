@@ -5,14 +5,14 @@
  * Data persists across page reloads but is limited to ~5MB per origin.
  */
 
-import type { FlowStore, RunState } from '../core/types.js';
+import type { StepMachineStore, StepMachineState } from '../step-machine/types.js';
 
 export interface LocalStorageStoreOptions {
   /** Key prefix for namespacing (default: 'yamlflow') */
   prefix?: string;
 }
 
-export class LocalStorageStore implements FlowStore {
+export class LocalStorageStore implements StepMachineStore {
   private prefix: string;
 
   constructor(options: LocalStorageStoreOptions = {}) {
@@ -36,7 +36,7 @@ export class LocalStorageStore implements FlowStore {
     return `${this.prefix}:runs`;
   }
 
-  async saveRunState(runId: string, state: RunState): Promise<void> {
+  async saveRunState(runId: string, state: StepMachineState): Promise<void> {
     localStorage.setItem(this.runKey(runId), JSON.stringify(state));
     
     // Update run index
@@ -47,7 +47,7 @@ export class LocalStorageStore implements FlowStore {
     }
   }
 
-  async loadRunState(runId: string): Promise<RunState | null> {
+  async loadRunState(runId: string): Promise<StepMachineState | null> {
     const raw = localStorage.getItem(this.runKey(runId));
     return raw ? JSON.parse(raw) : null;
   }
