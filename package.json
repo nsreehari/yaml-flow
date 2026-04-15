@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -43,6 +43,16 @@
       "types": "./dist/stores/file.d.ts",
       "import": "./dist/stores/file.js",
       "require": "./dist/stores/file.cjs"
+    },
+    "./batch": {
+      "types": "./dist/batch/index.d.ts",
+      "import": "./dist/batch/index.js",
+      "require": "./dist/batch/index.cjs"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js",
+      "require": "./dist/config/index.cjs"
     }
   },
   "browser": {

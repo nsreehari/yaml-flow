@@ -509,11 +509,250 @@ interface StepMachineStore {
 
 ---
 
+## Batch Processing
+
+yaml-flow includes a `batch()` utility for running multiple items through a flow concurrently. It works with both Step Machine and Event Graph — you provide the processor, it manages concurrency.
+
+### Quick Start
+
+```typescript
+import { batch } from 'yaml-flow/batch';
+import { createStepMachine } from 'yaml-flow/step-machine';
+
+const tickets = [
+  { id: 'T-001', message: 'Billing error' },
+  { id: 'T-002', message: 'App crashes on login' },
+  { id: 'T-003', message: 'Password reset help' },
+];
+
+const result = await batch(tickets, {
+  concurrency: 3,
+  processor: async (ticket) => {
+    const machine = createStepMachine(flow, handlers);
+    return machine.run({ message: ticket.message });
+  },
+  onProgress: (p) => console.log(`${p.percent}% done`),
+});
+
+console.log(`${result.completed} succeeded, ${result.failed} failed`);
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `concurrency` | `number` | `5` | Max parallel processors |
+| `processor` | `(item, index) => Promise<TResult>` | *required* | Async function to process each item |
+| `signal` | `AbortSignal` | — | Cancel remaining items |
+| `onItemComplete` | `(item, result, index) => void` | — | Called when an item succeeds |
+| `onItemError` | `(item, error, index) => void` | — | Called when an item fails |
+| `onProgress` | `(progress) => void` | — | Called after each item with `{ completed, failed, active, pending, total, percent, elapsedMs }` |
+
+### Result Shape
+
+```typescript
+{
+  items: BatchItemResult[];  // Per-item: { item, index, status, result?, error?, durationMs }
+  completed: number;         // Items that succeeded
+  failed: number;            // Items that threw
+  total: number;
+  durationMs: number;        // Wall-clock time for entire batch
+}
+```
+
+### Works with Event Graph too
+
+```typescript
+import { batch } from 'yaml-flow/batch';
+import { next, apply, createInitialExecutionState } from 'yaml-flow/event-graph';
+
+const result = await batch(items, {
+  concurrency: 5,
+  processor: async (item) => {
+    let state = createInitialExecutionState(graph, `run-${item.id}`);
+    state = apply(state, { type: 'inject-tokens', tokens: [item.readyToken], timestamp: Date.now() }, graph);
+    // ... drive graph loop with next() + apply()
+    return state;
+  },
+});
+```
+
+---
+
+## Config Utilities
+
+Pure pre-processing transforms you apply before passing config to the engine. They never touch engine state — just config in, config out.
+
+### Variable Interpolation
+
+Replace `${KEY}` patterns in any config object. Works with both GraphConfig and StepFlowConfig.
+
+```typescript
+import { resolveVariables } from 'yaml-flow/config';
+
+const resolved = resolveVariables(graphConfig, {
+  ENTITY_ID: 'ticket-42',
+  TOOLS_DIR: '/opt/tools',
+  WORKDIR: '/data/workdata',
+});
+// Every ${ENTITY_ID} in task configs, cmd-args, etc. → replaced
+```
+
+### Config Templates
+
+DRY reusable config blocks. Tasks reference a named template via `config-template`; the function deep-merges template + task overrides and removes the reference.
+
+```typescript
+import { resolveConfigTemplates } from 'yaml-flow/config';
+
+const config = {
+  configTemplates: {                              // or 'config-templates' (kebab-case)
+    PYTHON_TOOL: { cmd: 'python', timeout: 30000, cwd: '/workdata' },
+    NODE_CMD:    { cmd: 'node',   timeout: 60000 },
+  },
+  tasks: {
+    analyze:  { provides: ['analysis'], config: { 'config-template': 'PYTHON_TOOL', 'cmd-args': 'analyze.py' } },
+    build:    { provides: ['build'],    config: { 'config-template': 'NODE_CMD',    script: 'build.js' } },
+  },
+};
+
+const resolved = resolveConfigTemplates(config);
+// analyze.config → { cmd: 'python', timeout: 30000, cwd: '/workdata', 'cmd-args': 'analyze.py' }
+// configTemplates key removed from output
+```
+
+### Composing Both
+
+Templates first (expands references), then variables (fills in `${...}` placeholders):
+
+```typescript
+import { resolveConfigTemplates, resolveVariables } from 'yaml-flow/config';
+
+const raw = loadYaml('pipeline.yaml');                  // has configTemplates + ${VAR} refs
+const resolved = resolveVariables(
+  resolveConfigTemplates(raw),
+  { ENTITY_ID: 'url-42', TOOLS_DIR: '/opt/tools' },
+);
+```
+
+---
+
+## Graph-of-Graphs Pattern
+
+Real-world pipelines are often **layered**: an outer orchestration graph where some tasks are themselves entire sub-workflows — each processing a batch of items through their own DAG or step flow. yaml-flow doesn't bake this into the engine (the pure scheduler stays simple), but the primitives compose cleanly.
+
+### The Shape
+
+```
+Outer graph (event-graph)
+├── prep-workdata          → plain task
+├── copy-input-files       → plain task
+├── evidence-gathering     → batch × inner event-graph (N items, 5 concurrent)
+├── grade-synthesis        → batch × inner step-machine (N items, 3 concurrent)
+├── analyze-mismatches     → plain task
+├── [health-check ∥ report]→ parallel plain tasks
+└── archive-results        → waits for both
+```
+
+The outer graph sequences coarse stages. Some stages fan out into batches where each item runs through its own sub-workflow. The sub can be either mode.
+
+### How to Wire It
+
+Each "sub-graph task" in the outer graph is just a handler that composes `resolveConfigTemplates` → `resolveVariables` → `batch` → engine:
+
+```typescript
+import { next, apply, createInitialExecutionState } from 'yaml-flow/event-graph';
+import { createStepMachine } from 'yaml-flow/step-machine';
+import { batch } from 'yaml-flow/batch';
+import { resolveVariables, resolveConfigTemplates } from 'yaml-flow/config';
+
+// Outer graph handler for a sub-graph task (event-graph sub)
+async function runEvidenceBatch(items, rawSubConfig) {
+  return batch(items, {
+    concurrency: 5,
+    processor: async (item) => {
+      // Resolve config per-item (each item gets its own ENTITY_ID)
+      const config = resolveVariables(
+        resolveConfigTemplates(rawSubConfig),
+        { ENTITY_ID: item.id, TOOLS_DIR: '/opt/tools' },
+      );
+      // Drive the inner event-graph
+      let state = createInitialExecutionState(config, `run-${item.id}`);
+      while (true) {
+        const { eligibleTasks, isComplete } = next(config, state);
+        if (isComplete) break;
+        for (const task of eligibleTasks) {
+          state = apply(state, { type: 'task-started', taskName: task, timestamp: new Date().toISOString() }, config);
+          const result = await executeTask(task, config.tasks[task], item);
+          state = apply(state, { type: 'task-completed', taskName: task, result, timestamp: new Date().toISOString() }, config);
+        }
+      }
+      return state;
+    },
+  });
+}
+
+// Outer graph handler for a sub-graph task (step-machine sub)
+async function runGradeBatch(items, flowConfig, handlers) {
+  return batch(items, {
+    concurrency: 3,
+    processor: async (item) => {
+      const machine = createStepMachine(flowConfig, handlers);
+      return machine.run({ entityId: item.id, evidence: item.evidence });
+    },
+  });
+}
+```
+
+### Driving the Outer Graph
+
+The outer graph itself is an event-graph. Each handler maps to a task:
+
+```typescript
+const outerHandlers = {
+  'prep-workdata':     async () => { /* setup */ },
+  'copy-input-files':  async () => { /* parse CSV, return items */ },
+  'evidence-batch':    async (ctx) => runEvidenceBatch(ctx.items, evidenceConfig),
+  'grade-batch':       async (ctx) => runGradeBatch(ctx.items, gradeFlow, gradeHandlers),
+  'analyze-mismatches':async (ctx) => { /* compare grades */ },
+  'health-check':      async (ctx) => { /* validate */ },
+  'generate-report':   async (ctx) => { /* summarize */ },
+  'archive':           async (ctx) => { /* move outputs */ },
+};
+
+// Simple outer loop
+let state = createInitialExecutionState(outerGraph, 'pipeline-run-1');
+while (true) {
+  const { eligibleTasks, isComplete } = next(outerGraph, state);
+  if (isComplete) break;
+  await Promise.all(eligibleTasks.map(async (taskName) => {
+    state = apply(state, { type: 'task-started', taskName, timestamp: now() }, outerGraph);
+    try {
+      await outerHandlers[taskName](context);
+      state = apply(state, { type: 'task-completed', taskName, timestamp: now() }, outerGraph);
+    } catch (err) {
+      state = apply(state, { type: 'task-failed', taskName, error: err.message, timestamp: now() }, outerGraph);
+    }
+  }));
+}
+```
+
+### Why Not Bake It Into the Engine?
+
+- The pure scheduler (`next`/`apply`) stays a simple `f(state, event) → newState`.
+- Sub-graph execution involves file I/O, process spawning, HTTP calls — all driver concerns.
+- Every deployment customizes how sub-tasks execute: in-process, `execSync`, HTTP, serverless.
+- The primitives (`batch` + `resolveVariables` + `resolveConfigTemplates` + both engines) compose without coupling.
+
+See the [examples/graph-of-graphs/](./examples/graph-of-graphs/) directory for complete runnable examples.
+
+---
+
 ## Package Exports
 
 ```typescript
-// Everything (both modes + stores)
-import { StepMachine, next, apply, MemoryStore } from 'yaml-flow';
+// Everything (both modes + stores + batch)
+import { StepMachine, next, apply, MemoryStore, batch } from 'yaml-flow';
 
 // Step Machine only
 import { StepMachine, createStepMachine, loadStepFlow } from 'yaml-flow/step-machine';
@@ -526,6 +765,13 @@ import { TASK_STATUS, COMPLETION_STRATEGIES, CONFLICT_STRATEGIES } from 'yaml-fl
 
 // Stores
 import { MemoryStore, LocalStorageStore, FileStore } from 'yaml-flow/stores';
+
+// Batch
+import { batch } from 'yaml-flow/batch';
+import type { BatchOptions, BatchResult, BatchItemResult, BatchProgress } from 'yaml-flow/batch';
+
+// Config utilities
+import { resolveVariables, resolveConfigTemplates } from 'yaml-flow/config';
 
 // Backward compatibility (v1 names → v2)
 import { FlowEngine, createEngine } from 'yaml-flow';  // aliases for StepMachine, createStepMachine
@@ -587,6 +833,9 @@ See the [examples/](./examples) directory:
 | [AI Conversation](./examples/node/ai-conversation.ts) | Step Machine | Retry, circuit breakers, component injection |
 | [Research Pipeline](./examples/event-graph/research-pipeline.ts) | Event Graph | Parallel tasks, goal-based completion |
 | [CI/CD Pipeline](./examples/event-graph/ci-cd-pipeline.ts) | Event Graph | External events, conditional routing, failure tokens |
+| [Batch Tickets](./examples/batch/batch-step-machine.ts) | Batch | Concurrent processing, progress tracking |
+| [URL Pipeline](./examples/graph-of-graphs/url-processing-pipeline.ts) | Graph-of-Graphs | Outer event-graph → batch × inner event-graph per item |
+| [Multi-Stage ETL](./examples/graph-of-graphs/multi-stage-etl.ts) | Graph-of-Graphs | Mixed modes: event-graph outer → step-machine + event-graph subs |
 | [Order Processing](./examples/flows/order-processing.yaml) | Step Machine | YAML flow definition |
 | [Browser Demo](./examples/browser/index.html) | Step Machine | In-browser usage |
 

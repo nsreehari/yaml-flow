@@ -8,6 +8,8 @@ export default defineConfig({
     'stores/index': 'src/stores/index.ts',
     'stores/memory': 'src/stores/memory.ts',
     'stores/localStorage': 'src/stores/localStorage.ts',
+    'batch/index': 'src/batch/index.ts',
+    'config/index': 'src/config/index.ts',
     'stores/file': 'src/stores/file.ts',
   },
   format: ['esm', 'cjs'],

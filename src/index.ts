@@ -65,6 +65,18 @@ export { LocalStorageStore } from './stores/localStorage.js';
 export { FileStore } from './stores/file.js';
 
 // ============================================================================
+// Batch
+// ============================================================================
+export { batch } from './batch/index.js';
+export type { BatchOptions, BatchResult, BatchItemResult, BatchProgress } from './batch/index.js';
+
+// ============================================================================
+// Config utilities (pre-processing transforms)
+// ============================================================================
+export { resolveVariables, resolveConfigTemplates } from './config/index.js';
+export type { Variables, ConfigTemplates } from './config/index.js';
+
+// ============================================================================
 // Backward compat aliases (deprecated — use new names)
 // ============================================================================
 export { StepMachine as FlowEngine } from './step-machine/index.js';
