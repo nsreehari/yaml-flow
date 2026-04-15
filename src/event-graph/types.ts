@@ -59,6 +59,17 @@ export interface TaskConfig {
   circuit_breaker?: TaskCircuitBreakerConfig;
   /** Description */
   description?: string;
+  /** LLM inference hints — opt-in metadata for AI-assisted completion detection */
+  inference?: {
+    /** Human-readable completion criteria */
+    criteria?: string;
+    /** Keywords to help the LLM understand the domain */
+    keywords?: string[];
+    /** Suggested checks for verification */
+    suggestedChecks?: string[];
+    /** Whether the LLM should attempt to auto-detect completion (default: false) */
+    autoDetectable?: boolean;
+  };
 }
 
 export interface TaskRetryConfig {

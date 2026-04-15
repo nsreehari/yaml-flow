@@ -103,6 +103,19 @@ export type {
 } from './continuous-event-graph/index.js';
 
 // ============================================================================
+// Inference
+// ============================================================================
+export {
+  buildInferencePrompt, inferCompletions, applyInferences, inferAndApply,
+  createCliAdapter, createHttpAdapter,
+} from './inference/index.js';
+export type {
+  InferenceAdapter, InferenceHints, InferenceOptions,
+  InferenceResult, InferredCompletion, InferAndApplyResult,
+  CliAdapterOptions, HttpAdapterOptions,
+} from './inference/index.js';
+
+// ============================================================================
 // Backward compat aliases (deprecated — use new names)
 // ============================================================================
 export { StepMachine as FlowEngine } from './step-machine/index.js';

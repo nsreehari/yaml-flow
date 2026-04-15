@@ -983,6 +983,208 @@ const restored = restore(data);     // → LiveGraph (validates shape)
 
 ---
 
+## LLM Inference
+
+Pluggable AI-assisted completion detection. The caller provides the LLM via an `InferenceAdapter` — yaml-flow builds the prompt, parses the response, and applies the results. Core stays pure; inference is opt-in.
+
+```typescript
+import {
+  buildInferencePrompt, inferCompletions, applyInferences, inferAndApply,
+} from 'yaml-flow/inference';
+```
+
+### Inference Hints on Nodes
+
+Add optional `inference` metadata to any `TaskConfig`:
+
+```typescript
+const config = {
+  settings: { completion: 'all-tasks' },
+  tasks: {
+    'infra-provisioned': {
+      provides: ['infra-ready'],
+      inference: {
+        criteria: 'All Azure resources provisioned successfully',
+        keywords: ['azure', 'deployment', 'provisioning'],
+        suggestedChecks: ['scan logs for "Deployment Succeeded"'],
+        autoDetectable: true,   // LLM will analyze this node
+      },
+    },
+    'app-deployed': {
+      requires: ['infra-ready'],
+      provides: ['app-ready'],
+      inference: {
+        criteria: 'Health check returns HTTP 200',
+        autoDetectable: true,
+      },
+    },
+    'monitoring': {                         // no inference → LLM skips it
+      requires: ['app-ready'],
+      provides: ['monitored'],
+    },
+  },
+};
+```
+
+### Pluggable Adapter
+
+Implement one method — `analyze(prompt) → string`:
+
+```typescript
+import type { InferenceAdapter } from 'yaml-flow/inference';
+
+// OpenAI
+const openaiAdapter: InferenceAdapter = {
+  analyze: async (prompt) => {
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o', messages: [{ role: 'user', content: prompt }],
+    });
+    return res.choices[0].message.content ?? '[]';
+  },
+};
+
+// Anthropic
+const claudeAdapter: InferenceAdapter = {
+  analyze: async (prompt) => {
+    const res = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514', max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return res.content[0].type === 'text' ? res.content[0].text : '[]';
+  },
+};
+
+// Any HTTP endpoint
+const customAdapter: InferenceAdapter = {
+  analyze: async (prompt) => {
+    const res = await fetch('https://my-llm/analyze', {
+      method: 'POST', body: JSON.stringify({ prompt }),
+    });
+    return (await res.json()).response;
+  },
+};
+```
+
+### Built-in Adapter Factories
+
+Zero-boilerplate adapters for common patterns:
+
+```typescript
+import { createCliAdapter, createHttpAdapter } from 'yaml-flow/inference';
+
+// Ollama via HTTP
+const ollama = createHttpAdapter({
+  url: 'http://localhost:11434/api/generate',
+  buildBody: (prompt) => ({ model: 'llama3', prompt, stream: false }),
+  extractResponse: (json) => json.response,
+});
+
+// Ollama via CLI
+const ollamaCli = createCliAdapter({
+  command: 'ollama',
+  args: (prompt) => ['run', 'llama3', prompt],
+});
+
+// Simon Willison's llm CLI (stdin mode for long prompts)
+const llm = createCliAdapter({
+  command: 'llm',
+  args: () => ['--no-stream'],
+  stdin: true,
+});
+
+// Custom Python script
+const custom = createCliAdapter({
+  command: 'python',
+  args: (prompt) => ['scripts/infer.py', '--json', prompt],
+  cwd: '/path/to/project',
+  env: { MODEL: 'gpt-4o' },
+  timeout: 60_000,
+});
+```
+
+**`createCliAdapter(options)`** — spawns a child process, captures stdout:
+| Option | Type | Description |
+|--------|------|-------------|
+| `command` | `string` | Executable to run (`ollama`, `llm`, `python`, `gh`, …) |
+| `args` | `(prompt) => string[]` | Build argument list from the prompt |
+| `stdin` | `boolean` | Pipe prompt via stdin instead of args (default: `false`) |
+| `timeout` | `number` | Kill after N ms (default: `30000`) |
+| `cwd` | `string` | Working directory |
+| `env` | `Record<string, string>` | Extra environment variables |
+
+**`createHttpAdapter(options)`** — POSTs to an HTTP endpoint:
+| Option | Type | Description |
+|--------|------|-------------|
+| `url` | `string` | Endpoint URL |
+| `headers` | `Record<string, string>` | Request headers |
+| `buildBody` | `(prompt) => object` | Build request body (default: `{ prompt }`) |
+| `extractResponse` | `(json) => string` | Extract text from response JSON |
+| `timeout` | `number` | Abort after N ms (default: `30000`) |
+```
+
+### Three APIs: Build → Suggest → Apply
+
+```typescript
+import { createLiveGraph } from 'yaml-flow/continuous-event-graph';
+import { buildInferencePrompt, inferCompletions, applyInferences } from 'yaml-flow/inference';
+
+let live = createLiveGraph(config);
+
+// 1. BUILD: Generate the prompt (pure, sync)
+const prompt = buildInferencePrompt(live, {
+  context: 'Deployment log: "Deployment Succeeded", health check: HTTP 200',
+});
+
+// 2. SUGGEST: Ask the LLM (async)
+const result = await inferCompletions(live, adapter, {
+  threshold: 0.8,
+  context: 'Deployment log: ...',
+});
+result.suggestions;  // [{ taskName, confidence, reasoning, detectionMethod }]
+
+// 3. APPLY: Accept high-confidence suggestions (pure, sync)
+live = applyInferences(live, result, 0.8);  // only applies >= 80% confidence
+```
+
+### One-Shot Convenience
+
+```typescript
+import { inferAndApply } from 'yaml-flow/inference';
+
+const { live: updated, applied, skipped, inference } = await inferAndApply(
+  live, adapter, { threshold: 0.8, context: 'deployment logs...' }
+);
+
+console.log('Auto-completed:', applied.map(s => s.taskName));
+console.log('Skipped (low confidence):', skipped.map(s => `${s.taskName} (${s.confidence})`));
+```
+
+### Inference API Reference
+
+| Function | Description |
+|---|---|
+| `buildInferencePrompt(live, opts?)` | Build LLM prompt from graph state (pure, sync) |
+| `inferCompletions(live, adapter, opts?)` | Ask LLM to suggest completions (async) |
+| `applyInferences(live, result, threshold?)` | Apply suggestions above threshold (pure, sync) |
+| `inferAndApply(live, adapter, opts?)` | Infer + apply in one step (async, convenience) |
+| `createCliAdapter(opts)` | Factory: adapter that spawns a CLI command |
+| `createHttpAdapter(opts)` | Factory: adapter that POSTs to an HTTP endpoint |
+
+### Inference Types
+
+| Type | Description |
+|---|---|
+| `InferenceAdapter` | `{ analyze(prompt: string): Promise<string> }` — pluggable LLM bridge |
+| `InferenceHints` | `criteria`, `keywords`, `suggestedChecks`, `autoDetectable` on a TaskConfig |
+| `InferenceOptions` | `threshold`, `scope`, `context`, `systemPrompt` |
+| `InferenceResult` | `suggestions[]`, `promptUsed`, `rawResponse`, `analyzedNodes` |
+| `InferredCompletion` | `taskName`, `confidence`, `reasoning`, `detectionMethod: 'llm-inferred'` |
+| `InferAndApplyResult` | `live`, `inference`, `applied[]`, `skipped[]` |
+| `CliAdapterOptions` | `command`, `args`, `stdin`, `timeout`, `cwd`, `env` |
+| `HttpAdapterOptions` | `url`, `headers`, `buildBody`, `extractResponse`, `timeout` |
+
+---
+
 ## Loading & Exporting Graph Configs
 
 ```typescript
@@ -1040,6 +1242,12 @@ import {
   getUnreachableTokens, getUnreachableNodes,
   getUpstream, getDownstream,
 } from 'yaml-flow/continuous-event-graph';
+
+// LLM Inference (AI-assisted completion detection)
+import {
+  buildInferencePrompt, inferCompletions, applyInferences, inferAndApply,
+} from 'yaml-flow/inference';
+import type { InferenceAdapter, InferenceResult, InferenceOptions } from 'yaml-flow/inference';
 
 // Backward compatibility (v1 names → v2)
 import { FlowEngine, createEngine } from 'yaml-flow';  // aliases for StepMachine, createStepMachine
@@ -1113,6 +1321,10 @@ See the [examples/](./examples) directory:
 | [URL Pipeline](./examples/graph-of-graphs/url-processing-pipeline.ts) | Graph-of-Graphs | Outer event-graph → batch × inner event-graph per item |
 | [Multi-Stage ETL](./examples/graph-of-graphs/multi-stage-etl.ts) | Graph-of-Graphs | Mixed modes: event-graph outer → step-machine + event-graph subs |
 | [Stock Dashboard](./examples/continuous-event-graph/stock-dashboard.ts) | Continuous Event Graph | Runtime mutations, token drain, upstream/downstream, snapshot |
+| [Azure Deployment](./examples/inference/azure-deployment.ts) | Inference | LLM analyzes deployment logs, auto-completes checkpoints |
+| [Data Pipeline](./examples/inference/data-pipeline.ts) | Inference | Iterative inference — evidence arrives in waves |
+| [Pluggable Adapters](./examples/inference/pluggable-adapters.ts) | Inference | OpenAI, Anthropic, Azure, CLI, HTTP adapter factories |
+| [Copilot CLI](./examples/inference/copilot-cli.ts) | Inference | GitHub Copilot CLI as inference adapter via `createCliAdapter` |
 | [Order Processing](./examples/flows/order-processing.yaml) | Step Machine | YAML flow definition |
 | [Browser Demo](./examples/browser/index.html) | Step Machine | In-browser usage |
 
