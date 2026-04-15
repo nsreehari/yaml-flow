@@ -10,6 +10,7 @@ export default defineConfig({
     'stores/localStorage': 'src/stores/localStorage.ts',
     'batch/index': 'src/batch/index.ts',
     'config/index': 'src/config/index.ts',
+    'continuous-event-graph/index': 'src/continuous-event-graph/index.ts',
     'stores/file': 'src/stores/file.ts',
   },
   format: ['esm', 'cjs'],

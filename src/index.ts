@@ -83,6 +83,26 @@ export { resolveVariables, resolveConfigTemplates } from './config/index.js';
 export type { Variables, ConfigTemplates } from './config/index.js';
 
 // ============================================================================
+// Continuous Event Graph
+// ============================================================================
+export {
+  createLiveGraph, applyEvent,
+  addNode, removeNode,
+  addRequires, removeRequires, addProvides, removeProvides,
+  injectTokens, drainTokens, schedule, inspect,
+  resetNode, disableNode, enableNode, getNode,
+  snapshot, restore,
+  getUnreachableTokens, getUnreachableNodes,
+  getUpstream, getDownstream,
+} from './continuous-event-graph/index.js';
+export type {
+  LiveGraph, ScheduleResult, PendingTask, UnresolvedDependency, BlockedTask, LiveGraphHealth,
+  NodeInfo, LiveGraphSnapshot,
+  UnreachableTokensResult, UnreachableNodesResult,
+  UpstreamResult, DownstreamResult,
+} from './continuous-event-graph/index.js';
+
+// ============================================================================
 // Backward compat aliases (deprecated — use new names)
 // ============================================================================
 export { StepMachine as FlowEngine } from './step-machine/index.js';

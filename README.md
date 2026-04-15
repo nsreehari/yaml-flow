@@ -839,6 +839,150 @@ Use `validateGraphConfig()` for structural checks (JSON shape) and `validateGrap
 
 ---
 
+## Continuous Event Graph
+
+A **long-lived, evolving** event-graph where both the graph config and execution state mutate over time. Ideal for dashboards, monitoring systems, and any scenario where the workflow has no fixed endpoint.
+
+The core type is `LiveGraph` — it bundles `config` + `state` so they can't get out of sync. Every function is pure: `f(LiveGraph, input) → LiveGraph`.
+
+```typescript
+import {
+  createLiveGraph, applyEvent,
+  addNode, removeNode,
+  addRequires, removeRequires, addProvides, removeProvides,
+  injectTokens, drainTokens,
+  schedule, inspect,
+  resetNode, disableNode, enableNode, getNode,
+  snapshot, restore,
+  getUnreachableTokens, getUnreachableNodes,
+  getUpstream, getDownstream,
+} from 'yaml-flow/continuous-event-graph';
+```
+
+### Quick Start
+
+```typescript
+import { createLiveGraph, applyEvent, addNode, schedule, inspect } from 'yaml-flow/continuous-event-graph';
+
+// 1. Bootstrap
+let live = createLiveGraph({
+  settings: { completion: 'manual' },
+  tasks: {
+    fetch_prices: { provides: ['price-data'] },
+    compute:      { requires: ['price-data'], provides: ['indicators'] },
+  },
+});
+
+// 2. Schedule — what's ready?
+schedule(live).eligible;  // ['fetch_prices']
+
+// 3. Apply events — immutable state transitions
+live = applyEvent(live, { type: 'task-started', taskName: 'fetch_prices', timestamp: new Date().toISOString() });
+live = applyEvent(live, { type: 'task-completed', taskName: 'fetch_prices', timestamp: new Date().toISOString() });
+schedule(live).eligible;  // ['compute']
+
+// 4. Evolve — add a node at runtime
+live = addNode(live, 'alert', { requires: ['indicators'], provides: ['alert-sent'] });
+
+// 5. Health check
+inspect(live);  // { totalNodes: 3, running: 0, completed: 1, ... }
+```
+
+### Graph Mutations
+
+| Function | Description |
+|---|---|
+| `addNode(live, name, config)` | Add a task to the graph (config + state) |
+| `removeNode(live, name)` | Remove a task from the graph |
+| `addRequires(live, node, tokens)` | Add requires tokens to a node |
+| `removeRequires(live, node, tokens)` | Remove requires tokens from a node |
+| `addProvides(live, node, tokens)` | Add provides tokens to a node |
+| `removeProvides(live, node, tokens)` | Remove provides tokens from a node |
+
+### Token Management
+
+```typescript
+// Inject external data/signals
+live = injectTokens(live, ['market-open', 'price-data']);
+
+// Drain stale/expired tokens
+live = drainTokens(live, ['price-data']);  // forces re-fetch before downstream can run
+```
+
+### Node Lifecycle
+
+| Function | Description |
+|---|---|
+| `resetNode(live, name)` | Reset a node to `not-started` (for retry) |
+| `disableNode(live, name)` | Set a node to `inactivated` (scheduler skips it) |
+| `enableNode(live, name)` | Re-enable a disabled node |
+| `getNode(live, name)` | Get config + state for a single node |
+
+### Graph Traversal
+
+```typescript
+// "What feeds into generate_signals?"
+const upstream = getUpstream(live, 'generate_signals');
+upstream.nodes;   // [{ nodeName: 'fetch_prices', providesTokens: ['price-data'] }, ...]
+upstream.tokens;  // ['price-data', 'indicators', ...]
+
+// "What breaks if fetch_prices goes down?"
+const downstream = getDownstream(live, 'fetch_prices');
+downstream.nodes;   // [{ nodeName: 'compute', requiresTokens: ['price-data'] }, ...]
+downstream.tokens;  // ['price-data', 'indicators', ...]
+```
+
+### Reachability Analysis
+
+```typescript
+// Tokens that can never be produced given the current state
+const unreachableTokens = getUnreachableTokens(live);
+unreachableTokens.tokens;  // [{ token: 'ghost', reason: 'no-producer', producers: [] }]
+
+// Nodes that can never become eligible
+const unreachableNodes = getUnreachableNodes(live);
+unreachableNodes.nodes;  // [{ nodeName: 'orphan', missingTokens: ['ghost'] }]
+```
+
+### Persistence
+
+```typescript
+// Save
+const snap = snapshot(live);        // JSON-safe object
+localStorage.setItem('graph', JSON.stringify(snap));
+
+// Restore
+const data = JSON.parse(localStorage.getItem('graph')!);
+const restored = restore(data);     // → LiveGraph (validates shape)
+```
+
+### Continuous Event Graph API Reference
+
+| Function | Description |
+|---|---|
+| `createLiveGraph(config, id?)` | Bootstrap a LiveGraph from a GraphConfig |
+| `applyEvent(live, event)` | Apply an execution event (task-started, task-completed, etc.) |
+| `addNode(live, name, config)` | Add a node (both config + state) |
+| `removeNode(live, name)` | Remove a node |
+| `addRequires / removeRequires` | Wire/unwire requires tokens |
+| `addProvides / removeProvides` | Wire/unwire provides tokens |
+| `injectTokens(live, tokens)` | Add tokens to available outputs |
+| `drainTokens(live, tokens)` | Remove tokens from available outputs |
+| `schedule(live)` | Classify tasks: eligible / pending / unresolved / blocked / conflicts |
+| `inspect(live)` | Health report: statuses, cycles, open deps, conflicts |
+| `resetNode(live, name)` | Reset node to not-started |
+| `disableNode(live, name)` | Disable a node (inactivated) |
+| `enableNode(live, name)` | Re-enable a disabled node |
+| `getNode(live, name)` | Get a node's config + state |
+| `getUpstream(live, name)` | Transitive upstream: what feeds into this node? |
+| `getDownstream(live, name)` | Transitive downstream: what depends on this node? |
+| `getUnreachableTokens(live)` | Tokens that can never be produced |
+| `getUnreachableNodes(live)` | Nodes that can never become eligible |
+| `snapshot(live)` | Serialize to a JSON-safe snapshot |
+| `restore(data)` | Restore a LiveGraph from a snapshot |
+
+---
+
 ## Loading & Exporting Graph Configs
 
 ```typescript
@@ -885,6 +1029,17 @@ import type { BatchOptions, BatchResult, BatchItemResult, BatchProgress } from '
 
 // Config utilities
 import { resolveVariables, resolveConfigTemplates } from 'yaml-flow/config';
+
+// Continuous Event Graph (long-lived evolving workflows)
+import {
+  createLiveGraph, applyEvent, addNode, removeNode,
+  addRequires, removeRequires, addProvides, removeProvides,
+  injectTokens, drainTokens, schedule, inspect,
+  resetNode, disableNode, enableNode, getNode,
+  snapshot, restore,
+  getUnreachableTokens, getUnreachableNodes,
+  getUpstream, getDownstream,
+} from 'yaml-flow/continuous-event-graph';
 
 // Backward compatibility (v1 names → v2)
 import { FlowEngine, createEngine } from 'yaml-flow';  // aliases for StepMachine, createStepMachine
@@ -957,6 +1112,7 @@ See the [examples/](./examples) directory:
 | [Batch Tickets](./examples/batch/batch-step-machine.ts) | Batch | Concurrent processing, progress tracking |
 | [URL Pipeline](./examples/graph-of-graphs/url-processing-pipeline.ts) | Graph-of-Graphs | Outer event-graph → batch × inner event-graph per item |
 | [Multi-Stage ETL](./examples/graph-of-graphs/multi-stage-etl.ts) | Graph-of-Graphs | Mixed modes: event-graph outer → step-machine + event-graph subs |
+| [Stock Dashboard](./examples/continuous-event-graph/stock-dashboard.ts) | Continuous Event Graph | Runtime mutations, token drain, upstream/downstream, snapshot |
 | [Order Processing](./examples/flows/order-processing.yaml) | Step Machine | YAML flow definition |
 | [Browser Demo](./examples/browser/index.html) | Step Machine | In-browser usage |
 
