@@ -801,6 +801,44 @@ Entry points (no requires) get rounded shapes, leaf tasks get double-bracketed s
 
 ---
 
+## Graph Validation (Semantic)
+
+Validate the logical correctness of a graph — catches issues that structural validation (`validateGraphConfig`) can't.
+
+```typescript
+import { validateGraph } from 'yaml-flow/event-graph';
+
+const result = validateGraph(graph);
+
+result.valid;     // true if no errors (warnings/info allowed)
+result.errors;    // issues that will break execution
+result.warnings;  // issues that may cause unexpected behavior
+result.issues;    // all issues (errors + warnings + info)
+
+// Each issue
+result.issues[0].severity; // 'error' | 'warning' | 'info'
+result.issues[0].code;     // e.g. 'CIRCULAR_DEPENDENCY'
+result.issues[0].message;  // human-readable description
+result.issues[0].tasks;    // affected task names
+result.issues[0].tokens;   // affected tokens
+```
+
+| Issue Code | Severity | Description |
+|---|---|---|
+| `EMPTY_GRAPH` | error | Graph has no tasks |
+| `DANGLING_REQUIRES` | error | Task requires a token that no task produces |
+| `CIRCULAR_DEPENDENCY` | error | Cycle detected in task dependencies |
+| `SELF_DEPENDENCY` | error | Task requires a token it provides itself |
+| `UNREACHABLE_GOAL` | error | Goal token cannot be produced by any task |
+| `MISSING_GOAL` | error | `goal-reached` strategy without goal array |
+| `PROVIDE_CONFLICT` | warning | Multiple tasks produce the same token |
+| `DEAD_END_TASK` | warning | Task has no provides — can't unblock downstream |
+| `ISOLATED_TASK` | info | Disconnected task with no requires or dependents |
+
+Use `validateGraphConfig()` for structural checks (JSON shape) and `validateGraph()` for semantic checks (logical correctness). Both are pure functions.
+
+---
+
 ## Loading & Exporting Graph Configs
 
 ```typescript
@@ -835,6 +873,7 @@ import { next, apply, applyAll, getCandidateTasks } from 'yaml-flow/event-graph'
 import { createInitialExecutionState, isExecutionComplete, detectStuckState } from 'yaml-flow/event-graph';
 import { planExecution, graphToMermaid, flowToMermaid } from 'yaml-flow/event-graph';
 import { loadGraphConfig, validateGraphConfig, exportGraphConfig } from 'yaml-flow/event-graph';
+import { validateGraph } from 'yaml-flow/event-graph';
 import { TASK_STATUS, COMPLETION_STRATEGIES, CONFLICT_STRATEGIES } from 'yaml-flow/event-graph';
 
 // Stores
@@ -889,6 +928,7 @@ import { FlowEngine, createEngine } from 'yaml-flow';  // aliases for StepMachin
 | `validateGraphConfig(config)` | Validate a GraphConfig, returns error strings |
 | `exportGraphConfig(config, options?)` | Export a GraphConfig to JSON or YAML string |
 | `exportGraphConfigToFile(config, path)` | Export a GraphConfig to a file |
+| `validateGraph(graph)` | Semantic validation: cycles, dangling requires, unreachable goals, conflicts |
 
 ### Event Types (for `apply()`)
 

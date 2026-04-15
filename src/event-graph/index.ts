@@ -41,6 +41,10 @@ export type { MermaidOptions } from './mermaid.js';
 export { loadGraphConfig, validateGraphConfig, exportGraphConfig, exportGraphConfigToFile } from './loader.js';
 export type { ExportOptions } from './loader.js';
 
+// Semantic graph validation
+export { validateGraph } from './validate.js';
+export type { GraphIssue, GraphValidationResult, IssueSeverity } from './validate.js';
+
 // Conflict resolution
 export { selectBestAlternative, getNonConflictingTasks, selectRandomTasks } from './conflict-resolution.js';
 

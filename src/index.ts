@@ -49,6 +49,7 @@ export {
   planExecution,
   graphToMermaid, flowToMermaid,
   loadGraphConfig, validateGraphConfig, exportGraphConfig, exportGraphConfigToFile,
+  validateGraph,
   TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, CONFLICT_STRATEGIES, DEFAULTS,
 } from './event-graph/index.js';
 export type {
@@ -58,6 +59,7 @@ export type {
   InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
   SchedulerResult, CompletionResult,
   ExecutionPlan, MermaidOptions, ExportOptions,
+  GraphIssue, GraphValidationResult, IssueSeverity,
   TaskStatus, ExecutionStatus, CompletionStrategy, ExecutionMode, ConflictStrategy,
 } from './event-graph/index.js';
 
