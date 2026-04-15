@@ -748,6 +748,78 @@ See the [examples/graph-of-graphs/](./examples/graph-of-graphs/) directory for c
 
 ---
 
+## Execution Plan (Dry Run)
+
+Compute the full execution plan from a graph config without running anything — like `terraform plan` for workflows.
+
+```typescript
+import { planExecution } from 'yaml-flow/event-graph';
+
+const plan = planExecution(graph);
+
+plan.phases;          // [['prep'], ['copy'], ['evidence'], ['synthesis'], ['analyze'], ['health', 'report'], ['archive']]
+plan.depth;           // 7
+plan.maxParallelism;  // 2
+plan.entryPoints;     // ['prep']
+plan.leafTasks;       // ['archive']
+plan.conflicts;       // { 'output-token': ['task-a', 'task-b'] }  — multiple producers
+plan.unreachableTokens; // ['human-approval']  — required but no task produces it
+plan.blockedTasks;    // ['approve']  — blocked by unreachable tokens
+plan.dependencies;    // { 'copy': ['prep'], 'evidence': ['copy'], ... }
+```
+
+---
+
+## Mermaid Diagrams
+
+Generate Mermaid syntax from any config — useful for docs, debugging, and CI reports.
+
+```typescript
+import { graphToMermaid, flowToMermaid } from 'yaml-flow/event-graph';
+
+// Event graph → dependency diagram
+console.log(graphToMermaid(graph));
+// graph TD
+//   build([build])
+//   test[test]
+//   deploy[[deploy]]
+//   build -->|artifact| test
+//   test -->|tested| deploy
+
+// Step machine → flowchart
+console.log(flowToMermaid(flow));
+// graph TD
+//   START(( ))
+//   START --> classify
+//   classify -->|billing| handle
+//   handle -->|resolved| done
+//   done([done: resolved])
+```
+
+Options: `{ direction: 'LR' | 'TD', showTokens: boolean, title: string }`.  
+Entry points (no requires) get rounded shapes, leaf tasks get double-bracketed shapes, unreachable deps get warning markers.
+
+---
+
+## Loading & Exporting Graph Configs
+
+```typescript
+import { loadGraphConfig, exportGraphConfig, exportGraphConfigToFile } from 'yaml-flow/event-graph';
+
+// Load from file, URL, JSON string, or object (validates automatically)
+const graph = await loadGraphConfig('./pipeline.yaml');
+const graph2 = await loadGraphConfig('https://example.com/graph.json');
+
+// Export to string
+const json = exportGraphConfig(graph);                         // JSON (default)
+const yaml = exportGraphConfig(graph, { format: 'yaml' });     // YAML
+
+// Export to file (format auto-detected from extension)
+await exportGraphConfigToFile(graph, './output/pipeline.yaml');
+```
+
+---
+
 ## Package Exports
 
 ```typescript
@@ -761,6 +833,8 @@ import { applyStepResult, checkCircuitBreaker, createInitialState } from 'yaml-f
 // Event Graph only
 import { next, apply, applyAll, getCandidateTasks } from 'yaml-flow/event-graph';
 import { createInitialExecutionState, isExecutionComplete, detectStuckState } from 'yaml-flow/event-graph';
+import { planExecution, graphToMermaid, flowToMermaid } from 'yaml-flow/event-graph';
+import { loadGraphConfig, validateGraphConfig, exportGraphConfig } from 'yaml-flow/event-graph';
 import { TASK_STATUS, COMPLETION_STRATEGIES, CONFLICT_STRATEGIES } from 'yaml-flow/event-graph';
 
 // Stores
@@ -808,6 +882,13 @@ import { FlowEngine, createEngine } from 'yaml-flow';  // aliases for StepMachin
 | `isExecutionComplete(graph, state)` | Check completion against configured strategy |
 | `detectStuckState({graph, state, ...})` | Check if execution is stuck |
 | `addDynamicTask(graph, name, config)` | Immutably add a task to a graph config |
+| `planExecution(graph)` | Dry-run: compute phases, parallelism, conflicts, unreachable tokens |
+| `graphToMermaid(graph, options?)` | Generate Mermaid dependency diagram from an event-graph |
+| `flowToMermaid(flow, options?)` | Generate Mermaid flowchart from a step-machine |
+| `loadGraphConfig(source)` | Load + validate a YAML/JSON/URL graph config |
+| `validateGraphConfig(config)` | Validate a GraphConfig, returns error strings |
+| `exportGraphConfig(config, options?)` | Export a GraphConfig to JSON or YAML string |
+| `exportGraphConfigToFile(config, path)` | Export a GraphConfig to a file |
 
 ### Event Types (for `apply()`)
 

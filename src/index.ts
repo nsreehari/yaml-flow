@@ -46,6 +46,9 @@ export {
   isRepeatableTask, computeAvailableOutputs,
   addDynamicTask, createDefaultTaskState, createInitialExecutionState,
   isExecutionComplete, detectStuckState,
+  planExecution,
+  graphToMermaid, flowToMermaid,
+  loadGraphConfig, validateGraphConfig, exportGraphConfig, exportGraphConfigToFile,
   TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, CONFLICT_STRATEGIES, DEFAULTS,
 } from './event-graph/index.js';
 export type {
@@ -54,6 +57,7 @@ export type {
   GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent,
   InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
   SchedulerResult, CompletionResult,
+  ExecutionPlan, MermaidOptions, ExportOptions,
   TaskStatus, ExecutionStatus, CompletionStrategy, ExecutionMode, ConflictStrategy,
 } from './event-graph/index.js';
 

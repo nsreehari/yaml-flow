@@ -29,6 +29,18 @@ export type { CompletionResult } from './completion.js';
 // Stuck detection
 export { detectStuckState } from './stuck-detection.js';
 
+// Execution plan (dry run)
+export { planExecution } from './plan.js';
+export type { ExecutionPlan } from './plan.js';
+
+// Mermaid diagram export
+export { graphToMermaid, flowToMermaid } from './mermaid.js';
+export type { MermaidOptions } from './mermaid.js';
+
+// Loader & exporter
+export { loadGraphConfig, validateGraphConfig, exportGraphConfig, exportGraphConfigToFile } from './loader.js';
+export type { ExportOptions } from './loader.js';
+
 // Conflict resolution
 export { selectBestAlternative, getNonConflictingTasks, selectRandomTasks } from './conflict-resolution.js';
 
