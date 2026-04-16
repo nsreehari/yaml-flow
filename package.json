@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -94,10 +94,11 @@
     "vitest": "^1.0.0"
   },
   "dependencies": {
+    "ajv-formats": "^3.0.1",
     "yaml": "^2.3.4"
   },
   "optionalDependencies": {
-    "ajv": "^8.12.0"
+    "ajv": "^8.18.0"
   },
   "keywords": [
     "workflow",

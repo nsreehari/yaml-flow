@@ -603,4 +603,6 @@ export const CardCompute = {
   },
 };
 
+export { validateLiveCardSchema } from './schema-validator.js';
+
 export default CardCompute;

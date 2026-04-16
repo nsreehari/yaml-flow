@@ -116,7 +116,7 @@
         "kind":      {
           "enum": ["metric", "table", "chart", "form", "filter", "list",
                    "notes", "todo", "alert", "narrative", "badge", "text",
-                   "markdown", "custom"]
+                   "markdown", "custom", "file-upload", "chat", "actions"]
         },
         "label":     { "type": "string", "description": "Heading above this element" },
         "className": { "type": "string", "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'" },
@@ -141,7 +141,27 @@
               }
             },
             "colorMap": { "type": "object", "description": "badge: value → Bootstrap color" },
-            "style":    { "enum": ["heading", "muted", "default"], "description": "text: display style" }
+            "style":    { "enum": ["heading", "muted", "default"], "description": "text: display style" },
+            "upload":   { "type": "boolean", "default": true, "description": "file-upload: show drop zone (false = read-only file list)" },
+            "accept":   { "type": "array", "items": { "type": "string" }, "description": "file-upload: allowed extensions" },
+            "multiple": { "type": "boolean", "default": true, "description": "file-upload: allow multiple files" },
+            "fileAttach": { "type": "boolean", "default": false, "description": "chat: enable inline file attachments" },
+            "fileAccept": { "type": "array", "items": { "type": "string" }, "description": "chat: allowed attachment extensions" },
+            "buttons":  {
+              "type": "array",
+              "description": "actions: button definitions",
+              "items": {
+                "type": "object",
+                "required": ["id", "label"],
+                "properties": {
+                  "id":       { "type": "string" },
+                  "label":    { "type": "string" },
+                  "style":    { "type": "string", "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'" },
+                  "size":     { "type": "string", "default": "sm" },
+                  "disabled": { "oneOf": [{ "type": "boolean" }, { "type": "string", "description": "state path — truthy = disabled" }] }
+                }
+              }
+            }
           }
         }
       }

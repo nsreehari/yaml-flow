@@ -118,7 +118,7 @@ export type {
 // ============================================================================
 // Card Compute
 // ============================================================================
-export { CardCompute } from './card-compute/index.js';
+export { CardCompute, validateLiveCardSchema } from './card-compute/index.js';
 export type { ComputeExpr, ComputeNode, ComputeFn, EvalFn, ValidationResult } from './card-compute/index.js';
 
 // ============================================================================

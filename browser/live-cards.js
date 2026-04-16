@@ -51,10 +51,25 @@ var LiveCard = (function () {
       .lc-todo-item:last-child { border-bottom:none; }
       .lc-notes-preview { min-height:80px; }
       .lc-source-pill { display:inline-flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; border-radius:2rem; font-size:0.8rem; background:var(--bs-light,#f8f9fa); border:1px solid var(--bs-border-color,#dee2e6); }
+      .lc-dropzone { border:2px dashed var(--bs-border-color,#dee2e6); border-radius:.5rem; padding:1.5rem; text-align:center; cursor:pointer; transition:border-color .15s,background .15s; }
+      .lc-dropzone:hover { border-color:var(--bs-primary,#0d6efd); }
+      .lc-dropzone.lc-drag-over { border-color:var(--bs-primary,#0d6efd); background:rgba(13,110,253,.05); }
+      .lc-dropzone.lc-disabled { pointer-events:none; opacity:.5; }
+      .lc-staged-file { display:flex; align-items:center; gap:.5rem; padding:.125rem 0; }
+      .lc-chat-el { display:flex; flex-direction:column; }
+      .lc-chat-body { flex:1; overflow-y:auto; max-height:300px; padding:.25rem; }
+      .lc-chat-bubble { padding:.375rem .625rem; margin:.25rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; }
+      .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; }
+      .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); }
+      .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; }
+      .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
+      .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.25rem .5rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
         .lc-chat-msg { max-width:95%; }
+        .lc-chat-body { max-height:200px; }
+        .lc-chat-bubble { max-width:95%; }
       }
     `;
     document.head.appendChild(s);
@@ -150,6 +165,7 @@ var LiveCard = (function () {
       markdown:     config.markdown     || null,
       sanitize:     config.sanitize     || null,
       chartLib:     config.chartLib     || null,
+      onAction:     config.onAction     || function () {},
     };
 
     const _cleanup = {};   // nodeId → { ac, timers, charts, unsubs }
@@ -671,6 +687,276 @@ var LiveCard = (function () {
       el.innerHTML = `<pre class="small mb-0">${_esc(JSON.stringify(data, null, 2))}</pre>`;
     }
 
+    // ---- file-upload ----
+
+    function _renderFileUpload(data, el, elemDef, node) {
+      const cleanup = _getCleanup(node.id);
+      const signal = cleanup.ac.signal;
+      const ed = elemDef.data || {};
+      const uploaded = Array.isArray(data) ? data : [];
+      const showUpload = ed.upload !== false;
+      const accept = ed.accept || ['.txt','.csv','.md','.json','.html','.xml','.pdf','.xlsx','.docx','.pptx','.png','.jpg','.jpeg'];
+      const acceptSet = new Set(accept.map(e => e.toLowerCase()));
+      const multiple = ed.multiple !== false;
+      const placeholder = ed.placeholder || 'Drop files here or click to browse';
+      const uid = 'lc-fu-' + (elemDef.id || Math.random().toString(36).slice(2, 8));
+
+      let stagedFiles = el._stagedFiles || [];
+      el._stagedFiles = stagedFiles;
+
+      let h = '';
+
+      // Drop zone
+      if (showUpload) {
+        h += `<div class="lc-dropzone mb-2" id="${uid}-dz">`;
+        h += '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-muted mb-1"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+        h += `<div class="small text-muted">${_esc(placeholder)}</div>`;
+        h += `<input type="file" id="${uid}-fi" class="d-none"${multiple ? ' multiple' : ''} accept="${accept.join(',')}">`;
+        h += '</div>';
+        h += `<div id="${uid}-staged"></div>`;
+      }
+
+      // Uploaded files list
+      if (uploaded.length) {
+        h += '<div class="lc-uploaded-files">';
+        uploaded.forEach(f => {
+          const name = typeof f === 'string' ? f : (f.name || '');
+          const url = typeof f === 'string' ? null : f.url;
+          h += '<div class="d-flex align-items-center gap-1 small mb-1">';
+          h += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+          if (url) h += `<a href="${_esc(url)}" class="text-truncate" target="_blank" download>${_esc(name)}</a>`;
+          else h += `<span class="text-truncate">${_esc(name)}</span>`;
+          h += '</div>';
+        });
+        h += '</div>';
+      }
+
+      if (!showUpload && !uploaded.length) {
+        h = `<p class="text-muted small">${_esc(ed.placeholder || 'No files')}</p>`;
+      }
+
+      el.innerHTML = h;
+
+      if (!showUpload) {
+        el._fileUpload = { getFiles: () => [], clear: () => {} };
+        return;
+      }
+
+      const dz = document.getElementById(uid + '-dz');
+      const fi = document.getElementById(uid + '-fi');
+      const stagedEl = document.getElementById(uid + '-staged');
+      if (!dz) return;
+
+      function addFiles(fileList) {
+        for (const f of fileList) {
+          const ext = '.' + f.name.split('.').pop().toLowerCase();
+          if (!acceptSet.has(ext)) continue;
+          if (!stagedFiles.find(s => s.name === f.name)) stagedFiles.push(f);
+        }
+        renderStaged();
+        cfg.onPatchState(node.id, { _stagedFiles: stagedFiles.map(f => ({ name: f.name, size: f.size })) });
+      }
+
+      function renderStaged() {
+        if (!stagedFiles.length) { stagedEl.innerHTML = ''; return; }
+        let sh = '';
+        stagedFiles.forEach((f, i) => {
+          sh += '<div class="lc-staged-file">';
+          sh += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+          sh += `<span class="small flex-grow-1 text-truncate">${_esc(f.name)}</span>`;
+          sh += `<button class="btn btn-sm btn-link text-danger p-0 lc-rm-staged" data-idx="${i}">&times;</button>`;
+          sh += '</div>';
+        });
+        stagedEl.innerHTML = sh;
+        stagedEl.querySelectorAll('.lc-rm-staged').forEach(btn => {
+          btn.addEventListener('click', () => {
+            stagedFiles.splice(parseInt(btn.dataset.idx), 1);
+            el._stagedFiles = stagedFiles;
+            renderStaged();
+          }, { signal });
+        });
+      }
+
+      dz.addEventListener('click', () => fi.click(), { signal });
+      dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('lc-drag-over'); }, { signal });
+      dz.addEventListener('dragleave', () => dz.classList.remove('lc-drag-over'), { signal });
+      dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('lc-drag-over'); addFiles(e.dataTransfer.files); }, { signal });
+      fi.addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; }, { signal });
+
+      renderStaged();
+
+      el._fileUpload = {
+        getFiles: () => stagedFiles,
+        clear: () => { stagedFiles = []; el._stagedFiles = []; renderStaged(); },
+        disable: () => { dz.classList.add('lc-disabled'); fi.disabled = true; },
+        enable: () => { dz.classList.remove('lc-disabled'); fi.disabled = false; },
+      };
+    }
+
+    // ---- chat (element kind) ----
+
+    function _renderChatEl(data, el, elemDef, node) {
+      const cleanup = _getCleanup(node.id);
+      const signal = cleanup.ac.signal;
+      const ed = elemDef.data || {};
+      const messages = Array.isArray(data) ? data : [];
+      const placeholder = ed.placeholder || 'Type a message...';
+      const canAttach = ed.fileAttach === true;
+      const accept = ed.fileAccept || ['.txt','.csv','.md','.json','.html','.xml','.pdf','.xlsx','.docx','.pptx','.png','.jpg','.jpeg'];
+      const uid = 'lc-ch-' + (elemDef.id || Math.random().toString(36).slice(2, 8));
+
+      let h = '<div class="lc-chat-el">';
+      h += `<div class="lc-chat-body" id="${uid}-body"></div>`;
+      h += '<div class="lc-chat-input-bar">';
+      if (canAttach) {
+        h += `<input type="file" id="${uid}-fi" class="d-none" multiple accept="${accept.join(',')}">`;
+        h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-attach" title="Attach files" type="button">`;
+        h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>';
+        h += '</button>';
+      }
+      h += `<input type="text" class="form-control form-control-sm flex-grow-1" id="${uid}-input" placeholder="${_esc(placeholder)}">`;
+      h += `<button class="btn btn-sm btn-outline-primary" id="${uid}-send" type="button">`;
+      h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+      h += '</button></div>';
+      if (canAttach) h += `<div id="${uid}-staged" class="mt-1"></div>`;
+      h += '</div>';
+
+      el.innerHTML = h;
+
+      const body = document.getElementById(uid + '-body');
+      const input = document.getElementById(uid + '-input');
+      const sendBtn = document.getElementById(uid + '-send');
+      const attachBtn = canAttach ? document.getElementById(uid + '-attach') : null;
+      const fileInput = canAttach ? document.getElementById(uid + '-fi') : null;
+      const stagedEl = canAttach ? document.getElementById(uid + '-staged') : null;
+
+      let stagedFiles = [];
+
+      function appendMsg(msg) {
+        const bub = document.createElement('div');
+        const roleClass = msg.role === 'user' ? 'lc-chat-bubble-user'
+          : msg.role === 'assistant' ? 'lc-chat-bubble-assistant'
+          : 'lc-chat-bubble-system';
+        bub.className = 'lc-chat-bubble ' + roleClass;
+        if (msg.role === 'assistant') {
+          bub.innerHTML = _renderMd(msg.text || '');
+        } else {
+          bub.textContent = msg.text || '';
+        }
+        if (msg.files && msg.files.length) {
+          const fDiv = document.createElement('div');
+          fDiv.className = 'small mt-1';
+          msg.files.forEach(f => {
+            const name = typeof f === 'string' ? f : f.name;
+            fDiv.innerHTML += '\uD83D\uDCCE ' + _esc(name) + '<br>';
+          });
+          bub.appendChild(fDiv);
+        }
+        body.appendChild(bub);
+      }
+
+      messages.forEach(appendMsg);
+      body.scrollTop = body.scrollHeight;
+
+      function renderStaged() {
+        if (!stagedEl) return;
+        if (!stagedFiles.length) { stagedEl.innerHTML = ''; return; }
+        stagedEl.innerHTML = stagedFiles.map((f, i) =>
+          `<div class="d-flex align-items-center gap-1 small"><span>\uD83D\uDCCE ${_esc(f.name)}</span><button class="btn btn-sm btn-link text-danger p-0 lc-rm-cs" data-idx="${i}">&times;</button></div>`
+        ).join('');
+        stagedEl.querySelectorAll('.lc-rm-cs').forEach(btn => {
+          btn.addEventListener('click', () => { stagedFiles.splice(parseInt(btn.dataset.idx), 1); renderStaged(); }, { signal });
+        });
+      }
+
+      if (attachBtn && fileInput) {
+        const acceptS = new Set(accept.map(x => x.toLowerCase()));
+        attachBtn.addEventListener('click', () => fileInput.click(), { signal });
+        fileInput.addEventListener('change', e => {
+          for (const f of e.target.files) {
+            const ext = '.' + f.name.split('.').pop().toLowerCase();
+            if (acceptS.has(ext) && !stagedFiles.find(s => s.name === f.name)) stagedFiles.push(f);
+          }
+          e.target.value = '';
+          renderStaged();
+        }, { signal });
+      }
+
+      function doSend() {
+        const text = input.value.trim();
+        if (!text && !stagedFiles.length) return;
+        const msg = { role: 'user', text: text || '' };
+        if (stagedFiles.length) msg.files = stagedFiles.map(f => ({ name: f.name, size: f.size }));
+        appendMsg(msg);
+        body.scrollTop = body.scrollHeight;
+        input.value = '';
+        const filesToSend = stagedFiles.slice();
+        stagedFiles = [];
+        renderStaged();
+        cfg.onAction(node.id, 'chat-send', { text: msg.text, files: filesToSend, elemId: elemDef.id });
+      }
+
+      sendBtn.addEventListener('click', doSend, { signal });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } }, { signal });
+
+      el._chat = {
+        appendMessage: (role, text, files) => { appendMsg({ role, text, files }); body.scrollTop = body.scrollHeight; },
+        showProcessing: (text) => {
+          let ind = body.querySelector('.lc-chat-processing');
+          if (!ind) {
+            ind = document.createElement('div');
+            ind.className = 'lc-chat-processing';
+            ind.innerHTML = '<span class="spinner-border spinner-border-sm"></span><span class="small">Processing...</span>';
+            body.appendChild(ind);
+          }
+          if (text) ind.querySelector('.small').textContent = text;
+          body.scrollTop = body.scrollHeight;
+        },
+        removeProcessing: () => { const ind = body.querySelector('.lc-chat-processing'); if (ind) ind.remove(); },
+        disable: () => { input.disabled = true; sendBtn.disabled = true; if (attachBtn) attachBtn.disabled = true; },
+        enable: () => { input.disabled = false; sendBtn.disabled = false; if (attachBtn) attachBtn.disabled = false; },
+      };
+    }
+
+    // ---- actions ----
+
+    function _renderActions(data, el, elemDef, node) {
+      const cleanup = _getCleanup(node.id);
+      const signal = cleanup.ac.signal;
+      const ed = elemDef.data || {};
+      const buttons = ed.buttons || (Array.isArray(data) ? data : []);
+      if (!buttons.length) { el.innerHTML = ''; return; }
+
+      let h = '<div class="d-flex gap-2 flex-wrap">';
+      buttons.forEach(btn => {
+        const style = btn.style || 'outline-secondary';
+        const size = btn.size || 'sm';
+        const dis = typeof btn.disabled === 'string' ? _resolveBind(node, btn.disabled) : btn.disabled;
+        h += `<button class="btn btn-${_esc(style)} btn-${size}" data-action-id="${_esc(btn.id)}"${dis ? ' disabled' : ''}>`;
+        h += _esc(btn.label || btn.id);
+        h += '</button>';
+      });
+      h += '</div>';
+      el.innerHTML = h;
+
+      el.querySelectorAll('[data-action-id]').forEach(btnEl => {
+        btnEl.addEventListener('click', () => {
+          cfg.onAction(node.id, 'action', { buttonId: btnEl.dataset.actionId, elemId: elemDef.id });
+        }, { signal });
+      });
+
+      el._actions = {
+        setDisabled: (buttonId, disabled) => {
+          const b = el.querySelector(`[data-action-id="${buttonId}"]`);
+          if (b) b.disabled = disabled;
+        },
+        setLabel: (buttonId, label) => {
+          const b = el.querySelector(`[data-action-id="${buttonId}"]`);
+          if (b) b.textContent = label;
+        },
+      };
+    }
+
     // ---- Register built-in renderers ----
 
     _renderers.table     = _renderTable;
@@ -687,6 +973,9 @@ var LiveCard = (function () {
     _renderers.text      = _renderText;
     _renderers.markdown  = _renderMarkdown;
     _renderers.custom    = _renderCustom;
+    _renderers['file-upload'] = _renderFileUpload;
+    _renderers['chat']        = _renderChatEl;
+    _renderers.actions        = _renderActions;
 
     // ===========================================================================
     // _renderElements — render all view.elements for a card node
@@ -695,6 +984,8 @@ var LiveCard = (function () {
     function _renderElements(node, containerEl) {
       const view = node.view;
       if (!view || !Array.isArray(view.elements)) { containerEl.innerHTML = ''; return; }
+
+      if (_nodeEls[node.id]) _nodeEls[node.id].elements = {};
 
       const container = document.createElement('div');
       container.className = 'row g-2';
@@ -728,6 +1019,8 @@ var LiveCard = (function () {
           console.error('LiveCard render error', node.id, elemDef.kind, e);
           inner.innerHTML = `<div class="text-danger small">Render error: ${_esc(e.message)}</div>`;
         }
+
+        if (elemDef.id && _nodeEls[node.id]) _nodeEls[node.id].elements[elemDef.id] = inner;
 
         container.appendChild(col);
       });
@@ -930,6 +1223,15 @@ var LiveCard = (function () {
     }
 
     // ===========================================================================
+    // Element access
+    // ===========================================================================
+
+    function getElement(nodeId, elemId) {
+      const info = _nodeEls[nodeId];
+      return (info && info.elements && info.elements[elemId]) || null;
+    }
+
+    // ===========================================================================
     // Return engine
     // ===========================================================================
 
@@ -941,6 +1243,7 @@ var LiveCard = (function () {
       notify,
       subscribe,
       appendChatMessage,
+      getElement,
       registerRenderer(name, fn) { _renderers[name] = fn; },
       renderers: _renderers,
     };
