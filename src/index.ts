@@ -116,6 +116,12 @@ export type {
 } from './inference/index.js';
 
 // ============================================================================
+// Card Compute
+// ============================================================================
+export { CardCompute } from './card-compute/index.js';
+export type { ComputeExpr, ComputeNode, ComputeFn, EvalFn } from './card-compute/index.js';
+
+// ============================================================================
 // Backward compat aliases (deprecated — use new names)
 // ============================================================================
 export { StepMachine as FlowEngine } from './step-machine/index.js';

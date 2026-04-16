@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -63,6 +63,11 @@
       "types": "./dist/inference/index.d.ts",
       "import": "./dist/inference/index.js",
       "require": "./dist/inference/index.cjs"
+    },
+    "./card-compute": {
+      "types": "./dist/card-compute/index.d.ts",
+      "import": "./dist/card-compute/index.js",
+      "require": "./dist/card-compute/index.cjs"
     }
   },
   "browser": {
