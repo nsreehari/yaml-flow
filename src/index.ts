@@ -122,6 +122,15 @@ export { CardCompute } from './card-compute/index.js';
 export type { ComputeExpr, ComputeNode, ComputeFn, EvalFn, ValidationResult } from './card-compute/index.js';
 
 // ============================================================================
+// Card Engine
+// ============================================================================
+export { CardEngine } from './card-engine/index.js';
+export type {
+  ReactiveNode, EngineConfig, StateChangeEvent, BusEvent, Edge,
+  Fetcher, CardEngineInstance,
+} from './card-engine/index.js';
+
+// ============================================================================
 // Backward compat aliases (deprecated — use new names)
 // ============================================================================
 export { StepMachine as FlowEngine } from './step-machine/index.js';
