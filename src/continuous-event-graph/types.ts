@@ -13,7 +13,7 @@ import type {
   GraphSettings,
   TaskConfig,
   ExecutionState,
-  TaskState,
+  GraphEngineStore,
   ExecutionConfig,
   StuckDetection,
   GraphEvent,
@@ -26,7 +26,7 @@ export type {
   GraphSettings,
   TaskConfig,
   ExecutionState,
-  TaskState,
+  GraphEngineStore,
   ExecutionConfig,
   StuckDetection,
   GraphEvent,
@@ -122,7 +122,7 @@ export interface NodeInfo {
   /** The task configuration */
   config: TaskConfig;
   /** The current runtime state */
-  state: TaskState;
+  state: GraphEngineStore;
 }
 
 // ============================================================================

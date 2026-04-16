@@ -16,8 +16,9 @@ import {
   applyTaskCompletion,
   applyTaskFailure,
   applyTaskProgress,
+  applyTaskRestart,
 } from './task-transitions.js';
-import { createDefaultTaskState, createInitialExecutionState } from './graph-helpers.js';
+import { createDefaultGraphEngineStore, createInitialExecutionState } from './graph-helpers.js';
 
 /**
  * Apply an event to the current execution state, producing a new state.
@@ -43,13 +44,16 @@ export function apply(
       return applyTaskStart(state, event.taskName);
 
     case 'task-completed':
-      return applyTaskCompletion(state, graph, event.taskName, event.result, event.dataHash);
+      return applyTaskCompletion(state, graph, event.taskName, event.result, event.dataHash, event.data);
 
     case 'task-failed':
       return applyTaskFailure(state, graph, event.taskName, event.error);
 
     case 'task-progress':
       return applyTaskProgress(state, event.taskName, event.message, event.progress);
+
+    case 'task-restart':
+      return applyTaskRestart(state, event.taskName);
 
     case 'inject-tokens':
       return applyInjectTokens(state, event.tokens);
@@ -156,7 +160,7 @@ function applyTaskCreation(
     ...state,
     tasks: {
       ...state.tasks,
-      [taskName]: createDefaultTaskState(),
+      [taskName]: createDefaultGraphEngineStore(),
     },
     lastUpdated: new Date().toISOString(),
   };

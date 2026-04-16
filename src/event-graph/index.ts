@@ -19,7 +19,7 @@ export {
   isRerunnable, getRefreshStrategy, getMaxExecutions,
   computeAvailableOutputs, groupTasksByProvides, hasOutputConflict,
   addKeyToProvides, removeKeyFromProvides, addKeyToRequires, removeKeyFromRequires,
-  addDynamicTask, createDefaultTaskState, createInitialExecutionState,
+  addDynamicTask, createDefaultGraphEngineStore, createInitialExecutionState,
 } from './graph-helpers.js';
 
 // Completion
@@ -52,7 +52,7 @@ export { validateGraphSchema } from './schema-validator.js';
 export { selectBestAlternative, getNonConflictingTasks, selectRandomTasks } from './conflict-resolution.js';
 
 // Task transitions (low-level — prefer reducer.apply)
-export { applyTaskStart, applyTaskCompletion, applyTaskFailure, applyTaskProgress } from './task-transitions.js';
+export { applyTaskStart, applyTaskCompletion, applyTaskFailure, applyTaskProgress, applyTaskRestart } from './task-transitions.js';
 
 // Constants
 export { TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, CONFLICT_STRATEGIES, DEFAULTS } from './constants.js';
@@ -60,8 +60,8 @@ export { TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, 
 // Types
 export type {
   GraphConfig, GraphSettings, TaskConfig, TaskRetryConfig, TaskCircuitBreakerConfig, RefreshStrategy,
-  ExecutionState, ExecutionConfig, TaskState, TaskMessage, StuckDetection,
-  GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent, TaskProgressEvent,
+  ExecutionState, ExecutionConfig, GraphEngineStore, TaskMessage, StuckDetection,
+  GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent, TaskProgressEvent, TaskRestartEvent,
   InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
   SchedulerResult,
   TaskStatus, ExecutionStatus, CompletionStrategy, ExecutionMode, ConflictStrategy,

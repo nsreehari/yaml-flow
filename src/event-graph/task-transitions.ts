@@ -5,16 +5,16 @@
  * Each function: f(state, ...) → newState
  */
 
-import type { ExecutionState, TaskState, GraphConfig } from './types.js';
+import type { ExecutionState, GraphEngineStore, GraphConfig } from './types.js';
 import { getProvides } from './graph-helpers.js';
 
 /**
  * Apply task start to execution state. Pure function.
  */
 export function applyTaskStart(state: ExecutionState, taskName: string): ExecutionState {
-  const existingTask = state.tasks[taskName] ?? createDefaultTaskState();
+  const existingTask = state.tasks[taskName] ?? createDefaultGraphEngineStore();
 
-  const updatedTask: TaskState = {
+  const updatedTask: GraphEngineStore = {
     ...existingTask,
     status: 'running',
     startedAt: new Date().toISOString(),
@@ -40,9 +40,10 @@ export function applyTaskCompletion(
   graph: GraphConfig,
   taskName: string,
   result?: string,
-  dataHash?: string
+  dataHash?: string,
+  data?: Record<string, unknown>
 ): ExecutionState {
-  const existingTask = state.tasks[taskName] ?? createDefaultTaskState();
+  const existingTask = state.tasks[taskName] ?? createDefaultGraphEngineStore();
   const taskConfig = graph.tasks[taskName];
   if (!taskConfig) {
     throw new Error(`Task "${taskName}" not found in graph`);
@@ -74,7 +75,7 @@ export function applyTaskCompletion(
     }
   }
 
-  const updatedTask: TaskState = {
+  const updatedTask: GraphEngineStore = {
     ...existingTask,
     status: 'completed',
     completedAt: new Date().toISOString(),
@@ -82,6 +83,7 @@ export function applyTaskCompletion(
     executionCount: existingTask.executionCount + 1,
     lastEpoch: existingTask.executionCount + 1,
     lastDataHash: dataHash,
+    data,
     lastConsumedHashes,
     error: undefined,
   };
@@ -108,7 +110,7 @@ export function applyTaskFailure(
   taskName: string,
   error: string
 ): ExecutionState {
-  const existingTask = state.tasks[taskName] ?? createDefaultTaskState();
+  const existingTask = state.tasks[taskName] ?? createDefaultGraphEngineStore();
   const taskConfig = graph.tasks[taskName];
 
   // Check retry
@@ -116,7 +118,7 @@ export function applyTaskFailure(
     const retryCount = existingTask.retryCount + 1;
     if (retryCount <= taskConfig.retry.max_attempts) {
       // Retry — set back to not-started with incremented retry count
-      const updatedTask: TaskState = {
+      const updatedTask: GraphEngineStore = {
         ...existingTask,
         status: 'not-started',
         retryCount,
@@ -132,7 +134,7 @@ export function applyTaskFailure(
   }
 
   // No more retries — mark as failed
-  const updatedTask: TaskState = {
+  const updatedTask: GraphEngineStore = {
     ...existingTask,
     status: 'failed',
     failedAt: new Date().toISOString(),
@@ -170,9 +172,9 @@ export function applyTaskProgress(
   message?: string,
   progress?: number
 ): ExecutionState {
-  const existingTask = state.tasks[taskName] ?? createDefaultTaskState();
+  const existingTask = state.tasks[taskName] ?? createDefaultGraphEngineStore();
 
-  const updatedTask: TaskState = {
+  const updatedTask: GraphEngineStore = {
     ...existingTask,
     progress: typeof progress === 'number' ? progress : existingTask.progress,
     messages: [
@@ -189,7 +191,40 @@ export function applyTaskProgress(
   };
 }
 
-function createDefaultTaskState(): TaskState {
+/**
+ * Apply task restart to execution state.
+ * Resets the task to not-started, preserving executionCount and lastEpoch
+ * (history). Clears data, error, progress. The task becomes eligible for
+ * scheduling again on the next drain cycle.
+ * Pure function.
+ */
+export function applyTaskRestart(
+  state: ExecutionState,
+  taskName: string,
+): ExecutionState {
+  const existingTask = state.tasks[taskName];
+  if (!existingTask) return state;
+
+  const updatedTask: GraphEngineStore = {
+    ...existingTask,
+    status: 'not-started',
+    startedAt: undefined,
+    completedAt: undefined,
+    failedAt: undefined,
+    error: undefined,
+    data: undefined,
+    progress: null,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  return {
+    ...state,
+    tasks: { ...state.tasks, [taskName]: updatedTask },
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+function createDefaultGraphEngineStore(): GraphEngineStore {
   return {
     status: 'not-started',
     executionCount: 0,

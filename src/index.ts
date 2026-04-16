@@ -44,7 +44,7 @@ export {
   getProvides, getRequires, getAllTasks, getTask, hasTask,
   isNonActiveTask, isTaskCompleted, isTaskRunning,
   isRerunnable, getRefreshStrategy, getMaxExecutions, computeAvailableOutputs,
-  addDynamicTask, createDefaultTaskState, createInitialExecutionState,
+  addDynamicTask, createDefaultGraphEngineStore, createInitialExecutionState,
   isExecutionComplete, detectStuckState,
   planExecution,
   graphToMermaid, flowToMermaid,
@@ -54,7 +54,7 @@ export {
 } from './event-graph/index.js';
 export type {
   GraphConfig, GraphSettings, TaskConfig as GraphTaskConfig, RefreshStrategy,
-  ExecutionState, ExecutionConfig, TaskState, StuckDetection,
+  ExecutionState, ExecutionConfig, GraphEngineStore, StuckDetection,
   GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent,
   InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
   SchedulerResult, CompletionResult,
@@ -95,6 +95,11 @@ export {
   getUnreachableTokens, getUnreachableNodes,
   getUpstream, getDownstream,
   createReactiveGraph,
+  validateLiveGraph, validateReactiveGraph,
+  mutateGraph,
+  createCallbackHandler, createFireAndForgetHandler,
+  createShellHandler, createScriptHandler, createWebhookHandler, createNoopHandler,
+  liveCardsToReactiveGraph,
   MemoryJournal, FileJournal,
 } from './continuous-event-graph/index.js';
 export type {
@@ -103,8 +108,11 @@ export type {
   UnreachableTokensResult, UnreachableNodesResult,
   UpstreamResult, DownstreamResult,
   ReactiveGraph, ReactiveGraphOptions,
-  TaskHandler, TaskHandlerContext, TaskHandlerResult,
-  DispatchEntry, Journal,
+  TaskHandlerFn, TaskHandlerInput, TaskHandlerReturn,
+  Journal,
+  ReactiveGraphValidationInput, GraphMutation,
+  ShellHandlerOptions, ScriptHandlerOptions, WebhookHandlerOptions, ResolveCallbackFn,
+  LiveCard, LiveBoard, LiveCardsToReactiveOptions, LiveCardsToReactiveResult,
 } from './continuous-event-graph/index.js';
 
 // ============================================================================

@@ -5,7 +5,7 @@
  * No I/O, no side effects.
  */
 
-import type { GraphConfig, TaskConfig, TaskState, ExecutionState, RefreshStrategy } from './types.js';
+import type { GraphConfig, TaskConfig, GraphEngineStore, ExecutionState, RefreshStrategy } from './types.js';
 import { TASK_STATUS } from './constants.js';
 
 // ============================================================================
@@ -40,16 +40,16 @@ export function hasTask(graph: GraphConfig, taskName: string): boolean {
 // Task State Predicates
 // ============================================================================
 
-export function isNonActiveTask(taskState: TaskState | undefined): boolean {
+export function isNonActiveTask(taskState: GraphEngineStore | undefined): boolean {
   if (!taskState) return false;
   return taskState.status === TASK_STATUS.FAILED || taskState.status === TASK_STATUS.INACTIVATED;
 }
 
-export function isTaskCompleted(taskState: TaskState | undefined): boolean {
+export function isTaskCompleted(taskState: GraphEngineStore | undefined): boolean {
   return taskState?.status === TASK_STATUS.COMPLETED;
 }
 
-export function isTaskRunning(taskState: TaskState | undefined): boolean {
+export function isTaskRunning(taskState: GraphEngineStore | undefined): boolean {
   return taskState?.status === TASK_STATUS.RUNNING;
 }
 
@@ -76,7 +76,7 @@ export function getMaxExecutions(taskConfig: TaskConfig): number | undefined {
  */
 export function computeAvailableOutputs(
   graph: GraphConfig,
-  taskStates: Record<string, TaskState>
+  taskStates: Record<string, GraphEngineStore>
 ): string[] {
   const outputs: Set<string> = new Set();
 
@@ -190,7 +190,7 @@ export function addDynamicTask(
 /**
  * Create default task state for a new task.
  */
-export function createDefaultTaskState(): TaskState {
+export function createDefaultGraphEngineStore(): GraphEngineStore {
   return {
     status: 'not-started',
     executionCount: 0,
@@ -208,9 +208,9 @@ export function createInitialExecutionState(
   graph: GraphConfig,
   executionId: string
 ): ExecutionState {
-  const tasks: Record<string, TaskState> = {};
+  const tasks: Record<string, GraphEngineStore> = {};
   for (const taskName of Object.keys(graph.tasks)) {
-    tasks[taskName] = createDefaultTaskState();
+    tasks[taskName] = createDefaultGraphEngineStore();
   }
 
   return {

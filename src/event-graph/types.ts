@@ -43,6 +43,8 @@ export interface TaskConfig {
   on_failure?: string[];
   /** Task execution method (informational — driver concern) */
   method?: string;
+  /** Named task handler references — looked up in the handler registry at dispatch time */
+  taskHandlers?: string[];
   /** Arbitrary task configuration (driver concern) */
   config?: Record<string, unknown>;
   /** Task priority (higher = preferred in conflict resolution) */
@@ -99,7 +101,7 @@ export interface ExecutionState {
   /** Current status of the execution */
   status: ExecutionStatus;
   /** Task states keyed by task name */
-  tasks: Record<string, TaskState>;
+  tasks: Record<string, GraphEngineStore>;
   /** Tokens currently available in the system */
   availableOutputs: string[];
   /** Stuck detection result */
@@ -118,13 +120,15 @@ export interface ExecutionConfig {
   completionStrategy: CompletionStrategy;
 }
 
-export interface TaskState {
+export interface GraphEngineStore {
   status: TaskStatus;
   executionCount: number;
   retryCount: number;
   lastEpoch: number;
   /** Hash of this task's last output (for data-changed strategy) */
   lastDataHash?: string;
+  /** The task's last output data payload */
+  data?: Record<string, unknown>;
   /** Per-require token: the data hash consumed on last run */
   lastConsumedHashes?: Record<string, string>;
   startedAt?: string;
@@ -158,6 +162,7 @@ export type GraphEvent =
   | TaskCompletedEvent
   | TaskFailedEvent
   | TaskProgressEvent
+  | TaskRestartEvent
   | InjectTokensEvent
   | AgentActionEvent
   | TaskCreationEvent;
@@ -195,6 +200,13 @@ export interface TaskProgressEvent {
   taskName: string;
   message?: string;
   progress?: number;
+  timestamp: string;
+  executionId?: string;
+}
+
+export interface TaskRestartEvent {
+  type: 'task-restart';
+  taskName: string;
   timestamp: string;
   executionId?: string;
 }

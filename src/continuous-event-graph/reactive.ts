@@ -15,80 +15,179 @@
  * without touching the core engine types.
  */
 
-import type { GraphConfig, TaskConfig, GraphEvent } from '../event-graph/types.js';
+import type { GraphConfig, TaskConfig, GraphEvent, GraphEngineStore } from '../event-graph/types.js';
 import type { LiveGraph, ScheduleResult } from './types.js';
-import { createLiveGraph, applyEvent, applyEvents, addNode, removeNode } from './core.js';
+import { createLiveGraph, applyEvents, addNode, removeNode } from './core.js';
 import { schedule } from './schedule.js';
 import { MemoryJournal } from './journal.js';
 import type { Journal } from './journal.js';
+import { createHash } from 'node:crypto';
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+/**
+ * Deterministic hash of a data payload.
+ * Recursively-sorted JSON → SHA-256 hex (first 16 chars for compactness).
+ * Used to auto-compute dataHash when the handler doesn't provide one.
+ * Exported so handler authors can pre-compute or test hashes.
+ */
+export function computeDataHash(data: Record<string, unknown>): string {
+  const json = stableStringify(data);
+  return createHash('sha256').update(json).digest('hex').slice(0, 16);
+}
+
+/** Recursively produce a JSON string with sorted keys at every level. */
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableStringify).join(',') + ']';
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+}
+
+/**
+ * Encode a callback token for a task.
+ * Opaque base64url string — can be sent to external systems.
+ */
+function encodeCallbackToken(taskName: string): string {
+  const payload = JSON.stringify({ t: taskName, n: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+  return Buffer.from(payload).toString('base64url');
+}
+
+/**
+ * Decode a callback token → { taskName } or null if malformed.
+ */
+function decodeCallbackToken(token: string): { taskName: string } | null {
+  try {
+    const payload = JSON.parse(Buffer.from(token, 'base64url').toString());
+    if (typeof payload?.t === 'string') return { taskName: payload.t };
+    return null;
+  } catch { return null; }
+}
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/** Context passed to task handlers. */
-export interface TaskHandlerContext {
-  /** Name of the task being executed */
-  taskName: string;
-  /** Current snapshot of the live graph (read-only — do not mutate) */
-  live: Readonly<LiveGraph>;
-  /** The task's own config */
-  config: TaskConfig;
+/**
+ * Input passed to a task handler function.
+ *
+ * The reactive layer resolves upstream data from `requires` into `state`,
+ * and provides this task's own engine store as `taskState`.
+ * Handlers push output data back via `graph.resolveCallback(callbackToken, data)`.
+ */
+export interface TaskHandlerInput {
+  /** This task's node ID (task name) */
+  nodeId: string;
+  /**
+   * Upstream dependency data, keyed by require token name.
+   * Only tokens from this task's `requires` are present.
+   * Value is the producing task's `data` field (or undefined if not yet available).
+   */
+  state: Readonly<Record<string, Record<string, unknown> | undefined>>;
+  /**
+   * This task's own GraphEngineStore — includes status, data, executionCount, etc.
+   */
+  taskState: Readonly<GraphEngineStore>;
+  /** This task's config */
+  config: Readonly<TaskConfig>;
+  /**
+   * Opaque callback token encoding this task's identity.
+   * Pass this to `graph.resolveCallback(callbackToken, data)` to complete the task.
+   * Can be serialized and sent to external systems (webhooks, other scripts,
+   * message queues) — any process with this token can push data back.
+   */
+  callbackToken: string;
 }
 
-/** A task handler function. Return value becomes the event's `data` payload. */
-export type TaskHandler = (ctx: TaskHandlerContext) => Promise<TaskHandlerResult>;
+/**
+ * Handler return value — initiation status only.
+ * - `'task-initiated'` — async work started successfully; data will arrive via resolveCallback
+ * - `'task-initiate-failure'` — failed to start (bad config, connection refused, etc.)
+ */
+export type TaskHandlerReturn = 'task-initiated' | 'task-initiate-failure';
 
-export interface TaskHandlerResult {
-  /** Optional result key for conditional routing (task's `on` map) */
-  result?: string;
-  /** Optional data payload */
-  data?: Record<string, unknown>;
-  /** Optional content hash for data-changed strategy */
-  dataHash?: string;
-}
-
-/** Internal dispatch tracking — NOT exposed to the core engine. */
-export interface DispatchEntry {
-  status: 'initiated' | 'dispatch-failed' | 'timed-out' | 'retry-queued' | 'abandoned';
-  dispatchedAt: number;
-  dispatchAttempts: number;
-  lastError?: string;
-}
+/**
+ * A named task handler function.
+ * Registered in the handler registry, referenced by name in `taskConfig.taskHandlers`.
+ *
+ * The handler's job is to **initiate** async work, not await it.
+ *
+ * Flow:
+ *   1. Handler receives `callbackToken` + upstream `state`
+ *   2. Handler kicks off background work (internal, external script, webhook, etc.)
+ *      — passes `callbackToken` to the background work
+ *   3. Handler returns `'task-initiated'` immediately
+ *   4. Background work runs independently — when done, it calls
+ *      `graph.resolveCallback(callbackToken, data)` for success, or
+ *      `graph.resolveCallback(callbackToken, {}, ['error msg'])` for failure
+ *   5. resolveCallback completes the task → data-changed cascade fires
+ *
+ * The callbackToken is opaque — pass it to the background work so it can
+ * call back. Works across processes, scripts, webhooks, message queues.
+ *
+ * @example
+ * ```ts
+ * const fetchYahoo: TaskHandlerFn = async ({ state, callbackToken }) => {
+ *   const symbols = state['portfolio-form']?.holdings?.map(h => h.symbol) ?? [];
+ *   // Kick off background work — do NOT await
+ *   fetch(`https://api.yahoo.com/prices?s=${symbols.join(',')}`)
+ *     .then(res => res.json())
+ *     .then(prices => graph.resolveCallback(callbackToken, { prices }))
+ *     .catch(err => graph.resolveCallback(callbackToken, {}, [err.message]));
+ *   // Return immediately — background work will resolveCallback when done
+ *   return 'task-initiated';
+ * };
+ * ```
+ */
+export type TaskHandlerFn = (input: TaskHandlerInput) => Promise<TaskHandlerReturn>;
 
 export interface ReactiveGraphOptions {
-  /** Task handlers keyed by task name */
-  handlers: Record<string, TaskHandler>;
-  /** Max times to retry dispatching a handler that fails to invoke (default: 3) */
-  maxDispatchRetries?: number;
-  /** Default timeout in ms for handler callbacks (default: 30000). 0 = no timeout. */
-  defaultTimeoutMs?: number;
+  /** Named handler registry — handler name → handler function */
+  handlers: Record<string, TaskHandlerFn>;
   /** Journal adapter (default: MemoryJournal) */
   journal?: Journal;
-  /** Called when a handler fails to dispatch */
-  onDispatchFailed?: (taskName: string, error: Error, attempt: number) => void;
-  /** Called when a task is abandoned after max dispatch retries */
-  onAbandoned?: (taskName: string) => void;
   /** Called after each drain cycle — for observability */
   onDrain?: (events: GraphEvent[], live: LiveGraph, scheduleResult: ScheduleResult) => void;
 }
 
 export interface ReactiveGraph {
-  /** Push an event into the graph. Triggers drain → schedule → dispatch cascade. */
+  /** Push an event into the graph via journal. Triggers drain → schedule → dispatch. */
   push(event: GraphEvent): void;
-  /** Push multiple events. Single drain cycle after all are journaled. */
+  /** Push multiple events via journal. Single drain cycle after all are journaled. */
   pushAll(events: GraphEvent[]): void;
-  /** Add a node with its handler. Triggers re-evaluation. */
-  addNode(name: string, taskConfig: TaskConfig, handler: TaskHandler): void;
-  /** Remove a node and its handler. */
+  /**
+   * Resolve a callback token — complete (or fail) a task after initiation.
+   * Journals task-completed or task-failed, then drains.
+   * Gracefully ignores invalid tokens or tokens for tasks no longer in the graph.
+   */
+  resolveCallback(callbackToken: string, data: Record<string, unknown>, errors?: string[]): void;
+  /** Add a node to the graph config. Journals nothing — structural mutation. */
+  addNode(name: string, taskConfig: TaskConfig): void;
+  /** Remove a node from the graph config. Structural mutation. */
   removeNode(name: string): void;
+  /** Register a named handler in the registry. */
+  registerHandler(name: string, fn: TaskHandlerFn): void;
+  /** Unregister a named handler from the registry. */
+  unregisterHandler(name: string): void;
+  /**
+   * Re-trigger a task: journals a task-restart event, then drains.
+   * data-changed cascade handles downstream automatically.
+   */
+  retrigger(taskName: string): void;
+  /** Re-trigger multiple tasks via journal. */
+  retriggerAll(taskNames: string[]): void;
   /** Read-only snapshot of current LiveGraph state. */
   getState(): LiveGraph;
   /** Current schedule projection. */
   getSchedule(): ScheduleResult;
-  /** Internal dispatch tracking (for observability/debugging). */
-  getDispatchState(): ReadonlyMap<string, DispatchEntry>;
-  /** Cancel pending timeouts and stop dispatching. */
+  /** Stop accepting events. */
   dispose(): void;
 }
 
@@ -103,25 +202,15 @@ export function createReactiveGraph(
 ): ReactiveGraph {
   const {
     handlers: initialHandlers,
-    maxDispatchRetries = 3,
-    defaultTimeoutMs = 30_000,
     journal = new MemoryJournal(),
-    onDispatchFailed,
-    onAbandoned,
     onDrain,
   } = options;
 
   let live = createLiveGraph(config, executionId);
   let disposed = false;
 
-  // Handler registry — mutable so addNode/removeNode can update it
-  const handlers = new Map<string, TaskHandler>(Object.entries(initialHandlers));
-
-  // Dispatch tracking — reactive-layer only, never touches core types
-  const dispatched = new Map<string, DispatchEntry>();
-
-  // Timeout timers — so we can cancel them on dispose
-  const timeoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Handler registry — mutable, keyed by handler name
+  const handlers = new Map<string, TaskHandlerFn>(Object.entries(initialHandlers));
 
   // Drain lock — prevents re-entrant drain cycles
   let draining = false;
@@ -150,45 +239,82 @@ export function createReactiveGraph(
   }
 
   function drainOnce(): void {
-    // 1. Sweep timeouts
-    sweepTimeouts();
-
-    // 2. Read all pending events from journal
+    // 1. Read all pending events from journal
     const events = journal.drain();
 
-    // 3. Clear dispatch tracking for tasks that completed or failed
-    for (const event of events) {
-      if (event.type === 'task-completed' || event.type === 'task-failed') {
-        const taskName = (event as { taskName: string }).taskName;
-        dispatched.delete(taskName);
-        clearTimeout(timeoutTimers.get(taskName));
-        timeoutTimers.delete(taskName);
-      }
-    }
-
-    // 4. Apply all events atomically
+    // 2. Apply events atomically (if any)
     if (events.length > 0) {
       live = applyEvents(live, events);
     }
 
-    // 5. Schedule — what can run?
+    // 3. Schedule — what can run?
     const result = schedule(live);
 
-    // 6. Observability callback
-    if (onDrain && events.length > 0) {
-      onDrain(events, live, result);
+    // 4. Observability callback (only when there were events)
+    if (events.length > 0) {
+      onDrain?.(events, live, result);
     }
 
-    // 7. Dispatch eligible tasks not already initiated
+    // 5. Dispatch eligible tasks
     for (const taskName of result.eligible) {
-      if (dispatched.has(taskName)) continue;
       dispatchTask(taskName);
     }
+  }
 
-    // 8. Re-dispatch retry-queued tasks
-    for (const [taskName, entry] of dispatched) {
-      if (entry.status === 'retry-queued') {
-        dispatchTask(taskName);
+  // --------------------------------------------------------------------------
+  // Resolve upstream state for a task's requires
+  // --------------------------------------------------------------------------
+
+  function resolveUpstreamState(taskName: string): Record<string, Record<string, unknown> | undefined> {
+    const taskConfig = live.config.tasks[taskName];
+    const requires = taskConfig.requires ?? [];
+
+    const tokenToTask = new Map<string, string>();
+    for (const [name, cfg] of Object.entries(live.config.tasks)) {
+      for (const token of cfg.provides ?? []) {
+        tokenToTask.set(token, name);
+      }
+    }
+
+    const state: Record<string, Record<string, unknown> | undefined> = {};
+    for (const token of requires) {
+      const producerTask = tokenToTask.get(token);
+      if (producerTask) {
+        state[token] = live.state.tasks[producerTask]?.data;
+      } else {
+        state[token] = undefined;
+      }
+    }
+    return state;
+  }
+
+  // --------------------------------------------------------------------------
+  // Run the handler pipeline for a task
+  // --------------------------------------------------------------------------
+
+  async function runPipeline(taskName: string, callbackToken: string): Promise<void> {
+    const taskConfig = live.config.tasks[taskName];
+    const handlerNames = taskConfig.taskHandlers ?? [];
+    const upstreamState = resolveUpstreamState(taskName);
+
+    for (const handlerName of handlerNames) {
+      const handler = handlers.get(handlerName);
+      if (!handler) {
+        throw new Error(`Handler '${handlerName}' not found in registry (task '${taskName}')`);
+      }
+
+      const input: TaskHandlerInput = {
+        nodeId: taskName,
+        state: upstreamState,
+        taskState: live.state.tasks[taskName],
+        config: taskConfig,
+        callbackToken,
+      };
+
+      const status = await handler(input);
+
+      if (status === 'task-initiate-failure') {
+        throw new Error(`Handler '${handlerName}' returned task-initiate-failure (task '${taskName}')`);
       }
     }
   }
@@ -198,208 +324,132 @@ export function createReactiveGraph(
   // --------------------------------------------------------------------------
 
   function dispatchTask(taskName: string): void {
-    const handler = handlers.get(taskName);
-    if (!handler) {
-      // No handler registered — push task-failed to core
-      journal.append({
-        type: 'task-failed',
-        taskName,
-        error: `No handler registered for task "${taskName}"`,
-        timestamp: new Date().toISOString(),
-      });
-      drainQueued = true;
+    const taskConfig = live.config.tasks[taskName];
+    const handlerNames = taskConfig?.taskHandlers;
+
+    if (!handlerNames || handlerNames.length === 0) {
+      // No taskHandlers — externally driven.
       return;
     }
 
-    const existing = dispatched.get(taskName);
-    const attempt = existing ? existing.dispatchAttempts + 1 : 1;
-
-    // Check max retries
-    if (attempt > maxDispatchRetries) {
-      dispatched.set(taskName, {
-        status: 'abandoned',
-        dispatchedAt: existing?.dispatchedAt ?? Date.now(),
-        dispatchAttempts: attempt - 1,
-        lastError: existing?.lastError,
-      });
-      onAbandoned?.(taskName);
-      // Notify core engine so on_failure/circuit_breaker can fire
-      journal.append({
-        type: 'task-failed',
-        taskName,
-        error: `dispatch-abandoned: handler unreachable after ${attempt - 1} attempts${existing?.lastError ? ` (${existing.lastError})` : ''}`,
-        timestamp: new Date().toISOString(),
-      });
-      drainQueued = true;
-      return;
-    }
-
-    // Mark initiated
-    dispatched.set(taskName, {
-      status: 'initiated',
-      dispatchedAt: Date.now(),
-      dispatchAttempts: attempt,
-    });
-
-    // Push task-started to journal
+    // Journal task-started
     journal.append({
       type: 'task-started',
       taskName,
       timestamp: new Date().toISOString(),
     });
 
-    // Set up timeout
-    if (defaultTimeoutMs > 0) {
-      const timer = setTimeout(() => {
-        if (disposed) return;
-        const entry = dispatched.get(taskName);
-        if (entry?.status === 'initiated') {
-          dispatched.set(taskName, {
-            ...entry,
-            status: 'timed-out',
-          });
-          // Queue retry or abandon on next drain
-          dispatched.set(taskName, {
-            ...entry,
-            status: entry.dispatchAttempts >= maxDispatchRetries ? 'abandoned' : 'retry-queued',
-          });
-          if (entry.dispatchAttempts >= maxDispatchRetries) {
-            onAbandoned?.(taskName);
-            journal.append({
-              type: 'task-failed',
-              taskName,
-              error: `dispatch-timeout: no callback after ${defaultTimeoutMs}ms (${entry.dispatchAttempts} attempts)`,
-              timestamp: new Date().toISOString(),
-            });
-          }
-          drain();
-        }
-      }, defaultTimeoutMs);
-      timeoutTimers.set(taskName, timer);
-    }
+    const callbackToken = encodeCallbackToken(taskName);
 
-    // Fire-and-forget: invoke handler
-    const ctx: TaskHandlerContext = {
-      taskName,
-      live: live,
-      config: live.config.tasks[taskName],
-    };
-
-    try {
-      const promise = handler(ctx);
-      promise.then(
-        (handlerResult) => {
-          if (disposed) return;
-          clearTimeout(timeoutTimers.get(taskName));
-          timeoutTimers.delete(taskName);
-
-          journal.append({
-            type: 'task-completed',
-            taskName,
-            result: handlerResult.result,
-            data: handlerResult.data,
-            dataHash: handlerResult.dataHash,
-            timestamp: new Date().toISOString(),
-          });
-          drain();
-        },
-        (error: Error) => {
-          if (disposed) return;
-          clearTimeout(timeoutTimers.get(taskName));
-          timeoutTimers.delete(taskName);
-
-          journal.append({
-            type: 'task-failed',
-            taskName,
-            error: error.message ?? String(error),
-            timestamp: new Date().toISOString(),
-          });
-          drain();
-        },
-      );
-    } catch (syncError: unknown) {
-      // Handler threw synchronously (not async)
-      const err = syncError instanceof Error ? syncError : new Error(String(syncError));
-      dispatched.set(taskName, {
-        status: 'dispatch-failed',
-        dispatchedAt: Date.now(),
-        dispatchAttempts: attempt,
-        lastError: err.message,
+    // Fire-and-forget: run the handler pipeline
+    runPipeline(taskName, callbackToken).catch((error: Error) => {
+      if (disposed) return;
+      journal.append({
+        type: 'task-failed',
+        taskName,
+        error: error.message ?? String(error),
+        timestamp: new Date().toISOString(),
       });
-      onDispatchFailed?.(taskName, err, attempt);
-      dispatched.set(taskName, {
-        ...dispatched.get(taskName)!,
-        status: 'retry-queued',
-      });
-      drainQueued = true;
-    }
+      drain();
+    });
   }
 
   // --------------------------------------------------------------------------
-  // Timeout sweep
-  // --------------------------------------------------------------------------
-
-  function sweepTimeouts(): void {
-    // Timeouts are handled via setTimeout callbacks, but we also sweep
-    // on each drain cycle for any that might have slipped through.
-    const now = Date.now();
-    for (const [taskName, entry] of dispatched) {
-      if (entry.status !== 'initiated') continue;
-      if (defaultTimeoutMs <= 0) continue;
-      if (now - entry.dispatchedAt >= defaultTimeoutMs) {
-        dispatched.set(taskName, {
-          ...entry,
-          status: entry.dispatchAttempts >= maxDispatchRetries ? 'abandoned' : 'retry-queued',
-        });
-        if (entry.dispatchAttempts >= maxDispatchRetries) {
-          onAbandoned?.(taskName);
-          journal.append({
-            type: 'task-failed',
-            taskName,
-            error: `dispatch-timeout: no callback after ${defaultTimeoutMs}ms (${entry.dispatchAttempts} attempts)`,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        clearTimeout(timeoutTimers.get(taskName));
-        timeoutTimers.delete(taskName);
-      }
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Public API
+  // Public API — every mutation goes through journal
   // --------------------------------------------------------------------------
 
   return {
     push(event: GraphEvent): void {
       if (disposed) return;
-      // Apply immediately (not via journal — this is an external push)
-      live = applyEvent(live, event);
-      // Then schedule + dispatch
+      if (event.type === 'task-completed' && event.data && !event.dataHash) {
+        event = { ...event, dataHash: computeDataHash(event.data) };
+      }
+      journal.append(event);
       drain();
     },
 
     pushAll(events: GraphEvent[]): void {
       if (disposed) return;
-      if (events.length === 0) return;
-      live = applyEvents(live, events);
+      for (const event of events) {
+        if (event.type === 'task-completed' && event.data && !event.dataHash) {
+          journal.append({ ...event, dataHash: computeDataHash(event.data) });
+        } else {
+          journal.append(event);
+        }
+      }
       drain();
     },
 
-    addNode(name: string, taskConfig: TaskConfig, handler: TaskHandler): void {
+    resolveCallback(callbackToken: string, data: Record<string, unknown>, errors?: string[]): void {
+      if (disposed) return;
+
+      const decoded = decodeCallbackToken(callbackToken);
+      if (!decoded) return;
+
+      const { taskName } = decoded;
+      if (!live.config.tasks[taskName]) return;
+
+      if (errors && errors.length > 0) {
+        journal.append({
+          type: 'task-failed',
+          taskName,
+          error: errors.join('; '),
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        const dataHash = data && Object.keys(data).length > 0 ? computeDataHash(data) : undefined;
+        journal.append({
+          type: 'task-completed',
+          taskName,
+          data,
+          dataHash,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      drain();
+    },
+
+    addNode(name: string, taskConfig: TaskConfig): void {
       if (disposed) return;
       live = addNode(live, name, taskConfig);
-      handlers.set(name, handler);
       drain();
     },
 
     removeNode(name: string): void {
       if (disposed) return;
       live = removeNode(live, name);
+    },
+
+    registerHandler(name: string, fn: TaskHandlerFn): void {
+      handlers.set(name, fn);
+    },
+
+    unregisterHandler(name: string): void {
       handlers.delete(name);
-      dispatched.delete(name);
-      clearTimeout(timeoutTimers.get(name));
-      timeoutTimers.delete(name);
+    },
+
+    retrigger(taskName: string): void {
+      if (disposed) return;
+      if (!live.config.tasks[taskName]) return;
+      journal.append({
+        type: 'task-restart',
+        taskName,
+        timestamp: new Date().toISOString(),
+      });
+      drain();
+    },
+
+    retriggerAll(taskNames: string[]): void {
+      if (disposed) return;
+      for (const name of taskNames) {
+        if (!live.config.tasks[name]) continue;
+        journal.append({
+          type: 'task-restart',
+          taskName: name,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      drain();
     },
 
     getState(): LiveGraph {
@@ -410,16 +460,8 @@ export function createReactiveGraph(
       return schedule(live);
     },
 
-    getDispatchState(): ReadonlyMap<string, DispatchEntry> {
-      return dispatched;
-    },
-
     dispose(): void {
       disposed = true;
-      for (const timer of timeoutTimers.values()) {
-        clearTimeout(timer);
-      }
-      timeoutTimers.clear();
     },
   };
 }

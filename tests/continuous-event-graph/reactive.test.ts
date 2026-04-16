@@ -3,7 +3,6 @@
  *   - createReactiveGraph, push, pushAll, addNode, removeNode, dispose
  *   - Journal (MemoryJournal, FileJournal)
  *   - applyEvents batch
- *   - Dispatch tracking, timeout, retry, abandon
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -16,13 +15,19 @@ import {
   createReactiveGraph,
   MemoryJournal,
 } from '../../src/continuous-event-graph/index.js';
-import type { TaskHandler, TaskHandlerResult, ReactiveGraph } from '../../src/continuous-event-graph/index.js';
+import type { TaskHandlerFn, ReactiveGraph } from '../../src/continuous-event-graph/index.js';
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
 const ts = () => new Date().toISOString();
+
+/** Lazy graph ref for test handlers to call resolveCallback */
+function makeGraphRef(): { ref: ReactiveGraph | null; resolve: (token: string, data: Record<string, unknown>, errors?: string[]) => void } {
+  const o = { ref: null as ReactiveGraph | null, resolve: (token: string, data: Record<string, unknown>, errors?: string[]) => { o.ref!.resolveCallback(token, data, errors); } };
+  return o;
+}
 
 function makeConfig(tasks: Record<string, Partial<TaskConfig>> = {}): GraphConfig {
   return {
@@ -117,25 +122,28 @@ describe('createReactiveGraph', () => {
 
   it('drives a simple two-task pipeline to completion', async () => {
     const config = makeConfig({
-      fetch: { provides: ['data'] },
-      transform: { requires: ['data'], provides: ['result'] },
+      fetch: { provides: ['data'], taskHandlers: ['fetch'] },
+      transform: { requires: ['data'], provides: ['result'], taskHandlers: ['transform'] },
     });
 
     const log: string[] = [];
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        fetch: async () => {
+        fetch: async ({ callbackToken }) => {
           log.push('fetch-ran');
-          return {};
+          g.resolve(callbackToken, {});
+          return 'task-initiated';
         },
-        transform: async () => {
+        transform: async ({ callbackToken }) => {
           log.push('transform-ran');
-          return {};
+          g.resolve(callbackToken, {});
+          return 'task-initiated';
         },
       },
-      defaultTimeoutMs: 0, // disable timeouts for this test
     });
+    g.ref = rg;
 
     // Initial push — inject a token or just trigger schedule
     // Tasks with no requires are eligible immediately
@@ -159,19 +167,32 @@ describe('createReactiveGraph', () => {
       classify: {
         provides: ['default-out'],
         on: { photo: ['is-photo'], doc: ['is-doc'] },
+        taskHandlers: ['classify'],
       },
-      processPhoto: { requires: ['is-photo'], provides: ['done'] },
-      processDoc: { requires: ['is-doc'], provides: ['done'] },
+      processPhoto: { requires: ['is-photo'], provides: ['done'], taskHandlers: ['processPhoto'] },
+      processDoc: { requires: ['is-doc'], provides: ['done'], taskHandlers: ['processDoc'] },
     });
+
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        classify: async () => ({ result: 'photo' }),
-        processPhoto: async () => ({}),
-        processDoc: async () => ({}),
+        classify: async ({ callbackToken }) => {
+          // resolveCallback doesn't support result routing yet — use push instead
+          // For conditional routing, the handler pushes task-completed with result
+          g.ref!.push({
+            type: 'task-completed',
+            taskName: 'classify',
+            result: 'photo',
+            timestamp: ts(),
+          });
+          return 'task-initiated';
+        },
+        processPhoto: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
+        processDoc: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await ticks(50);
@@ -185,14 +206,13 @@ describe('createReactiveGraph', () => {
 
   it('pushes task-failed when handler rejects', async () => {
     const config = makeConfig({
-      flaky: { provides: ['data'] },
+      flaky: { provides: ['data'], taskHandlers: ['flaky'] },
     });
 
     rg = createReactiveGraph(config, {
       handlers: {
         flaky: async () => { throw new Error('network error'); },
       },
-      defaultTimeoutMs: 0,
     });
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
@@ -203,39 +223,40 @@ describe('createReactiveGraph', () => {
     expect(state.state.tasks.flaky.error).toBe('network error');
   });
 
-  it('pushes task-failed when no handler registered', async () => {
+  it('skips dispatch silently when no taskHandlers defined', async () => {
     const config = makeConfig({
-      orphan: { provides: ['data'] },
+      orphan: { provides: ['data'] }, // no taskHandlers — externally driven
     });
 
     rg = createReactiveGraph(config, {
       handlers: {}, // no handler for 'orphan'
-      defaultTimeoutMs: 0,
     });
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await ticks(50);
 
     const state = rg.getState();
-    expect(state.state.tasks.orphan.status).toBe('failed');
-    expect(state.state.tasks.orphan.error).toContain('No handler registered');
+    // No taskHandlers → task stays not-started (externally-driven pattern)
+    expect(state.state.tasks.orphan.status).toBe('not-started');
+    expect(state.state.tasks.orphan.error).toBeUndefined();
   });
 
   it('respects dispose — stops dispatching', async () => {
     const config = makeConfig({
-      a: { provides: ['x'] },
-      b: { requires: ['x'], provides: ['y'] },
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
     });
 
     const log: string[] = [];
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        a: async () => { log.push('a'); return {}; },
-        b: async () => { log.push('b'); return {}; },
+        a: async ({ callbackToken }) => { log.push('a'); g.resolve(callbackToken, {}); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { log.push('b'); g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await tick();
@@ -261,27 +282,30 @@ describe('reactive — dynamic nodes', () => {
 
   it('addNode triggers dispatch of newly eligible task', async () => {
     const config = makeConfig({
-      source: { provides: ['data'] },
+      source: { provides: ['data'], taskHandlers: ['source'] },
     });
 
     const log: string[] = [];
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        source: async () => { log.push('source'); return {}; },
+        source: async ({ callbackToken }) => { log.push('source'); g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await ticks(50);
     expect(log).toContain('source');
 
-    // Now add a node that depends on 'data' (already produced)
-    rg.addNode('sink', { requires: ['data'], provides: ['done'] } as TaskConfig, async () => {
+    // Register the handler, then add a node that depends on 'data' (already produced)
+    rg.registerHandler('sink', async ({ callbackToken }) => {
       log.push('sink');
-      return {};
+      g.resolve(callbackToken, {});
+      return 'task-initiated';
     });
+    rg.addNode('sink', { requires: ['data'], provides: ['done'], taskHandlers: ['sink'] } as TaskConfig);
 
     await ticks(50);
     expect(log).toContain('sink');
@@ -290,17 +314,19 @@ describe('reactive — dynamic nodes', () => {
 
   it('removeNode stops its handler and removes it from state', async () => {
     const config = makeConfig({
-      a: { provides: ['x'] },
-      b: { requires: ['x'], provides: ['y'] },
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
     });
+
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        a: async () => ({}),
-        b: async () => ({}),
+        a: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     rg.removeNode('b');
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
@@ -323,19 +349,20 @@ describe('reactive — pushAll', () => {
 
   it('applies multiple events atomically then dispatches', async () => {
     const config = makeConfig({
-      a: { provides: ['x'] },
-      b: { requires: ['x'], provides: ['y'] },
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
     });
 
     const log: string[] = [];
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        a: async () => { log.push('a'); return {}; },
-        b: async () => { log.push('b'); return {}; },
+        a: async ({ callbackToken }) => { log.push('a'); g.resolve(callbackToken, {}); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { log.push('b'); g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     // Manually push start + complete for 'a', then see b gets dispatched
     rg.pushAll([
@@ -346,49 +373,6 @@ describe('reactive — pushAll', () => {
     await ticks(50);
     expect(log).toContain('b');
     expect(rg.getState().state.tasks.b.status).toBe('completed');
-  });
-});
-
-// ============================================================================
-// Dispatch tracking
-// ============================================================================
-
-describe('reactive — dispatch state', () => {
-  let rg: ReactiveGraph;
-
-  afterEach(() => {
-    rg?.dispose();
-  });
-
-  it('tracks initiated tasks', async () => {
-    const config = makeConfig({
-      slow: { provides: ['x'] },
-    });
-
-    let resolve: () => void;
-    const promise = new Promise<void>(r => { resolve = r; });
-
-    rg = createReactiveGraph(config, {
-      handlers: {
-        slow: async () => {
-          await promise;
-          return {};
-        },
-      },
-      defaultTimeoutMs: 0,
-    });
-
-    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-    await tick();
-
-    const dispatch = rg.getDispatchState();
-    expect(dispatch.get('slow')?.status).toBe('initiated');
-
-    resolve!();
-    await ticks(50);
-
-    // After completion, dispatch entry is cleared
-    expect(rg.getDispatchState().has('slow')).toBe(false);
   });
 });
 
@@ -405,16 +389,16 @@ describe('reactive — observability', () => {
 
   it('calls onDrain with events and state', async () => {
     const config = makeConfig({
-      a: { provides: ['x'] },
+      a: { provides: ['x'], taskHandlers: ['a'] },
     });
 
     const drainCalls: { eventCount: number; eligible: string[] }[] = [];
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        a: async () => ({}),
+        a: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
       onDrain: (events, _live, scheduleResult) => {
         drainCalls.push({
           eventCount: events.length,
@@ -422,6 +406,7 @@ describe('reactive — observability', () => {
         });
       },
     });
+    g.ref = rg;
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await ticks(50);
@@ -431,68 +416,33 @@ describe('reactive — observability', () => {
 });
 
 // ============================================================================
-// Timeout + abandon
+// Sync throw
 // ============================================================================
 
-describe('reactive — timeout and abandon', () => {
+describe('reactive — sync handler failure', () => {
   let rg: ReactiveGraph;
 
   afterEach(() => {
     rg?.dispose();
   });
 
-  it('abandons task after timeout + max retries', async () => {
+  it('marks task as failed when handler throws synchronously', async () => {
     const config = makeConfig({
-      stuck: { provides: ['x'] },
+      bad: { provides: ['x'], taskHandlers: ['bad'] },
     });
-
-    const abandoned: string[] = [];
 
     rg = createReactiveGraph(config, {
       handlers: {
-        // Handler that never resolves
-        stuck: () => new Promise(() => {}),
-      },
-      defaultTimeoutMs: 50,
-      maxDispatchRetries: 1,
-      onAbandoned: (name) => abandoned.push(name),
-    });
-
-    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-
-    // Wait for timeout + abandon cycle
-    await ticks(200);
-
-    expect(abandoned).toContain('stuck');
-
-    const state = rg.getState();
-    expect(state.state.tasks.stuck.status).toBe('failed');
-    expect(state.state.tasks.stuck.error).toContain('dispatch-timeout');
-  });
-
-  it('calls onDispatchFailed when handler throws synchronously', async () => {
-    const config = makeConfig({
-      bad: { provides: ['x'] },
-    });
-
-    const failures: { name: string; attempt: number }[] = [];
-
-    rg = createReactiveGraph(config, {
-      handlers: {
-        bad: (() => { throw new Error('sync boom'); }) as unknown as TaskHandler,
-      },
-      defaultTimeoutMs: 0,
-      maxDispatchRetries: 2,
-      onDispatchFailed: (name, _err, attempt) => {
-        failures.push({ name, attempt });
+        bad: (() => { throw new Error('sync boom'); }) as unknown as TaskHandlerFn,
       },
     });
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await ticks(50);
 
-    expect(failures.length).toBeGreaterThan(0);
-    expect(failures[0].name).toBe('bad');
+    const state = rg.getState();
+    expect(state.state.tasks.bad.status).toBe('failed');
+    expect(state.state.tasks.bad.error).toContain('sync boom');
   });
 });
 
@@ -509,15 +459,25 @@ describe('reactive — dataHash', () => {
 
   it('handler dataHash is stored on task state', async () => {
     const config = makeConfig({
-      producer: { provides: ['data'] },
+      producer: { provides: ['data'], taskHandlers: ['producer'] },
     });
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        producer: async () => ({ dataHash: 'abc123' }),
+        producer: async ({ callbackToken }) => {
+          // Push task-completed with explicit dataHash via external push
+          g.ref!.push({
+            type: 'task-completed',
+            taskName: 'producer',
+            dataHash: 'abc123',
+            timestamp: ts(),
+          });
+          return 'task-initiated';
+        },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
     await ticks(50);
@@ -539,17 +499,18 @@ describe('reactive — getSchedule', () => {
 
   it('returns current schedule projection', () => {
     const config = makeConfig({
-      a: { provides: ['x'] },
-      b: { requires: ['x'], provides: ['y'] },
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
     });
+    const g = makeGraphRef();
 
     rg = createReactiveGraph(config, {
       handlers: {
-        a: async () => ({}),
-        b: async () => ({}),
+        a: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
       },
-      defaultTimeoutMs: 0,
     });
+    g.ref = rg;
 
     const result = rg.getSchedule();
     expect(result.eligible).toContain('a');

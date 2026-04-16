@@ -10,13 +10,14 @@
  */
 
 import type { GraphConfig, TaskConfig, GraphEvent, LiveGraph, NodeInfo, LiveGraphSnapshot } from './types.js';
-import type { ExecutionState, TaskState } from '../event-graph/types.js';
+import type { ExecutionState, GraphEngineStore } from '../event-graph/types.js';
 import { getProvides, getRequires } from '../event-graph/graph-helpers.js';
 import {
   applyTaskStart,
   applyTaskCompletion,
   applyTaskFailure,
   applyTaskProgress,
+  applyTaskRestart,
 } from '../event-graph/task-transitions.js';
 
 // ============================================================================
@@ -29,10 +30,10 @@ import {
  */
 export function createLiveGraph(config: GraphConfig, executionId?: string): LiveGraph {
   const id = executionId ?? `live-${Date.now()}`;
-  const tasks: Record<string, TaskState> = {};
+  const tasks: Record<string, GraphEngineStore> = {};
 
   for (const taskName of Object.keys(config.tasks)) {
-    tasks[taskName] = createDefaultTaskState();
+    tasks[taskName] = createDefaultGraphEngineStore();
   }
 
   const state: ExecutionState = {
@@ -79,7 +80,7 @@ export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
       break;
 
     case 'task-completed':
-      newState = applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash);
+      newState = applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash, event.data);
       break;
 
     case 'task-failed':
@@ -88,6 +89,10 @@ export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
 
     case 'task-progress':
       newState = applyTaskProgress(state, event.taskName, event.message, event.progress);
+      break;
+
+    case 'task-restart':
+      newState = applyTaskRestart(state, event.taskName);
       break;
 
     case 'inject-tokens':
@@ -136,7 +141,7 @@ export function addNode(live: LiveGraph, name: string, taskConfig: TaskConfig): 
     },
     state: {
       ...live.state,
-      tasks: { ...live.state.tasks, [name]: createDefaultTaskState() },
+      tasks: { ...live.state.tasks, [name]: createDefaultGraphEngineStore() },
       lastUpdated: new Date().toISOString(),
     },
   };
@@ -321,7 +326,7 @@ export function resetNode(live: LiveGraph, name: string): LiveGraph {
       ...live.state,
       tasks: {
         ...live.state.tasks,
-        [name]: createDefaultTaskState(),
+        [name]: createDefaultGraphEngineStore(),
       },
       lastUpdated: new Date().toISOString(),
     },
@@ -382,7 +387,7 @@ export function enableNode(live: LiveGraph, name: string): LiveGraph {
 export function getNode(live: LiveGraph, name: string): NodeInfo | undefined {
   const config = live.config.tasks[name];
   if (!config) return undefined;
-  const state = live.state.tasks[name] ?? createDefaultTaskState();
+  const state = live.state.tasks[name] ?? createDefaultGraphEngineStore();
   return { name, config, state };
 }
 
@@ -444,7 +449,7 @@ export function restore(data: unknown): LiveGraph {
 // Internals
 // ============================================================================
 
-function createDefaultTaskState(): TaskState {
+function createDefaultGraphEngineStore(): GraphEngineStore {
   return {
     status: 'not-started',
     executionCount: 0,

@@ -3,10 +3,13 @@
  *
  * Demonstrates the reactive graph's advanced features:
  *  - Self-sustaining execution (no loops, no daemon)
+ *  - createCallbackHandler + createFireAndForgetHandler
  *  - Adding nodes at runtime with handlers
  *  - Conditional routing (on)
  *  - Handler failure → core engine on_failure tokens
- *  - Observability via onDrain + getDispatchState
+ *  - Auto dataHash (no explicit hash in handlers)
+ *  - validateReactiveGraph for handler/dispatch checks
+ *  - Observability via onDrain
  *  - Journal-based event batching
  *
  * Scenario: A monitoring system that collects metrics, evaluates alerts,
@@ -18,9 +21,13 @@
 import {
   createReactiveGraph,
   MemoryJournal,
+  createCallbackHandler,
+  createFireAndForgetHandler,
+  validateReactiveGraph,
 } from '../../src/continuous-event-graph/index.js';
 import type { GraphConfig, TaskConfig } from '../../src/continuous-event-graph/types.js';
-import type { TaskHandler } from '../../src/continuous-event-graph/reactive.js';
+import type { TaskHandlerFn, ReactiveGraph } from '../../src/continuous-event-graph/reactive.js';
+import type { ResolveCallbackFn } from '../../src/continuous-event-graph/handlers.js';
 
 // ============================================================================
 // 1. Define the initial graph
@@ -35,15 +42,18 @@ const config: GraphConfig = {
   tasks: {
     collect_cpu: {
       provides: ['cpu-metrics'],
+      taskHandlers: ['collect_cpu'],
       description: 'Collect CPU utilization metrics',
     },
     collect_memory: {
       provides: ['memory-metrics'],
+      taskHandlers: ['collect_memory'],
       description: 'Collect memory usage metrics',
     },
     evaluate_health: {
       requires: ['cpu-metrics', 'memory-metrics'],
       provides: ['health-status'],
+      taskHandlers: ['evaluate_health'],
       on: {
         healthy: ['system-ok'],
         degraded: ['system-degraded'],
@@ -54,22 +64,26 @@ const config: GraphConfig = {
     alert_oncall: {
       requires: ['system-critical'],
       provides: ['oncall-notified'],
+      taskHandlers: ['alert_oncall'],
       description: 'Page the on-call engineer',
     },
     log_status: {
       requires: ['system-ok'],
       provides: ['status-logged'],
+      taskHandlers: ['log_status'],
       description: 'Log healthy status for audit',
     },
     scale_up: {
       requires: ['system-degraded'],
       provides: ['scaled-up'],
+      taskHandlers: ['scale_up'],
       on_failure: ['scale-failed'],
       description: 'Auto-scale infrastructure',
     },
     escalate: {
       requires: ['scale-failed'],
       provides: ['escalated'],
+      taskHandlers: ['escalate'],
       description: 'Escalate to platform team when auto-scale fails',
     },
   },
@@ -95,22 +109,32 @@ function simulateMetrics(): { cpu: number; memory: number } {
 
 console.log('=== Reactive Monitoring Dashboard ===\n');
 
-const rg = createReactiveGraph(config, {
-  handlers: {
-    collect_cpu: async ({ taskName }) => {
-      const { cpu } = simulateMetrics();
-      console.log(`  [${taskName}] CPU: ${cpu}%`);
-      return { data: { cpu }, dataHash: `cpu-${cpu}` };
-    },
+// Lazy resolver — graph doesn't exist at handler-creation time
+let graphRef: ReactiveGraph;
+const getResolve = (): ResolveCallbackFn => graphRef.resolveCallback.bind(graphRef);
 
-    collect_memory: async ({ taskName }) => {
-      const { memory } = simulateMetrics();
-      console.log(`  [${taskName}] Memory: ${memory}%`);
-      return { data: { memory }, dataHash: `mem-${memory}` };
-    },
+// Handlers use createCallbackHandler for data-producing tasks and
+// createFireAndForgetHandler for side-effect-only tasks.
+// No explicit dataHash — the reactive layer auto-computes from data.
 
-    evaluate_health: async ({ taskName }) => {
-      await sleep(50);
+const handlers: Record<string, TaskHandlerFn> = {
+  // Data-producing handlers — return data and let auto-hash do the rest
+  collect_cpu: createCallbackHandler(async ({ nodeId }) => {
+    const { cpu } = simulateMetrics();
+    console.log(`  [${nodeId}] CPU: ${cpu}%`);
+    return { cpu };
+  }, getResolve),
+
+  collect_memory: createCallbackHandler(async ({ nodeId }) => {
+    const { memory } = simulateMetrics();
+    console.log(`  [${nodeId}] Memory: ${memory}%`);
+    return { memory };
+  }, getResolve),
+
+  // evaluate_health uses conditional routing (on: { healthy, degraded, critical })
+  // resolveCallback doesn't support `result`, so we push directly to the graph
+  evaluate_health: async ({ nodeId, callbackToken }) => {
+    setTimeout(() => {
       let status: string;
       if (cpuLoad > 90 || memoryUsage > 90) {
         status = 'critical';
@@ -119,39 +143,47 @@ const rg = createReactiveGraph(config, {
       } else {
         status = 'healthy';
       }
-      console.log(`  [${taskName}] Health: ${status.toUpperCase()} (CPU=${cpuLoad}%, Mem=${memoryUsage}%)`);
-      return { result: status, data: { status, cpu: cpuLoad, memory: memoryUsage } };
-    },
-
-    alert_oncall: async ({ taskName }) => {
-      console.log(`  [${taskName}] 🚨 PAGING ON-CALL: System critical!`);
-      await sleep(100);
-      return {};
-    },
-
-    log_status: async ({ taskName }) => {
-      console.log(`  [${taskName}] ✅ System healthy — logged.`);
-      return {};
-    },
-
-    scale_up: async ({ taskName }) => {
-      console.log(`  [${taskName}] ⚡ Scaling up infrastructure...`);
-      await sleep(100);
-      // Simulate scale failure 50% of the time
-      if (Math.random() > 0.5) {
-        throw new Error('Auto-scale service unavailable');
-      }
-      console.log(`  [${taskName}] Scaled up successfully.`);
-      return {};
-    },
-
-    escalate: async ({ taskName }) => {
-      console.log(`  [${taskName}] 📢 Escalating to platform team — auto-scale failed.`);
-      return {};
-    },
+      console.log(`  [${nodeId}] Health: ${status.toUpperCase()} (CPU=${cpuLoad}%, Mem=${memoryUsage}%)`);
+      // Use graph.push directly for conditional routing (result field)
+      graphRef.push({
+        type: 'task-completed',
+        taskName: nodeId,
+        result: status,
+        data: { status, cpu: cpuLoad, memory: memoryUsage },
+        timestamp: new Date().toISOString(),
+      });
+    }, 50);
+    return 'task-initiated';
   },
 
-  defaultTimeoutMs: 5_000,
+  // Side-effect-only handlers — fire and forget (logging, alerting)
+  alert_oncall: createFireAndForgetHandler(async ({ nodeId }) => {
+    console.log(`  [${nodeId}] 🚨 PAGING ON-CALL: System critical!`);
+    await sleep(100);
+  }, getResolve),
+
+  log_status: createFireAndForgetHandler(({ nodeId }) => {
+    console.log(`  [${nodeId}] ✅ System healthy — logged.`);
+  }, getResolve),
+
+  scale_up: createCallbackHandler(async ({ nodeId }) => {
+    console.log(`  [${nodeId}] ⚡ Scaling up infrastructure...`);
+    await sleep(100);
+    // Simulate scale failure 50% of the time
+    if (Math.random() > 0.5) {
+      throw new Error('Auto-scale service unavailable');
+    }
+    console.log(`  [${nodeId}] Scaled up successfully.`);
+    return {};
+  }, getResolve),
+
+  escalate: createFireAndForgetHandler(({ nodeId }) => {
+    console.log(`  [${nodeId}] 📢 Escalating to platform team — auto-scale failed.`);
+  }, getResolve),
+};
+
+const rg = createReactiveGraph(config, {
+  handlers,
 
   onDrain: (events, live, result) => {
     const statuses = Object.entries(live.state.tasks)
@@ -159,15 +191,8 @@ const rg = createReactiveGraph(config, {
       .join(', ');
     console.log(`  [drain] ${events.length} events | eligible: [${result.eligible.join(', ')}]`);
   },
-
-  onDispatchFailed: (name, err, attempt) => {
-    console.log(`  [dispatch-failed] ${name}: ${err.message} (attempt ${attempt})`);
-  },
-
-  onAbandoned: (name) => {
-    console.log(`  [abandoned] ${name} — giving up.`);
-  },
 });
+graphRef = rg;
 
 // ============================================================================
 // 4. Kick it off — one push, the graph drives itself
@@ -187,15 +212,17 @@ console.log('\n--- Adding Slack notification node at runtime ---\n');
 const slackConfig: TaskConfig = {
   requires: ['system-degraded'],
   provides: ['slack-notified'],
+  taskHandlers: ['notify_slack'],
   description: 'Send alert to #incidents Slack channel',
 };
 
-const slackHandler: TaskHandler = async ({ taskName }) => {
-  console.log(`  [${taskName}] 💬 Slack → #incidents: System degraded, auto-scaling...`);
-  return {};
-};
+// Use createFireAndForgetHandler — Slack notification is a side-effect
+const slackHandler: TaskHandlerFn = createFireAndForgetHandler(({ nodeId }) => {
+  console.log(`  [${nodeId}] 💬 Slack → #incidents: System degraded, auto-scaling...`);
+}, getResolve);
 
-rg.addNode('notify_slack', slackConfig, slackHandler);
+rg.registerHandler('notify_slack', slackHandler);
+rg.addNode('notify_slack', slackConfig);
 
 await sleep(500);
 
@@ -213,15 +240,18 @@ for (const [name, task] of Object.entries(state.state.tasks)) {
 
 console.log(`\n  Outputs: [${state.state.availableOutputs.join(', ')}]`);
 
-// Show dispatch tracking
-const dispatch = rg.getDispatchState();
-if (dispatch.size > 0) {
-  console.log('\n  In-flight dispatches:');
-  for (const [name, entry] of dispatch) {
-    console.log(`    ${name}: ${entry.status} (${entry.dispatchAttempts} attempts)`);
-  }
-} else {
-  console.log('\n  No in-flight dispatches.');
+// ============================================================================
+// 7. Validate reactive graph consistency
+// ============================================================================
+
+console.log('\n=== Validation ===');
+const validation = validateReactiveGraph({
+  graph: rg,
+  handlers: { ...handlers, notify_slack: slackHandler },
+});
+console.log(`  Valid: ${validation.valid} (${validation.issues.length} issues)`);
+for (const issue of validation.issues) {
+  console.log(`    [${issue.severity}] ${issue.code}: ${issue.message}`);
 }
 
 rg.dispose();

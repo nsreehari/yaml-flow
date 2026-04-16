@@ -4,15 +4,21 @@
  * Same ETL pipeline as reactive-pipeline.ts, but YOU drive the loop.
  * Each task simulates async work with random sleep.
  *
+ * Demonstrates:
+ *  - Manual executor loop with next/apply
+ *  - validateGraph for static config validation before running
+ *  - validateLiveGraph for runtime state-consistency after running
+ *
  * Contrast with reactive-pipeline.ts where the graph drives itself.
  *
  * Run with: npx tsx examples/event-graph/executor-pipeline.ts
  */
 
 import {
-  next, apply, createInitialExecutionState,
+  next, apply, createInitialExecutionState, validateGraph,
 } from '../../src/event-graph/index.js';
 import type { GraphConfig, ExecutionState } from '../../src/event-graph/types.js';
+import { validateLiveGraph } from '../../src/continuous-event-graph/index.js';
 
 // ============================================================================
 // 1. Define the graph (same as reactive-pipeline)
@@ -70,6 +76,14 @@ async function executeTask(taskName: string): Promise<{ ok: boolean; error?: str
 async function run() {
   console.log('=== Executor-driven ETL Pipeline (Library Mode) ===\n');
 
+  // Pre-flight: validate static config before running
+  const configValidation = validateGraph(graph);
+  console.log(`Config validation: ${configValidation.valid ? '✅ valid' : '❌ invalid'} (${configValidation.issues.length} issues)`);
+  for (const issue of configValidation.issues) {
+    console.log(`  [${issue.severity}] ${issue.code}: ${issue.message}`);
+  }
+  if (!configValidation.valid) return;
+
   let state: ExecutionState = createInitialExecutionState(graph, 'exec-1');
   let iteration = 0;
 
@@ -125,6 +139,14 @@ async function run() {
   console.log('\n=== Final State ===');
   for (const [name, task] of Object.entries(state.tasks)) {
     console.log(`  ${name}: ${task.status} (${task.executionCount}x)`);
+  }
+
+  // Post-run: validate runtime state consistency
+  console.log('\n=== Runtime Validation ===');
+  const runtimeValidation = validateLiveGraph({ config: graph, state });
+  console.log(`  Valid: ${runtimeValidation.valid} (${runtimeValidation.issues.length} issues)`);
+  for (const issue of runtimeValidation.issues) {
+    console.log(`    [${issue.severity}] ${issue.code}: ${issue.message}`);
   }
 }
 
