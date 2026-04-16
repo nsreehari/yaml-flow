@@ -5,6 +5,7 @@
 export { StepMachine, createStepMachine } from './StepMachine.js';
 export { applyStepResult, checkCircuitBreaker, computeStepInput, extractReturnData, createInitialState } from './reducer.js';
 export { loadStepFlow, validateStepFlowConfig, parseStepFlowYaml } from './loader.js';
+export { validateFlowSchema } from './schema-validator.js';
 export type {
   StepFlowConfig,
   StepFlowSettings,

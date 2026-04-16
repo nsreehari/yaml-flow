@@ -1,0 +1,254 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/yaml-flow/schema/event-graph.json",
+  "title": "Event Graph Configuration",
+  "description": "Schema for stateless event-graph (DAG) workflow definitions in yaml-flow",
+  "type": "object",
+  "required": ["settings", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Optional graph identifier"
+    },
+    "settings": {
+      "$ref": "#/definitions/settings"
+    },
+    "tasks": {
+      "type": "object",
+      "description": "Task definitions keyed by name",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/task"
+      }
+    }
+  },
+
+  "definitions": {
+
+    "settings": {
+      "type": "object",
+      "required": ["completion"],
+      "properties": {
+        "completion": {
+          "type": "string",
+          "enum": [
+            "all-tasks-done",
+            "all-outputs-done",
+            "only-resolved",
+            "goal-reached",
+            "manual"
+          ],
+          "description": "Completion strategy"
+        },
+        "conflict_strategy": {
+          "type": "string",
+          "enum": [
+            "alphabetical",
+            "priority-first",
+            "duration-first",
+            "cost-optimized",
+            "resource-aware",
+            "random-select",
+            "user-choice",
+            "parallel-all",
+            "skip-conflicts",
+            "round-robin"
+          ],
+          "description": "Conflict resolution strategy"
+        },
+        "execution_mode": {
+          "type": "string",
+          "enum": ["dependency-mode", "eligibility-mode"],
+          "description": "Execution mode"
+        },
+        "goal": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Goal outputs — required when completion is 'goal-reached'"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max scheduler iterations (safety limit, default: 1000)"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Timeout in ms (declared for drivers, not enforced by pure engine)"
+        },
+        "refreshStrategy": {
+          "$ref": "#/definitions/refresh_strategy",
+          "description": "Default refresh strategy for all tasks (default: 'data-changed')"
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": { "completion": { "const": "goal-reached" } }
+      },
+      "then": {
+        "required": ["completion", "goal"]
+      }
+    },
+
+    "task": {
+      "type": "object",
+      "required": ["provides"],
+      "properties": {
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tokens this task needs to become eligible"
+        },
+        "provides": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tokens this task produces on successful completion"
+        },
+        "on": {
+          "type": "object",
+          "description": "Conditional provides based on handler result key",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "on_failure": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tokens to inject when this task fails"
+        },
+        "method": {
+          "type": "string",
+          "description": "Task execution method (informational — driver concern)"
+        },
+        "config": {
+          "type": "object",
+          "description": "Arbitrary task configuration (driver concern)"
+        },
+        "priority": {
+          "type": "number",
+          "description": "Higher = preferred in conflict resolution"
+        },
+        "estimatedDuration": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Estimated duration in ms (used by duration-first strategy)"
+        },
+        "estimatedCost": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Estimated cost (used by cost-optimized strategy)"
+        },
+        "estimatedResources": {
+          "type": "object",
+          "additionalProperties": { "type": "number" },
+          "description": "Resource requirements (used by resource-aware strategy)"
+        },
+        "retry": {
+          "$ref": "#/definitions/task_retry"
+        },
+        "refreshStrategy": {
+          "$ref": "#/definitions/refresh_strategy",
+          "description": "Task-level refresh strategy (overrides settings default)"
+        },
+        "refreshInterval": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Interval in seconds for time-based refresh strategy"
+        },
+        "maxExecutions": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of times this task can execute"
+        },
+        "circuit_breaker": {
+          "$ref": "#/definitions/task_circuit_breaker"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        },
+        "inference": {
+          "$ref": "#/definitions/inference_hints"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "task_retry": {
+      "type": "object",
+      "required": ["max_attempts"],
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum retry attempts"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Delay between retries in ms"
+        },
+        "backoff_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Backoff multiplier (e.g., 2 for exponential)"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "refresh_strategy": {
+      "type": "string",
+      "enum": ["data-changed", "epoch-changed", "time-based", "manual", "once"],
+      "description": "Strategy for determining when a completed task should re-run"
+    },
+
+    "task_circuit_breaker": {
+      "type": "object",
+      "required": ["max_executions", "on_break"],
+      "properties": {
+        "max_executions": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max executions before breaker trips"
+        },
+        "on_break": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Tokens to inject when breaker trips"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "inference_hints": {
+      "type": "object",
+      "description": "LLM inference hints — opt-in metadata for AI-assisted completion detection",
+      "properties": {
+        "criteria": {
+          "type": "string",
+          "description": "Human-readable completion criteria"
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Keywords to help the LLM understand the domain"
+        },
+        "suggestedChecks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Suggested checks for verification"
+        },
+        "autoDetectable": {
+          "type": "boolean",
+          "description": "Whether the LLM should attempt to auto-detect completion (default: false)"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

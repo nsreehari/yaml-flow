@@ -233,16 +233,16 @@ describe('conflict resolution', () => {
 });
 
 // ============================================================================
-// Repeatable tasks
+// RefreshStrategy tasks
 // ============================================================================
 
-describe('repeatable tasks', () => {
-  it('should allow repeatable tasks to re-execute when inputs refresh', () => {
+describe('refreshStrategy tasks', () => {
+  it('should allow re-runnable tasks to re-execute when inputs refresh', () => {
     const graph: GraphConfig = {
       settings: { completion: 'goal-reached', goal: ['final'], conflict_strategy: 'parallel-all' },
       tasks: {
         source: { provides: ['data'] },
-        processor: { requires: ['data'], provides: ['result'], repeatable: true },
+        processor: { requires: ['data'], provides: ['result'], refreshStrategy: 'epoch-changed' },
         finalize: { requires: ['result'], provides: ['final'] },
       },
     };
@@ -256,17 +256,17 @@ describe('repeatable tasks', () => {
     state = apply(state, { type: 'task-started', taskName: 'processor', timestamp: ts() }, graph);
     state = apply(state, { type: 'task-completed', taskName: 'processor', timestamp: ts() }, graph);
 
-    // After first completion, repeatable task status should be reset to not-started
-    expect(state.tasks.processor.status).toBe('not-started');
+    // After first completion, task stays completed; scheduler determines re-eligibility
+    expect(state.tasks.processor.status).toBe('completed');
     expect(state.tasks.processor.executionCount).toBe(1);
   });
 
-  it('should respect max execution limit on repeatable tasks', () => {
+  it('should respect max execution limit on re-runnable tasks', () => {
     const graph: GraphConfig = {
       settings: { completion: 'all-tasks-done', conflict_strategy: 'parallel-all' },
       tasks: {
         trigger: { provides: ['signal'] },
-        repeater: { requires: ['signal'], provides: ['output'], repeatable: { max: 2 } },
+        repeater: { requires: ['signal'], provides: ['output'], refreshStrategy: 'epoch-changed', maxExecutions: 2 },
       },
     };
     let state = makeState(graph);

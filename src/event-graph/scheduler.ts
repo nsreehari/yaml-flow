@@ -9,8 +9,8 @@ import type { GraphConfig, ExecutionState, SchedulerResult, ConflictStrategy } f
 import { TASK_STATUS } from './constants.js';
 import {
   getAllTasks, getRequires, getProvides, isNonActiveTask,
-  computeAvailableOutputs, groupTasksByProvides, isRepeatableTask,
-  getRepeatableMax,
+  computeAvailableOutputs, groupTasksByProvides,
+  getMaxExecutions, getRefreshStrategy,
 } from './graph-helpers.js';
 import { selectBestAlternative, getNonConflictingTasks, selectRandomTasks } from './conflict-resolution.js';
 import { isExecutionComplete } from './completion.js';
@@ -90,66 +90,112 @@ export function next(graph: GraphConfig, state: ExecutionState): SchedulerResult
 
 /**
  * Get candidate tasks whose dependencies are all met.
- * Handles repeatable tasks and circuit breakers.
+ * Uses refreshStrategy to determine re-execution eligibility.
  * Pure function.
  */
 export function getCandidateTasks(graph: GraphConfig, state: ExecutionState): string[] {
   const graphTasks = getAllTasks(graph);
-  // Merge computed outputs (from completed tasks) with state's available outputs (includes injected tokens)
   const computedOutputs = computeAvailableOutputs(graph, state.tasks);
   const availableOutputs = [...new Set([...computedOutputs, ...state.availableOutputs])];
   const candidates: string[] = [];
 
   for (const [taskName, taskConfig] of Object.entries(graphTasks)) {
     const taskState = state.tasks[taskName];
+    const strategy = getRefreshStrategy(taskConfig, graph.settings);
+    const rerunnable = strategy !== 'once';
 
-    // For non-repeatable tasks: skip if completed, running, failed, inactivated
-    if (!isRepeatableTask(taskConfig)) {
-      if (taskState?.status === TASK_STATUS.COMPLETED ||
-          taskState?.status === TASK_STATUS.RUNNING ||
-          isNonActiveTask(taskState)) {
-        continue;
-      }
-    } else {
-      // Repeatable task: skip if running or failed/inactivated
-      if (taskState?.status === TASK_STATUS.RUNNING || isNonActiveTask(taskState)) {
-        continue;
-      }
-      // Check max executions for repeatable
-      const maxExec = getRepeatableMax(taskConfig);
-      if (maxExec !== undefined && taskState && taskState.executionCount >= maxExec) {
-        continue;
-      }
-      // Circuit breaker check
-      if (taskConfig.circuit_breaker) {
-        if (taskState && taskState.executionCount >= taskConfig.circuit_breaker.max_executions) {
-          continue;
-        }
-      }
-      // For repeatable tasks that already completed: check if inputs have been refreshed
-      // A repeatable task needs its requires to have been regenerated since its last run
+    // Always skip running or inactive (failed/inactivated) tasks
+    if (taskState?.status === TASK_STATUS.RUNNING || isNonActiveTask(taskState)) {
+      continue;
+    }
+
+    // Max executions cap
+    const maxExec = getMaxExecutions(taskConfig);
+    if (maxExec !== undefined && taskState && taskState.executionCount >= maxExec) {
+      continue;
+    }
+
+    // Circuit breaker check
+    if (taskConfig.circuit_breaker && taskState &&
+        taskState.executionCount >= taskConfig.circuit_breaker.max_executions) {
+      continue;
+    }
+
+    // For once-only tasks: skip if completed
+    if (!rerunnable) {
       if (taskState?.status === TASK_STATUS.COMPLETED) {
-        // Check if any providing task has a higher epoch than this task's last epoch
-        const requires = getRequires(taskConfig);
-        if (requires.length > 0) {
-          const hasRefreshedInputs = requires.some(req => {
-            // Find which task provides this requirement and check its epoch
-            for (const [otherName, otherConfig] of Object.entries(graphTasks)) {
-              if (getProvides(otherConfig).includes(req)) {
-                const otherState = state.tasks[otherName];
-                if (otherState && otherState.executionCount > taskState.lastEpoch) {
-                  return true;
+        continue;
+      }
+    }
+
+    // For re-runnable tasks that already completed: check strategy
+    if (rerunnable && taskState?.status === TASK_STATUS.COMPLETED) {
+      const requires = getRequires(taskConfig);
+
+      switch (strategy) {
+        case 'data-changed': {
+          // Re-run only if an upstream task's dataHash differs from what we last consumed
+          if (requires.length > 0) {
+            const hasChangedData = requires.some(req => {
+              for (const [otherName, otherConfig] of Object.entries(graphTasks)) {
+                if (getProvides(otherConfig).includes(req)) {
+                  const otherState = state.tasks[otherName];
+                  if (!otherState) continue;
+                  const consumed = taskState.lastConsumedHashes?.[req];
+                  // If upstream has no hash, fall back to epoch check
+                  if (otherState.lastDataHash == null) {
+                    return otherState.executionCount > taskState.lastEpoch;
+                  }
+                  return otherState.lastDataHash !== consumed;
                 }
               }
-            }
-            return false;
-          });
-          if (!hasRefreshedInputs) continue; // No new inputs since last execution
-        } else {
-          // No requires — for repeatable tasks with no deps, they need an external trigger
-          // (inject-tokens event). If already completed and nothing new, skip.
+              return false;
+            });
+            if (!hasChangedData) continue;
+          } else {
+            // No requires — needs external trigger
+            continue;
+          }
+          break;
+        }
+
+        case 'epoch-changed': {
+          if (requires.length > 0) {
+            const hasRefreshedInputs = requires.some(req => {
+              for (const [otherName, otherConfig] of Object.entries(graphTasks)) {
+                if (getProvides(otherConfig).includes(req)) {
+                  const otherState = state.tasks[otherName];
+                  if (otherState && otherState.executionCount > taskState.lastEpoch) {
+                    return true;
+                  }
+                }
+              }
+              return false;
+            });
+            if (!hasRefreshedInputs) continue;
+          } else {
+            continue;
+          }
+          break;
+        }
+
+        case 'time-based': {
+          const interval = taskConfig.refreshInterval ?? 0;
+          if (interval <= 0) continue;
+          const completedAt = taskState.completedAt;
+          if (!completedAt) continue;
+          const elapsedSec = (Date.now() - Date.parse(completedAt)) / 1000;
+          if (elapsedSec < interval) continue;
+          break;
+        }
+
+        case 'manual': {
+          // Never auto-eligible once completed — needs resetNode() or inject-tokens
           continue;
         }
+
+        default:
+          continue;
       }
     }
 
@@ -159,8 +205,8 @@ export function getCandidateTasks(graph: GraphConfig, state: ExecutionState): st
       continue;
     }
 
-    // Redundancy check: skip if all outputs already available (non-repeatable only)
-    if (!isRepeatableTask(taskConfig)) {
+    // Redundancy check for once-only tasks: skip if all outputs already available
+    if (!rerunnable) {
       const provides = getProvides(taskConfig);
       const allAlreadyAvailable = provides.length > 0 &&
         provides.every(output => availableOutputs.includes(output));

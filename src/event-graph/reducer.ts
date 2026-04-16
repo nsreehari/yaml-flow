@@ -43,7 +43,7 @@ export function apply(
       return applyTaskStart(state, event.taskName);
 
     case 'task-completed':
-      return applyTaskCompletion(state, graph, event.taskName, event.result);
+      return applyTaskCompletion(state, graph, event.taskName, event.result, event.dataHash);
 
     case 'task-failed':
       return applyTaskFailure(state, graph, event.taskName, event.error);

@@ -16,7 +16,7 @@ export { apply, applyAll } from './reducer.js';
 export {
   getProvides, getRequires, getAllTasks, getTask, hasTask,
   isNonActiveTask, isTaskCompleted, isTaskRunning,
-  isRepeatableTask, getRepeatableMax,
+  isRerunnable, getRefreshStrategy, getMaxExecutions,
   computeAvailableOutputs, groupTasksByProvides, hasOutputConflict,
   addKeyToProvides, removeKeyFromProvides, addKeyToRequires, removeKeyFromRequires,
   addDynamicTask, createDefaultTaskState, createInitialExecutionState,
@@ -45,6 +45,9 @@ export type { ExportOptions } from './loader.js';
 export { validateGraph } from './validate.js';
 export type { GraphIssue, GraphValidationResult, IssueSeverity } from './validate.js';
 
+// Full JSON Schema validation
+export { validateGraphSchema } from './schema-validator.js';
+
 // Conflict resolution
 export { selectBestAlternative, getNonConflictingTasks, selectRandomTasks } from './conflict-resolution.js';
 
@@ -56,7 +59,7 @@ export { TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, 
 
 // Types
 export type {
-  GraphConfig, GraphSettings, TaskConfig, TaskRetryConfig, RepeatableConfig, TaskCircuitBreakerConfig,
+  GraphConfig, GraphSettings, TaskConfig, TaskRetryConfig, TaskCircuitBreakerConfig, RefreshStrategy,
   ExecutionState, ExecutionConfig, TaskState, TaskMessage, StuckDetection,
   GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent, TaskProgressEvent,
   InjectTokensEvent, AgentActionEvent, TaskCreationEvent,

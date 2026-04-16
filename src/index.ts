@@ -27,7 +27,7 @@
 // ============================================================================
 export { StepMachine, createStepMachine } from './step-machine/index.js';
 export { applyStepResult, checkCircuitBreaker, computeStepInput, extractReturnData, createInitialState } from './step-machine/index.js';
-export { loadStepFlow, validateStepFlowConfig } from './step-machine/index.js';
+export { loadStepFlow, validateStepFlowConfig, validateFlowSchema } from './step-machine/index.js';
 export type {
   StepFlowConfig, StepFlowSettings, StepConfig, TerminalStateConfig,
   RetryConfig, CircuitBreakerConfig,
@@ -43,17 +43,17 @@ export {
   next, apply, applyAll, getCandidateTasks,
   getProvides, getRequires, getAllTasks, getTask, hasTask,
   isNonActiveTask, isTaskCompleted, isTaskRunning,
-  isRepeatableTask, computeAvailableOutputs,
+  isRerunnable, getRefreshStrategy, getMaxExecutions, computeAvailableOutputs,
   addDynamicTask, createDefaultTaskState, createInitialExecutionState,
   isExecutionComplete, detectStuckState,
   planExecution,
   graphToMermaid, flowToMermaid,
   loadGraphConfig, validateGraphConfig, exportGraphConfig, exportGraphConfigToFile,
-  validateGraph,
+  validateGraph, validateGraphSchema,
   TASK_STATUS, EXECUTION_STATUS, COMPLETION_STRATEGIES, EXECUTION_MODES, CONFLICT_STRATEGIES, DEFAULTS,
 } from './event-graph/index.js';
 export type {
-  GraphConfig, GraphSettings, TaskConfig as GraphTaskConfig,
+  GraphConfig, GraphSettings, TaskConfig as GraphTaskConfig, RefreshStrategy,
   ExecutionState, ExecutionConfig, TaskState, StuckDetection,
   GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent,
   InjectTokensEvent, AgentActionEvent, TaskCreationEvent,

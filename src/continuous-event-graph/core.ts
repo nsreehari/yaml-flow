@@ -79,7 +79,7 @@ export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
       break;
 
     case 'task-completed':
-      newState = applyTaskCompletion(state, config, event.taskName, event.result);
+      newState = applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash);
       break;
 
     case 'task-failed':

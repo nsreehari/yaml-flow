@@ -22,6 +22,8 @@ export interface GraphSettings {
   conflict_strategy?: ConflictStrategy;
   /** Execution mode */
   execution_mode?: ExecutionMode;
+  /** Default refresh strategy for all tasks (default: 'data-changed') */
+  refreshStrategy?: RefreshStrategy;
   /** Goal outputs — used with 'goal-reached' completion */
   goal?: string[];
   /** Max total scheduler iterations (safety limit, default: 1000) */
@@ -53,8 +55,12 @@ export interface TaskConfig {
   estimatedResources?: Record<string, number>;
   /** Retry configuration */
   retry?: TaskRetryConfig;
-  /** Repeatable task configuration */
-  repeatable?: boolean | RepeatableConfig;
+  /** Refresh strategy — controls when a completed task re-runs (default: 'data-changed') */
+  refreshStrategy?: RefreshStrategy;
+  /** Refresh interval in seconds — only used with 'time-based' strategy */
+  refreshInterval?: number;
+  /** Max executions cap (safety limit, optional) */
+  maxExecutions?: number;
   /** Circuit breaker: max executions before breaking */
   circuit_breaker?: TaskCircuitBreakerConfig;
   /** Description */
@@ -76,11 +82,6 @@ export interface TaskRetryConfig {
   max_attempts: number;
   delay_ms?: number;
   backoff_multiplier?: number;
-}
-
-export interface RepeatableConfig {
-  /** Max times this task can repeat (undefined = unlimited) */
-  max?: number;
 }
 
 export interface TaskCircuitBreakerConfig {
@@ -122,6 +123,10 @@ export interface TaskState {
   executionCount: number;
   retryCount: number;
   lastEpoch: number;
+  /** Hash of this task's last output (for data-changed strategy) */
+  lastDataHash?: string;
+  /** Per-require token: the data hash consumed on last run */
+  lastConsumedHashes?: Record<string, string>;
   startedAt?: string;
   completedAt?: string;
   failedAt?: string;
@@ -171,6 +176,8 @@ export interface TaskCompletedEvent {
   result?: string;
   /** Data payload from task execution */
   data?: Record<string, unknown>;
+  /** Content hash of the output — used by 'data-changed' refresh strategy */
+  dataHash?: string;
   timestamp: string;
   executionId?: string;
 }
@@ -260,3 +267,10 @@ export type ConflictStrategy =
   | 'parallel-all'
   | 'skip-conflicts'
   | 'round-robin';
+
+export type RefreshStrategy =
+  | 'data-changed'
+  | 'epoch-changed'
+  | 'time-based'
+  | 'manual'
+  | 'once';

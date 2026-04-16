@@ -11,7 +11,7 @@
  */
 
 import type { LiveGraph, ScheduleResult, PendingTask, UnresolvedDependency, BlockedTask } from './types.js';
-import { getProvides, getRequires, getAllTasks, isNonActiveTask, computeAvailableOutputs, isRepeatableTask, getRepeatableMax, groupTasksByProvides } from '../event-graph/graph-helpers.js';
+import { getProvides, getRequires, getAllTasks, isNonActiveTask, computeAvailableOutputs, getMaxExecutions, getRefreshStrategy, groupTasksByProvides } from '../event-graph/graph-helpers.js';
 import { TASK_STATUS } from '../event-graph/constants.js';
 
 /**
@@ -41,45 +41,90 @@ export function schedule(live: LiveGraph): ScheduleResult {
 
   for (const [taskName, taskConfig] of Object.entries(graphTasks)) {
     const taskState = state.tasks[taskName];
+    const strategy = getRefreshStrategy(taskConfig, config.settings);
+    const rerunnable = strategy !== 'once';
 
-    // Skip terminal tasks
-    if (!isRepeatableTask(taskConfig)) {
-      if (taskState?.status === TASK_STATUS.COMPLETED ||
-          taskState?.status === TASK_STATUS.RUNNING ||
-          isNonActiveTask(taskState)) {
-        continue;
-      }
-    } else {
-      if (taskState?.status === TASK_STATUS.RUNNING || isNonActiveTask(taskState)) {
-        continue;
-      }
-      const maxExec = getRepeatableMax(taskConfig);
-      if (maxExec !== undefined && taskState && taskState.executionCount >= maxExec) {
-        continue;
-      }
-      // Circuit breaker
-      if (taskConfig.circuit_breaker && taskState &&
-          taskState.executionCount >= taskConfig.circuit_breaker.max_executions) {
-        continue;
-      }
-      // Repeatable + completed: need refreshed inputs
-      if (taskState?.status === TASK_STATUS.COMPLETED) {
-        const requires = getRequires(taskConfig);
-        if (requires.length > 0) {
-          const hasRefreshed = requires.some(req => {
-            for (const [otherName, otherConfig] of Object.entries(graphTasks)) {
-              if (getProvides(otherConfig).includes(req)) {
-                const otherState = state.tasks[otherName];
-                if (otherState && otherState.executionCount > taskState.lastEpoch) return true;
+    // Always skip running or inactive (failed/inactivated) tasks
+    if (taskState?.status === TASK_STATUS.RUNNING || isNonActiveTask(taskState)) {
+      continue;
+    }
+
+    // Max executions cap
+    const maxExec = getMaxExecutions(taskConfig);
+    if (maxExec !== undefined && taskState && taskState.executionCount >= maxExec) {
+      continue;
+    }
+
+    // Circuit breaker
+    if (taskConfig.circuit_breaker && taskState &&
+        taskState.executionCount >= taskConfig.circuit_breaker.max_executions) {
+      continue;
+    }
+
+    // For once-only tasks: skip if completed
+    if (!rerunnable && taskState?.status === TASK_STATUS.COMPLETED) {
+      continue;
+    }
+
+    // For re-runnable tasks that already completed: check strategy
+    if (rerunnable && taskState?.status === TASK_STATUS.COMPLETED) {
+      const requires = getRequires(taskConfig);
+
+      let shouldSkip = false;
+      switch (strategy) {
+        case 'data-changed': {
+          if (requires.length > 0) {
+            const hasChangedData = requires.some(req => {
+              for (const [otherName, otherConfig] of Object.entries(graphTasks)) {
+                if (getProvides(otherConfig).includes(req)) {
+                  const otherState = state.tasks[otherName];
+                  if (!otherState) continue;
+                  const consumed = taskState.lastConsumedHashes?.[req];
+                  if (otherState.lastDataHash == null) {
+                    return otherState.executionCount > taskState.lastEpoch;
+                  }
+                  return otherState.lastDataHash !== consumed;
+                }
               }
-            }
-            return false;
-          });
-          if (!hasRefreshed) continue;
-        } else {
-          continue;
+              return false;
+            });
+            if (!hasChangedData) shouldSkip = true;
+          } else {
+            shouldSkip = true;
+          }
+          break;
         }
+        case 'epoch-changed': {
+          if (requires.length > 0) {
+            const hasRefreshed = requires.some(req => {
+              for (const [otherName, otherConfig] of Object.entries(graphTasks)) {
+                if (getProvides(otherConfig).includes(req)) {
+                  const otherState = state.tasks[otherName];
+                  if (otherState && otherState.executionCount > taskState.lastEpoch) return true;
+                }
+              }
+              return false;
+            });
+            if (!hasRefreshed) shouldSkip = true;
+          } else {
+            shouldSkip = true;
+          }
+          break;
+        }
+        case 'time-based': {
+          const interval = taskConfig.refreshInterval ?? 0;
+          if (interval <= 0) { shouldSkip = true; break; }
+          const completedAt = taskState.completedAt;
+          if (!completedAt) { shouldSkip = true; break; }
+          const elapsedSec = (Date.now() - Date.parse(completedAt)) / 1000;
+          if (elapsedSec < interval) shouldSkip = true;
+          break;
+        }
+        case 'manual':
+          shouldSkip = true;
+          break;
       }
+      if (shouldSkip) continue;
     }
 
     const requires = getRequires(taskConfig);

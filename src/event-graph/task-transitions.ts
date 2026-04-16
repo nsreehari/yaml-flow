@@ -6,7 +6,7 @@
  */
 
 import type { ExecutionState, TaskState, GraphConfig } from './types.js';
-import { getProvides, isRepeatableTask } from './graph-helpers.js';
+import { getProvides } from './graph-helpers.js';
 
 /**
  * Apply task start to execution state. Pure function.
@@ -32,14 +32,15 @@ export function applyTaskStart(state: ExecutionState, taskName: string): Executi
 
 /**
  * Apply task completion to execution state.
- * Handles: default provides, conditional provides (on), repeatable epoch tracking.
+ * Handles: default provides, conditional provides (on), refresh strategy, data hash tracking.
  * Pure function.
  */
 export function applyTaskCompletion(
   state: ExecutionState,
   graph: GraphConfig,
   taskName: string,
-  result?: string
+  result?: string,
+  dataHash?: string
 ): ExecutionState {
   const existingTask = state.tasks[taskName] ?? createDefaultTaskState();
   const taskConfig = graph.tasks[taskName];
@@ -57,6 +58,22 @@ export function applyTaskCompletion(
     outputTokens = getProvides(taskConfig);
   }
 
+  // Build lastConsumedHashes: snapshot the data hashes of all upstream tasks
+  const lastConsumedHashes: Record<string, string> = { ...existingTask.lastConsumedHashes };
+  const requires = taskConfig.requires ?? [];
+  for (const token of requires) {
+    // Find the task that provides this token and grab its hash
+    for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
+      if (getProvides(otherConfig).includes(token)) {
+        const otherState = state.tasks[otherName];
+        if (otherState?.lastDataHash) {
+          lastConsumedHashes[token] = otherState.lastDataHash;
+        }
+        break;
+      }
+    }
+  }
+
   const updatedTask: TaskState = {
     ...existingTask,
     status: 'completed',
@@ -64,14 +81,10 @@ export function applyTaskCompletion(
     lastUpdated: new Date().toISOString(),
     executionCount: existingTask.executionCount + 1,
     lastEpoch: existingTask.executionCount + 1,
+    lastDataHash: dataHash,
+    lastConsumedHashes,
     error: undefined,
   };
-
-  // For repeatable tasks, reset status to 'not-started' so they can run again
-  // but keep executionCount incremented for epoch tracking
-  if (isRepeatableTask(taskConfig)) {
-    updatedTask.status = 'not-started';
-  }
 
   // Merge new outputs with existing available outputs
   const newOutputs = [...new Set([...state.availableOutputs, ...outputTokens])];

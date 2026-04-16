@@ -5,7 +5,7 @@
  * No I/O, no side effects.
  */
 
-import type { GraphConfig, TaskConfig, TaskState, ExecutionState } from './types.js';
+import type { GraphConfig, TaskConfig, TaskState, ExecutionState, RefreshStrategy } from './types.js';
 import { TASK_STATUS } from './constants.js';
 
 // ============================================================================
@@ -53,16 +53,16 @@ export function isTaskRunning(taskState: TaskState | undefined): boolean {
   return taskState?.status === TASK_STATUS.RUNNING;
 }
 
-export function isRepeatableTask(taskConfig: TaskConfig): boolean {
-  return taskConfig.repeatable === true || (typeof taskConfig.repeatable === 'object' && taskConfig.repeatable !== null);
+export function getRefreshStrategy(taskConfig: TaskConfig, graphSettings?: { refreshStrategy?: RefreshStrategy }): RefreshStrategy {
+  return taskConfig.refreshStrategy ?? graphSettings?.refreshStrategy ?? 'data-changed';
 }
 
-export function getRepeatableMax(taskConfig: TaskConfig): number | undefined {
-  if (taskConfig.repeatable === true) return undefined; // unlimited
-  if (typeof taskConfig.repeatable === 'object' && taskConfig.repeatable !== null) {
-    return taskConfig.repeatable.max;
-  }
-  return undefined;
+export function isRerunnable(taskConfig: TaskConfig, graphSettings?: { refreshStrategy?: RefreshStrategy }): boolean {
+  return getRefreshStrategy(taskConfig, graphSettings) !== 'once';
+}
+
+export function getMaxExecutions(taskConfig: TaskConfig): number | undefined {
+  return taskConfig.maxExecutions;
 }
 
 // ============================================================================
@@ -71,7 +71,7 @@ export function getRepeatableMax(taskConfig: TaskConfig): number | undefined {
 
 /**
  * Dynamically compute available outputs from all completed tasks.
- * For repeatable tasks, outputs are versioned by epoch.
+ * Tasks with strategies other than 'once' may have completed and reset.
  * Pure function.
  */
 export function computeAvailableOutputs(
