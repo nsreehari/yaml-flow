@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { execSync } from 'node:child_process';
 import { createLiveGraph, schedule } from '../../src/continuous-event-graph/index.js';
 import {
   buildInferencePrompt,
@@ -79,6 +80,10 @@ const copilotAdapter = createCliAdapter({
   timeout: 120_000,
 });
 
+/** Check if `copilot` binary is reachable (false on CI runners) */
+let hasCopilotCli = false;
+try { execSync('copilot --version', { stdio: 'ignore' }); hasCopilotCli = true; } catch { /* not installed */ }
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -102,7 +107,7 @@ describe('copilot CLI integration', () => {
     console.log(`Prompt length: ${prompt.length} chars`);
   });
 
-  it('calls copilot and gets a response', async () => {
+  it.skipIf(!hasCopilotCli)('calls copilot and gets a response', async () => {
     const live = createLiveGraph(pipelineConfig);
     const prompt = buildInferencePrompt(live, {
       context: [
@@ -120,7 +125,7 @@ describe('copilot CLI integration', () => {
     expect(raw.length).toBeGreaterThan(0);
   }, 120_000);
 
-  it('runs full inferCompletions → applyInferences pipeline', async () => {
+  it.skipIf(!hasCopilotCli)('runs full inferCompletions → applyInferences pipeline', async () => {
     const live = createLiveGraph(pipelineConfig);
 
     const result = await inferCompletions(live, copilotAdapter, {
