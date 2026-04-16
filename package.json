@@ -75,7 +75,8 @@
   },
   "files": [
     "dist",
-    "schema"
+    "schema",
+    "browser"
   ],
   "scripts": {
     "build": "tsup",
