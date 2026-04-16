@@ -427,6 +427,105 @@
   }
 
   // ===========================================================================
+  // validate — lightweight structural validator for LiveCards nodes
+  // ===========================================================================
+
+  var VALID_ELEMENT_KINDS = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
+  var VALID_SOURCE_KINDS = ['api','websocket','static','llm'];
+  var VALID_STATUSES = ['fresh','stale','loading','error'];
+  var CARD_KEYS = ['id','type','meta','data','view','state','compute'];
+  var SOURCE_KEYS = ['id','type','meta','data','source','state','compute'];
+
+  function validateNode(node) {
+    var errors = [];
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      return { ok: false, errors: ['Node must be a non-null object'] };
+    }
+
+    if (typeof node.id !== 'string' || !node.id) errors.push('id: required, must be a non-empty string');
+
+    if (node.type !== 'card' && node.type !== 'source') {
+      errors.push('type: must be "card" or "source"');
+      return { ok: false, errors: errors };
+    }
+
+    var allowed = node.type === 'card' ? CARD_KEYS : SOURCE_KEYS;
+    Object.keys(node).forEach(function (k) {
+      if (allowed.indexOf(k) === -1) errors.push('Unknown top-level key: "' + k + '"');
+    });
+
+    // state
+    if (node.state == null || typeof node.state !== 'object' || Array.isArray(node.state)) {
+      errors.push('state: required, must be an object');
+    } else if (node.state.status != null && VALID_STATUSES.indexOf(node.state.status) === -1) {
+      errors.push('state.status: must be one of: ' + VALID_STATUSES.join(', '));
+    }
+
+    // meta
+    if (node.meta != null) {
+      if (typeof node.meta !== 'object' || Array.isArray(node.meta)) errors.push('meta: must be an object');
+      else {
+        if (node.meta.title != null && typeof node.meta.title !== 'string') errors.push('meta.title: must be a string');
+        if (node.meta.tags != null && !Array.isArray(node.meta.tags)) errors.push('meta.tags: must be an array');
+      }
+    }
+
+    // data
+    if (node.data != null) {
+      if (typeof node.data !== 'object' || Array.isArray(node.data)) errors.push('data: must be an object');
+      else {
+        if (node.data.requires != null && !Array.isArray(node.data.requires)) errors.push('data.requires: must be an array');
+        if (node.data.provides != null && (typeof node.data.provides !== 'object' || Array.isArray(node.data.provides))) errors.push('data.provides: must be an object');
+      }
+    }
+
+    // compute
+    if (node.compute != null) {
+      if (typeof node.compute !== 'object' || Array.isArray(node.compute)) errors.push('compute: must be an object');
+      else {
+        Object.keys(node.compute).forEach(function (key) {
+          var expr = node.compute[key];
+          if (!expr || typeof expr !== 'object' || Array.isArray(expr)) errors.push('compute.' + key + ': must be a compute expression object');
+          else if (!expr.fn) errors.push('compute.' + key + ': missing required "fn" property');
+          else if (!_fns[expr.fn] && !_customFns[expr.fn]) errors.push('compute.' + key + ': unknown function "' + expr.fn + '"');
+        });
+      }
+    }
+
+    // Card-specific
+    if (node.type === 'card') {
+      if (node.source != null) errors.push('Card nodes must not have "source"');
+      if (node.view == null || typeof node.view !== 'object' || Array.isArray(node.view)) {
+        errors.push('view: required for card nodes, must be an object');
+      } else {
+        if (!Array.isArray(node.view.elements) || node.view.elements.length === 0) {
+          errors.push('view.elements: required, must be a non-empty array');
+        } else {
+          node.view.elements.forEach(function (elem, i) {
+            if (!elem || typeof elem !== 'object') { errors.push('view.elements[' + i + ']: must be an object'); return; }
+            if (!elem.kind || typeof elem.kind !== 'string') errors.push('view.elements[' + i + '].kind: required');
+            else if (VALID_ELEMENT_KINDS.indexOf(elem.kind) === -1) errors.push('view.elements[' + i + '].kind: unknown "' + elem.kind + '"');
+          });
+        }
+      }
+    }
+
+    // Source-specific
+    if (node.type === 'source') {
+      if (node.view != null) errors.push('Source nodes must not have "view"');
+      if (node.source == null || typeof node.source !== 'object' || Array.isArray(node.source)) {
+        errors.push('source: required for source nodes, must be an object');
+      } else {
+        if (!node.source.kind || VALID_SOURCE_KINDS.indexOf(node.source.kind) === -1) errors.push('source.kind: required, must be one of: ' + VALID_SOURCE_KINDS.join(', '));
+        if (typeof node.source.bindTo !== 'string' || !node.source.bindTo) errors.push('source.bindTo: required, must be a state path string');
+        else if (node.source.bindTo.indexOf('state.') !== 0) errors.push('source.bindTo: must start with "state."');
+      }
+    }
+
+    return { ok: errors.length === 0, errors: errors };
+  }
+
+  // ===========================================================================
   // Export
   // ===========================================================================
 
@@ -434,6 +533,7 @@
     run: run,
     eval: evalExpr,
     resolve: resolve,
+    validate: validateNode,
     registerFunction: registerFunction,
     get functions() {
       var all = {};

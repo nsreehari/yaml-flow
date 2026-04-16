@@ -1,0 +1,246 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
+  "title": "LiveCards Node Schema",
+  "description": "Schema for Card and ExternalSource nodes in the LiveCards Board/Canvas engine",
+
+  "definitions": {
+
+    "bind_ref": {
+      "description": "A state path reference, e.g. 'state.raw_quotes' or 'state.compute_vars.total'",
+      "type": "string",
+      "pattern": "^state\\."
+    },
+
+    "bind_or_literal": {
+      "description": "A literal value or a bind reference object",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "array" },
+        { "type": "object",
+          "properties": { "bind": { "$ref": "#/definitions/bind_ref" } },
+          "required": ["bind"]
+        }
+      ]
+    },
+
+    "compute_expr": {
+      "description": "A declarative JSON compute expression",
+      "type": "object",
+      "required": ["fn"],
+      "properties": {
+        "fn": {
+          "type": "string",
+          "description": "Function name from the built-in vocabulary",
+          "enum": [
+            "sum", "avg", "min", "max", "count", "first", "last",
+            "add", "sub", "mul", "div", "round", "abs", "mod",
+            "gt", "gte", "lt", "lte", "eq", "neq",
+            "if", "and", "or", "not",
+            "concat", "upper", "lower", "template",
+            "filter", "pluck", "map", "sort", "slice", "flat", "unique", "group",
+            "get", "default",
+            "now", "diff_days", "format_date"
+          ]
+        },
+        "input": {
+          "description": "state.path, literal, array of inputs, or nested compute_expr",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array" },
+            { "$ref": "#/definitions/compute_expr" }
+          ]
+        },
+        "field": { "type": "string", "description": "For pluck/sum/group — the object key to extract" },
+        "where": { "$ref": "#/definitions/compute_expr", "description": "For filter — predicate expression ($ = current item)" },
+        "cond":  { "$ref": "#/definitions/compute_expr", "description": "For if — condition expression" },
+        "then":  { "description": "For if — value when cond is truthy" },
+        "else":  { "description": "For if — value when cond is falsy" },
+        "format": { "type": "string", "description": "For format_date — date format string" }
+      }
+    },
+
+    "meta": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "tags":  { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "data": {
+      "type": "object",
+      "properties": {
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "IDs of upstream nodes this node depends on"
+        },
+        "provides": {
+          "type": "object",
+          "description": "Subset of state exposed downstream. Keys are published names, values are bind refs.",
+          "additionalProperties": { "$ref": "#/definitions/bind_or_literal" }
+        }
+      }
+    },
+
+    "source_def": {
+      "type": "object",
+      "required": ["kind", "bindTo"],
+      "properties": {
+        "kind":           { "enum": ["api", "websocket", "static", "llm"] },
+        "bindTo":         { "$ref": "#/definitions/bind_ref", "description": "state path to write fetched data into" },
+        "method":         { "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET" },
+        "url_template":   { "type": "string", "description": "URL with {{var}} placeholders" },
+        "headers":        { "type": "object", "additionalProperties": { "$ref": "#/definitions/bind_or_literal" } },
+        "body_template":  { "type": "object", "description": "Request body with {{var}} placeholders or bind refs" },
+        "template_vars":  {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/bind_or_literal" },
+          "description": "Variables for url/body templates — static values or bind refs"
+        },
+        "poll_interval":  { "type": "integer", "minimum": 0, "description": "Auto-refresh in seconds (0 = manual)" },
+        "transform":      { "type": "string", "description": "Dot-path to extract from response, e.g. 'data.items'" }
+      }
+    },
+
+    "render_element": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "id":        { "type": "string", "description": "Optional element ID for targeted updates" },
+        "kind":      {
+          "enum": ["metric", "table", "chart", "form", "filter", "list",
+                   "notes", "todo", "alert", "narrative", "badge", "text",
+                   "markdown", "custom"]
+        },
+        "label":     { "type": "string", "description": "Heading above this element" },
+        "className": { "type": "string", "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'" },
+        "visible":   { "type": "string", "description": "state path — element shown only if truthy" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "bind":        { "$ref": "#/definitions/bind_ref", "description": "state path to read data from" },
+            "writeTo":     { "$ref": "#/definitions/bind_ref", "description": "state path for user input (form, filter, todo, notes)" },
+            "columns":     { "type": "array", "items": { "type": "string" }, "description": "table: visible columns" },
+            "maxRows":     { "type": "integer", "description": "table/list: max rows to display" },
+            "sortable":    { "type": "boolean", "default": true, "description": "table: enable click-to-sort" },
+            "placeholder": { "type": "string", "description": "Empty-state message" },
+            "chartType":   { "enum": ["bar", "line", "pie", "doughnut"] },
+            "chartOptions": { "type": "object", "description": "Chart.js options passthrough" },
+            "fields":      { "type": "object", "description": "JSON Schema for form/filter fields" },
+            "thresholds":  {
+              "type": "object",
+              "properties": {
+                "green": { "type": "string" },
+                "amber": { "type": "string" }
+              }
+            },
+            "colorMap": { "type": "object", "description": "badge: value → Bootstrap color" },
+            "style":    { "enum": ["heading", "muted", "default"], "description": "text: display style" }
+          }
+        }
+      }
+    },
+
+    "view": {
+      "type": "object",
+      "required": ["elements"],
+      "properties": {
+        "elements": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/render_element" }
+        },
+        "layout": {
+          "type": "object",
+          "properties": {
+            "board": {
+              "type": "object",
+              "properties": {
+                "col":   { "type": "integer", "minimum": 1, "maximum": 12 },
+                "order": { "type": "integer" }
+              }
+            },
+            "canvas": {
+              "type": "object",
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "w": { "type": "number" },
+                "h": { "type": "number" }
+              }
+            }
+          }
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "chat":    { "type": "boolean", "default": false },
+            "notes":   { "type": "boolean", "default": false },
+            "refresh": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    }
+  },
+
+  "oneOf": [
+    {
+      "title": "Card",
+      "description": "A renderable card node with view elements",
+      "type": "object",
+      "required": ["id", "type", "view", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "id":      { "type": "string" },
+        "type":    { "const": "card" },
+        "meta":    { "$ref": "#/definitions/meta" },
+        "data":    { "$ref": "#/definitions/data" },
+        "view":    { "$ref": "#/definitions/view" },
+        "state":   { "type": "object", "additionalProperties": true,
+          "properties": {
+            "status":  { "enum": ["fresh", "stale", "loading", "error"] },
+            "lastRun": { "type": "string", "format": "date-time" },
+            "error":   { "type": "string" }
+          }
+        },
+        "compute": {
+          "type": "object",
+          "description": "Derived state: key = state path to write, value = compute_expr",
+          "additionalProperties": { "$ref": "#/definitions/compute_expr" }
+        }
+      }
+    },
+    {
+      "title": "ExternalSource",
+      "description": "A data-only node that fetches from external systems (no view)",
+      "type": "object",
+      "required": ["id", "type", "source", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "id":      { "type": "string" },
+        "type":    { "const": "source" },
+        "meta":    { "$ref": "#/definitions/meta" },
+        "data":    { "$ref": "#/definitions/data" },
+        "source":  { "$ref": "#/definitions/source_def" },
+        "state":   { "type": "object", "additionalProperties": true,
+          "properties": {
+            "status":  { "enum": ["fresh", "stale", "loading", "error"] },
+            "lastRun": { "type": "string", "format": "date-time" },
+            "error":   { "type": "string" }
+          }
+        },
+        "compute": {
+          "type": "object",
+          "description": "Derived state: key = state path to write, value = compute_expr",
+          "additionalProperties": { "$ref": "#/definitions/compute_expr" }
+        }
+      }
+    }
+  ]
+}

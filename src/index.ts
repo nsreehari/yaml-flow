@@ -119,7 +119,7 @@ export type {
 // Card Compute
 // ============================================================================
 export { CardCompute } from './card-compute/index.js';
-export type { ComputeExpr, ComputeNode, ComputeFn, EvalFn } from './card-compute/index.js';
+export type { ComputeExpr, ComputeNode, ComputeFn, EvalFn, ValidationResult } from './card-compute/index.js';
 
 // ============================================================================
 // Backward compat aliases (deprecated — use new names)

@@ -415,13 +415,185 @@ function registerFunction(name: string, fn: ComputeFn): void {
 }
 
 // ---------------------------------------------------------------------------
-// Export
+// Validation
 // ---------------------------------------------------------------------------
+
+/** Result of validateNode — ok: true means valid, ok: false has errors[]. */
+export interface ValidationResult {
+  ok: boolean;
+  errors: string[];
+}
+
+const VALID_ELEMENT_KINDS = new Set([
+  'metric', 'table', 'chart', 'form', 'filter', 'list',
+  'notes', 'todo', 'alert', 'narrative', 'badge', 'text',
+  'markdown', 'custom',
+]);
+
+const VALID_SOURCE_KINDS = new Set(['api', 'websocket', 'static', 'llm']);
+const VALID_STATUSES = new Set(['fresh', 'stale', 'loading', 'error']);
+
+const CARD_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'data', 'view', 'state', 'compute']);
+const SOURCE_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'data', 'source', 'state', 'compute']);
+
+/**
+ * Validate a node against the LiveCards schema.
+ * Lightweight structural check — no external dependencies.
+ *
+ * @example
+ * ```typescript
+ * const result = CardCompute.validate(node);
+ * if (!result.ok) console.error(result.errors);
+ * ```
+ */
+function validateNode(node: unknown): ValidationResult {
+  const errors: string[] = [];
+
+  if (!node || typeof node !== 'object' || Array.isArray(node)) {
+    return { ok: false, errors: ['Node must be a non-null object'] };
+  }
+
+  const n = node as Record<string, unknown>;
+
+  // id
+  if (typeof n.id !== 'string' || !n.id) {
+    errors.push('id: required, must be a non-empty string');
+  }
+
+  // type
+  if (n.type !== 'card' && n.type !== 'source') {
+    errors.push('type: must be "card" or "source"');
+    return { ok: false, errors }; // Can't validate further without type
+  }
+
+  // Check for unknown top-level keys
+  const allowed = n.type === 'card' ? CARD_ALLOWED_KEYS : SOURCE_ALLOWED_KEYS;
+  for (const key of Object.keys(n)) {
+    if (!allowed.has(key)) errors.push(`Unknown top-level key: "${key}"`);
+  }
+
+  // state (required)
+  if (n.state == null || typeof n.state !== 'object' || Array.isArray(n.state)) {
+    errors.push('state: required, must be an object');
+  } else {
+    const state = n.state as Record<string, unknown>;
+    if (state.status != null && !VALID_STATUSES.has(state.status as string)) {
+      errors.push(`state.status: must be one of: ${[...VALID_STATUSES].join(', ')}`);
+    }
+  }
+
+  // meta (optional)
+  if (n.meta != null) {
+    if (typeof n.meta !== 'object' || Array.isArray(n.meta)) {
+      errors.push('meta: must be an object');
+    } else {
+      const meta = n.meta as Record<string, unknown>;
+      if (meta.title != null && typeof meta.title !== 'string') errors.push('meta.title: must be a string');
+      if (meta.tags != null && !Array.isArray(meta.tags)) errors.push('meta.tags: must be an array');
+    }
+  }
+
+  // data (optional)
+  if (n.data != null) {
+    if (typeof n.data !== 'object' || Array.isArray(n.data)) {
+      errors.push('data: must be an object');
+    } else {
+      const data = n.data as Record<string, unknown>;
+      if (data.requires != null && !Array.isArray(data.requires)) errors.push('data.requires: must be an array of strings');
+      if (data.provides != null && (typeof data.provides !== 'object' || Array.isArray(data.provides))) errors.push('data.provides: must be an object');
+    }
+  }
+
+  // compute (optional)
+  if (n.compute != null) {
+    if (typeof n.compute !== 'object' || Array.isArray(n.compute)) {
+      errors.push('compute: must be an object');
+    } else {
+      for (const [key, expr] of Object.entries(n.compute as Record<string, unknown>)) {
+        if (!expr || typeof expr !== 'object' || Array.isArray(expr)) {
+          errors.push(`compute.${key}: must be a compute expression object`);
+        } else if (!(expr as Record<string, unknown>).fn) {
+          errors.push(`compute.${key}: missing required "fn" property`);
+        } else {
+          const fn = (expr as Record<string, unknown>).fn as string;
+          if (!_fns[fn] && !_customFns[fn]) {
+            errors.push(`compute.${key}: unknown function "${fn}"`);
+          }
+        }
+      }
+    }
+  }
+
+  // ---- Card-specific ----
+  if (n.type === 'card') {
+    if (n.source != null) errors.push('Card nodes must not have "source" — use type "source" instead');
+
+    // view (required for cards)
+    if (n.view == null || typeof n.view !== 'object' || Array.isArray(n.view)) {
+      errors.push('view: required for card nodes, must be an object');
+    } else {
+      const view = n.view as Record<string, unknown>;
+
+      // view.elements
+      if (!Array.isArray(view.elements) || view.elements.length === 0) {
+        errors.push('view.elements: required, must be a non-empty array');
+      } else {
+        (view.elements as Record<string, unknown>[]).forEach((elem, i) => {
+          if (!elem || typeof elem !== 'object') {
+            errors.push(`view.elements[${i}]: must be an object`);
+            return;
+          }
+          if (!elem.kind || typeof elem.kind !== 'string') {
+            errors.push(`view.elements[${i}].kind: required, must be a string`);
+          } else if (!VALID_ELEMENT_KINDS.has(elem.kind as string)) {
+            errors.push(`view.elements[${i}].kind: unknown kind "${elem.kind}". Valid: ${[...VALID_ELEMENT_KINDS].join(', ')}`);
+          }
+          if (elem.data != null && (typeof elem.data !== 'object' || Array.isArray(elem.data))) {
+            errors.push(`view.elements[${i}].data: must be an object`);
+          }
+        });
+      }
+
+      // view.layout (optional)
+      if (view.layout != null && (typeof view.layout !== 'object' || Array.isArray(view.layout))) {
+        errors.push('view.layout: must be an object');
+      }
+
+      // view.features (optional)
+      if (view.features != null && (typeof view.features !== 'object' || Array.isArray(view.features))) {
+        errors.push('view.features: must be an object');
+      }
+    }
+  }
+
+  // ---- Source-specific ----
+  if (n.type === 'source') {
+    if (n.view != null) errors.push('Source nodes must not have "view" — use type "card" instead');
+
+    // source (required for source nodes)
+    if (n.source == null || typeof n.source !== 'object' || Array.isArray(n.source)) {
+      errors.push('source: required for source nodes, must be an object');
+    } else {
+      const src = n.source as Record<string, unknown>;
+      if (!src.kind || !VALID_SOURCE_KINDS.has(src.kind as string)) {
+        errors.push(`source.kind: required, must be one of: ${[...VALID_SOURCE_KINDS].join(', ')}`);
+      }
+      if (typeof src.bindTo !== 'string' || !src.bindTo) {
+        errors.push('source.bindTo: required, must be a state path string');
+      } else if (!(src.bindTo as string).startsWith('state.')) {
+        errors.push('source.bindTo: must start with "state."');
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}
 
 export const CardCompute = {
   run,
   eval: evalExpr,
   resolve,
+  validate: validateNode,
   registerFunction,
   get functions(): Record<string, ComputeFn> {
     const all: Record<string, ComputeFn> = {};
