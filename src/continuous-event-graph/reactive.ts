@@ -17,7 +17,7 @@
 
 import type { GraphConfig, TaskConfig, GraphEvent, GraphEngineStore } from '../event-graph/types.js';
 import type { LiveGraph, ScheduleResult } from './types.js';
-import { createLiveGraph, applyEvents, addNode, removeNode } from './core.js';
+import { createLiveGraph, applyEvents, addNode, removeNode, addRequires, removeRequires, addProvides, removeProvides } from './core.js';
 import { schedule } from './schedule.js';
 import { MemoryJournal } from './journal.js';
 import type { Journal } from './journal.js';
@@ -172,6 +172,14 @@ export interface ReactiveGraph {
   addNode(name: string, taskConfig: TaskConfig): void;
   /** Remove a node from the graph config. Structural mutation. */
   removeNode(name: string): void;
+  /** Add required tokens to an existing node. Structural mutation + drain. */
+  addRequires(nodeName: string, tokens: string[]): void;
+  /** Remove required tokens from an existing node. Structural mutation + drain. */
+  removeRequires(nodeName: string, tokens: string[]): void;
+  /** Add provided tokens to an existing node. Structural mutation + drain. */
+  addProvides(nodeName: string, tokens: string[]): void;
+  /** Remove provided tokens from an existing node. Structural mutation. */
+  removeProvides(nodeName: string, tokens: string[]): void;
   /** Register a named handler in the registry. */
   registerHandler(name: string, fn: TaskHandlerFn): void;
   /** Unregister a named handler from the registry. */
@@ -418,6 +426,29 @@ export function createReactiveGraph(
     removeNode(name: string): void {
       if (disposed) return;
       live = removeNode(live, name);
+    },
+
+    addRequires(nodeName: string, tokens: string[]): void {
+      if (disposed) return;
+      live = addRequires(live, nodeName, tokens);
+      drain();
+    },
+
+    removeRequires(nodeName: string, tokens: string[]): void {
+      if (disposed) return;
+      live = removeRequires(live, nodeName, tokens);
+      drain();
+    },
+
+    addProvides(nodeName: string, tokens: string[]): void {
+      if (disposed) return;
+      live = addProvides(live, nodeName, tokens);
+      drain();
+    },
+
+    removeProvides(nodeName: string, tokens: string[]): void {
+      if (disposed) return;
+      live = removeProvides(live, nodeName, tokens);
     },
 
     registerHandler(name: string, fn: TaskHandlerFn): void {

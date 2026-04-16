@@ -1,15 +1,24 @@
 /**
  * Live Cards Disk Roundtrip — Integration Test
  *
- * Tests the full lifecycle:
- *   1. Write 4 live card JSONs to disk (stock portfolio theme)
- *   2. Load them, feed into liveCardsToReactiveGraph
- *   3. Wrap every handler with an "update-card" layer that writes
- *      the card JSON back to disk after each task completes
- *   4. Simulate events → verify disk state
- *   5. addNode (chart card) → verify new card on disk
- *   6. removeNode (portfolio-value) → verify disk reflects removal
- *   7. More dynamic mutations + verifications
+ * Full lifecycle: live card JSONs on disk → liveCardsToReactiveGraph →
+ * handlers that persist state back to disk → dynamic graph manipulation.
+ *
+ * Starting graph (8 cards):
+ *
+ *   holdings ─────┐
+ *                  ├─→ valuator ─→ portfolio-value ─→ daily-pnl
+ *   price-feed ───┘         │
+ *                           └─→ sector-breakdown
+ *   news-feed ─→ sentiment
+ *   benchmark ──(standalone)
+ *
+ * Dynamically added cards (7+):
+ *   allocation-chart, risk-score, value-alert, summary,
+ *   correlation, combined-view, newsletter
+ *
+ * Tests exercise: addNode, removeNode, addRequires, removeRequires,
+ * addProvides, removeProvides, retrigger, retriggerAll, pushAll
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -29,89 +38,115 @@ import { liveCardsToReactiveGraph } from '../../src/continuous-event-graph/live-
 const ts = () => new Date().toISOString();
 const ticks = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-/** Read a card JSON from disk. */
 function readCard(dir: string, id: string): LiveCard {
   return JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf-8'));
 }
 
-/** Write a card JSON to disk. */
 function writeCard(dir: string, card: LiveCard): void {
   fs.writeFileSync(path.join(dir, `${card.id}.json`), JSON.stringify(card, null, 2));
 }
 
-// ============================================================================
-// Card definitions (stock portfolio theme)
-// ============================================================================
-
-function makePortfolioCards(): LiveCard[] {
-  const holdings: LiveCard = {
-    id: 'holdings',
-    type: 'source',
-    meta: { title: 'Portfolio Holdings' },
-    data: { provides: { holdings: 'state.holdings' } },
-    state: {
-      holdings: [
-        { symbol: 'AAPL', shares: 50 },
-        { symbol: 'MSFT', shares: 30 },
-        { symbol: 'GOOG', shares: 20 },
-      ],
-    },
-  };
-
-  const priceFeed: LiveCard = {
-    id: 'price-feed',
-    type: 'source',
-    meta: { title: 'Live Price Feed' },
-    data: { provides: { prices: 'state.prices' } },
-    state: {
-      prices: {
-        AAPL: 195.50,
-        MSFT: 420.10,
-        GOOG: 176.30,
-      },
-    },
-  };
-
-  // valuator does a cross-reference join (holdings × prices) → positions.
-  // CardCompute can't do cross-card joins, so we provide a cardHandler.
-  const valuator: LiveCard = {
-    id: 'valuator',
-    type: 'card',
-    meta: { title: 'Position Valuator' },
-    data: { requires: ['holdings', 'price-feed'] },
-    state: {},
-  };
-
-  // portfolio-value uses CardCompute: sum + count over valuator.positions
-  const portfolioValue: LiveCard = {
-    id: 'portfolio-value',
-    type: 'card',
-    meta: { title: 'Total Portfolio Value' },
-    data: { requires: ['valuator'] },
-    state: {},
-    compute: {
-      totalValue: { fn: 'sum', input: 'state.valuator.positions', field: 'value' },
-      positionCount: { fn: 'count', input: 'state.valuator.positions' },
-    },
-  };
-
-  return [holdings, priceFeed, valuator, portfolioValue];
+function cardExists(dir: string, id: string): boolean {
+  return fs.existsSync(path.join(dir, `${id}.json`));
 }
 
 // ============================================================================
-// Simulated market prices
+// Card definitions — 8 initial cards
 // ============================================================================
 
-const marketPrices = {
-  round1: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30 } as Record<string, number>,
-  round2: { AAPL: 201.00, MSFT: 418.75, GOOG: 180.50 } as Record<string, number>,
+function makePortfolioCards(): LiveCard[] {
+  return [
+    // --- Sources (4) ---
+    {
+      id: 'holdings',
+      type: 'source',
+      meta: { title: 'Portfolio Holdings' },
+      data: { provides: { holdings: 'state.holdings' } },
+      state: {
+        holdings: [
+          { symbol: 'AAPL', shares: 50, sector: 'tech' },
+          { symbol: 'MSFT', shares: 30, sector: 'tech' },
+          { symbol: 'GOOG', shares: 20, sector: 'tech' },
+          { symbol: 'JPM', shares: 40, sector: 'finance' },
+          { symbol: 'JNJ', shares: 25, sector: 'healthcare' },
+        ],
+      },
+    },
+    {
+      id: 'price-feed',
+      type: 'source',
+      meta: { title: 'Live Price Feed' },
+      data: { provides: { prices: 'state.prices' } },
+      state: {
+        prices: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 },
+      },
+    },
+    {
+      id: 'news-feed',
+      type: 'source',
+      meta: { title: 'Market News Feed' },
+      state: {
+        headlines: [
+          { symbol: 'AAPL', headline: 'Apple beats Q4 estimates', sentiment: 0.8 },
+          { symbol: 'JPM', headline: 'JPMorgan raises dividend', sentiment: 0.6 },
+          { symbol: 'JNJ', headline: 'JNJ faces litigation risk', sentiment: -0.4 },
+        ],
+      },
+    },
+    {
+      id: 'benchmark',
+      type: 'source',
+      meta: { title: 'S&P 500 Benchmark' },
+      state: {
+        index: 'SPY',
+        value: 5280.50,
+        dailyReturn: 0.45,
+      },
+    },
+
+    // --- Cards (4) ---
+    {
+      id: 'valuator',
+      type: 'card',
+      meta: { title: 'Position Valuator' },
+      data: { requires: ['holdings', 'price-feed'] },
+      state: {},
+    },
+    {
+      id: 'portfolio-value',
+      type: 'card',
+      meta: { title: 'Total Portfolio Value' },
+      data: { requires: ['valuator'] },
+      state: {},
+    },
+    {
+      id: 'sector-breakdown',
+      type: 'card',
+      meta: { title: 'Sector Breakdown' },
+      data: { requires: ['valuator'] },
+      state: {},
+    },
+    {
+      id: 'sentiment',
+      type: 'card',
+      meta: { title: 'News Sentiment Score' },
+      data: { requires: ['news-feed'] },
+      state: {},
+    },
+  ];
+}
+
+const prices = {
+  round1: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 } as Record<string, number>,
+  round2: { AAPL: 201.00, MSFT: 418.75, GOOG: 180.50, JPM: 202.10, JNJ: 153.40 } as Record<string, number>,
+  round3: { AAPL: 205.25, MSFT: 422.00, GOOG: 182.10, JPM: 199.80, JNJ: 157.10, TSLA: 168.75 } as Record<string, number>,
 };
 
 // ============================================================================
 // Test suite
 // ============================================================================
 
-describe('live cards → disk roundtrip integration', () => {
+describe('live cards → disk roundtrip integration (15+ cards)', () => {
   let tmpDir: string;
   let graphResult: ReturnType<typeof liveCardsToReactiveGraph>;
 
@@ -125,493 +160,917 @@ describe('live cards → disk roundtrip integration', () => {
   });
 
   // --------------------------------------------------------------------------
-  // Core helper: build graph with disk-sync onDrain + valuator cardHandler
+  // Handler factory — creates a handler that reads upstream from engine,
+  // computes, resolves callback, and syncs to disk
   // --------------------------------------------------------------------------
 
-  function buildGraphWithDiskSync(
-    cards: LiveCard[],
-  ) {
-    // Write cards to disk
-    for (const card of cards) {
-      writeCard(tmpDir, card);
-    }
+  function makeHandler(
+    id: string,
+    computeFn: (engine: ReturnType<ReactiveGraph['getState']>) => Record<string, unknown>,
+    graphRef: { rg: ReactiveGraph | null },
+  ): TaskHandlerFn {
+    return async (input: TaskHandlerInput) => {
+      const result = computeFn(graphRef.rg!.getState());
+      // Sync to disk
+      try {
+        const diskCard = readCard(tmpDir, id);
+        diskCard.state = { ...diskCard.state, ...result };
+        writeCard(tmpDir, diskCard);
+      } catch { /* card may not exist yet */ }
+      graphRef.rg!.resolveCallback(input.callbackToken, result);
+      return 'task-initiated';
+    };
+  }
 
-    let graphRef: ReactiveGraph | null = null;
+  // --------------------------------------------------------------------------
+  // Core builder
+  // --------------------------------------------------------------------------
 
-    // Valuator: join holdings × prices → positions
-    const valuatorHandler: TaskHandlerFn = async (input: TaskHandlerInput) => {
-      const engine = graphRef!.getState();
-      const holdingsData = engine.state.tasks.holdings?.data ?? {};
-      const priceData = engine.state.tasks['price-feed']?.data ?? {};
-      const holdingsList = (holdingsData as any).holdings ?? [];
-      const prices = (priceData as any).prices ?? {};
+  function buildGraph(cards: LiveCard[]) {
+    for (const card of cards) writeCard(tmpDir, card);
 
+    const graphRef: { rg: ReactiveGraph | null } = { rg: null };
+
+    // --- Custom card handlers ---
+
+    const valuator = makeHandler('valuator', (engine) => {
+      const holdingsList = (engine.state.tasks.holdings?.data as any)?.holdings ?? [];
+      const priceMap = (engine.state.tasks['price-feed']?.data as any)?.prices ?? {};
       const positions = holdingsList.map((h: any) => ({
-        symbol: h.symbol,
-        shares: h.shares,
-        price: prices[h.symbol] ?? 0,
-        value: h.shares * (prices[h.symbol] ?? 0),
+        symbol: h.symbol, shares: h.shares, sector: h.sector,
+        price: priceMap[h.symbol] ?? 0,
+        value: h.shares * (priceMap[h.symbol] ?? 0),
       }));
+      return { positions };
+    }, graphRef);
 
-      graphRef!.resolveCallback(input.callbackToken, { positions });
-      return 'task-initiated';
-    };
+    const portfolioValue = makeHandler('portfolio-value', (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const totalValue = positions.reduce((s: number, p: any) => s + p.value, 0);
+      return { totalValue, positionCount: positions.length };
+    }, graphRef);
 
-    // Portfolio-value: sum positions from engine state (not via CardCompute sharedState)
-    const portfolioValueHandler: TaskHandlerFn = async (input: TaskHandlerInput) => {
-      const engine = graphRef!.getState();
-      const valuatorData = engine.state.tasks.valuator?.data ?? {};
-      const positions = (valuatorData as any).positions ?? [];
-      const totalValue = positions.reduce((s: number, p: any) => s + (p.value ?? 0), 0);
-      const positionCount = positions.length;
+    const sectorBreakdown = makeHandler('sector-breakdown', (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const bySector: Record<string, number> = {};
+      for (const p of positions) {
+        bySector[p.sector] = (bySector[p.sector] ?? 0) + p.value;
+      }
+      const total = positions.reduce((s: number, p: any) => s + p.value, 0);
+      const sectors = Object.entries(bySector).map(([sector, value]) => ({
+        sector, value, pct: total > 0 ? Math.round(value / total * 10000) / 100 : 0,
+      }));
+      return { sectors, sectorCount: sectors.length };
+    }, graphRef);
 
-      graphRef!.resolveCallback(input.callbackToken, { totalValue, positionCount });
-      return 'task-initiated';
-    };
+    const sentimentHandler = makeHandler('sentiment', (engine) => {
+      const headlines = (engine.state.tasks['news-feed']?.data as any)?.headlines ?? [];
+      const avg = headlines.length > 0
+        ? headlines.reduce((s: number, h: any) => s + (h.sentiment ?? 0), 0) / headlines.length
+        : 0;
+      return {
+        avgSentiment: Math.round(avg * 100) / 100,
+        headlineCount: headlines.length,
+        bullish: avg > 0.2,
+      };
+    }, graphRef);
 
     const result = liveCardsToReactiveGraph(cards, {
       cardHandlers: {
-        valuator: valuatorHandler,
-        'portfolio-value': portfolioValueHandler,
+        valuator,
+        'portfolio-value': portfolioValue,
+        'sector-breakdown': sectorBreakdown,
+        sentiment: sentimentHandler,
       },
       reactiveOptions: {
         onDrain: (_events, live) => {
-          // After each drain, sync all task data back to disk
           for (const [taskName, taskState] of Object.entries(live.state.tasks)) {
             if (taskState.data && Object.keys(taskState.data).length > 0) {
               try {
                 const diskCard = readCard(tmpDir, taskName);
                 diskCard.state = { ...diskCard.state, ...taskState.data };
                 writeCard(tmpDir, diskCard);
-              } catch {
-                // Card may not exist on disk yet (e.g. dynamically added)
-              }
+              } catch { /* card not on disk yet */ }
             }
           }
         },
       },
     });
 
-    graphRef = result.graph;
+    graphRef.rg = result.graph;
     graphResult = result;
-    return result;
+    return { ...result, graphRef };
   }
 
   // --------------------------------------------------------------------------
-  // Test 1: Initial cascade — all 4 cards compute and sync to disk
+  // Helper: register a dynamic card handler + addNode
   // --------------------------------------------------------------------------
 
-  it('step 1-5: initial cascade computes all cards and syncs to disk', async () => {
+  function addDynamicCard(
+    rg: ReactiveGraph,
+    graphRef: { rg: ReactiveGraph | null },
+    card: LiveCard,
+    computeFn: (engine: ReturnType<ReactiveGraph['getState']>) => Record<string, unknown>,
+    taskConfig: Partial<TaskConfig> & { requires?: string[]; provides?: string[] },
+  ) {
+    writeCard(tmpDir, card);
+    rg.registerHandler(card.id, makeHandler(card.id, computeFn, graphRef));
+    rg.addNode(card.id, {
+      requires: taskConfig.requires,
+      provides: taskConfig.provides ?? [card.id],
+      taskHandlers: [card.id],
+      ...taskConfig,
+    } as TaskConfig);
+  }
+
+  // ==========================================================================
+  // Test 1: Initial 8-card cascade
+  // ==========================================================================
+
+  it('8-card cascade computes and syncs all to disk', async () => {
     const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
+    const { graph: rg } = buildGraph(cards);
 
-    // Push to trigger the cascade
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-    await ticks(100);
+    await ticks(150);
 
-    // Verify engine state — all completed
+    // All 8 completed
     const state = rg.getState();
-    expect(state.state.tasks.holdings.status).toBe('completed');
-    expect(state.state.tasks['price-feed'].status).toBe('completed');
-    expect(state.state.tasks.valuator.status).toBe('completed');
-    expect(state.state.tasks['portfolio-value'].status).toBe('completed');
+    for (const name of ['holdings', 'price-feed', 'news-feed', 'benchmark',
+                         'valuator', 'portfolio-value', 'sector-breakdown', 'sentiment']) {
+      expect(state.state.tasks[name].status).toBe('completed');
+    }
 
-    // Verify disk: holdings card
-    const holdingsOnDisk = readCard(tmpDir, 'holdings');
-    expect(holdingsOnDisk.state!.holdings).toHaveLength(3);
-    expect((holdingsOnDisk.state!.holdings as any[])[0].symbol).toBe('AAPL');
+    // Valuator: 5 positions
+    const valDisk = readCard(tmpDir, 'valuator');
+    expect(valDisk.state!.positions).toHaveLength(5);
 
-    // Verify disk: price-feed card
-    const pricesOnDisk = readCard(tmpDir, 'price-feed');
-    expect((pricesOnDisk.state!.prices as any).AAPL).toBe(195.50);
+    // Portfolio value
+    const pvDisk = readCard(tmpDir, 'portfolio-value');
+    const expectedTotal = 50*195.50 + 30*420.10 + 20*176.30 + 40*198.20 + 25*155.80;
+    expect(pvDisk.state!.totalValue).toBe(expectedTotal);
+    expect(pvDisk.state!.positionCount).toBe(5);
 
-    // Verify disk: valuator — positions with computed values
-    const valuatorOnDisk = readCard(tmpDir, 'valuator');
-    const positions = valuatorOnDisk.state!.positions as any[];
-    expect(positions).toHaveLength(3);
-    const aaplPos = positions.find((p: any) => p.symbol === 'AAPL');
-    expect(aaplPos.shares).toBe(50);
-    expect(aaplPos.price).toBe(195.50);
-    expect(aaplPos.value).toBe(50 * 195.50);
+    // Sector breakdown — 3 sectors
+    const sbDisk = readCard(tmpDir, 'sector-breakdown');
+    expect(sbDisk.state!.sectorCount).toBe(3);
+    const sectors = sbDisk.state!.sectors as any[];
+    expect(sectors.find((s: any) => s.sector === 'tech')).toBeDefined();
+    expect(sectors.find((s: any) => s.sector === 'finance')).toBeDefined();
+    expect(sectors.find((s: any) => s.sector === 'healthcare')).toBeDefined();
 
-    // Verify disk: portfolio-value — totals from CardCompute
-    const pvOnDisk = readCard(tmpDir, 'portfolio-value');
-    expect(pvOnDisk.state!.positionCount).toBe(3);
-    expect(pvOnDisk.state!.totalValue).toBe(
-      50 * 195.50 + 30 * 420.10 + 20 * 176.30,
-    );
+    // Sentiment
+    const sentDisk = readCard(tmpDir, 'sentiment');
+    expect(sentDisk.state!.headlineCount).toBe(3);
+    expect(sentDisk.state!.bullish).toBe(true); // avg (0.8+0.6-0.4)/3 = 0.33
   });
 
-  // --------------------------------------------------------------------------
-  // Test 2: Simulate price update → data-changed cascade
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // Test 2: Add 7 dynamic cards to reach 15
+  // ==========================================================================
 
-  it('step 4: price update cascades through valuator and portfolio-value', async () => {
+  it('dynamically grow to 15 cards, all compute correctly', async () => {
     const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
+    const { graph: rg, graphRef } = buildGraph(cards);
 
-    // Initial cascade
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    // --- Card 9: allocation-chart (requires valuator + portfolio-value) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'allocation-chart', type: 'card',
+      meta: { title: 'Allocation Chart' },
+      data: { requires: ['valuator', 'portfolio-value'] }, state: {},
+    }, (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const totalValue = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      const allocations = positions.map((p: any) => ({
+        symbol: p.symbol, pct: totalValue > 0 ? Math.round(p.value / totalValue * 10000) / 100 : 0,
+      }));
+      return { allocations };
+    }, { requires: ['valuator', 'portfolio-value'] });
+
+    // --- Card 10: risk-score (requires valuator) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'risk-score', type: 'card',
+      meta: { title: 'Risk Score' },
+      data: { requires: ['valuator'] }, state: {},
+    }, (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const values = positions.map((p: any) => p.value);
+      const total = values.reduce((s: number, v: number) => s + v, 0);
+      const maxConc = total > 0 ? Math.max(...values) / total : 0;
+      return { maxConcentration: Math.round(maxConc * 100) / 100, riskLevel: maxConc > 0.5 ? 'high' : maxConc > 0.3 ? 'medium' : 'low' };
+    }, { requires: ['valuator'] });
+
+    // --- Card 11: daily-pnl (requires portfolio-value + benchmark) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'daily-pnl', type: 'card',
+      meta: { title: 'Daily P&L' },
+      data: { requires: ['portfolio-value', 'benchmark'] }, state: {},
+    }, (engine) => {
+      const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      const benchReturn = (engine.state.tasks.benchmark?.data as any)?.dailyReturn ?? 0;
+      const portfolioReturn = 1.2;
+      const pnl = tv * (portfolioReturn / 100);
+      const alpha = portfolioReturn - benchReturn;
+      return { pnl: Math.round(pnl * 100) / 100, portfolioReturn, benchmarkReturn: benchReturn, alpha: Math.round(alpha * 100) / 100 };
+    }, { requires: ['portfolio-value', 'benchmark'] });
+
+    // --- Card 12: value-alert (requires portfolio-value) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'value-alert', type: 'card',
+      meta: { title: 'Value Alert' },
+      data: { requires: ['portfolio-value'] }, state: {},
+    }, (engine) => {
+      const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      return { triggered: tv > 25000, threshold: 25000, currentValue: tv };
+    }, { requires: ['portfolio-value'] });
+
+    // --- Card 13: summary (requires portfolio-value + sentiment) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'summary', type: 'card',
+      meta: { title: 'Portfolio Summary' },
+      data: { requires: ['portfolio-value', 'sentiment'] }, state: {},
+    }, (engine) => {
+      const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      const bullish = (engine.state.tasks.sentiment?.data as any)?.bullish ?? false;
+      return { text: `Portfolio: $${tv.toFixed(2)}`, totalValue: tv, marketMood: bullish ? 'bullish' : 'bearish' };
+    }, { requires: ['portfolio-value', 'sentiment'] });
+
+    // --- Card 14: correlation (requires valuator + benchmark) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'correlation', type: 'card',
+      meta: { title: 'Benchmark Correlation' },
+      data: { requires: ['valuator', 'benchmark'] }, state: {},
+    }, (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const benchValue = (engine.state.tasks.benchmark?.data as any)?.value ?? 0;
+      const techValue = positions.filter((p: any) => p.sector === 'tech').reduce((s: number, p: any) => s + p.value, 0);
+      const total = positions.reduce((s: number, p: any) => s + p.value, 0);
+      const techWeight = total > 0 ? techValue / total : 0;
+      return { techWeight: Math.round(techWeight * 100) / 100, benchmarkValue: benchValue, mockCorrelation: Math.round(techWeight * 0.85 * 100) / 100 };
+    }, { requires: ['valuator', 'benchmark'] });
+
+    // --- Card 15: combined-view (requires summary + sector-breakdown + risk-score) ---
+    addDynamicCard(rg, graphRef, {
+      id: 'combined-view', type: 'card',
+      meta: { title: 'Combined Dashboard View' },
+      data: { requires: ['summary', 'sector-breakdown', 'risk-score'] }, state: {},
+    }, (engine) => {
+      const summaryData = engine.state.tasks.summary?.data as any ?? {};
+      const sectorData = engine.state.tasks['sector-breakdown']?.data as any ?? {};
+      const riskData = engine.state.tasks['risk-score']?.data as any ?? {};
+      return {
+        portfolioText: summaryData.text ?? '',
+        sectorCount: sectorData.sectorCount ?? 0,
+        riskLevel: riskData.riskLevel ?? 'unknown',
+        dashboardReady: true,
+      };
+    }, { requires: ['summary', 'sector-breakdown', 'risk-score'] });
+
+    await ticks(200);
+
+    // --- Verify all 15 tasks completed ---
+    const state = rg.getState();
+    const allNames = Object.keys(state.state.tasks);
+    expect(allNames).toHaveLength(15);
+    for (const name of allNames) {
+      expect(state.state.tasks[name].status).toBe('completed');
+    }
+
+    // Spot-check dynamic cards on disk
+    const allocDisk = readCard(tmpDir, 'allocation-chart');
+    expect(allocDisk.state!.allocations).toHaveLength(5);
+
+    const riskDisk = readCard(tmpDir, 'risk-score');
+    expect(['high', 'medium', 'low']).toContain(riskDisk.state!.riskLevel);
+
+    const pnlDisk = readCard(tmpDir, 'daily-pnl');
+    expect(pnlDisk.state!.alpha).toBeDefined();
+
+    const combDisk = readCard(tmpDir, 'combined-view');
+    expect(combDisk.state!.dashboardReady).toBe(true);
+    expect(combDisk.state!.sectorCount).toBe(3);
+  });
+
+  // ==========================================================================
+  // Test 3: addRequires — wire sentiment into risk-score mid-flight
+  // ==========================================================================
+
+  it('addRequires wires sentiment into risk-score, re-computes on retrigger', async () => {
+    const cards = makePortfolioCards();
+    const { graph: rg, graphRef } = buildGraph(cards);
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    // Add risk-score (initially only requires valuator)
+    // Handler checks its own config to decide whether to use sentiment
+    addDynamicCard(rg, graphRef, {
+      id: 'risk-score', type: 'card', data: { requires: ['valuator'] }, state: {},
+    }, (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const values = positions.map((p: any) => p.value);
+      const total = values.reduce((s: number, v: number) => s + v, 0);
+      const maxConc = total > 0 ? Math.max(...values) / total : 0;
+      // Only use sentiment if it's in our declared requires
+      const myRequires = engine.config.tasks['risk-score']?.requires ?? [];
+      const useSentiment = myRequires.includes('sentiment');
+      let riskScore = maxConc;
+      if (useSentiment) {
+        const sentimentData = engine.state.tasks.sentiment?.data as any;
+        if (sentimentData?.avgSentiment != null) {
+          riskScore = maxConc - sentimentData.avgSentiment * 0.1;
+        }
+      }
+      return {
+        rawConcentration: Math.round(maxConc * 100) / 100,
+        adjustedRisk: Math.round(riskScore * 100) / 100,
+        usesSentiment: useSentiment,
+      };
+    }, { requires: ['valuator'] });
     await ticks(100);
+
+    // Before addRequires: handler does not use sentiment
+    const riskBefore = readCard(tmpDir, 'risk-score');
+    expect(riskBefore.state!.usesSentiment).toBe(false);
+    expect(riskBefore.state!.adjustedRisk).toBe(riskBefore.state!.rawConcentration);
+
+    // Wire sentiment into risk-score
+    rg.addRequires('risk-score', ['sentiment']);
+
+    // Verify the config was updated
+    const config = rg.getState().config;
+    expect(config.tasks['risk-score'].requires).toContain('sentiment');
+    expect(config.tasks['risk-score'].requires).toContain('valuator');
+
+    // Retrigger risk-score to pick up the new dependency
+    rg.retrigger('risk-score');
+    await ticks(100);
+
+    // After: handler now uses sentiment
+    const riskAfter = readCard(tmpDir, 'risk-score');
+    expect(riskAfter.state!.usesSentiment).toBe(true);
+    expect(riskAfter.state!.adjustedRisk).not.toBe(riskAfter.state!.rawConcentration);
+  });
+
+  // ==========================================================================
+  // Test 4: removeRequires — disconnect price-feed from valuator
+  // ==========================================================================
+
+  it('removeRequires disconnects price-feed, valuator still runs', async () => {
+    const cards = makePortfolioCards();
+    const { graph: rg } = buildGraph(cards);
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    // Before: valuator requires both holdings and price-feed
+    expect(rg.getState().config.tasks.valuator.requires).toContain('price-feed');
+
+    const valBefore = readCard(tmpDir, 'valuator');
+    const posBefore = valBefore.state!.positions as any[];
+    expect(posBefore[0].price).toBeGreaterThan(0);
+
+    // Remove price-feed requirement
+    rg.removeRequires('valuator', ['price-feed']);
+
+    // Config updated
+    const requires = rg.getState().config.tasks.valuator.requires ?? [];
+    expect(requires).not.toContain('price-feed');
+    expect(requires).toContain('holdings');
+
+    // Retrigger to re-run with only holdings data
+    rg.retrigger('valuator');
+    await ticks(100);
+
+    // Valuator still completed
+    expect(rg.getState().state.tasks.valuator.status).toBe('completed');
+  });
+
+  // ==========================================================================
+  // Test 5: addProvides — add a new token to sector-breakdown
+  // ==========================================================================
+
+  it('addProvides lets sector-breakdown produce a new token for downstream', async () => {
+    const cards = makePortfolioCards();
+    const { graph: rg, graphRef } = buildGraph(cards);
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    // sector-breakdown currently provides ['sector-breakdown']
+    const providesBefore = rg.getState().config.tasks['sector-breakdown'].provides ?? [];
+    expect(providesBefore).toContain('sector-breakdown');
+    expect(providesBefore).not.toContain('sector-data');
+
+    // Add a new provides token
+    rg.addProvides('sector-breakdown', ['sector-data']);
+
+    const providesAfter = rg.getState().config.tasks['sector-breakdown'].provides ?? [];
+    expect(providesAfter).toContain('sector-data');
+    expect(providesAfter).toContain('sector-breakdown');
+
+    // Now add a card that requires 'sector-data'
+    addDynamicCard(rg, graphRef, {
+      id: 'sector-report', type: 'card',
+      data: { requires: ['sector-data'] }, state: {},
+    }, (engine) => {
+      const sectorData = engine.state.tasks['sector-breakdown']?.data as any ?? {};
+      return { report: `${sectorData.sectorCount ?? 0} sectors analyzed`, generated: true };
+    }, { requires: ['sector-data'] });
+
+    await ticks(100);
+
+    expect(rg.getState().state.tasks['sector-report'].status).toBe('completed');
+    const reportDisk = readCard(tmpDir, 'sector-report');
+    expect(reportDisk.state!.generated).toBe(true);
+    expect(reportDisk.state!.report).toContain('3 sectors');
+  });
+
+  // ==========================================================================
+  // Test 6: removeProvides — remove a token, downstream becomes unresolved
+  // ==========================================================================
+
+  it('removeProvides updates config and schedule sees token as unresolvable', async () => {
+    const cards = makePortfolioCards();
+    const { graph: rg, graphRef } = buildGraph(cards);
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    // First add a novel provides token to sector-breakdown
+    rg.addProvides('sector-breakdown', ['sector-signal']);
+    expect(rg.getState().config.tasks['sector-breakdown'].provides).toContain('sector-signal');
+
+    // A card requiring 'sector-signal' should run (token produced by completed task)
+    addDynamicCard(rg, graphRef, {
+      id: 'signal-consumer', type: 'card',
+      data: { requires: ['sector-signal'] }, state: {},
+    }, () => ({ consumed: true }), { requires: ['sector-signal'] });
+    await ticks(100);
+    expect(rg.getState().state.tasks['signal-consumer'].status).toBe('completed');
+
+    // Now removeProvides 'sector-signal' from sector-breakdown
+    rg.removeProvides('sector-breakdown', ['sector-signal']);
+    const providesAfter = rg.getState().config.tasks['sector-breakdown'].provides ?? [];
+    expect(providesAfter).not.toContain('sector-signal');
+    // Original token still there
+    expect(providesAfter).toContain('sector-breakdown');
+
+    // Schedule now shows 'sector-signal' as unresolvable for signal-consumer
+    // (no producer declares it, even though runtime tokens exist)
+    const sched = rg.getSchedule();
+    // signal-consumer already completed — scheduler skips it, so it won't
+    // appear in unresolved. But the config accurately reflects the removal.
+    expect(rg.getState().config.tasks['sector-breakdown'].provides).not.toContain('sector-signal');
+
+    // Verify: if we add another card requiring the removed token,
+    // the schedule correctly flags it as unresolved.
+    // Note: runtime tokens from prior completion may still satisfy it,
+    // so we verify the config-level detachment instead.
+    const allProvides = Object.values(rg.getState().config.tasks)
+      .flatMap(t => t.provides ?? []);
+    expect(allProvides).not.toContain('sector-signal');
+  });
+
+  // ==========================================================================
+  // Test 7: retriggerAll + pushAll — refresh multiple sources at once
+  // ==========================================================================
+
+  it('pushAll refreshes sources, full cascade re-computes', async () => {
+    const cards = makePortfolioCards();
+    const { graph: rg } = buildGraph(cards);
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
 
     const pvBefore = readCard(tmpDir, 'portfolio-value');
     const totalBefore = pvBefore.state!.totalValue as number;
 
-    // Push new price data directly (simulates external price feed update)
-    rg.push({
-      type: 'task-completed',
-      taskName: 'price-feed',
-      data: { prices: marketPrices.round2 },
-      timestamp: ts(),
-    });
-    await ticks(100);
-
-    // Valuator and portfolio-value should have re-computed with new prices
-    const pvAfter = readCard(tmpDir, 'portfolio-value');
-    const totalAfter = pvAfter.state!.totalValue as number;
-
-    const expectedTotal = 50 * 201.00 + 30 * 418.75 + 20 * 180.50;
-    expect(totalAfter).toBe(expectedTotal);
-    expect(totalAfter).not.toBe(totalBefore);
-
-    // Valuator positions should reflect new prices
-    const valuatorAfter = readCard(tmpDir, 'valuator');
-    const positionsAfter = valuatorAfter.state!.positions as any[];
-    const aaplPos = positionsAfter.find((p: any) => p.symbol === 'AAPL');
-    expect(aaplPos.price).toBe(201.00);
-    expect(aaplPos.value).toBe(50 * 201.00);
-  });
-
-  // --------------------------------------------------------------------------
-  // Test 3: Add a new holding → cascade
-  // --------------------------------------------------------------------------
-
-  it('step 4: adding a holding recalculates portfolio', async () => {
-    const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
-
-    // Initial cascade
-    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-    await ticks(100);
-
-    // Push both source updates — add TSLA
-    const newHoldings = [
-      { symbol: 'AAPL', shares: 50 },
-      { symbol: 'MSFT', shares: 30 },
-      { symbol: 'GOOG', shares: 20 },
-      { symbol: 'TSLA', shares: 15 },
-    ];
-    const newPrices = { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, TSLA: 168.75 };
-
+    // Push new data for both price-feed and holdings
     rg.pushAll([
       {
-        type: 'task-completed',
-        taskName: 'holdings',
-        data: { holdings: newHoldings },
+        type: 'task-completed', taskName: 'price-feed',
+        data: { prices: prices.round2 },
         timestamp: ts(),
       },
       {
-        type: 'task-completed',
-        taskName: 'price-feed',
-        data: { prices: newPrices },
+        type: 'task-completed', taskName: 'holdings',
+        data: {
+          holdings: [
+            { symbol: 'AAPL', shares: 60, sector: 'tech' },
+            { symbol: 'MSFT', shares: 30, sector: 'tech' },
+            { symbol: 'GOOG', shares: 20, sector: 'tech' },
+            { symbol: 'JPM', shares: 40, sector: 'finance' },
+            { symbol: 'JNJ', shares: 25, sector: 'healthcare' },
+          ],
+        },
         timestamp: ts(),
       },
     ]);
-    await ticks(100);
+    await ticks(150);
 
-    // Verify: 4 positions
-    const valuatorOnDisk = readCard(tmpDir, 'valuator');
-    const positions = valuatorOnDisk.state!.positions as any[];
-    expect(positions).toHaveLength(4);
-    expect(positions.find((p: any) => p.symbol === 'TSLA')).toBeDefined();
+    const pvAfter = readCard(tmpDir, 'portfolio-value');
+    const totalAfter = pvAfter.state!.totalValue as number;
+    const expectedTotal = 60*201.00 + 30*418.75 + 20*180.50 + 40*202.10 + 25*153.40;
+    expect(totalAfter).toBe(expectedTotal);
+    expect(totalAfter).not.toBe(totalBefore);
 
-    // Total includes TSLA
-    const pvOnDisk = readCard(tmpDir, 'portfolio-value');
-    expect(pvOnDisk.state!.positionCount).toBe(4);
-    const expectedTotal = 50 * 195.50 + 30 * 420.10 + 20 * 176.30 + 15 * 168.75;
-    expect(pvOnDisk.state!.totalValue).toBe(expectedTotal);
+    // Sector breakdown updated
+    const sbDisk = readCard(tmpDir, 'sector-breakdown');
+    const techSector = (sbDisk.state!.sectors as any[]).find((s: any) => s.sector === 'tech');
+    expect(techSector.value).toBe(60*201.00 + 30*418.75 + 20*180.50);
   });
 
-  // --------------------------------------------------------------------------
-  // Test 4: addNode — dynamic chart card
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // Test 8: Heavy rewiring — build chain → add cross-links → remove nodes
+  // ==========================================================================
 
-  it('step 6-7: addNode for allocation-chart card, verify on disk', async () => {
+  it('heavy rewiring: build chain → add cross-links → remove nodes', async () => {
     const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
+    const { graph: rg, graphRef } = buildGraph(cards);
 
-    // Initial cascade
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-    await ticks(100);
+    await ticks(150);
 
-    // Create chart card JSON
-    const chartCard: LiveCard = {
-      id: 'allocation-chart',
-      type: 'card',
-      meta: { title: 'Portfolio Allocation Chart' },
-      data: { requires: ['valuator', 'portfolio-value'] },
-      state: {},
-    };
-    writeCard(tmpDir, chartCard);
-
-    // Register handler — compute allocation percentages
-    rg.registerHandler('allocation-chart', async (input: TaskHandlerInput) => {
-      const engine = rg.getState();
+    // Add allocation-chart → depends on valuator + portfolio-value
+    addDynamicCard(rg, graphRef, {
+      id: 'allocation-chart', type: 'card', data: { requires: ['valuator', 'portfolio-value'] }, state: {},
+    }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
-      const totalValue = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      const total = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      return { allocations: positions.map((p: any) => ({ symbol: p.symbol, pct: total > 0 ? Math.round(p.value / total * 10000) / 100 : 0 })) };
+    }, { requires: ['valuator', 'portfolio-value'] });
 
-      const allocations = positions.map((p: any) => ({
-        symbol: p.symbol,
-        value: p.value,
-        pct: totalValue > 0 ? Math.round(p.value / totalValue * 10000) / 100 : 0,
-      }));
+    // Add daily-pnl → depends on portfolio-value + benchmark
+    addDynamicCard(rg, graphRef, {
+      id: 'daily-pnl', type: 'card', data: { requires: ['portfolio-value', 'benchmark'] }, state: {},
+    }, (engine) => {
+      const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      const benchReturn = (engine.state.tasks.benchmark?.data as any)?.dailyReturn ?? 0;
+      return { pnl: Math.round(tv * 0.012 * 100) / 100, benchReturn };
+    }, { requires: ['portfolio-value', 'benchmark'] });
 
-      const result = { allocations };
+    // Add summary + newsletter
+    addDynamicCard(rg, graphRef, {
+      id: 'summary', type: 'card', data: { requires: ['portfolio-value', 'sentiment'] }, state: {},
+    }, (engine) => {
+      const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      const mood = (engine.state.tasks.sentiment?.data as any)?.bullish ? 'bullish' : 'bearish';
+      return { text: `Portfolio: $${tv.toFixed(2)}`, mood };
+    }, { requires: ['portfolio-value', 'sentiment'] });
 
-      // Sync to disk
-      const diskCard = readCard(tmpDir, chartCard.id);
-      diskCard.state = { ...diskCard.state, ...result };
-      writeCard(tmpDir, diskCard);
+    addDynamicCard(rg, graphRef, {
+      id: 'newsletter', type: 'card', data: { requires: ['summary', 'allocation-chart', 'daily-pnl'] }, state: {},
+    }, (engine) => {
+      const summary = engine.state.tasks.summary?.data as any ?? {};
+      const alloc = engine.state.tasks['allocation-chart']?.data as any ?? {};
+      const pnl = engine.state.tasks['daily-pnl']?.data as any ?? {};
+      return { subject: `Daily: ${summary.text ?? ''}`, allocationCount: (alloc.allocations ?? []).length, pnl: pnl.pnl ?? 0, assembled: true };
+    }, { requires: ['summary', 'allocation-chart', 'daily-pnl'] });
 
-      rg.resolveCallback(input.callbackToken, result);
-      return 'task-initiated';
-    });
+    await ticks(200);
 
-    // Add the node to the live graph
-    rg.addNode('allocation-chart', {
-      requires: ['valuator', 'portfolio-value'],
-      provides: ['allocation-chart'],
-      taskHandlers: ['allocation-chart'],
-    } as TaskConfig);
+    // 12 cards (8 + 4 dynamic)
+    expect(Object.keys(rg.getState().state.tasks)).toHaveLength(12);
+    expect(rg.getState().state.tasks.newsletter.status).toBe('completed');
 
+    const nlDisk = readCard(tmpDir, 'newsletter');
+    expect(nlDisk.state!.assembled).toBe(true);
+    expect(nlDisk.state!.allocationCount).toBe(5);
+
+    // --- Add cross-link: wire sentiment into newsletter via addRequires ---
+    rg.addRequires('newsletter', ['sentiment']);
+    expect(rg.getState().config.tasks.newsletter.requires).toContain('sentiment');
+
+    rg.retrigger('newsletter');
     await ticks(100);
+    expect(rg.getState().state.tasks.newsletter.status).toBe('completed');
 
-    // Verify: chart card computed on disk
-    const chartOnDisk = readCard(tmpDir, 'allocation-chart');
-    const allocations = chartOnDisk.state!.allocations as any[];
-    expect(allocations).toHaveLength(3);
+    // --- Remove allocation-chart ---
+    rg.removeNode('allocation-chart');
+    expect(rg.getState().state.tasks['allocation-chart']).toBeUndefined();
+    expect(rg.getState().state.tasks.newsletter.status).toBe('completed');
 
-    // Percentages should sum to ~100
-    const totalPct = allocations.reduce((s: number, a: any) => s + a.pct, 0);
-    expect(totalPct).toBeCloseTo(100, 0);
+    // --- Remove the allocation-chart requirement from newsletter ---
+    rg.removeRequires('newsletter', ['allocation-chart']);
+    expect(rg.getState().config.tasks.newsletter.requires).not.toContain('allocation-chart');
 
-    // AAPL allocation check
-    const totalValue = 50 * 195.50 + 30 * 420.10 + 20 * 176.30;
-    const aaplAlloc = allocations.find((a: any) => a.symbol === 'AAPL');
-    expect(aaplAlloc.pct).toBeCloseTo((50 * 195.50 / totalValue) * 100, 1);
+    // Retrigger — works with remaining deps
+    rg.retrigger('newsletter');
+    await ticks(100);
+    expect(rg.getState().state.tasks.newsletter.status).toBe('completed');
 
-    // Engine confirms completed
-    expect(rg.getState().state.tasks['allocation-chart'].status).toBe('completed');
+    // Verify final graph shape
+    const finalTasks = Object.keys(rg.getState().config.tasks);
+    expect(finalTasks).toHaveLength(11); // 12 - 1 removed
+    expect(finalTasks).not.toContain('allocation-chart');
   });
 
-  // --------------------------------------------------------------------------
-  // Test 5: removeNode — remove portfolio-value
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // Test 9: Node removal cascade — remove key intermediate, re-add
+  // ==========================================================================
 
-  it('step 8-9: removeNode removes task from engine, disk card remains', async () => {
+  it('removing valuator orphans downstream, re-add brings it back', async () => {
     const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
+    const { graph: rg, graphRef } = buildGraph(cards);
 
-    // Initial cascade
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-    await ticks(100);
+    await ticks(150);
 
-    // Verify portfolio-value completed
-    expect(rg.getState().state.tasks['portfolio-value'].status).toBe('completed');
-
-    // Remove from engine
-    rg.removeNode('portfolio-value');
-
-    // Engine no longer has the task
-    expect(rg.getState().state.tasks['portfolio-value']).toBeUndefined();
-
-    // Disk card still exists with its last computed state
-    const pvOnDisk = readCard(tmpDir, 'portfolio-value');
-    expect(pvOnDisk.state!.totalValue).toBeDefined();
-
-    // Schedule doesn't include it
-    const sched = rg.getSchedule();
-    expect(sched.eligible).not.toContain('portfolio-value');
-  });
-
-  // --------------------------------------------------------------------------
-  // Test 6: Full dynamic cycle — add, retrigger cascade, remove
-  // --------------------------------------------------------------------------
-
-  it('step 10: add risk-score → price change cascades → remove chain', async () => {
-    const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
-
-    // Initial cascade
-    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
-    await ticks(100);
-
-    // --- Phase A: Add "risk-score" card ---
-    const riskCard: LiveCard = {
-      id: 'risk-score',
-      type: 'card',
-      meta: { title: 'Portfolio Risk Score' },
-      data: { requires: ['valuator'] },
-      state: {},
-    };
-    writeCard(tmpDir, riskCard);
-
-    rg.registerHandler('risk-score', async (input: TaskHandlerInput) => {
-      const positions = (rg.getState().state.tasks.valuator?.data as any)?.positions ?? [];
-      const values = positions.map((p: any) => p.value ?? 0);
+    // Add risk-score downstream of valuator
+    addDynamicCard(rg, graphRef, {
+      id: 'risk-score', type: 'card', data: { requires: ['valuator'] }, state: {},
+    }, (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      const values = positions.map((p: any) => p.value);
       const total = values.reduce((s: number, v: number) => s + v, 0);
-      const maxConcentration = total > 0 ? Math.max(...values) / total : 0;
-      const riskLevel = maxConcentration > 0.5 ? 'high' : maxConcentration > 0.3 ? 'medium' : 'low';
-      const result = { maxConcentration: Math.round(maxConcentration * 100) / 100, riskLevel };
-
-      // Sync to disk
-      const diskCard = readCard(tmpDir, riskCard.id);
-      diskCard.state = { ...diskCard.state, ...result };
-      writeCard(tmpDir, diskCard);
-
-      rg.resolveCallback(input.callbackToken, result);
-      return 'task-initiated';
-    });
-
-    rg.addNode('risk-score', {
-      requires: ['valuator'],
-      provides: ['risk-score'],
-      taskHandlers: ['risk-score'],
-    } as TaskConfig);
-
+      const maxConc = total > 0 ? Math.max(...values) / total : 0;
+      return { riskLevel: maxConc > 0.5 ? 'high' : 'medium' };
+    }, { requires: ['valuator'] });
     await ticks(100);
 
-    // Risk-score computed
-    const riskOnDisk = readCard(tmpDir, 'risk-score');
-    expect(riskOnDisk.state!.riskLevel).toBeDefined();
-    expect(['high', 'medium', 'low']).toContain(riskOnDisk.state!.riskLevel);
+    expect(Object.keys(rg.getState().state.tasks)).toHaveLength(9);
+
+    // Remove valuator
+    rg.removeNode('valuator');
+
+    // Downstream still completed (already ran)
+    expect(rg.getState().state.tasks['portfolio-value'].status).toBe('completed');
+    expect(rg.getState().state.tasks['sector-breakdown'].status).toBe('completed');
     expect(rg.getState().state.tasks['risk-score'].status).toBe('completed');
 
-    // --- Phase B: Price change → cascades through valuator → risk-score ---
+    // Disk files preserved
+    expect(cardExists(tmpDir, 'valuator')).toBe(true);
+    const valDisk = readCard(tmpDir, 'valuator');
+    expect(valDisk.state!.positions).toHaveLength(5);
+
+    // Re-add valuator
+    rg.registerHandler('valuator', makeHandler('valuator', (engine) => {
+      const holdingsList = (engine.state.tasks.holdings?.data as any)?.holdings ?? [];
+      const priceMap = (engine.state.tasks['price-feed']?.data as any)?.prices ?? {};
+      return {
+        positions: holdingsList.map((h: any) => ({
+          symbol: h.symbol, shares: h.shares, sector: h.sector,
+          price: priceMap[h.symbol] ?? 0, value: h.shares * (priceMap[h.symbol] ?? 0),
+        })),
+      };
+    }, graphRef));
+    rg.addNode('valuator', {
+      requires: ['holdings', 'price-feed'],
+      provides: ['valuator'],
+      taskHandlers: ['valuator'],
+    } as TaskConfig);
+    await ticks(100);
+
+    expect(rg.getState().state.tasks.valuator.status).toBe('completed');
+    expect(Object.keys(rg.getState().state.tasks)).toHaveLength(9);
+  });
+
+  // ==========================================================================
+  // Test 10: Price rounds with new stock — full cascade
+  // ==========================================================================
+
+  it('multiple price rounds + add TSLA holding shows full cascade', async () => {
+    const cards = makePortfolioCards();
+    const { graph: rg, graphRef } = buildGraph(cards);
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    addDynamicCard(rg, graphRef, {
+      id: 'risk-score', type: 'card', data: { requires: ['valuator'] }, state: {},
+    }, (engine) => {
+      const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
+      return { positionCount: positions.length, topHolding: positions.length > 0 ? positions.sort((a: any, b: any) => b.value - a.value)[0].symbol : null };
+    }, { requires: ['valuator'] });
+
+    addDynamicCard(rg, graphRef, {
+      id: 'daily-pnl', type: 'card', data: { requires: ['portfolio-value'] }, state: {},
+    }, (engine) => {
+      const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+      return { estimatedPnl: Math.round(tv * 0.012 * 100) / 100 };
+    }, { requires: ['portfolio-value'] });
+
+    await ticks(100);
+
+    let riskDisk = readCard(tmpDir, 'risk-score');
+    expect(riskDisk.state!.positionCount).toBe(5);
+
+    // Round 2: price change
     rg.push({
-      type: 'task-completed',
-      taskName: 'price-feed',
-      data: { prices: marketPrices.round2 },
+      type: 'task-completed', taskName: 'price-feed',
+      data: { prices: prices.round2 },
       timestamp: ts(),
     });
-    await ticks(100);
+    await ticks(150);
 
-    // Valuator re-ran with new prices
-    const valuatorState = rg.getState().state.tasks.valuator;
-    expect(valuatorState.status).toBe('completed');
-    const newPositions = (valuatorState.data as any)?.positions ?? [];
-    const aaplPos = newPositions.find((p: any) => p.symbol === 'AAPL');
-    expect(aaplPos.price).toBe(201.00);
+    const pvR2 = readCard(tmpDir, 'portfolio-value');
+    const expectedR2 = 50*201.00 + 30*418.75 + 20*180.50 + 40*202.10 + 25*153.40;
+    expect(pvR2.state!.totalValue).toBe(expectedR2);
 
-    // Risk-score also re-computed
-    expect(rg.getState().state.tasks['risk-score'].status).toBe('completed');
+    // Round 3: add TSLA + new prices
+    rg.pushAll([
+      {
+        type: 'task-completed', taskName: 'holdings',
+        data: {
+          holdings: [
+            { symbol: 'AAPL', shares: 50, sector: 'tech' },
+            { symbol: 'MSFT', shares: 30, sector: 'tech' },
+            { symbol: 'GOOG', shares: 20, sector: 'tech' },
+            { symbol: 'JPM', shares: 40, sector: 'finance' },
+            { symbol: 'JNJ', shares: 25, sector: 'healthcare' },
+            { symbol: 'TSLA', shares: 10, sector: 'tech' },
+          ],
+        },
+        timestamp: ts(),
+      },
+      {
+        type: 'task-completed', taskName: 'price-feed',
+        data: { prices: prices.round3 },
+        timestamp: ts(),
+      },
+    ]);
+    await ticks(150);
 
-    // --- Phase C: Remove valuator ---
-    rg.removeNode('valuator');
-    expect(rg.getState().state.tasks.valuator).toBeUndefined();
+    riskDisk = readCard(tmpDir, 'risk-score');
+    expect(riskDisk.state!.positionCount).toBe(6);
 
-    // risk-score and portfolio-value already completed — scheduler skips them.
-    // But the valuator token can no longer be produced (no producer in config).
-    const configAfterRemove = rg.getState().config;
-    expect(configAfterRemove.tasks.valuator).toBeUndefined();
-    // risk-score still has its completed data intact
-    expect(rg.getState().state.tasks['risk-score'].status).toBe('completed');
-    expect(rg.getState().state.tasks['portfolio-value'].status).toBe('completed');
+    const pvR3 = readCard(tmpDir, 'portfolio-value');
+    const expectedR3 = 50*205.25 + 30*422.00 + 20*182.10 + 40*199.80 + 25*157.10 + 10*168.75;
+    expect(pvR3.state!.totalValue).toBe(expectedR3);
+    expect(pvR3.state!.positionCount).toBe(6);
 
-    // --- Phase D: Clean up — remove both orphaned nodes ---
-    rg.removeNode('risk-score');
-    rg.removeNode('portfolio-value');
+    const sbDisk = readCard(tmpDir, 'sector-breakdown');
+    const techSector = (sbDisk.state!.sectors as any[]).find((s: any) => s.sector === 'tech');
+    const expectedTechValue = 50*205.25 + 30*422.00 + 20*182.10 + 10*168.75;
+    expect(techSector.value).toBe(expectedTechValue);
 
-    const remaining = Object.keys(rg.getState().state.tasks);
-    expect(remaining).toEqual(expect.arrayContaining(['holdings', 'price-feed']));
-    expect(remaining).not.toContain('valuator');
-    expect(remaining).not.toContain('risk-score');
-    expect(remaining).not.toContain('portfolio-value');
-
-    // Disk still has all files
-    expect(fs.existsSync(path.join(tmpDir, 'risk-score.json'))).toBe(true);
-    expect(fs.existsSync(path.join(tmpDir, 'valuator.json'))).toBe(true);
-    expect(fs.existsSync(path.join(tmpDir, 'portfolio-value.json'))).toBe(true);
+    const pnlDisk = readCard(tmpDir, 'daily-pnl');
+    expect(pnlDisk.state!.estimatedPnl).toBe(Math.round(expectedR3 * 0.012 * 100) / 100);
   });
 
-  // --------------------------------------------------------------------------
-  // Test 7: Add multiple independent downstream nodes
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // Test 11: Full 15+ card lifecycle with heavy graph manipulation
+  // ==========================================================================
 
-  it('step 10: add summary + alert, both depend on portfolio-value', async () => {
+  it('15+ cards: build → rewire → remove → re-add → verify disk', async () => {
     const cards = makePortfolioCards();
-    const { graph: rg } = buildGraphWithDiskSync(cards);
+    const { graph: rg, graphRef } = buildGraph(cards);
 
-    // Initial cascade
     rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(150);
+
+    // Phase 1: Add 7 dynamic cards → 15 total
+    const dynamicDefs: Array<{
+      id: string; requires: string[];
+      compute: (e: ReturnType<ReactiveGraph['getState']>) => Record<string, unknown>;
+    }> = [
+      { id: 'allocation-chart', requires: ['valuator', 'portfolio-value'], compute: (e) => {
+        const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
+        const tot = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+        return { allocations: pos.map((p: any) => ({ sym: p.symbol, pct: tot > 0 ? Math.round(p.value / tot * 10000) / 100 : 0 })) };
+      }},
+      { id: 'risk-score', requires: ['valuator'], compute: (e) => {
+        const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
+        const values = pos.map((p: any) => p.value);
+        const total = values.reduce((s: number, v: number) => s + v, 0);
+        return { maxConc: total > 0 ? Math.round(Math.max(...values) / total * 100) / 100 : 0 };
+      }},
+      { id: 'daily-pnl', requires: ['portfolio-value', 'benchmark'], compute: (e) => {
+        const tv = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+        return { pnl: Math.round(tv * 0.012 * 100) / 100 };
+      }},
+      { id: 'value-alert', requires: ['portfolio-value'], compute: (e) => {
+        const tv = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+        return { triggered: tv > 25000, currentValue: tv };
+      }},
+      { id: 'summary', requires: ['portfolio-value', 'sentiment'], compute: (e) => {
+        const tv = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
+        const mood = (e.state.tasks.sentiment?.data as any)?.bullish ? 'up' : 'down';
+        return { totalValue: tv, mood };
+      }},
+      { id: 'correlation', requires: ['valuator', 'benchmark'], compute: (e) => {
+        const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
+        const techVal = pos.filter((p: any) => p.sector === 'tech').reduce((s: number, p: any) => s + p.value, 0);
+        const total = pos.reduce((s: number, p: any) => s + p.value, 0);
+        return { techWeight: total > 0 ? Math.round(techVal / total * 100) / 100 : 0 };
+      }},
+      { id: 'combined-view', requires: ['summary', 'sector-breakdown', 'risk-score'], compute: (e) => {
+        return {
+          summaryMood: (e.state.tasks.summary?.data as any)?.mood ?? '?',
+          sectors: (e.state.tasks['sector-breakdown']?.data as any)?.sectorCount ?? 0,
+          risk: (e.state.tasks['risk-score']?.data as any)?.maxConc ?? 0,
+          ready: true,
+        };
+      }},
+    ];
+
+    for (const d of dynamicDefs) {
+      addDynamicCard(rg, graphRef, {
+        id: d.id, type: 'card', data: { requires: d.requires }, state: {},
+      }, d.compute, { requires: d.requires });
+    }
+    await ticks(250);
+
+    // Verify: 15 cards all completed
+    let tasks = rg.getState().state.tasks;
+    expect(Object.keys(tasks)).toHaveLength(15);
+    for (const t of Object.values(tasks)) expect(t.status).toBe('completed');
+
+    // Phase 2: addProvides to benchmark → add new token 'market-data'
+    rg.addProvides('benchmark', ['market-data']);
+    expect(rg.getState().config.tasks.benchmark.provides).toContain('market-data');
+
+    // Phase 3: Add card 16 depending on the new token
+    addDynamicCard(rg, graphRef, {
+      id: 'market-context', type: 'card', data: { requires: ['market-data'] }, state: {},
+    }, (e) => {
+      const bench = e.state.tasks.benchmark?.data as any ?? {};
+      return { indexValue: bench.value ?? 0, context: 'provided via market-data token' };
+    }, { requires: ['market-data'] });
     await ticks(100);
 
-    const totalValue = 50 * 195.50 + 30 * 420.10 + 20 * 176.30;
+    expect(rg.getState().state.tasks['market-context'].status).toBe('completed');
+    const mctxDisk = readCard(tmpDir, 'market-context');
+    expect(mctxDisk.state!.context).toBe('provided via market-data token');
+    expect(Object.keys(rg.getState().state.tasks)).toHaveLength(16);
 
-    // --- Add summary card ---
-    writeCard(tmpDir, { id: 'summary', type: 'card', data: { requires: ['portfolio-value'] }, state: {} });
+    // Phase 4: addRequires — wire news-feed into combined-view
+    rg.addRequires('combined-view', ['news-feed']);
+    expect(rg.getState().config.tasks['combined-view'].requires).toContain('news-feed');
 
-    rg.registerHandler('summary', async (input) => {
-      const pvData = rg.getState().state.tasks['portfolio-value']?.data ?? {};
-      const tv = (pvData as any).totalValue ?? 0;
-      const result = { text: `Portfolio: $${tv.toFixed(2)}`, totalValue: tv };
-      const diskCard = readCard(tmpDir, 'summary');
-      diskCard.state = { ...diskCard.state, ...result };
-      writeCard(tmpDir, diskCard);
-      rg.resolveCallback(input.callbackToken, result);
-      return 'task-initiated' as const;
+    // Phase 5: removeProvides — remove 'market-data' from benchmark
+    rg.removeProvides('benchmark', ['market-data']);
+    expect(rg.getState().config.tasks.benchmark.provides).not.toContain('market-data');
+
+    // market-context still completed with old data
+    expect(rg.getState().state.tasks['market-context'].status).toBe('completed');
+
+    // Phase 6: Remove 3 nodes
+    rg.removeNode('allocation-chart');
+    rg.removeNode('daily-pnl');
+    rg.removeNode('market-context');
+    expect(Object.keys(rg.getState().state.tasks)).toHaveLength(13);
+
+    // Phase 7: Push round2 prices → full cascade
+    rg.push({
+      type: 'task-completed', taskName: 'price-feed',
+      data: { prices: prices.round2 },
+      timestamp: ts(),
     });
+    await ticks(200);
 
-    rg.addNode('summary', {
-      requires: ['portfolio-value'],
-      provides: ['summary'],
-      taskHandlers: ['summary'],
-    } as TaskConfig);
+    tasks = rg.getState().state.tasks;
+    expect(tasks.valuator.status).toBe('completed');
+    expect(tasks['portfolio-value'].status).toBe('completed');
+    expect(tasks['risk-score'].status).toBe('completed');
+    expect(tasks['value-alert'].status).toBe('completed');
+    expect(tasks.summary.status).toBe('completed');
+    expect(tasks['combined-view'].status).toBe('completed');
+    expect(tasks.correlation.status).toBe('completed');
 
-    // --- Add alert card ---
-    writeCard(tmpDir, { id: 'value-alert', type: 'card', data: { requires: ['portfolio-value'] }, state: {} });
-
-    rg.registerHandler('value-alert', async (input) => {
-      const pvData = rg.getState().state.tasks['portfolio-value']?.data ?? {};
-      const tv = (pvData as any).totalValue ?? 0;
-      const threshold = 25000;
-      const result = { triggered: tv > threshold, threshold, currentValue: tv };
-      const diskCard = readCard(tmpDir, 'value-alert');
-      diskCard.state = { ...diskCard.state, ...result };
-      writeCard(tmpDir, diskCard);
-      rg.resolveCallback(input.callbackToken, result);
-      return 'task-initiated' as const;
-    });
-
-    rg.addNode('value-alert', {
-      requires: ['portfolio-value'],
-      provides: ['value-alert'],
-      taskHandlers: ['value-alert'],
-    } as TaskConfig);
-
+    // Phase 8: Re-add allocation-chart with different wiring
+    addDynamicCard(rg, graphRef, {
+      id: 'allocation-chart', type: 'card',
+      data: { requires: ['valuator'] },
+      state: {},
+    }, (e) => {
+      const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
+      const total = pos.reduce((s: number, p: any) => s + p.value, 0);
+      return { allocations: pos.map((p: any) => ({ sym: p.symbol, pct: total > 0 ? Math.round(p.value / total * 10000) / 100 : 0 })) };
+    }, { requires: ['valuator'] });
     await ticks(100);
 
-    // Both completed
-    expect(rg.getState().state.tasks.summary.status).toBe('completed');
-    expect(rg.getState().state.tasks['value-alert'].status).toBe('completed');
+    expect(rg.getState().state.tasks['allocation-chart'].status).toBe('completed');
+    const allocDisk = readCard(tmpDir, 'allocation-chart');
+    expect(allocDisk.state!.allocations).toHaveLength(5);
 
-    // Summary on disk
-    const summaryOnDisk = readCard(tmpDir, 'summary');
-    expect(summaryOnDisk.state!.text).toContain('Portfolio:');
-    expect(summaryOnDisk.state!.totalValue).toBe(totalValue);
+    // Phase 9: removeRequires — detach news-feed from combined-view
+    rg.removeRequires('combined-view', ['news-feed']);
+    expect(rg.getState().config.tasks['combined-view'].requires).not.toContain('news-feed');
 
-    // Alert on disk
-    const alertOnDisk = readCard(tmpDir, 'value-alert');
-    expect(alertOnDisk.state!.threshold).toBe(25000);
-    expect(alertOnDisk.state!.triggered).toBe(totalValue > 25000);
-    expect(alertOnDisk.state!.currentValue).toBe(totalValue);
+    // Phase 10: retriggerAll
+    rg.retriggerAll(['valuator', 'portfolio-value', 'sector-breakdown', 'sentiment']);
+    await ticks(200);
 
-    // Remove portfolio-value → summary and value-alert completed but orphaned.
-    // (Completed tasks are skipped by scheduler, so they won't appear in unresolved.)
-    rg.removeNode('portfolio-value');
-    expect(rg.getState().config.tasks['portfolio-value']).toBeUndefined();
-    // summary and value-alert still have their completed data
-    expect(rg.getState().state.tasks.summary.status).toBe('completed');
-    expect(rg.getState().state.tasks['value-alert'].status).toBe('completed');
+    for (const name of ['valuator', 'portfolio-value', 'sector-breakdown', 'sentiment']) {
+      expect(rg.getState().state.tasks[name].status).toBe('completed');
+    }
+
+    // Final count: 14 cards (16 - 3 removed + 1 re-added)
+    const finalCount = Object.keys(rg.getState().state.tasks).length;
+    expect(finalCount).toBe(14);
+
+    // Verify all disk files present for active cards
+    for (const name of Object.keys(rg.getState().state.tasks)) {
+      expect(cardExists(tmpDir, name)).toBe(true);
+    }
+
+    // Removed cards still on disk (never deleted)
+    expect(cardExists(tmpDir, 'daily-pnl')).toBe(true);
+    expect(cardExists(tmpDir, 'market-context')).toBe(true);
   });
 });

@@ -1069,11 +1069,10 @@ import { createReactiveGraph, MemoryJournal } from 'yaml-flow/continuous-event-g
 // 1. Create with handlers
 const rg = createReactiveGraph(config, {
   handlers: {
-    fetch:     async (ctx) => { const data = await fetchAPI(); return { dataHash: hash(data) }; },
-    transform: async (ctx) => { return { result: 'success' }; },
-    notify:    async (ctx) => { await sendSlack('done'); return {}; },
+    fetch:     async ({ callbackToken }) => { /* ... */ return 'task-initiated'; },
+    transform: async ({ callbackToken }) => { /* ... */ return 'task-initiated'; },
+    notify:    async ({ callbackToken }) => { /* ... */ return 'task-initiated'; },
   },
-  defaultTimeoutMs: 30_000,
   onDrain: (events, live, schedule) => console.log(`${events.length} events, ${schedule.eligible.length} eligible`),
 });
 
@@ -1081,18 +1080,30 @@ const rg = createReactiveGraph(config, {
 rg.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
 // fetch runs -> completes -> transform becomes eligible -> runs -> notify -> done
 
-// 3. Add nodes at runtime (with handler)
-rg.addNode('alert', { requires: ['anomaly'], provides: ['alerted'] }, async (ctx) => {
-  await pageOncall(ctx.taskName);
-  return {};
+// 3. Add nodes at runtime
+rg.addNode('alert', { requires: ['anomaly'], provides: ['alerted'], taskHandlers: ['alert'] });
+rg.registerHandler('alert', async ({ callbackToken }) => {
+  // ... do work, then resolve the callback
+  rg.resolveCallback(callbackToken, { alerted: true });
+  return 'task-initiated';
 });
 
-// 4. Read state
+// 4. Dynamic wiring mutations
+rg.addRequires('alert', ['sentiment']);      // add a new dependency
+rg.removeRequires('alert', ['sentiment']);   // detach it
+rg.addProvides('fetch', ['market-data']);    // produce a new token
+rg.removeProvides('fetch', ['market-data']); // stop producing it
+
+// 5. Batch events + selective retrigger
+rg.pushAll([event1, event2]);               // atomic multi-event push
+rg.retrigger('fetch');                       // re-run a single task
+rg.retriggerAll(['fetch', 'transform']);     // re-run multiple tasks
+
+// 6. Read state
 rg.getState();          // LiveGraph snapshot
 rg.getSchedule();       // current ScheduleResult
-rg.getDispatchState();  // Map<taskName, DispatchEntry>
 
-// 5. Cleanup
+// 7. Cleanup
 rg.dispose();
 ```
 
@@ -1110,27 +1121,36 @@ push(event)
 
 The journal serializes concurrent callbacks — multiple handlers complete simultaneously, their events batch into a single `applyEvents()` call. No race conditions.
 
-**Dispatch lifecycle (reactive-layer internal, NOT in core types):**
+**Handler model:** Handlers are initiators. They receive a `callbackToken` and return `'task-initiated'` or `'task-initiate-failure'`. When work completes, call `rg.resolveCallback(token, data, errors?)` to push the result back through the engine.
 
-| Status | Meaning |
+**ReactiveGraph API:**
+
+| Method | Description |
 |---|---|
-| `initiated` | Handler callback fired, awaiting response |
-| `dispatch-failed` | Handler threw synchronously |
-| `timed-out` | No callback within deadline |
-| `retry-queued` | Will retry on next drain cycle |
-| `abandoned` | Max dispatch retries exceeded -> pushes `task-failed` to core |
+| `push(event)` | Push a single event into the engine |
+| `pushAll(events)` | Push multiple events atomically |
+| `resolveCallback(token, data, errors?)` | Resolve a handler's callback token |
+| `addNode(name, config)` | Add a task to the live graph |
+| `removeNode(name)` | Remove a task from the live graph |
+| `addRequires(name, tokens)` | Add require tokens to a task |
+| `removeRequires(name, tokens)` | Remove require tokens from a task |
+| `addProvides(name, tokens)` | Add provide tokens to a task |
+| `removeProvides(name, tokens)` | Remove provide tokens from a task |
+| `registerHandler(name, fn)` | Register a named handler |
+| `unregisterHandler(name)` | Unregister a handler |
+| `retrigger(name)` | Reset and re-run a single task |
+| `retriggerAll(names)` | Reset and re-run multiple tasks |
+| `getState()` | Current LiveGraph snapshot |
+| `getSchedule()` | Current ScheduleResult |
+| `dispose()` | Shut down the reactive graph |
 
 **Options:**
 
 | Option | Default | Description |
 |---|---|---|
-| `handlers` | (required) | `Record<string, TaskHandler>` |
-| `maxDispatchRetries` | `3` | Times to retry invoking a handler |
-| `defaultTimeoutMs` | `30000` | Handler callback deadline (0 = no timeout) |
+| `handlers` | (required) | `Record<string, TaskHandlerFn>` |
 | `journal` | `MemoryJournal` | Event log adapter (`MemoryJournal` or `FileJournal`) |
 | `onDrain` | — | Called after each drain cycle (observability) |
-| `onDispatchFailed` | — | Called when handler invocation fails |
-| `onAbandoned` | — | Called when task dispatch is abandoned |
 
 ---
 
@@ -1484,6 +1504,7 @@ See the [examples/](./examples) directory:
 | [Stock Dashboard](./examples/continuous-event-graph/stock-dashboard.ts) | Continuous Event Graph | Runtime mutations, token drain, upstream/downstream, snapshot |
 | [Reactive Pipeline](./examples/continuous-event-graph/reactive-pipeline.ts) | Reactive Graph | Self-driving ETL — push once, 4 tasks complete automatically |
 | [Reactive Monitoring](./examples/continuous-event-graph/reactive-monitoring.ts) | Reactive Graph | Conditional routing, on_failure escalation, runtime addNode |
+| [Live Portfolio Dashboard](./examples/continuous-event-graph/live-portfolio-dashboard.ts) | Reactive Graph + Live Cards | 15+ cards, disk roundtrip, addRequires/removeRequires, addProvides/removeProvides, pushAll, retriggerAll |
 | [Executor Pipeline](./examples/event-graph/executor-pipeline.ts) | Event Graph (library) | You-drive-the-loop ETL with random async delays |
 | [Executor Diamond](./examples/event-graph/executor-diamond.ts) | Event Graph (library) | Parallel fan-out/fan-in diamond DAG with async executors |
 | [Azure Deployment](./examples/inference/azure-deployment.ts) | Inference | LLM analyzes deployment logs, auto-completes checkpoints |
