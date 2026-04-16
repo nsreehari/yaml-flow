@@ -86,7 +86,7 @@ export type { Variables, ConfigTemplates } from './config/index.js';
 // Continuous Event Graph
 // ============================================================================
 export {
-  createLiveGraph, applyEvent,
+  createLiveGraph, applyEvent, applyEvents,
   addNode, removeNode,
   addRequires, removeRequires, addProvides, removeProvides,
   injectTokens, drainTokens, schedule, inspect,
@@ -94,12 +94,17 @@ export {
   snapshot, restore,
   getUnreachableTokens, getUnreachableNodes,
   getUpstream, getDownstream,
+  createReactiveGraph,
+  MemoryJournal, FileJournal,
 } from './continuous-event-graph/index.js';
 export type {
   LiveGraph, ScheduleResult, PendingTask, UnresolvedDependency, BlockedTask, LiveGraphHealth,
   NodeInfo, LiveGraphSnapshot,
   UnreachableTokensResult, UnreachableNodesResult,
   UpstreamResult, DownstreamResult,
+  ReactiveGraph, ReactiveGraphOptions,
+  TaskHandler, TaskHandlerContext, TaskHandlerResult,
+  DispatchEntry, Journal,
 } from './continuous-event-graph/index.js';
 
 // ============================================================================

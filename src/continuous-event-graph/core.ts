@@ -109,6 +109,15 @@ export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
   return { config, state: newState };
 }
 
+/**
+ * Apply multiple events atomically to a LiveGraph.
+ * Events are reduced sequentially, but the caller only sees the final state.
+ * Use this for batch processing (e.g. draining a journal of pending events).
+ */
+export function applyEvents(live: LiveGraph, events: GraphEvent[]): LiveGraph {
+  return events.reduce((current, event) => applyEvent(current, event), live);
+}
+
 // ============================================================================
 // Graph Mutations — node-level
 // ============================================================================

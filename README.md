@@ -280,7 +280,9 @@ That's the entire integration. ~30 lines. The engine is pure; your loop owns the
 | Conditional routing | `on: { positive: [pos-result], negative: [neg-result] }` | Different outputs based on task result |
 | Failure tokens | `on_failure: [data-unavailable]` | Inject tokens on failure so downstream alternatives can activate |
 | Retry | `retry: { max_attempts: 3 }` | Auto-retry on failure (task resets to not-started) |
-| Repeatable tasks | `repeatable: true` or `repeatable: { max: 5 }` | Task can re-execute when its inputs refresh |
+| Refresh strategy | `refreshStrategy: 'data-changed'` (default) | When a completed task should re-run: `data-changed`, `epoch-changed`, `time-based`, `manual`, `once` |
+| Max executions | `maxExecutions: 5` | Cap how many times a task can execute |
+| Refresh interval | `refreshInterval: 300` | Seconds between re-runs (for `time-based` strategy) |
 | Circuit breaker | `circuit_breaker: { max_executions: 10, on_break: [stop-token] }` | Inject tokens after N executions |
 | External events | `apply(state, { type: 'inject-tokens', tokens: ['user-approved'] })` | Unblock tasks waiting on external input |
 | Dynamic tasks | `apply(state, { type: 'task-creation', taskName: 'new', taskConfig: {...} })` | Add tasks at runtime |
@@ -352,10 +354,54 @@ tasks:
   revise:
     requires: [needs-revision]
     provides: [draft-answer]
-    repeatable: { max: 3 }
+    refreshStrategy: epoch-changed
+    maxExecutions: 3
 ```
 
 The three searches run in parallel. `synthesize` waits for all three. `verify` can produce different token sets depending on its result. If rejected, `revise` picks up and feeds back into `verify` (up to 3 times). If verify itself fails, `verification-skipped` unblocks any downstream task waiting on it.
+
+### Refresh Strategies
+
+| Strategy | Behavior |
+|---|---|
+| `data-changed` (default) | Re-run when upstream output content changes (tracked via `dataHash`) |
+| `epoch-changed` | Re-run when upstream task execution count increases (classic "inputs refreshed") |
+| `time-based` | Re-run after `refreshInterval` seconds since last completion |
+| `manual` | Never auto-eligible; only via external `inject-tokens` or explicit push |
+| `once` | Run once, never re-run (classic one-shot task) |
+
+Set a board-level default in `settings.refreshStrategy`, then override per-task:
+
+```yaml
+settings:
+  completion: manual
+  refreshStrategy: epoch-changed   # board default
+tasks:
+  fetch_prices:
+    provides: [price-data]
+    refreshStrategy: time-based     # override: poll every 60s
+    refreshInterval: 60
+  compute:
+    requires: [price-data]
+    provides: [indicators]
+    # inherits epoch-changed from settings
+  alert:
+    requires: [indicators]
+    provides: [alert-sent]
+    refreshStrategy: data-changed   # override: only if indicators actually changed
+    maxExecutions: 10               # safety cap
+```
+
+Handlers can return a `dataHash` with completion events to enable content-aware freshness:
+
+```typescript
+apply(state, {
+  type: 'task-completed',
+  taskName: 'fetch_prices',
+  dataHash: crypto.createHash('md5').update(JSON.stringify(data)).digest('hex'),
+  timestamp: new Date().toISOString(),
+}, graph);
+```
 
 ### Pattern: Order Processing Pipeline (Step Machine)
 
@@ -839,6 +885,37 @@ Use `validateGraphConfig()` for structural checks (JSON shape) and `validateGrap
 
 ---
 
+## JSON Schema Validation
+
+Full structural validation using AJV against the JSON Schema definitions. Catches malformed configs before they reach the engine.
+
+```typescript
+import { validateGraphSchema } from 'yaml-flow/event-graph';
+import { validateFlowSchema } from 'yaml-flow/step-machine';
+import { validateLiveCardSchema } from 'yaml-flow/card-compute';
+
+// Event graph
+const r1 = validateGraphSchema(config);
+r1.ok;      // true | false
+r1.errors;  // AJV error objects (when invalid)
+
+// Step machine
+const r2 = validateFlowSchema(config);
+
+// Live cards
+const r3 = validateLiveCardSchema(config);
+```
+
+| Validator | Schema file | What it checks |
+|---|---|---|
+| `validateGraphSchema` | `schema/event-graph.schema.json` | Tasks, settings, refreshStrategy, retry, circuit_breaker, inference hints |
+| `validateFlowSchema` | `schema/flow.schema.json` | Steps, transitions, retry, terminal states |
+| `validateLiveCardSchema` | `schema/live-cards.schema.json` | Cards, sources, elements, compute, data bindings |
+
+All validators are synchronous, pure functions. They return `{ ok: boolean, errors?: ErrorObject[] }`.
+
+---
+
 ## Continuous Event Graph
 
 A **long-lived, evolving** event-graph where both the graph config and execution state mutate over time. Ideal for dashboards, monitoring systems, and any scenario where the workflow has no fixed endpoint.
@@ -980,6 +1057,80 @@ const restored = restore(data);     // → LiveGraph (validates shape)
 | `getUnreachableNodes(live)` | Nodes that can never become eligible |
 | `snapshot(live)` | Serialize to a JSON-safe snapshot |
 | `restore(data)` | Restore a LiveGraph from a snapshot |
+| `applyEvents(live, events)` | Apply multiple events atomically (batch reduce) |
+
+### Reactive Graph (Push-based Execution)
+
+The reactive layer adds **self-sustaining execution** on top of the pure LiveGraph. Register handlers, push one event, and the graph drives itself to completion. No daemon, no polling — each handler callback triggers the next wave.
+
+```typescript
+import { createReactiveGraph, MemoryJournal } from 'yaml-flow/continuous-event-graph';
+
+// 1. Create with handlers
+const rg = createReactiveGraph(config, {
+  handlers: {
+    fetch:     async (ctx) => { const data = await fetchAPI(); return { dataHash: hash(data) }; },
+    transform: async (ctx) => { return { result: 'success' }; },
+    notify:    async (ctx) => { await sendSlack('done'); return {}; },
+  },
+  defaultTimeoutMs: 30_000,
+  onDrain: (events, live, schedule) => console.log(`${events.length} events, ${schedule.eligible.length} eligible`),
+});
+
+// 2. Push one event — the chain sustains itself
+rg.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
+// fetch runs -> completes -> transform becomes eligible -> runs -> notify -> done
+
+// 3. Add nodes at runtime (with handler)
+rg.addNode('alert', { requires: ['anomaly'], provides: ['alerted'] }, async (ctx) => {
+  await pageOncall(ctx.taskName);
+  return {};
+});
+
+// 4. Read state
+rg.getState();          // LiveGraph snapshot
+rg.getSchedule();       // current ScheduleResult
+rg.getDispatchState();  // Map<taskName, DispatchEntry>
+
+// 5. Cleanup
+rg.dispose();
+```
+
+**How it works internally:**
+
+```
+push(event)
+  -> applyEvent (pure state change)
+  -> schedule (what's eligible?)
+  -> dispatch handlers (fire-and-forget)
+  -> handler completes -> appends to journal
+  -> drain journal -> applyEvents (batch) -> schedule -> dispatch
+  -> repeat until nothing is eligible
+```
+
+The journal serializes concurrent callbacks — multiple handlers complete simultaneously, their events batch into a single `applyEvents()` call. No race conditions.
+
+**Dispatch lifecycle (reactive-layer internal, NOT in core types):**
+
+| Status | Meaning |
+|---|---|
+| `initiated` | Handler callback fired, awaiting response |
+| `dispatch-failed` | Handler threw synchronously |
+| `timed-out` | No callback within deadline |
+| `retry-queued` | Will retry on next drain cycle |
+| `abandoned` | Max dispatch retries exceeded -> pushes `task-failed` to core |
+
+**Options:**
+
+| Option | Default | Description |
+|---|---|---|
+| `handlers` | (required) | `Record<string, TaskHandler>` |
+| `maxDispatchRetries` | `3` | Times to retry invoking a handler |
+| `defaultTimeoutMs` | `30000` | Handler callback deadline (0 = no timeout) |
+| `journal` | `MemoryJournal` | Event log adapter (`MemoryJournal` or `FileJournal`) |
+| `onDrain` | — | Called after each drain cycle (observability) |
+| `onDispatchFailed` | — | Called when handler invocation fails |
+| `onAbandoned` | — | Called when task dispatch is abandoned |
 
 ---
 
@@ -1234,14 +1385,24 @@ import { resolveVariables, resolveConfigTemplates } from 'yaml-flow/config';
 
 // Continuous Event Graph (long-lived evolving workflows)
 import {
-  createLiveGraph, applyEvent, addNode, removeNode,
+  createLiveGraph, applyEvent, applyEvents, addNode, removeNode,
   addRequires, removeRequires, addProvides, removeProvides,
   injectTokens, drainTokens, schedule, inspect,
   resetNode, disableNode, enableNode, getNode,
   snapshot, restore,
   getUnreachableTokens, getUnreachableNodes,
   getUpstream, getDownstream,
+  createReactiveGraph, MemoryJournal, FileJournal,
 } from 'yaml-flow/continuous-event-graph';
+import type {
+  ReactiveGraph, TaskHandler, TaskHandlerContext, TaskHandlerResult,
+  DispatchEntry, Journal,
+} from 'yaml-flow/continuous-event-graph';
+
+// JSON Schema Validators
+import { validateGraphSchema } from 'yaml-flow/event-graph';
+import { validateFlowSchema } from 'yaml-flow/step-machine';
+import { validateLiveCardSchema } from 'yaml-flow/card-compute';
 
 // LLM Inference (AI-assisted completion detection)
 import {
@@ -1321,6 +1482,10 @@ See the [examples/](./examples) directory:
 | [URL Pipeline](./examples/graph-of-graphs/url-processing-pipeline.ts) | Graph-of-Graphs | Outer event-graph → batch × inner event-graph per item |
 | [Multi-Stage ETL](./examples/graph-of-graphs/multi-stage-etl.ts) | Graph-of-Graphs | Mixed modes: event-graph outer → step-machine + event-graph subs |
 | [Stock Dashboard](./examples/continuous-event-graph/stock-dashboard.ts) | Continuous Event Graph | Runtime mutations, token drain, upstream/downstream, snapshot |
+| [Reactive Pipeline](./examples/continuous-event-graph/reactive-pipeline.ts) | Reactive Graph | Self-driving ETL — push once, 4 tasks complete automatically |
+| [Reactive Monitoring](./examples/continuous-event-graph/reactive-monitoring.ts) | Reactive Graph | Conditional routing, on_failure escalation, runtime addNode |
+| [Executor Pipeline](./examples/event-graph/executor-pipeline.ts) | Event Graph (library) | You-drive-the-loop ETL with random async delays |
+| [Executor Diamond](./examples/event-graph/executor-diamond.ts) | Event Graph (library) | Parallel fan-out/fan-in diamond DAG with async executors |
 | [Azure Deployment](./examples/inference/azure-deployment.ts) | Inference | LLM analyzes deployment logs, auto-completes checkpoints |
 | [Data Pipeline](./examples/inference/data-pipeline.ts) | Inference | Iterative inference — evidence arrives in waves |
 | [Pluggable Adapters](./examples/inference/pluggable-adapters.ts) | Inference | OpenAI, Anthropic, Azure, CLI, HTTP adapter factories |

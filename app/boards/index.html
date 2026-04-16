@@ -209,6 +209,132 @@ CardCompute.registerFunction(name, fn) // add custom fn</code></pre>
           </div>
         </div>
 
+        <!-- ---- yaml-flow Engine Features ---- -->
+        <div class="col-12">
+          <div class="card">
+            <div class="card-header fw-bold">yaml-flow — Engine Modules</div>
+            <div class="card-body small">
+              <table class="table table-sm table-bordered mb-2">
+                <thead><tr><th style="width:20%">Module</th><th style="width:30%">Import</th><th>Description</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Step Machine</strong></td>
+                    <td><code>yaml-flow/step-machine</code></td>
+                    <td>Stateful sequential executor. Define steps + transitions, register handlers, call <code>.run()</code>. Supports pause/resume, retry, circuit breakers.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Event Graph</strong></td>
+                    <td><code>yaml-flow/event-graph</code></td>
+                    <td>Stateless DAG engine. Tasks declare <code>requires</code>/<code>provides</code> tokens. Pure functions: <code>next(graph, state)</code> &rarr; eligible tasks, <code>apply(state, event, graph)</code> &rarr; new state.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Continuous Event Graph</strong></td>
+                    <td><code>yaml-flow/continuous-event-graph</code></td>
+                    <td>Long-lived evolving DAG via <code>LiveGraph = { config, state }</code>. Runtime mutations: <code>addNode</code>, <code>removeNode</code>, <code>injectTokens</code>, <code>drainTokens</code>. Pure <code>schedule(live)</code> &rarr; eligible/pending/blocked.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Reactive Graph</strong></td>
+                    <td><code>yaml-flow/continuous-event-graph</code></td>
+                    <td>Push-based self-sustaining executor. Register <code>TaskHandler</code> per task, push one event, the graph drives itself via journal-batched drain cycles. No daemon, no polling. Handles dispatch retry, timeout, abandon.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>LLM Inference</strong></td>
+                    <td><code>yaml-flow/inference</code></td>
+                    <td>AI-assisted completion detection. Pluggable adapters (CLI, HTTP). Builds prompts from graph state + inference hints, applies high-confidence suggestions automatically.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Card Compute</strong></td>
+                    <td><code>yaml-flow/card-compute</code></td>
+                    <td>Declarative JSON expression engine (53 built-in functions). Isomorphic &mdash; runs in browser and Node.js. Powers <code>compute</code> blocks on LiveCards.</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Schema Validators</strong></td>
+                    <td><em>per module</em></td>
+                    <td>AJV-based JSON Schema validation: <code>validateGraphSchema</code>, <code>validateFlowSchema</code>, <code>validateLiveCardSchema</code>. Sync, pure, returns <code>{ ok, errors }</code>.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- RefreshStrategy ---- -->
+        <div class="col-12 col-lg-6">
+          <div class="card h-100">
+            <div class="card-header fw-bold">RefreshStrategy — Task Re-execution</div>
+            <div class="card-body small">
+              <p>Controls when a completed task becomes eligible again. Set per-task or as a board default in <code>settings.refreshStrategy</code>.</p>
+              <table class="table table-sm table-bordered mb-2">
+                <thead><tr><th>Strategy</th><th>Behavior</th></tr></thead>
+                <tbody>
+                  <tr><td><code>data-changed</code></td><td>Default. Re-run when upstream <code>dataHash</code> changes.</td></tr>
+                  <tr><td><code>epoch-changed</code></td><td>Re-run when upstream execution count increases.</td></tr>
+                  <tr><td><code>time-based</code></td><td>Re-run after <code>refreshInterval</code> seconds.</td></tr>
+                  <tr><td><code>manual</code></td><td>Never auto-eligible. External push only.</td></tr>
+                  <tr><td><code>once</code></td><td>Run once, never re-run.</td></tr>
+                </tbody>
+              </table>
+<pre class="mb-0"><code>// Per-task config
+{ refreshStrategy: 'time-based', refreshInterval: 60, maxExecutions: 10 }
+// Board default
+{ settings: { refreshStrategy: 'epoch-changed' } }</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- Reactive Graph API ---- -->
+        <div class="col-12 col-lg-6">
+          <div class="card h-100">
+            <div class="card-header fw-bold">Reactive Graph — Push-based Execution</div>
+            <div class="card-body small">
+<pre><code>const rg = createReactiveGraph(config, {
+  handlers: {
+    fetch:     async (ctx) =&gt; ({ dataHash: 'abc' }),
+    transform: async (ctx) =&gt; ({ result: 'ok' }),
+  },
+  defaultTimeoutMs: 30000,
+  onDrain: (events, live, schedule) =&gt; { ... },
+});
+
+rg.push(event);              // triggers drain cascade
+rg.addNode(name, cfg, handler); // runtime add + dispatch
+rg.removeNode(name);
+rg.getState();               // LiveGraph snapshot
+rg.getSchedule();            // current ScheduleResult
+rg.getDispatchState();       // Map&lt;name, DispatchEntry&gt;
+rg.dispose();                // cancel timeouts</code></pre>
+              <p class="mb-0"><strong>Dispatch states:</strong> <code>initiated</code> &rarr; <code>dispatch-failed</code> / <code>timed-out</code> &rarr; <code>retry-queued</code> &rarr; <code>abandoned</code></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- Examples ---- -->
+        <div class="col-12">
+          <div class="card">
+            <div class="card-header fw-bold">Examples</div>
+            <div class="card-body small">
+              <table class="table table-sm table-bordered mb-0">
+                <thead><tr><th style="width:30%">Example</th><th style="width:20%">Mode</th><th>Description</th></tr></thead>
+                <tbody>
+                  <tr><td><a href="../../examples/event-graph/executor-pipeline.ts">Executor Pipeline</a></td><td>Event Graph (library)</td><td>You drive the loop &mdash; sequential ETL with random async delays, 10% failure simulation.</td></tr>
+                  <tr><td><a href="../../examples/event-graph/executor-diamond.ts">Executor Diamond</a></td><td>Event Graph (library)</td><td>Parallel fan-out/fan-in diamond DAG. Shows <code>parse</code> + <code>validate</code> dispatched in parallel.</td></tr>
+                  <tr><td><a href="../../examples/event-graph/research-pipeline.ts">Research Pipeline</a></td><td>Event Graph</td><td>Three parallel searches &rarr; merge &rarr; goal-based completion.</td></tr>
+                  <tr><td><a href="../../examples/event-graph/ci-cd-pipeline.ts">CI/CD Pipeline</a></td><td>Event Graph</td><td>External events, conditional routing (<code>on</code>), failure tokens, approval gates.</td></tr>
+                  <tr><td><a href="../../examples/continuous-event-graph/stock-dashboard.ts">Stock Dashboard</a></td><td>Continuous Event Graph</td><td>Runtime mutations, token drain, upstream/downstream traversal, snapshot/restore.</td></tr>
+                  <tr><td><a href="../../examples/continuous-event-graph/reactive-pipeline.ts">Reactive Pipeline</a></td><td>Reactive Graph</td><td>Self-driving ETL &mdash; push once, 4 tasks (extract &rarr; validate &rarr; enrich &rarr; load) run automatically.</td></tr>
+                  <tr><td><a href="../../examples/continuous-event-graph/reactive-monitoring.ts">Reactive Monitoring</a></td><td>Reactive Graph</td><td>Conditional routing (healthy/degraded/critical paths), <code>on_failure</code> escalation, runtime <code>addNode</code> for Slack.</td></tr>
+                  <tr><td><a href="../../examples/node/simple-greeting.ts">Simple Greeting</a></td><td>Step Machine</td><td>Basic flow with file store &mdash; minimal getting-started example.</td></tr>
+                  <tr><td><a href="../../examples/node/ai-conversation.ts">AI Conversation</a></td><td>Step Machine</td><td>Retry, circuit breakers, component injection.</td></tr>
+                  <tr><td><a href="../../examples/batch/batch-step-machine.ts">Batch Tickets</a></td><td>Batch</td><td>Concurrent processing of multiple items with progress tracking.</td></tr>
+                  <tr><td><a href="../../examples/inference/azure-deployment.ts">Azure Deployment</a></td><td>Inference</td><td>LLM analyzes deployment logs, auto-completes checkpoints.</td></tr>
+                  <tr><td><a href="../../examples/inference/copilot-cli.ts">Copilot CLI</a></td><td>Inference</td><td>GitHub Copilot CLI as inference adapter via <code>createCliAdapter</code>.</td></tr>
+                  <tr><td><a href="../../examples/graph-of-graphs/url-processing-pipeline.ts">URL Pipeline</a></td><td>Graph-of-Graphs</td><td>Outer event-graph orchestrates batch &times; inner event-graphs per item.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </div>
     </details>
 

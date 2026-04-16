@@ -21,6 +21,7 @@
 export {
   createLiveGraph,
   applyEvent,
+  applyEvents,
   addNode,
   removeNode,
   addRequires,
@@ -42,6 +43,18 @@ export { schedule } from './schedule.js';
 
 // Inspect: live health report + reachability
 export { inspect, getUnreachableTokens, getUnreachableNodes, getUpstream, getDownstream } from './inspect.js';
+
+// Reactive: push-based self-sustaining execution
+export { createReactiveGraph } from './reactive.js';
+export type {
+  ReactiveGraph, ReactiveGraphOptions,
+  TaskHandler, TaskHandlerContext, TaskHandlerResult,
+  DispatchEntry,
+} from './reactive.js';
+
+// Journal: append-only event log
+export { MemoryJournal, FileJournal } from './journal.js';
+export type { Journal } from './journal.js';
 
 // Types
 export type {
