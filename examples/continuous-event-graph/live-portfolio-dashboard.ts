@@ -426,6 +426,91 @@ async function main() {
   rg.retriggerAll(['valuator', 'portfolio-value', 'sector-breakdown', 'sentiment']);
   await sleep(200);
 
+  // ── Phase 10: Watchlist — form input source + derived price card ────────
+
+  log('PHASE 10', 'Adding watchlist (form input) + watchlist-prices (derived)');
+
+  // Watchlist is a "source" card — it has no handler, data is pushed externally
+  // (simulating a user typing symbols into a form)
+  const watchlistCard: LiveCard = {
+    id: 'watchlist', type: 'source',
+    meta: { title: 'Watchlist (User Input)' },
+    data: { provides: { watchlist: 'state.symbols' } },
+    state: { symbols: ['NVDA', 'AMD', 'AMZN'] },
+  };
+  writeCard(tmpDir, watchlistCard);
+  rg.registerHandler('watchlist', makeHandler('watchlist', (engine) => {
+    // Source handler just returns current state — data comes via external push
+    return {};
+  }, tmpDir));
+  rg.addNode('watchlist', {
+    provides: ['watchlist'],
+    taskHandlers: ['watchlist'],
+  } as TaskConfig);
+
+  // Push the initial watchlist data (simulating form submission)
+  rg.push({
+    type: 'task-completed', taskName: 'watchlist',
+    data: { symbols: ['NVDA', 'AMD', 'AMZN'] },
+    timestamp: ts(),
+  });
+  await sleep(100);
+
+  console.log('  watchlist submitted: NVDA, AMD, AMZN');
+
+  // Watchlist-prices card — reads the watchlist symbols and the price-feed,
+  // then extracts the latest prices for watched symbols
+  addDynamicCard(rg, tmpDir, {
+    id: 'watchlist-prices', type: 'card',
+    meta: { title: 'Watchlist Latest Prices' },
+    data: { requires: ['watchlist', 'price-feed'] }, state: {},
+  }, (engine) => {
+    const symbols: string[] = (engine.state.tasks.watchlist?.data as any)?.symbols ?? [];
+    const allPrices: Record<string, number> = (engine.state.tasks['price-feed']?.data as any)?.prices ?? {};
+    const watchPrices = symbols.map(sym => ({
+      symbol: sym,
+      price: allPrices[sym] ?? null,
+      available: sym in allPrices,
+    }));
+    const available = watchPrices.filter(w => w.available);
+    const missing = watchPrices.filter(w => !w.available);
+    return {
+      watchPrices,
+      availableCount: available.length,
+      missingCount: missing.length,
+      missingSymbols: missing.map(m => m.symbol),
+    };
+  }, { requires: ['watchlist', 'price-feed'] });
+  await sleep(100);
+
+  printDiskCard(tmpDir, 'watchlist-prices');
+
+  // Now push updated prices that include the watchlist symbols
+  log('PHASE 10b', 'Pushing prices that include NVDA, AMD, AMZN');
+  rg.push({
+    type: 'task-completed', taskName: 'price-feed',
+    data: { prices: {
+      AAPL: 205.25, MSFT: 422.00, GOOG: 182.10, JPM: 199.80, JNJ: 157.10, TSLA: 168.75,
+      NVDA: 135.50, AMD: 164.20, AMZN: 192.80,
+    }},
+    timestamp: ts(),
+  });
+  await sleep(200);
+
+  console.log('  After prices include watchlist symbols:');
+  printDiskCard(tmpDir, 'watchlist-prices');
+
+  // User updates watchlist (adds META, removes AMD)
+  log('PHASE 10c', 'User edits watchlist: [NVDA, AMZN, META]');
+  rg.push({
+    type: 'task-completed', taskName: 'watchlist',
+    data: { symbols: ['NVDA', 'AMZN', 'META'] },
+    timestamp: ts(),
+  });
+  await sleep(200);
+
+  printDiskCard(tmpDir, 'watchlist-prices');
+
   const finalState = rg.getState();
   const completedCount = Object.values(finalState.state.tasks).filter(t => t.status === 'completed').length;
   const totalCards = Object.keys(finalState.state.tasks).length;
