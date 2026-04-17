@@ -14,6 +14,7 @@ import {
   schedule,
   createReactiveGraph,
   MemoryJournal,
+  restore,
 } from '../../src/continuous-event-graph/index.js';
 import type { TaskHandlerFn, ReactiveGraph } from '../../src/continuous-event-graph/index.js';
 
@@ -515,5 +516,155 @@ describe('reactive — getSchedule', () => {
     const result = rg.getSchedule();
     expect(result.eligible).toContain('a');
     expect(result.eligible).not.toContain('b');
+  });
+});
+
+// ============================================================================
+// snapshot + restore roundtrip
+// ============================================================================
+
+describe('reactive — snapshot / restore', () => {
+  const ticks = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+  let rg: ReactiveGraph;
+
+  afterEach(() => {
+    rg?.dispose();
+  });
+
+  it('snapshot returns a LiveGraphSnapshot with config, state, version', async () => {
+    const config = makeConfig({
+      src: { provides: ['x'], taskHandlers: ['src'] },
+    });
+    const g = makeGraphRef();
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        src: async ({ callbackToken }) => { g.resolve(callbackToken, { val: 1 }); return 'task-initiated'; },
+      },
+    });
+    g.ref = rg;
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    const snap = rg.snapshot();
+    expect(snap.version).toBe(1);
+    expect(snap.snapshotAt).toBeDefined();
+    expect(snap.config.tasks.src).toBeDefined();
+    expect(snap.state.tasks.src.status).toBe('completed');
+    expect(snap.state.tasks.src.data).toEqual({ val: 1 });
+  });
+
+  it('restore + createReactiveGraph reconstitutes state from snapshot', async () => {
+    const config = makeConfig({
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
+    });
+    const g1 = makeGraphRef();
+
+    // First graph: run task 'a', snapshot
+    const rg1 = createReactiveGraph(config, {
+      handlers: {
+        a: async ({ callbackToken }) => { g1.resolve(callbackToken, { fromA: 42 }); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { g1.resolve(callbackToken, { fromB: 99 }); return 'task-initiated'; },
+      },
+    });
+    g1.ref = rg1;
+
+    rg1.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(100);
+
+    expect(rg1.getState().state.tasks.a.status).toBe('completed');
+    expect(rg1.getState().state.tasks.b.status).toBe('completed');
+
+    const snap = rg1.snapshot();
+    rg1.dispose();
+
+    // Second graph: restore from snapshot — state should be intact
+    const restored = restore(snap);
+    const g2 = makeGraphRef();
+
+    rg = createReactiveGraph(restored, {
+      handlers: {
+        a: async ({ callbackToken }) => { g2.resolve(callbackToken, { fromA: 42 }); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { g2.resolve(callbackToken, { fromB: 99 }); return 'task-initiated'; },
+      },
+    });
+    g2.ref = rg;
+
+    // State survives the roundtrip — no events needed
+    expect(rg.getState().state.tasks.a.status).toBe('completed');
+    expect(rg.getState().state.tasks.a.data).toEqual({ fromA: 42 });
+    expect(rg.getState().state.tasks.b.status).toBe('completed');
+    expect(rg.getState().state.tasks.b.data).toEqual({ fromB: 99 });
+  });
+
+  it('restored graph accepts new events and continues the cascade', async () => {
+    const config = makeConfig({
+      src: { provides: ['x'], taskHandlers: ['src'] },
+      calc: { requires: ['x'], provides: ['y'], taskHandlers: ['calc'] },
+    });
+    const g1 = makeGraphRef();
+
+    // Run only 'src', then snapshot before 'calc' completes
+    const rg1 = createReactiveGraph(config, {
+      handlers: {
+        src: async ({ callbackToken }) => { g1.resolve(callbackToken, { v: 1 }); return 'task-initiated'; },
+        calc: async () => 'task-initiated', // never resolves
+      },
+    });
+    g1.ref = rg1;
+
+    rg1.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    expect(rg1.getState().state.tasks.src.status).toBe('completed');
+    // calc was dispatched (running) but never resolved
+    const snap = rg1.snapshot();
+    rg1.dispose();
+
+    // Restore — push a new event to re-drive
+    const restored = restore(snap);
+    const g2 = makeGraphRef();
+
+    rg = createReactiveGraph(restored, {
+      handlers: {
+        src: async ({ callbackToken }) => { g2.resolve(callbackToken, { v: 1 }); return 'task-initiated'; },
+        calc: async ({ callbackToken }) => { g2.resolve(callbackToken, { result: 42 }); return 'task-initiated'; },
+      },
+    });
+    g2.ref = rg;
+
+    // Retrigger calc on the restored graph
+    rg.retrigger('calc');
+    await ticks(50);
+
+    expect(rg.getState().state.tasks.calc.status).toBe('completed');
+    expect(rg.getState().state.tasks.calc.data).toEqual({ result: 42 });
+  });
+
+  it('snapshot serializes cleanly through JSON roundtrip', async () => {
+    const config = makeConfig({
+      a: { provides: ['a'], taskHandlers: ['a'] },
+    });
+    const g = makeGraphRef();
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        a: async ({ callbackToken }) => { g.resolve(callbackToken, { x: [1, 2, 3] }); return 'task-initiated'; },
+      },
+    });
+    g.ref = rg;
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    const snap = rg.snapshot();
+    const json = JSON.stringify(snap);
+    const parsed = JSON.parse(json);
+    const restored = restore(parsed);
+
+    expect(restored.state.tasks.a.status).toBe('completed');
+    expect(restored.state.tasks.a.data).toEqual({ x: [1, 2, 3] });
   });
 });

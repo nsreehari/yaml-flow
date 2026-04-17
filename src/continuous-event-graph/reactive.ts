@@ -16,8 +16,8 @@
  */
 
 import type { GraphConfig, TaskConfig, GraphEvent, GraphEngineStore } from '../event-graph/types.js';
-import type { LiveGraph, ScheduleResult } from './types.js';
-import { createLiveGraph, applyEvents, addNode, removeNode, addRequires, removeRequires, addProvides, removeProvides } from './core.js';
+import type { LiveGraph, LiveGraphSnapshot, ScheduleResult } from './types.js';
+import { createLiveGraph, applyEvents, addNode, removeNode, addRequires, removeRequires, addProvides, removeProvides, snapshot } from './core.js';
 import { schedule } from './schedule.js';
 import { MemoryJournal } from './journal.js';
 import type { Journal } from './journal.js';
@@ -191,6 +191,12 @@ export interface ReactiveGraph {
   retrigger(taskName: string): void;
   /** Re-trigger multiple tasks via journal. */
   retriggerAll(taskNames: string[]): void;
+  /**
+   * Serialize current state to a JSON-safe snapshot.
+   * Caller is responsible for writing to disk/DB/etc.
+   * Restore via: `createReactiveGraph(restore(snapshotData), options)`
+   */
+  snapshot(): LiveGraphSnapshot;
   /** Read-only snapshot of current LiveGraph state. */
   getState(): LiveGraph;
   /** Current schedule projection. */
@@ -204,7 +210,7 @@ export interface ReactiveGraph {
 // ============================================================================
 
 export function createReactiveGraph(
-  config: GraphConfig,
+  configOrLive: GraphConfig | LiveGraph,
   options: ReactiveGraphOptions,
   executionId?: string,
 ): ReactiveGraph {
@@ -214,7 +220,9 @@ export function createReactiveGraph(
     onDrain,
   } = options;
 
-  let live = createLiveGraph(config, executionId);
+  let live = 'state' in configOrLive && 'config' in configOrLive
+    ? configOrLive as LiveGraph
+    : createLiveGraph(configOrLive as GraphConfig, executionId);
   let disposed = false;
 
   // Handler registry — mutable, keyed by handler name
@@ -481,6 +489,10 @@ export function createReactiveGraph(
         });
       }
       drain();
+    },
+
+    snapshot(): LiveGraphSnapshot {
+      return snapshot(live);
     },
 
     getState(): LiveGraph {
