@@ -56,7 +56,7 @@ export type {
   GraphConfig, GraphSettings, TaskConfig as GraphTaskConfig, RefreshStrategy,
   ExecutionState, ExecutionConfig, GraphEngineStore, StuckDetection,
   GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent,
-  InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
+  InjectTokensEvent, AgentActionEvent,
   SchedulerResult, CompletionResult,
   ExecutionPlan, MermaidOptions, ExportOptions,
   GraphIssue, GraphValidationResult, IssueSeverity,
@@ -132,7 +132,7 @@ export type {
 // Card Compute
 // ============================================================================
 export { CardCompute, validateLiveCardSchema } from './card-compute/index.js';
-export type { ComputeExpr, ComputeNode, ComputeFn, EvalFn, ValidationResult } from './card-compute/index.js';
+export type { ComputeNode, ComputeStep, ValidationResult } from './card-compute/index.js';
 
 // ============================================================================
 // Backward compat aliases (deprecated — use new names)

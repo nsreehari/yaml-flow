@@ -92,19 +92,12 @@
     },
 
     "compute_step": {
-      "description": "A single ordered compute step with bindTo output key",
+      "description": "A single ordered compute step: reads state.*/requires.*/computed_values.*, writes to computed_values[bindTo]",
       "type": "object",
-      "required": ["bindTo", "fn"],
+      "required": ["bindTo", "expr"],
       "properties": {
         "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "fn": { "$ref": "#/definitions/compute_expr/properties/fn" },
-        "input": { "$ref": "#/definitions/compute_expr/properties/input" },
-        "field": { "type": "string" },
-        "where": { "$ref": "#/definitions/compute_expr" },
-        "cond":  { "$ref": "#/definitions/compute_expr" },
-        "then":  { "description": "For if — value when cond is truthy" },
-        "else":  { "description": "For if — value when cond is falsy" },
-        "format": { "type": "string" }
+        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, computed_values }" }
       }
     },
 

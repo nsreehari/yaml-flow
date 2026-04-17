@@ -331,18 +331,18 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         card = JSON.parse(fs.readFileSync(cardPath, 'utf-8'));
         const cardState = (card.state ?? {}) as Record<string, unknown>;
 
+        // Build compute node (used for both compute and provides resolution)
+        const computeNode: ComputeNode = {
+          id: card.id as string,
+          state: { ...cardState },
+          requires: input.state ?? {},
+          compute: card.compute as ComputeStep[] | undefined,
+        };
+
         // Run CardCompute if the card has a compute section
-        let computedState: Record<string, unknown> = {};
         if (card.compute) {
-          // Build compute input: card's own state + upstream requires
-          const computeNode: ComputeNode = {
-            id: card.id as string,
-            state: { ...cardState },
-            requires: input.state ?? {},
-            compute: card.compute as ComputeStep[],
-          };
-          CardCompute.run(computeNode);
-          computedState = computeNode.computed_values ?? {};
+          await CardCompute.run(computeNode);
+          // computeNode.computed_values available for provides resolution below
         }
 
         // Do NOT write computed_values to card.state on disk — it's ephemeral.

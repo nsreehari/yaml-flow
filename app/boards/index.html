@@ -19,12 +19,16 @@
 
   <!--
     CDN usage (after npm publish):
+      <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/yaml-flow@2.6.0/browser/card-compute.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/yaml-flow@2.6.0/browser/live-cards.js"></script>
     Local dev: references ../../browser/ relative path
   -->
 
-  <!-- CardCompute (isomorphic compute engine) -->
+  <!-- JSONata — expression engine (required by card-compute.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+
+  <!-- CardCompute (JSONata-powered compute engine) -->
   <script src="../../browser/card-compute.js"></script>
 
   <!-- LiveCards v3 engine -->
@@ -57,7 +61,7 @@
                   <tr><td><code>provides</code></td><td colspan="2"><code>[{ bindTo, src }]</code> — explicit downstream token bindings. <code>src</code> is a <code>state.*</code> / <code>computed_values.*</code> path</td></tr>
                   <tr><td><code>sources</code></td><td colspan="2"><code>[{ bindTo, kind?, script?, url_template?, ... }]</code> — blocking data sources. <code>kind</code>: api | websocket | static | llm | script | mail | teams | … (extensible)</td></tr>
                   <tr><td><code>optionalSources</code></td><td colspan="2">Same shape as <code>sources</code>. Non-blocking — arrivals re-fire but don't gate completion</td></tr>
-                  <tr><td><code>compute</code></td><td colspan="2"><code>[{ bindTo, fn, input, … }]</code> — ordered steps writing to ephemeral <code>computed_values[bindTo]</code>. Never persisted.</td></tr>
+                  <tr><td><code>compute</code></td><td colspan="2"><code>[{ bindTo, expr }]</code> — ordered JSONata steps writing to ephemeral <code>computed_values[bindTo]</code>. Never persisted.</td></tr>
                   <tr><td><code>view</code></td><td colspan="2"><code>{ elements[], layout, features }</code> — present on renderable cards; absent on source-only nodes</td></tr>
                 </tbody>
               </table>
@@ -163,7 +167,7 @@ board.nodes                   // shallow copy of node list</code></pre>
           <div class="card h-100">
             <div class="card-header fw-bold">CardCompute — Compute API</div>
             <div class="card-body small">
-<pre><code>CardCompute.run(node)                // eval all node.compute → state
+<pre><code>await CardCompute.run(node)        // eval all node.compute → computed_values
 CardCompute.eval(expr, node)         // eval single expression
 CardCompute.resolve(node, path)      // deep-get "state.foo.bar"
 CardCompute.registerFunction(name, fn) // add custom fn</code></pre>
@@ -181,13 +185,9 @@ CardCompute.registerFunction(name, fn) // add custom fn</code></pre>
                   <tr><td class="text-muted">Type</td><td><code>to_number to_string to_bool type_of is_null is_empty</code></td></tr>
                 </tbody>
               </table>
-<pre class="mb-0"><code>// Expression shape — pure JSON, nestable
-{ "fn": "round",
-  "input": { "fn": "div", "input": [
-    { "fn": "sum", "input": "state.data", "field": "revenue" },
-    { "fn": "count", "input": "state.data" }
-  ]},
-  "decimals": 2 }</code></pre>
+<pre class="mb-0"><code>// JSONata expression — computed against { state, requires, computed_values }
+{ "bindTo": "avg_revenue",
+  "expr": "$round($average(state.sales.revenue), 2)" }</code></pre>
             </div>
           </div>
         </div>
@@ -246,7 +246,7 @@ CardCompute.registerFunction(name, fn) // add custom fn</code></pre>
                   <tr>
                     <td><strong>Card Compute</strong></td>
                     <td><code>yaml-flow/card-compute</code></td>
-                    <td>Declarative JSON expression engine (53 built-in functions). Isomorphic &mdash; runs in browser and Node.js. Powers <code>compute</code> blocks on LiveCards.</td>
+                    <td>JSONata-powered compute engine. Expressions evaluated against <code>{ state, requires, computed_values }</code>. Async <code>run()</code>, isomorphic &mdash; browser and Node.js.</td>
                   </tr>
                   <tr>
                     <td><strong>Schema Validators</strong></td>
@@ -462,8 +462,8 @@ rg.dispose();                // cancel timeouts</code></pre>
     meta: { title: 'Revenue KPIs' },
     requires: ['tbl1'],
     compute: [
-      { bindTo: 'total_revenue', fn: 'sum', input: 'state.sales', field: 'revenue' },
-      { bindTo: 'avg_revenue',   fn: 'round', input: { fn: 'avg', input: 'state.sales', field: 'revenue' }, decimals: 0 }
+      { bindTo: 'total_revenue', expr: '$sum(state.sales.revenue)' },
+      { bindTo: 'avg_revenue',   expr: '$round($average(state.sales.revenue), 0)' }
     ],
     view: {
       elements: [
@@ -793,7 +793,7 @@ rg.dispose();                // cancel timeouts</code></pre>
   console.log('  _board.autoLayout()      — auto-arrange DAG');
   console.log('  _board.add(node)         — add a node');
   console.log('  _board.remove("tbl1")    — remove a node');
-  console.log('  CardCompute.eval({ fn:"sum", input:"state.sales", field:"revenue" }, _nodes["met1"])');
+  console.log('  await CardCompute.eval("$sum(state.sales.revenue)", _nodes["met1"])');
 })();
 </script>
 </body>

@@ -50,7 +50,7 @@ describe('validateLiveCardSchema', () => {
           features: { chat: true, refresh: true },
         },
         compute: [
-          { bindTo: 'total', fn: 'sum', input: 'state.data', field: 'revenue' },
+          { bindTo: 'total', expr: '$sum(state.data.revenue)' },
         ],
         sources: [{ bindTo: 'data', kind: 'api' }],
         optionalSources: [{ bindTo: 'news' }],
@@ -164,10 +164,10 @@ describe('validateLiveCardSchema', () => {
       expect(r.ok).toBe(false);
     });
 
-    it('compute step with invalid fn', () => {
+    it('compute step missing expr', () => {
       const r = validateLiveCardSchema({
         id: 'x', state: {},
-        compute: [{ bindTo: 'total', fn: 'bogus_fn' }],
+        compute: [{ bindTo: 'total' }],
       });
       expect(r.ok).toBe(false);
     });
@@ -175,7 +175,7 @@ describe('validateLiveCardSchema', () => {
     it('compute step missing bindTo', () => {
       const r = validateLiveCardSchema({
         id: 'x', state: {},
-        compute: [{ fn: 'sum' }],
+        compute: [{ expr: '$sum(state.data)' }],
       });
       expect(r.ok).toBe(false);
     });

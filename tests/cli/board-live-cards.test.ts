@@ -198,7 +198,7 @@ describe('liveCardToTaskConfig', () => {
     const card: BoardLiveCard = {
       id: 'total',
       requires: ['prices'],
-      compute: [{ bindTo: 'sum', fn: 'sum', input: 'state.data', field: 'value' }],
+      compute: [{ bindTo: 'sum', expr: '$sum(state.data.value)' }],
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
@@ -211,7 +211,7 @@ describe('liveCardToTaskConfig', () => {
     const card: BoardLiveCard = {
       id: 'enriched',
       requires: ['raw'],
-      compute: [{ bindTo: 'x', fn: 'sum', input: 'state.raw', field: 'v' }],
+      compute: [{ bindTo: 'x', expr: '$sum(state.raw.v)' }],
       asyncHelpers: { fetchExtra: { url: 'https://example.com' } },
       state: {},
     };
@@ -533,7 +533,7 @@ describe('cli add-card', () => {
     const card: BoardLiveCard = {
       id: 'enriched',
       requires: ['raw'],
-      compute: [{ bindTo: 'total', fn: 'sum', input: 'state.raw', field: 'v' }],
+      compute: [{ bindTo: 'total', expr: '$sum(state.raw.v)' }],
       asyncHelpers: { fetch: { url: 'https://example.com' } },
       state: {},
     };

@@ -5,6 +5,6 @@
   "provides": [{ "bindTo": "totalValue", "src": "computed_values.totalValue" }],
   "state": {},
   "compute": [
-    { "bindTo": "totalValue", "fn": "sum", "input": "requires.table.rows", "field": "value" }
+    { "bindTo": "totalValue", "expr": "$sum(requires.table.rows.value)" }
   ]
 }

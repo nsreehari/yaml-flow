@@ -162,8 +162,8 @@ describe('liveCardsToReactiveGraph', () => {
         makeCard('calc', {
           state: { data: [{ v: 10 }, { v: 20 }, { v: 30 }] },
           compute: [
-            { bindTo: 'total', fn: 'sum', input: 'state.data', field: 'v' },
-            { bindTo: 'avg', fn: 'avg', input: 'state.data', field: 'v' },
+            { bindTo: 'total', expr: '$sum(state.data.v)' },
+            { bindTo: 'avg', expr: '$average(state.data.v)' },
           ],
           provides: [
             { bindTo: 'total', src: 'computed_values.total' },
@@ -213,7 +213,7 @@ describe('liveCardsToReactiveGraph', () => {
         makeCard('stats', {
           requires: ['prices'],
           compute: [
-            { bindTo: 'total', fn: 'sum', input: 'requires.prices.raw' },
+            { bindTo: 'total', expr: '$sum(requires.prices.raw)' },
           ],
           provides: [
             { bindTo: 'total', src: 'computed_values.total' },
@@ -242,7 +242,7 @@ describe('liveCardsToReactiveGraph', () => {
         makeCard('dash', {
           requires: ['quotes'],
           compute: [
-            { bindTo: 'total', fn: 'sum', input: 'requires.quotes' },
+            { bindTo: 'total', expr: '$sum(requires.quotes)' },
           ],
           provides: [
             { bindTo: 'total', src: 'computed_values.total' },
@@ -273,8 +273,8 @@ describe('liveCardsToReactiveGraph', () => {
         makeCard('agg', {
           requires: ['src'],
           compute: [
-            { bindTo: 'total', fn: 'sum', input: 'requires.src.values' },
-            { bindTo: 'count', fn: 'count', input: 'requires.src.values' },
+            { bindTo: 'total', expr: '$sum(requires.src.values)' },
+            { bindTo: 'count', expr: '$count(requires.src.values)' },
           ],
         }),
       ];
@@ -304,14 +304,14 @@ describe('liveCardsToReactiveGraph', () => {
         makeCard('transform', {
           requires: ['raw_data'],
           compute: [
-            { bindTo: 'total', fn: 'sum', input: 'requires.raw_data.items', field: 'price' },
-            { bindTo: 'avg', fn: 'avg', input: 'requires.raw_data.items', field: 'price' },
+            { bindTo: 'total', expr: '$sum(requires.raw_data.items.price)' },
+            { bindTo: 'avg', expr: '$average(requires.raw_data.items.price)' },
           ],
         }),
         makeCard('dashboard', {
           requires: ['transform'],
           compute: [
-            { bindTo: 'label', fn: 'template', input: 'requires.transform', format: 'Total: {{total}}, Avg: {{avg}}' },
+            { bindTo: 'label', expr: '"Total: " & $string(requires.transform.total) & ", Avg: " & $string(requires.transform.avg)' },
           ],
         }),
       ];
@@ -409,7 +409,7 @@ describe('liveCardsToReactiveGraph', () => {
           makeCard('totals', {
             requires: ['feed'],
             compute: [
-              { bindTo: 'total', fn: 'sum', input: 'requires.feed.prices' },
+              { bindTo: 'total', expr: '$sum(requires.feed.prices)' },
             ],
           }),
         ],

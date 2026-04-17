@@ -318,7 +318,7 @@ function buildCardHandler(
   card: LiveCard,
   cardHandlers: Record<string, TaskHandlerFn>,
   sharedState: Map<string, Record<string, unknown>>,
-  cardMap: Map<string, LiveCard>,
+  _cardMap: Map<string, LiveCard>,
   tokenToCardId: Map<string, string>,
   getResolve: () => (token: string, data: Record<string, unknown>, errors?: string[]) => void,
 ): TaskHandlerFn {
@@ -352,7 +352,7 @@ function buildCardHandler(
     };
 
     // Run compute expressions → writes to ephemeral computed_values
-    CardCompute.run(computeNode);
+    await CardCompute.run(computeNode);
 
     // Build result: if card has explicit provides bindings, resolve each src path.
     // Otherwise spread full state + computed_values as data.
@@ -378,14 +378,3 @@ function buildCardHandler(
 // ============================================================================
 // Internal helpers
 // ============================================================================
-
-function deepGet(obj: unknown, path: string): unknown {
-  if (!path || !obj) return undefined;
-  const parts = path.split('.');
-  let cur: unknown = obj;
-  for (const part of parts) {
-    if (cur == null) return undefined;
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  return cur;
-}

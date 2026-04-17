@@ -62,7 +62,7 @@ export type {
   GraphConfig, GraphSettings, TaskConfig, TaskRetryConfig, TaskCircuitBreakerConfig, RefreshStrategy,
   ExecutionState, ExecutionConfig, GraphEngineStore, TaskMessage, StuckDetection,
   GraphEvent, TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent, TaskProgressEvent, TaskRestartEvent,
-  InjectTokensEvent, AgentActionEvent, TaskCreationEvent,
+  InjectTokensEvent, AgentActionEvent,
   SchedulerResult,
   TaskStatus, ExecutionStatus, CompletionStrategy, ExecutionMode, ConflictStrategy,
 } from './types.js';

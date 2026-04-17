@@ -40,38 +40,10 @@
     "compute_step": {
       "description": "A single ordered compute step: reads state.*/requires.*/computed_values.*, writes to computed_values[bindTo]",
       "type": "object",
-      "required": ["bindTo", "fn"],
+      "required": ["bindTo", "expr"],
       "properties": {
         "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "fn": {
-          "type": "string",
-          "description": "Function name from the built-in vocabulary or a custom registered function"
-        },
-        "input": {
-          "description": "state.path, literal, array of inputs, or nested compute_expr",
-          "oneOf": [
-            { "type": "string" },
-            { "type": "number" },
-            { "type": "boolean" },
-            { "type": "array" },
-            { "$ref": "#/definitions/compute_expr" }
-          ]
-        },
-        "field":    { "type": "string", "description": "For pluck/sum/group — the object key to extract" },
-        "where":    { "$ref": "#/definitions/compute_expr", "description": "For filter — predicate expression" },
-        "apply":    { "$ref": "#/definitions/compute_expr", "description": "For map — transform expression" },
-        "cond":     { "$ref": "#/definitions/compute_expr", "description": "For if — condition expression" },
-        "then":     { "description": "For if — value when cond is truthy" },
-        "else":     { "description": "For if — value when cond is falsy" },
-        "format":   { "type": "string", "description": "For format_date / template" },
-        "decimals": { "type": "integer", "description": "For round" },
-        "separator":{ "type": "string", "description": "For join/split" },
-        "direction":{ "enum": ["asc", "desc"], "description": "For sort" },
-        "start":    { "type": "integer", "description": "For slice" },
-        "end":      { "type": "integer", "description": "For slice" },
-        "depth":    { "type": "integer", "description": "For flat" },
-        "path":     { "type": "string", "description": "For get" },
-        "value":    { "description": "For default/coalesce" }
+        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, computed_values }" }
       }
     },
 

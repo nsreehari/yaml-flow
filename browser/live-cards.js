@@ -190,11 +190,11 @@ var LiveCard = (function () {
     }
 
     function _runCompute(node) {
-      if (!node.compute) return;
-      if (typeof CardCompute !== 'undefined') {
-        try { CardCompute.run(node); }
-        catch (e) { console.error('LiveCard compute error', node.id, e); }
-      }
+      if (!node.compute || !node.compute.length) return Promise.resolve();
+      if (typeof CardCompute === 'undefined') return Promise.resolve();
+      return CardCompute.run(node).catch(function (e) {
+        console.error('LiveCard compute error', node.id, e);
+      });
     }
 
     function _resolveBind(node, bind) {
@@ -224,9 +224,10 @@ var LiveCard = (function () {
         if (!info || !info.resultEl) return;
         const updated = cfg.resolve(node.id);
         if (!updated) return;
-        _runCompute(updated);
-        _renderElements(updated, info.resultEl);
-        notify(node.id);
+        _runCompute(updated).then(function () {
+          _renderElements(updated, info.resultEl);
+          notify(node.id);
+        });
       }));
     }
 
@@ -1045,8 +1046,8 @@ var LiveCard = (function () {
       const uid = 'lc-' + (node.id || 'x');
       const features = (node.view && node.view.features) || {};
 
-      // Run compute before render
-      _runCompute(node);
+      // Run compute async before populating elements
+      // (compute is triggered in the else branch below after DOM is ready)
 
       let h = `<div class="lc-card" id="${uid}">`;
 
@@ -1097,7 +1098,7 @@ var LiveCard = (function () {
       } else if (node.state && node.state.status === 'error' && node.state.error) {
         resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.state.error)}</pre>`;
       } else {
-        _renderElements(node, resultEl);
+        _runCompute(node).then(function () { _renderElements(node, resultEl); });
       }
 
       // ---- Wire refresh ----
@@ -1184,8 +1185,7 @@ var LiveCard = (function () {
       } else if (node.state.status === 'error' && node.state.error) {
         info.resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.state.error)}</pre>`;
       } else {
-        _runCompute(node);
-        _renderElements(node, info.resultEl);
+        _runCompute(node).then(function () { _renderElements(node, info.resultEl); });
       }
     }
 
