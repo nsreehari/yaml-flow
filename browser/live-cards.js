@@ -1,8 +1,11 @@
 // live-cards.js — LiveCards v3: Node-based Board/Canvas engine
 //
-// Schema: Each node has { id, type, meta, data, view?, source?, state, compute? }
-//   type "card"   — renderable node with view.elements[]
-//   type "source" — data-only node (no view, shown as pill in canvas)
+// Schema: Each node has { id, state } required; all else optional.
+//   id, meta, state, requires, provides, sources, optionalSources, compute, view, asyncHelpers
+//   Nodes with view render as cards; nodes with sources but no view render as source pills in canvas.
+//   compute[] — ordered array of { bindTo, fn, ... } steps → writes to node.computed_values (ephemeral)
+//   requires[] — upstream node IDs; engine subscribes automatically
+//   provides[] — [{ bindTo, src }] explicit downstream token bindings
 //
 // Uses Bootstrap 5 for layout/forms, optional Chart.js for charts.
 // Uses CardCompute (card-compute.js) for declarative compute expressions.
@@ -1380,7 +1383,7 @@ var LiveCard = (function () {
       el.className = 'lc-source-node';
       const status = (node.state && node.state.status) || 'fresh';
       const title = (node.meta && node.meta.title) || node.id;
-      const kind = (node.source && node.source.kind) || 'source';
+      const kind = (node.sources && node.sources[0] && node.sources[0].kind) || 'source';
       el.innerHTML = `<div class="lc-source-pill shadow-sm">
         ${_statusDot(status)}
         <span class="fw-medium">${_esc(title)}</span>

@@ -1,0 +1,10 @@
+{
+  "id": "holdings-table",
+  "meta": { "title": "Holdings Table" },
+  "requires": ["holdings", "prices"],
+  "provides": [{ "bindTo": "table", "src": "state.table" }],
+  "state": {},
+  "sources": [
+    { "script": "node scripts/compute-holdings.js", "bindTo": "table" }
+  ]
+}

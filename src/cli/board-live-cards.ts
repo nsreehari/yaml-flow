@@ -281,7 +281,9 @@ export type BoardLiveCard = LiveCard & { asyncHelpers?: Record<string, unknown> 
  */
 export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
   const requires = card.requires;
-  const provides = card.provides ?? [card.id];
+  const provides = card.provides
+    ? card.provides.map(p => p.bindTo)
+    : [card.id];
 
   return {
     requires: requires && requires.length > 0 ? requires : undefined,
@@ -340,10 +342,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
             compute: card.compute as ComputeStep[],
           };
           CardCompute.run(computeNode);
-          computedState = computeNode.computed_state ?? {};
+          computedState = computeNode.computed_values ?? {};
         }
 
-        // Do NOT write computed_state to card.state on disk — it's ephemeral.
+        // Do NOT write computed_values to card.state on disk — it's ephemeral.
         // Only sources mutate card.state on disk.
 
         // Check if we need to spawn sources
@@ -362,14 +364,11 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           return 'task-initiated';
         }
 
-        // All sources delivered (or no sources). Build provides data.
-        const provides = (card.provides ?? [card.id]) as string[];
+        // All sources delivered (or no sources). Build provides data via explicit src paths.
+        const providesBindings = (card.provides ?? [{ bindTo: card.id as string, src: `state.${card.id}` }]) as { bindTo: string; src: string }[];
         const data: Record<string, unknown> = {};
-        const requiresData = (input.state ?? {}) as Record<string, unknown>;
-        for (const key of provides) {
-          if (key in computedState) data[key] = computedState[key];
-          else if (key in cardState) data[key] = cardState[key];
-          else if (key in requiresData) data[key] = requiresData[key];
+        for (const { bindTo, src } of providesBindings) {
+          data[bindTo] = CardCompute.resolve(computeNode, src);
         }
 
         // Persist state unchanged

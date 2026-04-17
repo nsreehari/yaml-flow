@@ -561,7 +561,7 @@ describe('Type', () => {
 // ============================================================================
 
 describe('CardCompute.run', () => {
-  it('runs all compute expressions and writes to computed_state', () => {
+  it('runs all compute expressions and writes to computed_values', () => {
     const n = node(
       { data: [{ revenue: 100 }, { revenue: 200 }, { revenue: 300 }] },
       [
@@ -571,15 +571,15 @@ describe('CardCompute.run', () => {
       ],
     );
     CardCompute.run(n);
-    expect(n.computed_state!.total).toBe(600);
-    expect(n.computed_state!.avg).toBe(200);
-    expect(n.computed_state!.cnt).toBe(3);
+    expect(n.computed_values!.total).toBe(600);
+    expect(n.computed_values!.avg).toBe(200);
+    expect(n.computed_values!.cnt).toBe(3);
   });
 
   it('initialises state if missing', () => {
     const n: ComputeNode = { id: 'x', compute: [{ bindTo: 'val', fn: 'add', input: [1, 2] }] };
     CardCompute.run(n);
-    expect(n.computed_state!.val).toBe(3);
+    expect(n.computed_values!.val).toBe(3);
   });
 
   it('returns node if no compute', () => {
@@ -591,25 +591,25 @@ describe('CardCompute.run', () => {
     expect(CardCompute.run(null as any)).toBeNull();
   });
 
-  it('chains compute expressions (sequential via computed_state)', () => {
+  it('chains compute expressions (sequential via computed_values)', () => {
     const n = node(
       { data: [10, 20, 30] },
       [
         { bindTo: 'total', fn: 'sum', input: 'state.data' },
-        { bindTo: 'doubled', fn: 'mul', input: ['computed_state.total', 2] },
+        { bindTo: 'doubled', fn: 'mul', input: ['computed_values.total', 2] },
       ],
     );
     CardCompute.run(n);
-    expect(n.computed_state!.total).toBe(60);
-    expect(n.computed_state!.doubled).toBe(120);
+    expect(n.computed_values!.total).toBe(60);
+    expect(n.computed_values!.doubled).toBe(120);
   });
 
-  it('writes to nested computed_state path', () => {
+  it('writes to nested computed_values path', () => {
     const n = node({}, [
       { bindTo: 'summary.total', fn: 'add', input: [10, 20] },
     ]);
     CardCompute.run(n);
-    expect((n.computed_state!.summary as any).total).toBe(30);
+    expect((n.computed_values!.summary as any).total).toBe(30);
   });
 
   it('reads from requires namespace', () => {
@@ -620,7 +620,7 @@ describe('CardCompute.run', () => {
       compute: [{ bindTo: 'total', fn: 'sum', input: 'requires.upstream.values' }],
     };
     CardCompute.run(n);
-    expect(n.computed_state!.total).toBe(60);
+    expect(n.computed_values!.total).toBe(60);
   });
 });
 
@@ -703,7 +703,7 @@ describe('registerFunction', () => {
     CardCompute.registerFunction('triple', (input) => Number(input) * 3);
     const n = node({ x: 10 }, [{ bindTo: 'y', fn: 'triple', input: 'state.x' }]);
     CardCompute.run(n);
-    expect(n.computed_state!.y).toBe(30);
+    expect(n.computed_values!.y).toBe(30);
   });
 
   it('custom function appears in functions list', () => {
@@ -775,7 +775,7 @@ describe('CardCompute.validate', () => {
         id: 'full',
         meta: { title: 'Test', tags: ['a', 'b'] },
         requires: ['src1'],
-        provides: ['total'],
+        provides: [{ bindTo: 'total', src: 'state.total' }],
         state: { status: 'fresh' },
         view: { elements: [{ kind: 'table' }], layout: { columns: 2 }, features: { search: true } },
         compute: [{ bindTo: 'total', fn: 'sum', input: 'state.data', field: 'v' }],
@@ -873,6 +873,22 @@ describe('CardCompute.validate', () => {
       });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('provides'))).toBe(true);
+    });
+
+    it('provides with missing bindTo', () => {
+      const r = CardCompute.validate({
+        id: 'x', provides: [{ src: 'state.x' }], state: {},
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('bindTo'))).toBe(true);
+    });
+
+    it('provides with missing src', () => {
+      const r = CardCompute.validate({
+        id: 'x', provides: [{ bindTo: 'x' }], state: {},
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('src'))).toBe(true);
     });
 
     it('compute step missing fn', () => {

@@ -184,7 +184,7 @@ describe('liveCardToTaskConfig', () => {
   it('card with sources → [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'prices',
-      provides: ['prices'],
+      provides: [{ bindTo: 'prices', src: 'state.prices' }],
       sources: [{ script: 'fetch.sh', bindTo: 'raw' }],
       state: { prices: {} },
     };
@@ -242,7 +242,7 @@ describe('liveCardToTaskConfig', () => {
   it('provides keys from card.provides', () => {
     const card: BoardLiveCard = {
       id: 'multi',
-      provides: ['alpha', 'beta'],
+      provides: [{ bindTo: 'alpha', src: 'state.alpha' }, { bindTo: 'beta', src: 'state.beta' }],
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
@@ -498,7 +498,7 @@ describe('cli add-card', () => {
     const cardFile = path.join(tmpDir, 'my-source.json');
     const card: BoardLiveCard = {
       id: 'prices',
-      provides: ['prices'],
+      provides: [{ bindTo: 'prices', src: 'state.prices' }],
       source: { kind: 'api', bindTo: 'state.prices', url_template: 'https://example.com/prices' },
       state: { prices: {} },
     };
@@ -634,7 +634,7 @@ describe('cli update-card', () => {
     const cardFile = path.join(tmpDir, 'my-card.json');
     const card: BoardLiveCard = {
       id: 'prices',
-      provides: ['prices'],
+      provides: [{ bindTo: 'prices', src: 'state.prices' }],
       state: { prices: {} },
     };
     fs.writeFileSync(cardFile, JSON.stringify(card));
@@ -650,7 +650,7 @@ describe('cli update-card', () => {
     // Update the card file on disk — add a new provides key
     const updatedCard: BoardLiveCard = {
       id: 'prices',
-      provides: ['prices', 'rates'],
+      provides: [{ bindTo: 'prices', src: 'state.prices' }, { bindTo: 'rates', src: 'state.rates' }],
       state: { prices: {}, rates: {} },
     };
     fs.writeFileSync(cardFile, JSON.stringify(updatedCard));
@@ -675,7 +675,7 @@ describe('cli update-card', () => {
     const cardFile = path.join(tmpDir, 'my-card.json');
     fs.writeFileSync(cardFile, JSON.stringify({
       id: 'src',
-      provides: ['src'],
+      provides: [{ bindTo: 'src', src: 'state.src' }],
       state: {},
     }));
 

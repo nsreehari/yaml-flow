@@ -1,0 +1,10 @@
+{
+  "id": "price-fetch",
+  "meta": { "title": "Fetch Market Prices" },
+  "requires": ["holdings"],
+  "provides": [{ "bindTo": "prices", "src": "state.prices" }],
+  "state": {},
+  "sources": [
+    { "script": "node scripts/fetch-prices.js", "bindTo": "prices" }
+  ]
+}

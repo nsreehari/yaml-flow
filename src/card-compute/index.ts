@@ -59,7 +59,7 @@ export interface ComputeNode {
   state?: Record<string, unknown>;
   requires?: Record<string, unknown>;
   compute?: ComputeStep[];
-  computed_state?: Record<string, unknown>;
+  computed_values?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -335,15 +335,15 @@ function resolveRef(ref: string, node: ComputeNode): unknown {
     const path = ref.slice('requires.'.length);
     return deepGet(node.requires, path);
   }
-  if (ref.startsWith('computed_state.')) {
-    const path = ref.slice('computed_state.'.length);
-    return deepGet(node.computed_state, path);
+  if (ref.startsWith('computed_values.')) {
+    const path = ref.slice('computed_values.'.length);
+    return deepGet(node.computed_values, path);
   }
   return undefined;
 }
 
 function isRef(s: string): boolean {
-  return s.startsWith('state.') || s.startsWith('requires.') || s.startsWith('computed_state.');
+  return s.startsWith('state.') || s.startsWith('requires.') || s.startsWith('computed_values.');
 }
 
 function evalExpr(expr: unknown, node: ComputeNode): unknown {
@@ -380,7 +380,7 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
   // Special: filter with where
   if (e.fn === 'filter' && Array.isArray(input) && e.where) {
     return (input as unknown[]).filter(item => {
-      const tmp: ComputeNode = { state: { ...node.state, $: item }, requires: node.requires, computed_state: node.computed_state };
+      const tmp: ComputeNode = { state: { ...node.state, $: item }, requires: node.requires, computed_values: node.computed_values };
       return evalExpr(e.where, tmp);
     });
   }
@@ -388,7 +388,7 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
   // Special: map with apply
   if (e.fn === 'map' && Array.isArray(input) && e.apply) {
     return (input as unknown[]).map(item => {
-      const tmp: ComputeNode = { state: { ...node.state, $: item }, requires: node.requires, computed_state: node.computed_state };
+      const tmp: ComputeNode = { state: { ...node.state, $: item }, requires: node.requires, computed_values: node.computed_values };
       return evalExpr(e.apply as ComputeExpr, tmp);
     });
   }
@@ -409,12 +409,12 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
 function run(node: ComputeNode): ComputeNode {
   if (!node || !node.compute) return node;
   if (!node.state) node.state = {};
-  node.computed_state = {};
+  node.computed_values = {};
 
   for (const step of node.compute) {
     try {
       const val = evalExpr(step, node);
-      deepSet(node.computed_state, step.bindTo, val);
+      deepSet(node.computed_values, step.bindTo, val);
     } catch (err) {
       console.error(`CardCompute.run error on "${node.id || '?'}.${step.bindTo}":`, err);
     }
@@ -515,9 +515,23 @@ function validateNode(node: unknown): ValidationResult {
     errors.push('requires: must be an array of strings');
   }
 
-  // provides (optional)
-  if (n.provides != null && !Array.isArray(n.provides)) {
-    errors.push('provides: must be an array of strings');
+  // provides (optional) — array of { bindTo, src } bindings
+  if (n.provides != null) {
+    if (!Array.isArray(n.provides)) {
+      errors.push('provides: must be an array of { bindTo, src } bindings');
+    } else {
+      (n.provides as unknown[]).forEach((p, i) => {
+        if (!p || typeof p !== 'object' || Array.isArray(p)) {
+          errors.push(`provides[${i}]: must be an object with bindTo and src`);
+        } else {
+          const binding = p as Record<string, unknown>;
+          if (typeof binding.bindTo !== 'string' || !binding.bindTo)
+            errors.push(`provides[${i}]: missing required "bindTo" string`);
+          if (typeof binding.src !== 'string' || !binding.src)
+            errors.push(`provides[${i}]: missing required "src" string`);
+        }
+      });
+    }
   }
 
   // compute (optional) — ordered array of ComputeStep

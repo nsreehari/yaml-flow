@@ -1,0 +1,10 @@
+{
+  "id": "portfolio-value",
+  "meta": { "title": "Portfolio Total Value" },
+  "requires": ["table"],
+  "provides": [{ "bindTo": "totalValue", "src": "computed_values.totalValue" }],
+  "state": {},
+  "compute": [
+    { "bindTo": "totalValue", "fn": "sum", "input": "requires.table.rows", "field": "value" }
+  ]
+}

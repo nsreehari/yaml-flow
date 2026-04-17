@@ -2,14 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
   "title": "LiveCards Node Schema",
-  "description": "Schema for Card and ExternalSource nodes in the LiveCards Board/Canvas engine",
+  "description": "Schema for LiveCards nodes. All nodes share one flat shape: id + state required; requires/provides/sources/optionalSources/compute/view optional. computed_values is runtime-only (never in JSON).",
 
   "definitions": {
 
     "bind_ref": {
-      "description": "A state path reference, e.g. 'state.raw_quotes' or 'state.compute_vars.total'",
+      "description": "A path into the node's runtime namespace: state.*, requires.*, or computed_values.*",
       "type": "string",
-      "pattern": "^state\\."
+      "pattern": "^(state|requires|computed_values)\\."
     },
 
     "bind_or_literal": {
@@ -26,7 +26,73 @@
       ]
     },
 
-    "compute_expr": {
+    "provides_binding": {
+      "description": "Explicit binding: publish a named token downstream from a resolved path",
+      "type": "object",
+      "required": ["bindTo", "src"],
+      "additionalProperties": false,
+      "properties": {
+        "bindTo": { "type": "string", "description": "Token name published downstream" },
+        "src":    { "type": "string", "description": "Path to read value from (state.*, requires.*, computed_values.*)" }
+      }
+    },
+
+    "compute_step": {
+      "description": "A single ordered compute step: reads state.*/requires.*/computed_values.*, writes to computed_values[bindTo]",
+      "type": "object",
+      "required": ["bindTo", "fn"],
+      "properties": {
+        "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
+        "fn": {
+          "type": "string",
+          "description": "Function name from the built-in vocabulary or a custom registered function"
+        },
+        "input": {
+          "description": "state.path, literal, array of inputs, or nested compute_expr",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array" },
+            { "$ref": "#/definitions/compute_expr" }
+          ]
+        },
+        "field":    { "type": "string", "description": "For pluck/sum/group — the object key to extract" },
+        "where":    { "$ref": "#/definitions/compute_expr", "description": "For filter — predicate expression" },
+        "apply":    { "$ref": "#/definitions/compute_expr", "description": "For map — transform expression" },
+        "cond":     { "$ref": "#/definitions/compute_expr", "description": "For if — condition expression" },
+        "then":     { "description": "For if — value when cond is truthy" },
+        "else":     { "description": "For if — value when cond is falsy" },
+        "format":   { "type": "string", "description": "For format_date / template" },
+        "decimals": { "type": "integer", "description": "For round" },
+        "separator":{ "type": "string", "description": "For join/split" },
+        "direction":{ "enum": ["asc", "desc"], "description": "For sort" },
+        "start":    { "type": "integer", "description": "For slice" },
+        "end":      { "type": "integer", "description": "For slice" },
+        "depth":    { "type": "integer", "description": "For flat" },
+        "path":     { "type": "string", "description": "For get" },
+        "value":    { "description": "For default/coalesce" }
+      }
+    },
+
+    "source_entry": {
+      "description": "One source definition inside sources[] or optionalSources[]. bindTo is the only required field. kind indicates the channel (api, websocket, static, llm, script, mail, teams, ...) — open-ended, extensible.",
+      "type": "object",
+      "required": ["bindTo"],
+      "properties": {
+        "bindTo":        { "type": "string", "description": "Key in state to write fetched/received data into" },
+        "kind":          { "type": "string", "description": "Channel type — api | websocket | static | llm | script | mail | teams | ... (extensible)" },
+        "script":        { "type": "string", "description": "Shell command or path to script (for kind: script)" },
+        "url_template":  { "type": "string", "description": "URL with {{var}} placeholders (for kind: api/websocket)" },
+        "method":        { "type": "string", "description": "HTTP method (for kind: api)" },
+        "headers":       { "type": "object", "additionalProperties": true },
+        "body_template": { "type": "object", "additionalProperties": true },
+        "template_vars": { "type": "object", "additionalProperties": true },
+        "poll_interval": { "type": "integer", "minimum": 0, "description": "Auto-refresh in seconds (0 = manual)" },
+        "transform":     { "type": "string", "description": "Dot-path to extract from response, e.g. 'data.items'" }
+      },
+      "additionalProperties": true
+    },
       "description": "A declarative JSON compute expression",
       "type": "object",
       "required": ["fn"],
@@ -72,39 +138,13 @@
       }
     },
 
-    "data": {
+    "state_obj": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
-        "requires": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "IDs of upstream nodes this node depends on"
-        },
-        "provides": {
-          "type": "object",
-          "description": "Subset of state exposed downstream. Keys are published names, values are bind refs.",
-          "additionalProperties": { "$ref": "#/definitions/bind_or_literal" }
-        }
-      }
-    },
-
-    "source_def": {
-      "type": "object",
-      "required": ["kind", "bindTo"],
-      "properties": {
-        "kind":           { "enum": ["api", "websocket", "static", "llm"] },
-        "bindTo":         { "$ref": "#/definitions/bind_ref", "description": "state path to write fetched data into" },
-        "method":         { "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET" },
-        "url_template":   { "type": "string", "description": "URL with {{var}} placeholders" },
-        "headers":        { "type": "object", "additionalProperties": { "$ref": "#/definitions/bind_or_literal" } },
-        "body_template":  { "type": "object", "description": "Request body with {{var}} placeholders or bind refs" },
-        "template_vars":  {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/bind_or_literal" },
-          "description": "Variables for url/body templates — static values or bind refs"
-        },
-        "poll_interval":  { "type": "integer", "minimum": 0, "description": "Auto-refresh in seconds (0 = manual)" },
-        "transform":      { "type": "string", "description": "Dot-path to extract from response, e.g. 'data.items'" }
+        "status":  { "enum": ["fresh", "stale", "loading", "error"] },
+        "lastRun": { "type": "string", "format": "date-time" },
+        "error":   { "type": "string" }
       }
     },
 
@@ -209,58 +249,52 @@
     }
   },
 
-  "oneOf": [
-    {
-      "title": "Card",
-      "description": "A renderable card node with view elements",
-      "type": "object",
-      "required": ["id", "type", "view", "state"],
-      "additionalProperties": false,
-      "properties": {
-        "id":      { "type": "string" },
-        "type":    { "const": "card" },
-        "meta":    { "$ref": "#/definitions/meta" },
-        "data":    { "$ref": "#/definitions/data" },
-        "view":    { "$ref": "#/definitions/view" },
-        "state":   { "type": "object", "additionalProperties": true,
-          "properties": {
-            "status":  { "enum": ["fresh", "stale", "loading", "error"] },
-            "lastRun": { "type": "string", "format": "date-time" },
-            "error":   { "type": "string" }
-          }
-        },
-        "compute": {
-          "type": "object",
-          "description": "Derived state: key = state path to write, value = compute_expr",
-          "additionalProperties": { "$ref": "#/definitions/compute_expr" }
-        }
-      }
+  "title": "LiveCard Node",
+  "description": "Unified node: id + state required. requires/provides/sources/optionalSources/compute/view all optional. No type discriminator — nodes with view render as cards; nodes without view and with sources render as source pills in canvas mode.",
+  "type": "object",
+  "required": ["id", "state"],
+  "additionalProperties": true,
+  "properties": {
+    "id":    { "type": "string", "description": "Unique node identifier" },
+    "meta":  { "$ref": "#/definitions/meta" },
+    "state": { "$ref": "#/definitions/state_obj" },
+
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of upstream nodes this node depends on"
     },
-    {
-      "title": "ExternalSource",
-      "description": "A data-only node that fetches from external systems (no view)",
+
+    "provides": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/provides_binding" },
+      "description": "Explicit bindings publishing named tokens downstream. Each item: { bindTo, src } where src is a state.*/requires.*/computed_values.* path."
+    },
+
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/source_entry" },
+      "description": "Blocking sources — all must complete before node is considered fresh. Each writes to state[bindTo]."
+    },
+
+    "optionalSources": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/source_entry" },
+      "description": "Non-blocking sources — arrivals trigger re-fire but don't gate completion."
+    },
+
+    "compute": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/compute_step" },
+      "description": "Ordered compute steps. Each reads state.*/requires.*/computed_values.* and writes to ephemeral computed_values[bindTo]. computed_values is never persisted."
+    },
+
+    "asyncHelpers": {
       "type": "object",
-      "required": ["id", "type", "source", "state"],
-      "additionalProperties": false,
-      "properties": {
-        "id":      { "type": "string" },
-        "type":    { "const": "source" },
-        "meta":    { "$ref": "#/definitions/meta" },
-        "data":    { "$ref": "#/definitions/data" },
-        "source":  { "$ref": "#/definitions/source_def" },
-        "state":   { "type": "object", "additionalProperties": true,
-          "properties": {
-            "status":  { "enum": ["fresh", "stale", "loading", "error"] },
-            "lastRun": { "type": "string", "format": "date-time" },
-            "error":   { "type": "string" }
-          }
-        },
-        "compute": {
-          "type": "object",
-          "description": "Derived state: key = state path to write, value = compute_expr",
-          "additionalProperties": { "$ref": "#/definitions/compute_expr" }
-        }
-      }
-    }
-  ]
+      "description": "Named async helper definitions (CLI/board handler feature; not evaluated by the browser engine).",
+      "additionalProperties": true
+    },
+
+    "view": { "$ref": "#/definitions/view" }
+  }
 }

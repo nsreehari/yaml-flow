@@ -51,13 +51,14 @@
                 <thead><tr><th>Key</th><th>Card (<code>type:"card"</code>)</th><th>Source (<code>type:"source"</code>)</th></tr></thead>
                 <tbody>
                   <tr><td><code>id</code></td><td colspan="2">Unique string identifier</td></tr>
-                  <tr><td><code>type</code></td><td><code>"card"</code></td><td><code>"source"</code></td></tr>
                   <tr><td><code>meta</code></td><td colspan="2"><code>{ title, tags[] }</code></td></tr>
-                  <tr><td><code>data</code></td><td colspan="2"><code>{ requires: [ids], provides: { name: bindRef } }</code></td></tr>
-                  <tr><td><code>view</code></td><td><code>{ elements[], layout, features }</code></td><td>—</td></tr>
-                  <tr><td><code>source</code></td><td>—</td><td><code>{ kind, bindTo, url_template, … }</code></td></tr>
-                  <tr><td><code>state</code></td><td colspan="2">Mutable state object; elements read from here via <code>data.bind</code></td></tr>
-                  <tr><td><code>compute</code></td><td colspan="2">Declarative JSON expressions → derived values written to <code>state</code></td></tr>
+                  <tr><td><code>state</code></td><td colspan="2">Mutable persisted state object. Element binds read from <code>state.*</code></td></tr>
+                  <tr><td><code>requires</code></td><td colspan="2"><code>[nodeId, ...]</code> — upstream dependencies, engine auto-subscribes</td></tr>
+                  <tr><td><code>provides</code></td><td colspan="2"><code>[{ bindTo, src }]</code> — explicit downstream token bindings. <code>src</code> is a <code>state.*</code> / <code>computed_values.*</code> path</td></tr>
+                  <tr><td><code>sources</code></td><td colspan="2"><code>[{ bindTo, kind?, script?, url_template?, ... }]</code> — blocking data sources. <code>kind</code>: api | websocket | static | llm | script | mail | teams | … (extensible)</td></tr>
+                  <tr><td><code>optionalSources</code></td><td colspan="2">Same shape as <code>sources</code>. Non-blocking — arrivals re-fire but don't gate completion</td></tr>
+                  <tr><td><code>compute</code></td><td colspan="2"><code>[{ bindTo, fn, input, … }]</code> — ordered steps writing to ephemeral <code>computed_values[bindTo]</code>. Never persisted.</td></tr>
+                  <tr><td><code>view</code></td><td colspan="2"><code>{ elements[], layout, features }</code> — present on renderable cards; absent on source-only nodes</td></tr>
                 </tbody>
               </table>
             </div>
@@ -366,19 +367,16 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['src-sales'] = {
     id: 'src-sales',
-    type: 'source',
     meta: { title: 'Sales API', tags: ['api', 'sales'] },
-    source: {
+    provides: [{ bindTo: 'sales', src: 'state.raw' }],
+    sources: [{
+      bindTo: 'raw',
       kind: 'api',
-      bindTo: 'state.raw',
       url_template: 'https://api.example.com/v1/sales?region={{region}}',
       template_vars: { region: 'all' },
       poll_interval: 300,
       transform: 'data.items'
-    },
-    data: {
-      provides: { sales: { bind: 'state.raw' } }
-    },
+    }],
     state: {
       status: 'fresh',
       lastRun: new Date().toISOString(),
@@ -394,17 +392,14 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['src-metrics'] = {
     id: 'src-metrics',
-    type: 'source',
     meta: { title: 'Metrics API', tags: ['api', 'monitoring'] },
-    source: {
+    provides: [{ bindTo: 'metrics', src: 'state.raw' }],
+    sources: [{
+      bindTo: 'raw',
       kind: 'api',
-      bindTo: 'state.raw',
       url_template: 'https://api.example.com/v1/metrics',
       poll_interval: 60
-    },
-    data: {
-      provides: { metrics: { bind: 'state.raw' } }
-    },
+    }],
     state: {
       status: 'fresh',
       lastRun: new Date().toISOString(),
@@ -416,7 +411,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['flt1'] = {
     id: 'flt1',
-    type: 'card',
     meta: { title: 'Filters' },
     view: {
       elements: [{
@@ -439,9 +433,8 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['tbl1'] = {
     id: 'tbl1',
-    type: 'card',
     meta: { title: 'Sales Data', tags: ['table'] },
-    data: { requires: ['src-sales'] },
+    requires: ['src-sales'],
     view: {
       elements: [{
         kind: 'table',
@@ -466,13 +459,16 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['met1'] = {
     id: 'met1',
-    type: 'card',
     meta: { title: 'Revenue KPIs' },
-    data: { requires: ['tbl1'] },
+    requires: ['tbl1'],
+    compute: [
+      { bindTo: 'total_revenue', fn: 'sum', input: 'state.sales', field: 'revenue' },
+      { bindTo: 'avg_revenue',   fn: 'round', input: { fn: 'avg', input: 'state.sales', field: 'revenue' }, decimals: 0 }
+    ],
     view: {
       elements: [
-        { kind: 'metric', label: 'Total Revenue', className: 'col-6', data: { bind: 'state.total_revenue' } },
-        { kind: 'metric', label: 'Avg per Region', className: 'col-6', data: { bind: 'state.avg_revenue' } }
+        { kind: 'metric', label: 'Total Revenue', className: 'col-6', data: { bind: 'computed_values.total_revenue' } },
+        { kind: 'metric', label: 'Avg per Region', className: 'col-6', data: { bind: 'computed_values.avg_revenue' } }
       ],
       layout: { board: { col: 4, order: 2 }, canvas: { x: 500, y: 380, w: 300 } }
     },
@@ -485,18 +481,13 @@ rg.dispose();                // cancel timeouts</code></pre>
         { region: 'West',  product: 'Widget C', revenue: 6300, units: 125 },
         { region: 'North', product: 'Widget B', revenue: 9100, units: 230 },
       ]
-    },
-    compute: {
-      total_revenue: { fn: 'sum', input: 'state.sales', field: 'revenue' },
-      avg_revenue:   { fn: 'round', input: { fn: 'avg', input: 'state.sales', field: 'revenue' }, decimals: 0 }
     }
   };
 
   nodes['cht1'] = {
     id: 'cht1',
-    type: 'card',
     meta: { title: 'Revenue by Region' },
-    data: { requires: ['tbl1'] },
+    requires: ['tbl1'],
     view: {
       elements: [{
         kind: 'chart',
@@ -518,7 +509,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['cht2'] = {
     id: 'cht2',
-    type: 'card',
     meta: { title: 'Weekly Trend' },
     view: {
       elements: [{
@@ -539,7 +529,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['lst1'] = {
     id: 'lst1',
-    type: 'card',
     meta: { title: 'Config Summary' },
     view: {
       elements: [{
@@ -557,9 +546,8 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['alt1'] = {
     id: 'alt1',
-    type: 'card',
     meta: { title: 'CPU Alert' },
-    data: { requires: ['src-metrics'] },
+    requires: ['src-metrics'],
     view: {
       elements: [{
         kind: 'alert',
@@ -574,9 +562,8 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['alt2'] = {
     id: 'alt2',
-    type: 'card',
     meta: { title: 'Memory Alert' },
-    data: { requires: ['src-metrics'] },
+    requires: ['src-metrics'],
     view: {
       elements: [{
         kind: 'alert',
@@ -591,7 +578,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['frm1'] = {
     id: 'frm1',
-    type: 'card',
     meta: { title: 'New Alert Rule' },
     view: {
       elements: [{
@@ -618,7 +604,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['nts1'] = {
     id: 'nts1',
-    type: 'card',
     meta: { title: 'Investigation Notes' },
     view: {
       elements: [{
@@ -636,7 +621,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['td1'] = {
     id: 'td1',
-    type: 'card',
     meta: { title: 'Sprint Tasks' },
     view: {
       elements: [{
@@ -659,9 +643,8 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['nar1'] = {
     id: 'nar1',
-    type: 'card',
     meta: { title: 'Weekly Summary', tags: ['llm'] },
-    data: { requires: ['tbl1', 'met1'] },
+    requires: ['tbl1', 'met1'],
     view: {
       elements: [{
         kind: 'narrative',
@@ -680,7 +663,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['cst1'] = {
     id: 'cst1',
-    type: 'card',
     meta: { title: 'Service Health' },
     view: {
       elements: [
@@ -708,7 +690,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['load1'] = {
     id: 'load1',
-    type: 'card',
     meta: { title: 'Loading Example' },
     view: {
       elements: [{
@@ -724,7 +705,6 @@ rg.dispose();                // cancel timeouts</code></pre>
 
   nodes['err1'] = {
     id: 'err1',
-    type: 'card',
     meta: { title: 'Error Example' },
     view: {
       elements: [{

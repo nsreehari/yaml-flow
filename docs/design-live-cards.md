@@ -33,7 +33,7 @@ Every card is a unified entity. No `type` field — behavior is determined by wh
 | `provides` | Keys to pluck from state/requires/computed for downstream. | — | no (defaults to `[id]`) |
 | `sources` | Async fetches that MUST complete before task-completed. Each has `bindTo` targeting a `state` key. | `state[bindTo]` on disk | no |
 | `optionalSources` | Same as sources but don't gate completion. Arrive later → card re-fires. | `state[bindTo]` on disk | no |
-| `compute` | Ordered array of pure derivations. Reads `state.*` and `requires.*`. Writes to ephemeral computed_state via `bindTo`. | in-memory only (NOT persisted) | no |
+| `compute` | Ordered array of pure derivations. Reads `state.*` and `requires.*`. Writes to ephemeral computed_values via `bindTo`. | in-memory only (NOT persisted) | no |
 
 ## Two Read Namespaces
 
@@ -46,15 +46,15 @@ Compute expressions reference either `requires.X` or `state.X`. This prevents se
 
 - **Ordered array** (not a map). Runs top-to-bottom, once per handler invocation.
 - Each step: `{ bindTo, fn, input, args? }`
-- Reads from `state.*`, `requires.*`, and earlier compute outputs in `computed_state.*`
-- Writes to ephemeral `computed_state[bindTo]` — never persisted to disk.
-- `computed_state` is discarded after provides are plucked.
+- Reads from `state.*`, `requires.*`, and earlier compute outputs in `computed_values.*`
+- Writes to ephemeral `computed_values[bindTo]` — never persisted to disk.
+- `computed_values` is discarded after provides are plucked.
 
-### Why no disk persistence for computed_state
+### Why no disk persistence for computed_values
 
 - Downstream cards receive values through `provides` → `task-completed.data` → stored in graph state (`board-graph.json`).
 - On re-fire, everything is rebuilt from scratch: read `state` from disk, inject `requires`, run compute.
-- Nothing ever needs to read previous computed_state from disk.
+- Nothing ever needs to read previous computed_values from disk.
 
 ## Handler Lifecycle
 
@@ -62,9 +62,9 @@ Compute expressions reference either `requires.X` or `state.X`. This prevents se
 1. Card becomes eligible (all requires tokens satisfied upstream)
 2. Read card.state from disk
 3. Inject requires data (read-only, from upstream task-completed.data)
-4. Run compute array top-to-bottom → ephemeral computed_state
+4. Run compute array top-to-bottom → ephemeral computed_values
 5. Check: all sources[].bindTo keys present in state?
-   YES → Build provides data (pluck from state + requires + computed_state)
+   YES → Build provides data (pluck from state + requires + computed_values)
          Emit task-completed with provides data
          Spawn undelivered optionalSources in background
    NO  → Spawn undelivered sources
@@ -75,12 +75,9 @@ Compute expressions reference either `requires.X` or `state.X`. This prevents se
 
 ## Provides Resolution
 
-`provides` is `string[]`. For each key, look up in order:
-1. `computed_state[key]`
-2. `state[key]`
-3. `requires[key]`
-
-First match wins. This allows passthrough of upstream data if needed (via requires), computed derivations (via compute), or raw state.
+`provides` is `ProvidesBinding[]` where each entry is `{ bindTo: string, src: string }`.
+`src` is an explicit path in one of the card's data namespaces: `state.*`, `requires.*`, or `computed_values.*`.
+The value at `src` is resolved and emitted under the `bindTo` token name.
 
 ## Events
 

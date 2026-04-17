@@ -339,7 +339,7 @@
 
   function _isRef(s) {
     return typeof s === 'string' &&
-      (s.startsWith('state.') || s.startsWith('requires.') || s.startsWith('computed_state.'));
+      (s.startsWith('state.') || s.startsWith('requires.') || s.startsWith('computed_values.'));
   }
 
   function evalExpr(expr, node) {
@@ -378,7 +378,7 @@
     // Special: filter with where clause
     if (expr.fn === 'filter' && Array.isArray(input) && expr.where) {
       return input.filter(function (item) {
-        var tmp = { state: Object.assign({}, node.state, { $: item }), requires: node.requires, computed_state: node.computed_state };
+        var tmp = { state: Object.assign({}, node.state, { $: item }), requires: node.requires, computed_values: node.computed_values };
         return evalExpr(expr.where, tmp);
       });
     }
@@ -386,7 +386,7 @@
     // Special: map with apply clause
     if (expr.fn === 'map' && Array.isArray(input) && expr.apply) {
       return input.map(function (item) {
-        var tmp = { state: Object.assign({}, node.state, { $: item }), requires: node.requires, computed_state: node.computed_state };
+        var tmp = { state: Object.assign({}, node.state, { $: item }), requires: node.requires, computed_values: node.computed_values };
         return evalExpr(expr.apply, tmp);
       });
     }
@@ -408,13 +408,13 @@
   function run(node) {
     if (!node || !node.compute) return node;
     if (!node.state) node.state = {};
-    node.computed_state = {};
+    node.computed_values = {};
 
     for (var i = 0; i < node.compute.length; i++) {
       var step = node.compute[i];
       try {
         var val = evalExpr(step, node);
-        _deepSet(node.computed_state, step.bindTo, val);
+        _deepSet(node.computed_values, step.bindTo, val);
       } catch (e) {
         console.error('CardCompute.run error on "' + (node.id || '?') + '.' + step.bindTo + '":', e);
       }
@@ -472,7 +472,20 @@
     if (node.requires != null && !Array.isArray(node.requires)) errors.push('requires: must be an array of strings');
 
     // provides
-    if (node.provides != null && !Array.isArray(node.provides)) errors.push('provides: must be an array of strings');
+    if (node.provides != null) {
+      if (!Array.isArray(node.provides)) {
+        errors.push('provides: must be an array of { bindTo, src } bindings');
+      } else {
+        node.provides.forEach(function (p, i) {
+          if (!p || typeof p !== 'object' || Array.isArray(p)) {
+            errors.push('provides[' + i + ']: must be an object with bindTo and src');
+          } else {
+            if (typeof p.bindTo !== 'string' || !p.bindTo) errors.push('provides[' + i + ']: missing required "bindTo" string');
+            if (typeof p.src !== 'string' || !p.src)     errors.push('provides[' + i + ']: missing required "src" string');
+          }
+        });
+      }
+    }
 
     // compute (ordered array)
     if (node.compute != null) {

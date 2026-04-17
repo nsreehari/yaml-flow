@@ -49,10 +49,16 @@ import type { ComputeNode } from '../card-compute/index.js';
  * Minimal live card shape accepted by this utility.
  * Unified card — no type field. Behavior from sections present.
  */
+/** A provides binding: maps a token name to a source path in the card's data namespace. */
+export interface ProvidesBinding {
+  bindTo: string;
+  src: string;
+}
+
 export interface LiveCard {
   id: string;
   requires?: string[];
-  provides?: string[];
+  provides?: ProvidesBinding[];
   meta?: { title?: string; tags?: string[] };
   state?: Record<string, unknown>;
   compute?: { bindTo: string; fn: string; [key: string]: unknown }[];
@@ -204,9 +210,9 @@ export function liveCardsToReactiveGraph(
   const allTokens = new Set<string>();
   const tokenToCardId = new Map<string, string>();
   for (const card of cards) {
-    for (const token of (card.provides ?? [card.id])) {
-      allTokens.add(token);
-      tokenToCardId.set(token, card.id);
+    for (const binding of (card.provides ?? [{ bindTo: card.id, src: `state.${card.id}` }])) {
+      allTokens.add(binding.bindTo);
+      tokenToCardId.set(binding.bindTo, card.id);
     }
   }
 
@@ -222,8 +228,8 @@ export function liveCardsToReactiveGraph(
 
     tasks[card.id] = {
       requires: requires.length > 0 ? requires : undefined,
-      provides: card.provides ?? [card.id],
-      taskHandlers: [card.id], // each card has a named handler matching its ID
+      provides: (card.provides ?? [{ bindTo: card.id, src: `state.${card.id}` }]).map(p => p.bindTo),
+      taskHandlers: [card.id],
       description: card.meta?.title ?? card.id,
     };
   }
@@ -345,14 +351,26 @@ function buildCardHandler(
       compute: card.compute as ComputeNode['compute'],
     };
 
-    // Run compute expressions → writes to ephemeral computed_state
+    // Run compute expressions → writes to ephemeral computed_values
     CardCompute.run(computeNode);
 
-    // Build result: merge state + computed_state for downstream
-    const resultState = { ...computeNode.state, ...computeNode.computed_state };
+    // Build result: if card has explicit provides bindings, resolve each src path.
+    // Otherwise spread full state + computed_values as data.
+    let resultData: Record<string, unknown>;
+    if (card.provides && card.provides.length > 0) {
+      resultData = {};
+      for (const { bindTo, src } of card.provides) {
+        resultData[bindTo] = CardCompute.resolve(computeNode, src);
+      }
+    } else {
+      resultData = { ...computeNode.state, ...computeNode.computed_values };
+    }
+
+    // Also update sharedState for downstream cards that read via requiresData
+    const resultState = { ...computeNode.state, ...computeNode.computed_values };
     sharedState.set(card.id, resultState);
 
-    getResolve()(input.callbackToken, resultState);
+    getResolve()(input.callbackToken, resultData);
     return 'task-initiated';
   };
 }

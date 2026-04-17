@@ -9,7 +9,7 @@
     "bind_ref": {
       "description": "A state path reference, e.g. 'state.raw_quotes' or 'requires.upstream'",
       "type": "string",
-      "pattern": "^(state|requires|computed_state)\\."
+      "pattern": "^(state|requires|computed_values)\\."
     },
 
     "bind_or_literal": {
@@ -80,8 +80,15 @@
 
     "provides": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "State keys exposed downstream as task-completed data"
+      "items": {
+        "type": "object",
+        "required": ["bindTo", "src"],
+        "properties": {
+          "bindTo": { "type": "string", "description": "Token name published downstream" },
+          "src":    { "type": "string", "description": "Path to read value from (state.*, requires.*, computed_values.*)" }
+        }
+      },
+      "description": "Explicit bindings exposing computed/state values downstream as named tokens"
     },
 
     "compute_step": {
@@ -89,7 +96,7 @@
       "type": "object",
       "required": ["bindTo", "fn"],
       "properties": {
-        "bindTo": { "type": "string", "description": "Key in computed_state to write result" },
+        "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
         "fn": { "$ref": "#/definitions/compute_expr/properties/fn" },
         "input": { "$ref": "#/definitions/compute_expr/properties/input" },
         "field": { "type": "string" },
@@ -252,7 +259,7 @@
     },
     "compute": {
       "type": "array",
-      "description": "Ordered array of compute steps. Each reads state.*/requires.*/computed_state.* and writes to ephemeral computed_state[bindTo].",
+      "description": "Ordered array of compute steps. Each reads state.*/requires.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
       "items": { "$ref": "#/definitions/compute_step" }
     }
   }
