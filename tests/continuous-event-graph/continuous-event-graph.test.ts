@@ -182,12 +182,13 @@ describe('addNode / removeNode', () => {
     expect(live.state.tasks['b'].status).toBe('not-started');
   });
 
-  it('does not overwrite existing node', () => {
+  it('upserts existing node — replaces config, preserves state', () => {
     const live = createLiveGraph(makeConfig({ a: { provides: ['x'] } }), 'e1');
     const next = addNode(live, 'a', { provides: ['z'] });
 
-    expect(next).toBe(live); // unchanged
-    expect(next.config.tasks['a'].provides).toEqual(['x']);
+    expect(next).not.toBe(live); // new object
+    expect(next.config.tasks['a'].provides).toEqual(['z']); // config replaced
+    expect(next.state.tasks['a']).toBe(live.state.tasks['a']); // state preserved
   });
 
   it('removes a node from both config and state', () => {

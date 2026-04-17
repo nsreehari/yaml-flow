@@ -766,7 +766,8 @@ describe('CardCompute.validate', () => {
         id: 'full',
         type: 'card',
         meta: { title: 'Test', tags: ['a', 'b'] },
-        data: { requires: ['src1'], provides: { total: 'number' } },
+        requires: ['src1'],
+        provides: ['total'],
         state: { status: 'fresh' },
         view: { elements: [{ kind: 'table' }], layout: { columns: 2 }, features: { search: true } },
         compute: { total: { fn: 'sum', input: 'state.data', field: 'v' } },
@@ -852,22 +853,22 @@ describe('CardCompute.validate', () => {
       expect(r.errors.some(e => e.includes('meta.tags'))).toBe(true);
     });
 
-    it('data.requires not array', () => {
+    it('requires not array', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', data: { requires: 'src1' }, state: {},
+        id: 'x', type: 'card', requires: 'src1', state: {},
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('data.requires'))).toBe(true);
+      expect(r.errors.some(e => e.includes('requires'))).toBe(true);
     });
 
-    it('data.provides not object', () => {
+    it('provides not array', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', data: { provides: ['x'] }, state: {},
+        id: 'x', type: 'card', provides: { x: 'state.x' }, state: {},
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('data.provides'))).toBe(true);
+      expect(r.errors.some(e => e.includes('provides'))).toBe(true);
     });
 
     it('compute expression missing fn', () => {

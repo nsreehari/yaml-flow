@@ -51,7 +51,7 @@ describe('liveCardsToReactiveGraph', () => {
     it('creates tasks for each card', () => {
       const cards: LiveCard[] = [
         makeSource('prices'),
-        makeCard('dashboard', { data: { requires: ['prices'] } }),
+        makeCard('dashboard', { requires: ['prices'] }),
       ];
       const { config } = liveCardsToReactiveGraph(cards);
 
@@ -101,11 +101,11 @@ describe('liveCardsToReactiveGraph', () => {
 
     it('throws when requires references non-existent card', () => {
       const cards = [
-        makeCard('dashboard', { data: { requires: ['ghost'] } }),
+        makeCard('dashboard', { requires: ['ghost'] }),
       ];
 
       expect(() => liveCardsToReactiveGraph(cards)).toThrow(
-        'Card "dashboard" requires "ghost" but no card with that ID exists',
+        'Card "dashboard" requires "ghost" but no card provides that token',
       );
     });
   });
@@ -209,7 +209,7 @@ describe('liveCardsToReactiveGraph', () => {
       const cards: LiveCard[] = [
         makeSource('prices', { state: { raw: [10, 20, 30] } }),
         makeCard('stats', {
-          data: { requires: ['prices'] },
+          requires: ['prices'],
           compute: {
             total: { fn: 'sum', input: 'state.prices.raw' },
           },
@@ -231,18 +231,21 @@ describe('liveCardsToReactiveGraph', () => {
     it('provides mapping injects named values via reactive graph', async () => {
       const cards: LiveCard[] = [
         makeSource('prices', {
-          state: { raw_quotes: [100, 200] },
-          data: { provides: { quotes: 'state.raw_quotes' } },
+          state: { quotes: [100, 200] },
+          provides: ['quotes'],
         }),
         makeCard('dash', {
-          data: { requires: ['prices'] },
+          requires: ['quotes'],
           compute: {
             total: { fn: 'sum', input: 'state.quotes' },
           },
         }),
       ];
-      const { graph } = liveCardsToReactiveGraph(cards, {
+      const { config, graph } = liveCardsToReactiveGraph(cards, {
       });
+
+      expect(config.tasks['prices'].provides).toEqual(['quotes']);
+      expect(config.tasks['dash'].requires).toEqual(['quotes']);
 
       graph.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
       await sleep(500);
@@ -260,7 +263,7 @@ describe('liveCardsToReactiveGraph', () => {
       const cards: LiveCard[] = [
         makeSource('src', { state: { values: [5, 10, 15] } }),
         makeCard('agg', {
-          data: { requires: ['src'] },
+          requires: ['src'],
           compute: {
             total: { fn: 'sum', input: 'state.src.values' },
             count: { fn: 'count', input: 'state.src.values' },
@@ -291,14 +294,14 @@ describe('liveCardsToReactiveGraph', () => {
           state: { items: [{ price: 100 }, { price: 200 }, { price: 300 }] },
         }),
         makeCard('transform', {
-          data: { requires: ['raw_data'] },
+          requires: ['raw_data'],
           compute: {
             total: { fn: 'sum', input: 'state.raw_data.items', field: 'price' },
             avg: { fn: 'avg', input: 'state.raw_data.items', field: 'price' },
           },
         }),
         makeCard('dashboard', {
-          data: { requires: ['transform'] },
+          requires: ['transform'],
           compute: {
             label: { fn: 'template', input: 'state.transform', format: 'Total: {{total}}, Avg: {{avg}}' },
           },
@@ -340,7 +343,7 @@ describe('liveCardsToReactiveGraph', () => {
   describe('LiveBoard overload', () => {
     it('accepts a LiveBoard and extracts nodes', () => {
       const board: LiveBoard = {
-        nodes: [makeSource('prices'), makeCard('dash', { data: { requires: ['prices'] } })],
+        nodes: [makeSource('prices'), makeCard('dash', { requires: ['prices'] })],
       };
       const { config, handlers } = liveCardsToReactiveGraph(board);
 
@@ -396,7 +399,7 @@ describe('liveCardsToReactiveGraph', () => {
         nodes: [
           makeSource('feed', { state: { prices: [10, 20, 30] } }),
           makeCard('totals', {
-            data: { requires: ['feed'] },
+            requires: ['feed'],
             compute: {
               total: { fn: 'sum', input: 'state.feed.prices' },
             },

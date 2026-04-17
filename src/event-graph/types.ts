@@ -165,7 +165,12 @@ export type GraphEvent =
   | TaskRestartEvent
   | InjectTokensEvent
   | AgentActionEvent
-  | TaskCreationEvent;
+  | TaskUpsertEvent
+  | TaskRemovalEvent
+  | NodeRequiresAddEvent
+  | NodeRequiresRemoveEvent
+  | NodeProvidesAddEvent
+  | NodeProvidesRemoveEvent;
 
 export interface TaskStartedEvent {
   type: 'task-started';
@@ -224,10 +229,44 @@ export interface AgentActionEvent {
   config?: Partial<ExecutionConfig>;
 }
 
-export interface TaskCreationEvent {
-  type: 'task-creation';
+export interface TaskUpsertEvent {
+  type: 'task-upsert';
   taskName: string;
   taskConfig: TaskConfig;
+  timestamp: string;
+}
+
+export interface TaskRemovalEvent {
+  type: 'task-removal';
+  taskName: string;
+  timestamp: string;
+}
+
+export interface NodeRequiresAddEvent {
+  type: 'node-requires-add';
+  nodeName: string;
+  tokens: string[];
+  timestamp: string;
+}
+
+export interface NodeRequiresRemoveEvent {
+  type: 'node-requires-remove';
+  nodeName: string;
+  tokens: string[];
+  timestamp: string;
+}
+
+export interface NodeProvidesAddEvent {
+  type: 'node-provides-add';
+  nodeName: string;
+  tokens: string[];
+  timestamp: string;
+}
+
+export interface NodeProvidesRemoveEvent {
+  type: 'node-provides-remove';
+  nodeName: string;
+  tokens: string[];
   timestamp: string;
 }
 

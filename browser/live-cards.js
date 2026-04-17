@@ -213,7 +213,7 @@ var LiveCard = (function () {
     }
 
     function _autoSubscribe(node) {
-      const requires = (node.data && node.data.requires) || [];
+      const requires = node.requires || [];
       if (!requires.length) return;
       const cleanup = _getCleanup(node.id);
       cleanup.unsubs = requires.map(upId => subscribe(upId, () => {
@@ -1350,7 +1350,7 @@ var LiveCard = (function () {
     }
 
     function _getRequires(node) {
-      return (node.data && node.data.requires) || [];
+      return node.requires || [];
     }
 
     function _buildCardWrapper(node) {

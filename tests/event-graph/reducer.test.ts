@@ -281,15 +281,15 @@ describe('apply — agent-action', () => {
 });
 
 // ============================================================================
-// task-creation event
+// task-upsert event
 // ============================================================================
 
-describe('apply — task-creation', () => {
+describe('apply — task-upsert', () => {
   it('should add a new task to execution state', () => {
     const graph = makeGraph();
     const state = makeState(graph);
     const next = apply(state, {
-      type: 'task-creation',
+      type: 'task-upsert',
       taskName: 'new-task',
       taskConfig: { provides: ['new-output'] },
       timestamp: ts(),
@@ -303,7 +303,7 @@ describe('apply — task-creation', () => {
     const graph = makeGraph();
     const state = makeState(graph);
     const next = apply(state, {
-      type: 'task-creation',
+      type: 'task-upsert',
       taskName: '',
       taskConfig: { provides: [] as string[] },
       timestamp: ts(),
@@ -311,6 +311,29 @@ describe('apply — task-creation', () => {
 
     // Should be unchanged (empty name)
     expect(next).toBe(state);
+  });
+
+  it('should preserve existing state when upserting an existing task', () => {
+    const graph = makeGraph();
+    const state = makeState(graph);
+    // First upsert — creates the task
+    const after1 = apply(state, {
+      type: 'task-upsert',
+      taskName: 'new-task',
+      taskConfig: { provides: ['out-v1'] },
+      timestamp: ts(),
+    }, graph);
+    expect(after1.tasks['new-task'].status).toBe('not-started');
+
+    // Second upsert with different config — should preserve state
+    const after2 = apply(after1, {
+      type: 'task-upsert',
+      taskName: 'new-task',
+      taskConfig: { provides: ['out-v2'] },
+      timestamp: ts(),
+    }, graph);
+    expect(after2.tasks['new-task'].status).toBe('not-started');
+    expect(after2.tasks['new-task']).toBe(after1.tasks['new-task']);
   });
 });
 

@@ -37,10 +37,8 @@ describe('validateLiveCardSchema', () => {
         id: 'full-card',
         type: 'card',
         meta: { title: 'Dashboard', tags: ['finance'] },
-        data: {
-          requires: ['src1'],
-          provides: { total: { bind: 'state.total' } },
-        },
+        requires: ['src1'],
+        provides: ['total'],
         state: { status: 'fresh' },
         view: {
           elements: [

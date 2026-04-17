@@ -5,7 +5,7 @@
  * a fully wired ReactiveGraph where:
  *
  *   - Each card becomes a task in the graph
- *   - card.data.requires → task.requires (upstream card IDs as tokens)
+ *   - card.requires → task.requires (upstream card IDs as tokens)
  *   - Each card produces a token equal to its own ID
  *   - Card-type nodes: handler runs CardCompute.run() on a clone of the card,
  *     returns the computed state as data (auto-hashed by the reactive layer)
@@ -52,11 +52,9 @@ import type { ComputeNode } from '../card-compute/index.js';
 export interface LiveCard {
   id: string;
   type: 'card' | 'source';
+  requires?: string[];
+  provides?: string[];
   meta?: { title?: string; tags?: string[] };
-  data?: {
-    requires?: string[];
-    provides?: Record<string, unknown>;
-  };
   state?: Record<string, unknown>;
   compute?: Record<string, unknown>;
   source?: {
@@ -201,19 +199,30 @@ export function liveCardsToReactiveGraph(
 
   // Build GraphConfig
   const tasks: Record<string, TaskConfig> = {};
-  for (const card of cards) {
-    const requires = card.data?.requires ?? [];
 
-    // Validate requires reference real cards
+  // Collect all provided tokens for validation + build token→cardId map
+  const allTokens = new Set<string>();
+  const tokenToCardId = new Map<string, string>();
+  for (const card of cards) {
+    for (const token of (card.provides ?? [card.id])) {
+      allTokens.add(token);
+      tokenToCardId.set(token, card.id);
+    }
+  }
+
+  for (const card of cards) {
+    const requires = card.requires ?? [];
+
+    // Validate requires reference provided tokens
     for (const req of requires) {
-      if (!cardMap.has(req)) {
-        throw new Error(`Card "${card.id}" requires "${req}" but no card with that ID exists`);
+      if (!allTokens.has(req)) {
+        throw new Error(`Card "${card.id}" requires "${req}" but no card provides that token`);
       }
     }
 
     tasks[card.id] = {
       requires: requires.length > 0 ? requires : undefined,
-      provides: [card.id],
+      provides: card.provides ?? [card.id],
       taskHandlers: [card.id], // each card has a named handler matching its ID
       description: card.meta?.title ?? `${card.type}: ${card.id}`,
     };
@@ -243,7 +252,7 @@ export function liveCardsToReactiveGraph(
     if (card.type === 'source') {
       handlers[card.id] = buildSourceHandler(card, sourceHandlers, defaultSourceHandler, sharedState, getResolve);
     } else {
-      handlers[card.id] = buildCardHandler(card, cardHandlers, sharedState, cardMap, getResolve);
+      handlers[card.id] = buildCardHandler(card, cardHandlers, sharedState, cardMap, tokenToCardId, getResolve);
     }
   }
 
@@ -304,6 +313,7 @@ function buildCardHandler(
   cardHandlers: Record<string, TaskHandlerFn>,
   sharedState: Map<string, Record<string, unknown>>,
   cardMap: Map<string, LiveCard>,
+  tokenToCardId: Map<string, string>,
   getResolve: () => (token: string, data: Record<string, unknown>, errors?: string[]) => void,
 ): TaskHandlerFn {
   // Explicit handler override
@@ -323,26 +333,15 @@ function buildCardHandler(
       compute: card.compute as ComputeNode['compute'],
     };
 
-    // Inject upstream data into the card's state under the upstream card's ID
-    const requires = card.data?.requires ?? [];
-    for (const upstreamId of requires) {
-      const upstreamState = sharedState.get(upstreamId);
+    // Inject upstream data into the card's state
+    const requires = card.requires ?? [];
+    for (const token of requires) {
+      // Resolve token to the card that provides it
+      const producerId = tokenToCardId.get(token) ?? token;
+      const upstreamState = sharedState.get(producerId);
       if (upstreamState) {
-        computeNode.state![upstreamId] = upstreamState;
-      }
-
-      // Also inject via the provides mapping if the upstream card declares one
-      const upstreamCard = cardMap.get(upstreamId);
-      if (upstreamCard?.data?.provides && upstreamState) {
-        for (const [key, bindRef] of Object.entries(upstreamCard.data.provides)) {
-          if (typeof bindRef === 'string' && bindRef.startsWith('state.')) {
-            const path = bindRef.slice(6); // strip 'state.'
-            const value = deepGet(upstreamState, path);
-            if (value !== undefined) {
-              computeNode.state![key] = value;
-            }
-          }
-        }
+        // Inject under the token name so compute expressions can reference state.<token>
+        computeNode.state![token] = upstreamState[token] ?? upstreamState;
       }
     }
 

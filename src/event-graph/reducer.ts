@@ -61,8 +61,8 @@ export function apply(
     case 'agent-action':
       return applyAgentAction(state, event.action, graph, event.config);
 
-    case 'task-creation':
-      return applyTaskCreation(state, event.taskName, event.taskConfig);
+    case 'task-upsert':
+      return applyTaskUpsert(state, event.taskName, event.taskConfig);
 
     default:
       return state;
@@ -146,7 +146,7 @@ function applyAgentAction(
   }
 }
 
-function applyTaskCreation(
+function applyTaskUpsert(
   state: ExecutionState,
   taskName: string,
   taskConfig: TaskConfig
@@ -160,7 +160,7 @@ function applyTaskCreation(
     ...state,
     tasks: {
       ...state.tasks,
-      [taskName]: createDefaultGraphEngineStore(),
+      [taskName]: state.tasks[taskName] ?? createDefaultGraphEngineStore(),
     },
     lastUpdated: new Date().toISOString(),
   };

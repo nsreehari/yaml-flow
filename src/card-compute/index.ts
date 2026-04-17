@@ -433,8 +433,8 @@ const VALID_ELEMENT_KINDS = new Set([
 const VALID_SOURCE_KINDS = new Set(['api', 'websocket', 'static', 'llm']);
 const VALID_STATUSES = new Set(['fresh', 'stale', 'loading', 'error']);
 
-const CARD_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'data', 'view', 'state', 'compute']);
-const SOURCE_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'data', 'source', 'state', 'compute']);
+const CARD_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'requires', 'provides', 'view', 'state', 'compute']);
+const SOURCE_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'requires', 'provides', 'source', 'state', 'compute']);
 
 /**
  * Validate a node against the LiveCards schema.
@@ -493,15 +493,14 @@ function validateNode(node: unknown): ValidationResult {
     }
   }
 
-  // data (optional)
-  if (n.data != null) {
-    if (typeof n.data !== 'object' || Array.isArray(n.data)) {
-      errors.push('data: must be an object');
-    } else {
-      const data = n.data as Record<string, unknown>;
-      if (data.requires != null && !Array.isArray(data.requires)) errors.push('data.requires: must be an array of strings');
-      if (data.provides != null && (typeof data.provides !== 'object' || Array.isArray(data.provides))) errors.push('data.provides: must be an object');
-    }
+  // requires (optional)
+  if (n.requires != null && !Array.isArray(n.requires)) {
+    errors.push('requires: must be an array of strings');
+  }
+
+  // provides (optional)
+  if (n.provides != null && !Array.isArray(n.provides)) {
+    errors.push('provides: must be an array of strings');
   }
 
   // compute (optional)

@@ -72,20 +72,16 @@
       }
     },
 
-    "data": {
-      "type": "object",
-      "properties": {
-        "requires": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "IDs of upstream nodes this node depends on"
-        },
-        "provides": {
-          "type": "object",
-          "description": "Subset of state exposed downstream. Keys are published names, values are bind refs.",
-          "additionalProperties": { "$ref": "#/definitions/bind_or_literal" }
-        }
-      }
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of upstream nodes this node depends on"
+    },
+
+    "provides": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "State keys exposed downstream as task-completed data"
     },
 
     "source_def": {
@@ -217,12 +213,13 @@
       "required": ["id", "type", "view", "state"],
       "additionalProperties": false,
       "properties": {
-        "id":      { "type": "string" },
-        "type":    { "const": "card" },
-        "meta":    { "$ref": "#/definitions/meta" },
-        "data":    { "$ref": "#/definitions/data" },
-        "view":    { "$ref": "#/definitions/view" },
-        "state":   { "type": "object", "additionalProperties": true,
+        "id":       { "type": "string" },
+        "type":     { "const": "card" },
+        "requires": { "$ref": "#/definitions/requires" },
+        "provides": { "$ref": "#/definitions/provides" },
+        "meta":     { "$ref": "#/definitions/meta" },
+        "view":     { "$ref": "#/definitions/view" },
+        "state":    { "type": "object", "additionalProperties": true,
           "properties": {
             "status":  { "enum": ["fresh", "stale", "loading", "error"] },
             "lastRun": { "type": "string", "format": "date-time" },
@@ -243,12 +240,13 @@
       "required": ["id", "type", "source", "state"],
       "additionalProperties": false,
       "properties": {
-        "id":      { "type": "string" },
-        "type":    { "const": "source" },
-        "meta":    { "$ref": "#/definitions/meta" },
-        "data":    { "$ref": "#/definitions/data" },
-        "source":  { "$ref": "#/definitions/source_def" },
-        "state":   { "type": "object", "additionalProperties": true,
+        "id":       { "type": "string" },
+        "type":     { "const": "source" },
+        "requires": { "$ref": "#/definitions/requires" },
+        "provides": { "$ref": "#/definitions/provides" },
+        "meta":     { "$ref": "#/definitions/meta" },
+        "source":   { "$ref": "#/definitions/source_def" },
+        "state":    { "type": "object", "additionalProperties": true,
           "properties": {
             "status":  { "enum": ["fresh", "stale", "loading", "error"] },
             "lastRun": { "type": "string", "format": "date-time" },

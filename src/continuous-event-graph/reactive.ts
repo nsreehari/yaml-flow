@@ -17,7 +17,7 @@
 
 import type { GraphConfig, TaskConfig, GraphEvent, GraphEngineStore } from '../event-graph/types.js';
 import type { LiveGraph, LiveGraphSnapshot, ScheduleResult } from './types.js';
-import { createLiveGraph, applyEvents, addNode, removeNode, addRequires, removeRequires, addProvides, removeProvides, snapshot } from './core.js';
+import { createLiveGraph, applyEvents, snapshot } from './core.js';
 import { schedule } from './schedule.js';
 import { MemoryJournal } from './journal.js';
 import type { Journal } from './journal.js';
@@ -168,17 +168,17 @@ export interface ReactiveGraph {
    * Gracefully ignores invalid tokens or tokens for tasks no longer in the graph.
    */
   resolveCallback(callbackToken: string, data: Record<string, unknown>, errors?: string[]): void;
-  /** Add a node to the graph config. Journals nothing — structural mutation. */
+  /** Add a node to the graph. Journals a task-upsert event, then drains. */
   addNode(name: string, taskConfig: TaskConfig): void;
-  /** Remove a node from the graph config. Structural mutation. */
+  /** Remove a node from the graph. Journals a task-removal event, then drains. */
   removeNode(name: string): void;
-  /** Add required tokens to an existing node. Structural mutation + drain. */
+  /** Add required tokens to an existing node. Journals event, then drains. */
   addRequires(nodeName: string, tokens: string[]): void;
-  /** Remove required tokens from an existing node. Structural mutation + drain. */
+  /** Remove required tokens from an existing node. Journals event, then drains. */
   removeRequires(nodeName: string, tokens: string[]): void;
-  /** Add provided tokens to an existing node. Structural mutation + drain. */
+  /** Add provided tokens to an existing node. Journals event, then drains. */
   addProvides(nodeName: string, tokens: string[]): void;
-  /** Remove provided tokens from an existing node. Structural mutation. */
+  /** Remove provided tokens from an existing node. Journals event, then drains. */
   removeProvides(nodeName: string, tokens: string[]): void;
   /** Register a named handler in the registry. */
   registerHandler(name: string, fn: TaskHandlerFn): void;
@@ -427,36 +427,38 @@ export function createReactiveGraph(
 
     addNode(name: string, taskConfig: TaskConfig): void {
       if (disposed) return;
-      live = addNode(live, name, taskConfig);
+      journal.append({ type: 'task-upsert', taskName: name, taskConfig, timestamp: new Date().toISOString() });
       drain();
     },
 
     removeNode(name: string): void {
       if (disposed) return;
-      live = removeNode(live, name);
+      journal.append({ type: 'task-removal', taskName: name, timestamp: new Date().toISOString() });
+      drain();
     },
 
     addRequires(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      live = addRequires(live, nodeName, tokens);
+      journal.append({ type: 'node-requires-add', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
     removeRequires(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      live = removeRequires(live, nodeName, tokens);
+      journal.append({ type: 'node-requires-remove', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
     addProvides(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      live = addProvides(live, nodeName, tokens);
+      journal.append({ type: 'node-provides-add', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
     removeProvides(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      live = removeProvides(live, nodeName, tokens);
+      journal.append({ type: 'node-provides-remove', nodeName, tokens, timestamp: new Date().toISOString() });
+      drain();
     },
 
     registerHandler(name: string, fn: TaskHandlerFn): void {

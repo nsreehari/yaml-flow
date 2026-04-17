@@ -58,11 +58,12 @@ export function createLiveGraph(config: GraphConfig, executionId?: string): Live
 // ============================================================================
 
 /**
- * Apply an execution event to the LiveGraph, producing a new LiveGraph.
- * Events are the shared vocabulary: task-started, task-completed, task-failed,
- * task-progress, inject-tokens, agent-action.
+ * Apply an event to the LiveGraph, producing a new LiveGraph.
+ * Events are the shared vocabulary — both execution state transitions
+ * (task-started, task-completed, etc.) and structural mutations
+ * (task-upsert, task-removal, node-requires-add, etc.).
  *
- * Config is NOT mutated by events — only state changes.
+ * Pure function: f(LiveGraph, GraphEvent) → LiveGraph
  */
 export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
   const { config, state } = live;
@@ -72,46 +73,60 @@ export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
     return live;
   }
 
-  let newState: ExecutionState;
-
   switch (event.type) {
+    // --- Execution state transitions ---
+
     case 'task-started':
-      newState = applyTaskStart(state, event.taskName);
-      break;
+      return { config, state: applyTaskStart(state, event.taskName) };
 
     case 'task-completed':
-      newState = applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash, event.data);
-      break;
+      return { config, state: applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash, event.data) };
 
     case 'task-failed':
-      newState = applyTaskFailure(state, config, event.taskName, event.error);
-      break;
+      return { config, state: applyTaskFailure(state, config, event.taskName, event.error) };
 
     case 'task-progress':
-      newState = applyTaskProgress(state, event.taskName, event.message, event.progress);
-      break;
+      return { config, state: applyTaskProgress(state, event.taskName, event.message, event.progress) };
 
     case 'task-restart':
-      newState = applyTaskRestart(state, event.taskName);
-      break;
+      return { config, state: applyTaskRestart(state, event.taskName) };
 
     case 'inject-tokens':
-      newState = {
-        ...state,
-        availableOutputs: [...new Set([...state.availableOutputs, ...event.tokens])],
-        lastUpdated: new Date().toISOString(),
+      return {
+        config,
+        state: {
+          ...state,
+          availableOutputs: [...new Set([...state.availableOutputs, ...event.tokens])],
+          lastUpdated: new Date().toISOString(),
+        },
       };
-      break;
 
     case 'agent-action':
-      newState = applyAgentAction(state, event.action);
-      break;
+      return { config, state: applyAgentAction(state, event.action) };
+
+    // --- Structural mutations ---
+
+    case 'task-upsert':
+      return addNode(live, event.taskName, event.taskConfig);
+
+    case 'task-removal':
+      return removeNode(live, event.taskName);
+
+    case 'node-requires-add':
+      return addRequires(live, event.nodeName, event.tokens);
+
+    case 'node-requires-remove':
+      return removeRequires(live, event.nodeName, event.tokens);
+
+    case 'node-provides-add':
+      return addProvides(live, event.nodeName, event.tokens);
+
+    case 'node-provides-remove':
+      return removeProvides(live, event.nodeName, event.tokens);
 
     default:
       return live;
   }
-
-  return { config, state: newState };
 }
 
 /**
@@ -128,12 +143,12 @@ export function applyEvents(live: LiveGraph, events: GraphEvent[]): LiveGraph {
 // ============================================================================
 
 /**
- * Add a node (task) to the live graph. Updates both config and state atomically.
- * If the node already exists, returns the graph unchanged.
+ * Upsert a node (task) in the live graph. Updates both config and state atomically.
+ * If the node already exists, replaces its config but preserves its state.
+ * If new, creates fresh default state.
  */
 export function addNode(live: LiveGraph, name: string, taskConfig: TaskConfig): LiveGraph {
-  if (live.config.tasks[name]) return live;
-
+  const exists = !!live.config.tasks[name];
   return {
     config: {
       ...live.config,
@@ -141,7 +156,10 @@ export function addNode(live: LiveGraph, name: string, taskConfig: TaskConfig): 
     },
     state: {
       ...live.state,
-      tasks: { ...live.state.tasks, [name]: createDefaultGraphEngineStore() },
+      tasks: {
+        ...live.state.tasks,
+        [name]: exists ? live.state.tasks[name] : createDefaultGraphEngineStore(),
+      },
       lastUpdated: new Date().toISOString(),
     },
   };
