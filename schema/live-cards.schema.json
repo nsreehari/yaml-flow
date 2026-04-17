@@ -7,9 +7,9 @@
   "definitions": {
 
     "bind_ref": {
-      "description": "A state path reference, e.g. 'state.raw_quotes' or 'state.compute_vars.total'",
+      "description": "A state path reference, e.g. 'state.raw_quotes' or 'requires.upstream'",
       "type": "string",
-      "pattern": "^state\\."
+      "pattern": "^(state|requires|computed_state)\\."
     },
 
     "bind_or_literal": {
@@ -84,12 +84,29 @@
       "description": "State keys exposed downstream as task-completed data"
     },
 
+    "compute_step": {
+      "description": "A single ordered compute step with bindTo output key",
+      "type": "object",
+      "required": ["bindTo", "fn"],
+      "properties": {
+        "bindTo": { "type": "string", "description": "Key in computed_state to write result" },
+        "fn": { "$ref": "#/definitions/compute_expr/properties/fn" },
+        "input": { "$ref": "#/definitions/compute_expr/properties/input" },
+        "field": { "type": "string" },
+        "where": { "$ref": "#/definitions/compute_expr" },
+        "cond":  { "$ref": "#/definitions/compute_expr" },
+        "then":  { "description": "For if — value when cond is truthy" },
+        "else":  { "description": "For if — value when cond is falsy" },
+        "format": { "type": "string" }
+      }
+    },
+
     "source_def": {
       "type": "object",
-      "required": ["kind", "bindTo"],
+      "required": ["bindTo"],
       "properties": {
         "kind":           { "enum": ["api", "websocket", "static", "llm"] },
-        "bindTo":         { "$ref": "#/definitions/bind_ref", "description": "state path to write fetched data into" },
+        "bindTo":         { "type": "string", "description": "State key to write fetched data into" },
         "method":         { "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET" },
         "url_template":   { "type": "string", "description": "URL with {{var}} placeholders" },
         "headers":        { "type": "object", "additionalProperties": { "$ref": "#/definitions/bind_or_literal" } },
@@ -205,60 +222,38 @@
     }
   },
 
-  "oneOf": [
-    {
-      "title": "Card",
-      "description": "A renderable card node with view elements",
-      "type": "object",
-      "required": ["id", "type", "view", "state"],
-      "additionalProperties": false,
+  "title": "LiveCard",
+  "description": "A unified card node. Behavior depends on which sections are present (sources, compute, view, etc.)",
+  "type": "object",
+  "required": ["id"],
+  "additionalProperties": false,
+  "properties": {
+    "id":       { "type": "string" },
+    "requires": { "$ref": "#/definitions/requires" },
+    "provides": { "$ref": "#/definitions/provides" },
+    "meta":     { "$ref": "#/definitions/meta" },
+    "view":     { "$ref": "#/definitions/view" },
+    "state":    { "type": "object", "additionalProperties": true,
       "properties": {
-        "id":       { "type": "string" },
-        "type":     { "const": "card" },
-        "requires": { "$ref": "#/definitions/requires" },
-        "provides": { "$ref": "#/definitions/provides" },
-        "meta":     { "$ref": "#/definitions/meta" },
-        "view":     { "$ref": "#/definitions/view" },
-        "state":    { "type": "object", "additionalProperties": true,
-          "properties": {
-            "status":  { "enum": ["fresh", "stale", "loading", "error"] },
-            "lastRun": { "type": "string", "format": "date-time" },
-            "error":   { "type": "string" }
-          }
-        },
-        "compute": {
-          "type": "object",
-          "description": "Derived state: key = state path to write, value = compute_expr",
-          "additionalProperties": { "$ref": "#/definitions/compute_expr" }
-        }
+        "status":  { "enum": ["fresh", "stale", "loading", "error"] },
+        "lastRun": { "type": "string", "format": "date-time" },
+        "error":   { "type": "string" }
       }
     },
-    {
-      "title": "ExternalSource",
-      "description": "A data-only node that fetches from external systems (no view)",
-      "type": "object",
-      "required": ["id", "type", "source", "state"],
-      "additionalProperties": false,
-      "properties": {
-        "id":       { "type": "string" },
-        "type":     { "const": "source" },
-        "requires": { "$ref": "#/definitions/requires" },
-        "provides": { "$ref": "#/definitions/provides" },
-        "meta":     { "$ref": "#/definitions/meta" },
-        "source":   { "$ref": "#/definitions/source_def" },
-        "state":    { "type": "object", "additionalProperties": true,
-          "properties": {
-            "status":  { "enum": ["fresh", "stale", "loading", "error"] },
-            "lastRun": { "type": "string", "format": "date-time" },
-            "error":   { "type": "string" }
-          }
-        },
-        "compute": {
-          "type": "object",
-          "description": "Derived state: key = state path to write, value = compute_expr",
-          "additionalProperties": { "$ref": "#/definitions/compute_expr" }
-        }
-      }
+    "sources": {
+      "type": "array",
+      "description": "Async fetches that must complete before task-completed. Each writes to state[bindTo].",
+      "items": { "$ref": "#/definitions/source_def" }
+    },
+    "optionalSources": {
+      "type": "array",
+      "description": "Async fetches that don't gate completion. Arrival triggers re-fire via data-received.",
+      "items": { "$ref": "#/definitions/source_def" }
+    },
+    "compute": {
+      "type": "array",
+      "description": "Ordered array of compute steps. Each reads state.*/requires.*/computed_state.* and writes to ephemeral computed_state[bindTo].",
+      "items": { "$ref": "#/definitions/compute_step" }
     }
-  ]
+  }
 }

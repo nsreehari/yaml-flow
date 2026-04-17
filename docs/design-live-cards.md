@@ -1,0 +1,114 @@
+# Live Cards — Design
+
+## Card Schema
+
+Every card is a unified entity. No `type` field — behavior is determined by which sections are present.
+
+```json
+{
+  "id": "portfolio",
+  "requires": ["quotes", "holdings"],
+  "provides": ["portfolio_value"],
+  "state": { "portfolio_value": 0 },
+  "sources": [
+    { "script": "fetch-holdings.sh", "bindTo": "holdings" }
+  ],
+  "optionalSources": [
+    { "script": "fetch-news.sh", "bindTo": "news" }
+  ],
+  "compute": [
+    { "bindTo": "total", "fn": "sum", "input": "state.holdings.values" },
+    { "bindTo": "portfolio_value", "fn": "add", "input": "state.total", "args": [0] }
+  ]
+}
+```
+
+## Sections
+
+| Section | Purpose | Write target | Required |
+|---------|---------|-------------|----------|
+| `id` | Unique card identifier | — | yes |
+| `state` | Seed values + source mutations. User-authored initial data. | disk (only sources mutate at runtime) | no |
+| `requires` | Upstream tokens this card depends on. Read-only namespace at runtime. | — | no |
+| `provides` | Keys to pluck from state/requires/computed for downstream. | — | no (defaults to `[id]`) |
+| `sources` | Async fetches that MUST complete before task-completed. Each has `bindTo` targeting a `state` key. | `state[bindTo]` on disk | no |
+| `optionalSources` | Same as sources but don't gate completion. Arrive later → card re-fires. | `state[bindTo]` on disk | no |
+| `compute` | Ordered array of pure derivations. Reads `state.*` and `requires.*`. Writes to ephemeral computed_state via `bindTo`. | in-memory only (NOT persisted) | no |
+
+## Two Read Namespaces
+
+- **`requires.*`** — read-only, injected from upstream `task-completed.data`. Immutable within this card's lifecycle.
+- **`state.*`** — card's persistent state on disk. Readable by compute. Only mutated by sources/optionalSources at runtime.
+
+Compute expressions reference either `requires.X` or `state.X`. This prevents self-referential loops (e.g. `bindTo: "x", input: "state.x"` reads the seed value, not its own output).
+
+## Compute
+
+- **Ordered array** (not a map). Runs top-to-bottom, once per handler invocation.
+- Each step: `{ bindTo, fn, input, args? }`
+- Reads from `state.*`, `requires.*`, and earlier compute outputs in `computed_state.*`
+- Writes to ephemeral `computed_state[bindTo]` — never persisted to disk.
+- `computed_state` is discarded after provides are plucked.
+
+### Why no disk persistence for computed_state
+
+- Downstream cards receive values through `provides` → `task-completed.data` → stored in graph state (`board-graph.json`).
+- On re-fire, everything is rebuilt from scratch: read `state` from disk, inject `requires`, run compute.
+- Nothing ever needs to read previous computed_state from disk.
+
+## Handler Lifecycle
+
+```
+1. Card becomes eligible (all requires tokens satisfied upstream)
+2. Read card.state from disk
+3. Inject requires data (read-only, from upstream task-completed.data)
+4. Run compute array top-to-bottom → ephemeral computed_state
+5. Check: all sources[].bindTo keys present in state?
+   YES → Build provides data (pluck from state + requires + computed_state)
+         Emit task-completed with provides data
+         Spawn undelivered optionalSources in background
+   NO  → Spawn undelivered sources
+         Return task-initiated (card stays in-progress)
+6. Source delivers → writes state[bindTo] on disk → emits data-received → card re-fires from step 1
+7. OptionalSource delivers → same as source → card re-fires → re-completes with richer data
+```
+
+## Provides Resolution
+
+`provides` is `string[]`. For each key, look up in order:
+1. `computed_state[key]`
+2. `state[key]`
+3. `requires[key]`
+
+First match wins. This allows passthrough of upstream data if needed (via requires), computed derivations (via compute), or raw state.
+
+## Events
+
+| Event | Who emits | What it does |
+|-------|-----------|-------------|
+| `task-completed` | card-handler | Sets task status=completed, stores provides data. Unblocks downstream. |
+| `data-received` | source/optionalSource subprocess | Alias for task-restart. Resets card to not-started so it re-fires with new state. |
+| `task-restart` | CLI retrigger | Same as data-received. Manual re-fire. |
+| `task-failed` | handler/subprocess on error | Sets task status=failed. |
+
+## Infinite Loop Prevention
+
+1. Compute runs exactly once per handler invocation — no iterative convergence.
+2. A card only re-fires on external events: upstream requires change, data-received from source, or manual retrigger.
+3. Compute output does NOT trigger re-fire — it's ephemeral, not written to state.
+4. The two-namespace separation (requires vs state) prevents `{ bindTo: "x", fn: "add", input: "state.x", args: [1] }` from being self-feeding — `state.x` reads the persisted seed, not the compute output.
+
+## Disk Layout
+
+```
+card.json (on disk):
+  id, requires, provides, state, sources, optionalSources, compute, meta
+
+board-graph.json:
+  Task statuses, provides data (from task-completed events)
+
+board-journal.jsonl:
+  Append-only event log
+```
+
+Sources are the **only** runtime writer to card.json's `state`. Compute is pure projection.

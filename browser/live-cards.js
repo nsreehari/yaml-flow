@@ -1361,8 +1361,9 @@ var LiveCard = (function () {
       const title = (node.meta && node.meta.title) || node.id;
       const tags = (node.meta && node.meta.tags) || [];
       let badgeHtml = '';
-      if (node.type === 'source' && node.source) {
-        badgeHtml = '<span class="badge bg-info text-dark ms-auto">' + _esc(node.source.kind || 'source') + '</span>';
+      if ((node.sources && node.sources.length) && !node.view) {
+        var src = node.sources[0] || {};
+        badgeHtml = '<span class="badge bg-info text-dark ms-auto">' + _esc(src.kind || 'source') + '</span>';
       } else if (tags.length) {
         badgeHtml = tags.map(t => '<span class="badge bg-secondary ms-1">' + _esc(t) + '</span>').join('');
       }
@@ -1396,7 +1397,7 @@ var LiveCard = (function () {
       gridEl.innerHTML = '';
 
       // Only card nodes in board mode, sorted by order
-      const cards = nodeList.filter(n => n.type === 'card').slice();
+      const cards = nodeList.filter(n => n.view).slice();
       cards.sort((a, b) => {
         const ao = (a.view && a.view.layout && a.view.layout.board && a.view.layout.board.order) || 0;
         const bo = (b.view && b.view.layout && b.view.layout.board && b.view.layout.board.order) || 0;
@@ -1477,7 +1478,7 @@ var LiveCard = (function () {
         el.style.left = x + 'px'; el.style.top = y + 'px';
         // Persist
         _positions[node.id] = Object.assign(_positions[node.id] || {}, { x, y });
-        if (node.type === 'card' && node.view) {
+        if (node.view) {
           if (!node.view.layout) node.view.layout = {};
           if (!node.view.layout.canvas) node.view.layout.canvas = {};
           node.view.layout.canvas.x = x;
@@ -1499,7 +1500,7 @@ var LiveCard = (function () {
       nodeList.forEach(node => {
         const pos = _positions[node.id] || { x: 0, y: 0 };
 
-        if (node.type === 'source') {
+        if (!node.view && (node.sources && node.sources.length)) {
           const el = _buildSourcePill(node);
           el.dataset.nodeId = node.id;
           el.style.left = pos.x + 'px';
@@ -1596,7 +1597,7 @@ var LiveCard = (function () {
           w: (_positions[n.id] && _positions[n.id].w) || cvs.defaultW,
         };
         // Sync to card nodes
-        if (n.type === 'card' && n.view) {
+        if (n.view) {
           if (!n.view.layout) n.view.layout = {};
           n.view.layout.canvas = Object.assign({}, _positions[n.id]);
         }

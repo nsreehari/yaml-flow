@@ -337,6 +337,11 @@
 
   var _customFns = {};
 
+  function _isRef(s) {
+    return typeof s === 'string' &&
+      (s.startsWith('state.') || s.startsWith('requires.') || s.startsWith('computed_state.'));
+  }
+
   function evalExpr(expr, node) {
     if (expr == null) return expr;
 
@@ -348,11 +353,11 @@
 
     // Resolve input
     var input = expr.input;
-    if (typeof input === 'string' && input.startsWith('state.')) {
+    if (_isRef(input)) {
       input = resolve(node, input);
     } else if (Array.isArray(input)) {
       input = input.map(function (v) {
-        if (typeof v === 'string' && v.startsWith('state.')) return resolve(node, v);
+        if (_isRef(v)) return resolve(node, v);
         if (v && typeof v === 'object' && v.fn) return evalExpr(v, node);
         return v;
       });
@@ -373,7 +378,7 @@
     // Special: filter with where clause
     if (expr.fn === 'filter' && Array.isArray(input) && expr.where) {
       return input.filter(function (item) {
-        var tmp = { state: Object.assign({}, node.state, { $: item }) };
+        var tmp = { state: Object.assign({}, node.state, { $: item }), requires: node.requires, computed_state: node.computed_state };
         return evalExpr(expr.where, tmp);
       });
     }
@@ -381,7 +386,7 @@
     // Special: map with apply clause
     if (expr.fn === 'map' && Array.isArray(input) && expr.apply) {
       return input.map(function (item) {
-        var tmp = { state: Object.assign({}, node.state, { $: item }) };
+        var tmp = { state: Object.assign({}, node.state, { $: item }), requires: node.requires, computed_state: node.computed_state };
         return evalExpr(expr.apply, tmp);
       });
     }
@@ -403,15 +408,15 @@
   function run(node) {
     if (!node || !node.compute) return node;
     if (!node.state) node.state = {};
+    node.computed_state = {};
 
-    var keys = Object.keys(node.compute);
-    for (var i = 0; i < keys.length; i++) {
-      var key = keys[i];
+    for (var i = 0; i < node.compute.length; i++) {
+      var step = node.compute[i];
       try {
-        var val = evalExpr(node.compute[key], node);
-        _deepSet(node.state, key, val);
+        var val = evalExpr(step, node);
+        _deepSet(node.computed_state, step.bindTo, val);
       } catch (e) {
-        console.error('CardCompute.run error on "' + (node.id || '?') + '.' + key + '":', e);
+        console.error('CardCompute.run error on "' + (node.id || '?') + '.' + step.bindTo + '":', e);
       }
     }
 
@@ -433,8 +438,7 @@
   var VALID_ELEMENT_KINDS = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
   var VALID_SOURCE_KINDS = ['api','websocket','static','llm'];
   var VALID_STATUSES = ['fresh','stale','loading','error'];
-  var CARD_KEYS = ['id','type','meta','data','view','state','compute'];
-  var SOURCE_KEYS = ['id','type','meta','data','source','state','compute'];
+  var ALLOWED_KEYS = ['id','meta','requires','provides','view','state','compute','sources','optionalSources'];
 
   function validateNode(node) {
     var errors = [];
@@ -444,14 +448,8 @@
 
     if (typeof node.id !== 'string' || !node.id) errors.push('id: required, must be a non-empty string');
 
-    if (node.type !== 'card' && node.type !== 'source') {
-      errors.push('type: must be "card" or "source"');
-      return { ok: false, errors: errors };
-    }
-
-    var allowed = node.type === 'card' ? CARD_KEYS : SOURCE_KEYS;
     Object.keys(node).forEach(function (k) {
-      if (allowed.indexOf(k) === -1) errors.push('Unknown top-level key: "' + k + '"');
+      if (ALLOWED_KEYS.indexOf(k) === -1) errors.push('Unknown top-level key: "' + k + '"');
     });
 
     // state
@@ -470,33 +468,53 @@
       }
     }
 
-    // data
-    if (node.data != null) {
-      if (typeof node.data !== 'object' || Array.isArray(node.data)) errors.push('data: must be an object');
-      else {
-        if (node.data.requires != null && !Array.isArray(node.data.requires)) errors.push('data.requires: must be an array');
-        if (node.data.provides != null && (typeof node.data.provides !== 'object' || Array.isArray(node.data.provides))) errors.push('data.provides: must be an object');
-      }
-    }
+    // requires
+    if (node.requires != null && !Array.isArray(node.requires)) errors.push('requires: must be an array of strings');
 
-    // compute
+    // provides
+    if (node.provides != null && !Array.isArray(node.provides)) errors.push('provides: must be an array of strings');
+
+    // compute (ordered array)
     if (node.compute != null) {
-      if (typeof node.compute !== 'object' || Array.isArray(node.compute)) errors.push('compute: must be an object');
+      if (!Array.isArray(node.compute)) errors.push('compute: must be an array of compute steps');
       else {
-        Object.keys(node.compute).forEach(function (key) {
-          var expr = node.compute[key];
-          if (!expr || typeof expr !== 'object' || Array.isArray(expr)) errors.push('compute.' + key + ': must be a compute expression object');
-          else if (!expr.fn) errors.push('compute.' + key + ': missing required "fn" property');
-          else if (!_fns[expr.fn] && !_customFns[expr.fn]) errors.push('compute.' + key + ': unknown function "' + expr.fn + '"');
+        node.compute.forEach(function (step, i) {
+          if (!step || typeof step !== 'object' || Array.isArray(step)) errors.push('compute[' + i + ']: must be a compute step object');
+          else {
+            if (typeof step.bindTo !== 'string' || !step.bindTo) errors.push('compute[' + i + ']: missing required "bindTo" property');
+            if (!step.fn) errors.push('compute[' + i + ']: missing required "fn" property');
+            else if (!_fns[step.fn] && !_customFns[step.fn]) errors.push('compute[' + i + ']: unknown function "' + step.fn + '"');
+          }
         });
       }
     }
 
-    // Card-specific
-    if (node.type === 'card') {
-      if (node.source != null) errors.push('Card nodes must not have "source"');
-      if (node.view == null || typeof node.view !== 'object' || Array.isArray(node.view)) {
-        errors.push('view: required for card nodes, must be an object');
+    // sources
+    if (node.sources != null) {
+      if (!Array.isArray(node.sources)) errors.push('sources: must be an array');
+      else {
+        node.sources.forEach(function (src, i) {
+          if (!src || typeof src !== 'object' || Array.isArray(src)) errors.push('sources[' + i + ']: must be an object');
+          else if (typeof src.bindTo !== 'string' || !src.bindTo) errors.push('sources[' + i + ']: missing required "bindTo" property');
+        });
+      }
+    }
+
+    // optionalSources
+    if (node.optionalSources != null) {
+      if (!Array.isArray(node.optionalSources)) errors.push('optionalSources: must be an array');
+      else {
+        node.optionalSources.forEach(function (src, i) {
+          if (!src || typeof src !== 'object' || Array.isArray(src)) errors.push('optionalSources[' + i + ']: must be an object');
+          else if (typeof src.bindTo !== 'string' || !src.bindTo) errors.push('optionalSources[' + i + ']: missing required "bindTo" property');
+        });
+      }
+    }
+
+    // view (optional)
+    if (node.view != null) {
+      if (typeof node.view !== 'object' || Array.isArray(node.view)) {
+        errors.push('view: must be an object');
       } else {
         if (!Array.isArray(node.view.elements) || node.view.elements.length === 0) {
           errors.push('view.elements: required, must be a non-empty array');
@@ -507,18 +525,6 @@
             else if (VALID_ELEMENT_KINDS.indexOf(elem.kind) === -1) errors.push('view.elements[' + i + '].kind: unknown "' + elem.kind + '"');
           });
         }
-      }
-    }
-
-    // Source-specific
-    if (node.type === 'source') {
-      if (node.view != null) errors.push('Source nodes must not have "view"');
-      if (node.source == null || typeof node.source !== 'object' || Array.isArray(node.source)) {
-        errors.push('source: required for source nodes, must be an object');
-      } else {
-        if (!node.source.kind || VALID_SOURCE_KINDS.indexOf(node.source.kind) === -1) errors.push('source.kind: required, must be one of: ' + VALID_SOURCE_KINDS.join(', '));
-        if (typeof node.source.bindTo !== 'string' || !node.source.bindTo) errors.push('source.bindTo: required, must be a state path string');
-        else if (node.source.bindTo.indexOf('state.') !== 0) errors.push('source.bindTo: must start with "state."');
       }
     }
 

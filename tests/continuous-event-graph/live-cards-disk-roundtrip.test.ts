@@ -59,7 +59,6 @@ function makePortfolioCards(): LiveCard[] {
     // --- Sources (4) ---
     {
       id: 'holdings',
-      type: 'source',
       meta: { title: 'Portfolio Holdings' },
       state: {
         holdings: [
@@ -73,7 +72,6 @@ function makePortfolioCards(): LiveCard[] {
     },
     {
       id: 'price-feed',
-      type: 'source',
       meta: { title: 'Live Price Feed' },
       state: {
         prices: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 },
@@ -81,7 +79,6 @@ function makePortfolioCards(): LiveCard[] {
     },
     {
       id: 'news-feed',
-      type: 'source',
       meta: { title: 'Market News Feed' },
       state: {
         headlines: [
@@ -93,7 +90,6 @@ function makePortfolioCards(): LiveCard[] {
     },
     {
       id: 'benchmark',
-      type: 'source',
       meta: { title: 'S&P 500 Benchmark' },
       state: {
         index: 'SPY',
@@ -105,28 +101,24 @@ function makePortfolioCards(): LiveCard[] {
     // --- Cards (4) ---
     {
       id: 'valuator',
-      type: 'card',
       meta: { title: 'Position Valuator' },
       requires: ['holdings', 'price-feed'],
       state: {},
     },
     {
       id: 'portfolio-value',
-      type: 'card',
       meta: { title: 'Total Portfolio Value' },
       requires: ['valuator'],
       state: {},
     },
     {
       id: 'sector-breakdown',
-      type: 'card',
       meta: { title: 'Sector Breakdown' },
       requires: ['valuator'],
       state: {},
     },
     {
       id: 'sentiment',
-      type: 'card',
       meta: { title: 'News Sentiment Score' },
       requires: ['news-feed'],
       state: {},
@@ -336,7 +328,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 9: allocation-chart (requires valuator + portfolio-value) ---
     addDynamicCard(rg, graphRef, {
-      id: 'allocation-chart', type: 'card',
+      id: 'allocation-chart',
       meta: { title: 'Allocation Chart' },
       requires: ['valuator', 'portfolio-value'], state: {},
     }, (engine) => {
@@ -350,7 +342,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 10: risk-score (requires valuator) ---
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', type: 'card',
+      id: 'risk-score',
       meta: { title: 'Risk Score' },
       requires: ['valuator'], state: {},
     }, (engine) => {
@@ -363,7 +355,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 11: daily-pnl (requires portfolio-value + benchmark) ---
     addDynamicCard(rg, graphRef, {
-      id: 'daily-pnl', type: 'card',
+      id: 'daily-pnl',
       meta: { title: 'Daily P&L' },
       requires: ['portfolio-value', 'benchmark'], state: {},
     }, (engine) => {
@@ -377,7 +369,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 12: value-alert (requires portfolio-value) ---
     addDynamicCard(rg, graphRef, {
-      id: 'value-alert', type: 'card',
+      id: 'value-alert',
       meta: { title: 'Value Alert' },
       requires: ['portfolio-value'], state: {},
     }, (engine) => {
@@ -387,7 +379,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 13: summary (requires portfolio-value + sentiment) ---
     addDynamicCard(rg, graphRef, {
-      id: 'summary', type: 'card',
+      id: 'summary',
       meta: { title: 'Portfolio Summary' },
       requires: ['portfolio-value', 'sentiment'], state: {},
     }, (engine) => {
@@ -398,7 +390,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 14: correlation (requires valuator + benchmark) ---
     addDynamicCard(rg, graphRef, {
-      id: 'correlation', type: 'card',
+      id: 'correlation',
       meta: { title: 'Benchmark Correlation' },
       requires: ['valuator', 'benchmark'], state: {},
     }, (engine) => {
@@ -412,7 +404,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // --- Card 15: combined-view (requires summary + sector-breakdown + risk-score) ---
     addDynamicCard(rg, graphRef, {
-      id: 'combined-view', type: 'card',
+      id: 'combined-view',
       meta: { title: 'Combined Dashboard View' },
       requires: ['summary', 'sector-breakdown', 'risk-score'], state: {},
     }, (engine) => {
@@ -466,7 +458,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     // Add risk-score (initially only requires valuator)
     // Handler checks its own config to decide whether to use sentiment
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', type: 'card', requires: ['valuator'], state: {},
+      id: 'risk-score', requires: ['valuator'], state: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const values = positions.map((p: any) => p.value);
@@ -572,7 +564,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Now add a card that requires 'sector-data'
     addDynamicCard(rg, graphRef, {
-      id: 'sector-report', type: 'card',
+      id: 'sector-report',
       requires: ['sector-data'], state: {},
     }, (engine) => {
       const sectorData = engine.state.tasks['sector-breakdown']?.data as any ?? {};
@@ -604,7 +596,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // A card requiring 'sector-signal' should run (token produced by completed task)
     addDynamicCard(rg, graphRef, {
-      id: 'signal-consumer', type: 'card',
+      id: 'signal-consumer',
       requires: ['sector-signal'], state: {},
     }, () => ({ consumed: true }), { requires: ['sector-signal'] });
     await ticks(100);
@@ -695,7 +687,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add allocation-chart → depends on valuator + portfolio-value
     addDynamicCard(rg, graphRef, {
-      id: 'allocation-chart', type: 'card', requires: ['valuator', 'portfolio-value'], state: {},
+      id: 'allocation-chart', requires: ['valuator', 'portfolio-value'], state: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const total = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
@@ -704,7 +696,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add daily-pnl → depends on portfolio-value + benchmark
     addDynamicCard(rg, graphRef, {
-      id: 'daily-pnl', type: 'card', requires: ['portfolio-value', 'benchmark'], state: {},
+      id: 'daily-pnl', requires: ['portfolio-value', 'benchmark'], state: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       const benchReturn = (engine.state.tasks.benchmark?.data as any)?.dailyReturn ?? 0;
@@ -713,7 +705,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add summary + newsletter
     addDynamicCard(rg, graphRef, {
-      id: 'summary', type: 'card', requires: ['portfolio-value', 'sentiment'], state: {},
+      id: 'summary', requires: ['portfolio-value', 'sentiment'], state: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       const mood = (engine.state.tasks.sentiment?.data as any)?.bullish ? 'bullish' : 'bearish';
@@ -721,7 +713,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     }, { requires: ['portfolio-value', 'sentiment'] });
 
     addDynamicCard(rg, graphRef, {
-      id: 'newsletter', type: 'card', requires: ['summary', 'allocation-chart', 'daily-pnl'], state: {},
+      id: 'newsletter', requires: ['summary', 'allocation-chart', 'daily-pnl'], state: {},
     }, (engine) => {
       const summary = engine.state.tasks.summary?.data as any ?? {};
       const alloc = engine.state.tasks['allocation-chart']?.data as any ?? {};
@@ -780,7 +772,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add risk-score downstream of valuator
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', type: 'card', requires: ['valuator'], state: {},
+      id: 'risk-score', requires: ['valuator'], state: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const values = positions.map((p: any) => p.value);
@@ -839,14 +831,14 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     await ticks(150);
 
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', type: 'card', requires: ['valuator'], state: {},
+      id: 'risk-score', requires: ['valuator'], state: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       return { positionCount: positions.length, topHolding: positions.length > 0 ? positions.sort((a: any, b: any) => b.value - a.value)[0].symbol : null };
     }, { requires: ['valuator'] });
 
     addDynamicCard(rg, graphRef, {
-      id: 'daily-pnl', type: 'card', requires: ['portfolio-value'], state: {},
+      id: 'daily-pnl', requires: ['portfolio-value'], state: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       return { estimatedPnl: Math.round(tv * 0.012 * 100) / 100 };
@@ -968,7 +960,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     for (const d of dynamicDefs) {
       addDynamicCard(rg, graphRef, {
-        id: d.id, type: 'card', requires: d.requires, state: {},
+        id: d.id, requires: d.requires, state: {},
       }, d.compute, { requires: d.requires });
     }
     await ticks(250);
@@ -984,7 +976,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Phase 3: Add card 16 depending on the new token
     addDynamicCard(rg, graphRef, {
-      id: 'market-context', type: 'card', requires: ['market-data'], state: {},
+      id: 'market-context', requires: ['market-data'], state: {},
     }, (e) => {
       const bench = e.state.tasks.benchmark?.data as any ?? {};
       return { indexValue: bench.value ?? 0, context: 'provided via market-data token' };
@@ -1032,7 +1024,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Phase 8: Re-add allocation-chart with different wiring
     addDynamicCard(rg, graphRef, {
-      id: 'allocation-chart', type: 'card',
+      id: 'allocation-chart',
       requires: ['valuator'],
       state: {},
     }, (e) => {

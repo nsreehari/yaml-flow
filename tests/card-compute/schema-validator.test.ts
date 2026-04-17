@@ -10,32 +10,33 @@ describe('validateLiveCardSchema', () => {
   // ---------- valid nodes ----------
 
   describe('valid nodes', () => {
-    it('minimal valid card', () => {
-      const r = validateLiveCardSchema({
-        id: 'card1',
-        type: 'card',
-        state: { status: 'fresh' },
-        view: { elements: [{ kind: 'metric' }] },
-      });
+    it('minimal valid card (just id)', () => {
+      const r = validateLiveCardSchema({ id: 'card1' });
       expect(r.ok).toBe(true);
       expect(r.errors).toHaveLength(0);
     });
 
-    it('minimal valid source', () => {
+    it('card with view', () => {
       const r = validateLiveCardSchema({
-        id: 'src1',
-        type: 'source',
+        id: 'card1',
         state: { status: 'fresh' },
-        source: { kind: 'api', bindTo: 'state.raw' },
+        view: { elements: [{ kind: 'metric' }] },
       });
       expect(r.ok).toBe(true);
-      expect(r.errors).toHaveLength(0);
+    });
+
+    it('card with sources', () => {
+      const r = validateLiveCardSchema({
+        id: 'src1',
+        state: { status: 'fresh' },
+        sources: [{ bindTo: 'raw', kind: 'api' }],
+      });
+      expect(r.ok).toBe(true);
     });
 
     it('card with all optional sections', () => {
       const r = validateLiveCardSchema({
         id: 'full-card',
-        type: 'card',
         meta: { title: 'Dashboard', tags: ['finance'] },
         requires: ['src1'],
         provides: ['total'],
@@ -48,21 +49,22 @@ describe('validateLiveCardSchema', () => {
           layout: { board: { col: 6, order: 1 } },
           features: { chat: true, refresh: true },
         },
-        compute: {
-          total: { fn: 'sum', input: 'state.data', field: 'revenue' },
-        },
+        compute: [
+          { bindTo: 'total', fn: 'sum', input: 'state.data', field: 'revenue' },
+        ],
+        sources: [{ bindTo: 'data', kind: 'api' }],
+        optionalSources: [{ bindTo: 'news' }],
       });
       expect(r.ok).toBe(true);
     });
 
-    it('source with full source_def', () => {
+    it('source with full source_def fields', () => {
       const r = validateLiveCardSchema({
         id: 'src-full',
-        type: 'source',
         state: {},
-        source: {
+        sources: [{
           kind: 'api',
-          bindTo: 'state.quotes',
+          bindTo: 'quotes',
           method: 'POST',
           url_template: 'https://api.example.com/{{symbol}}',
           headers: { Authorization: 'Bearer abc' },
@@ -70,7 +72,7 @@ describe('validateLiveCardSchema', () => {
           template_vars: { symbol: 'MSFT' },
           poll_interval: 30,
           transform: 'data.items',
-        },
+        }],
       });
       expect(r.ok).toBe(true);
     });
@@ -83,18 +85,18 @@ describe('validateLiveCardSchema', () => {
       ];
       for (const kind of kinds) {
         const r = validateLiveCardSchema({
-          id: `k-${kind}`, type: 'card', state: {},
+          id: `k-${kind}`, state: {},
           view: { elements: [{ kind }] },
         });
         expect(r.ok, `kind "${kind}" should be valid`).toBe(true);
       }
     });
 
-    it('all source kinds accepted', () => {
+    it('all source kinds accepted in sources array', () => {
       for (const kind of ['api', 'websocket', 'static', 'llm']) {
         const r = validateLiveCardSchema({
-          id: `s-${kind}`, type: 'source', state: {},
-          source: { kind, bindTo: 'state.x' },
+          id: `s-${kind}`, state: {},
+          sources: [{ kind, bindTo: 'x' }],
         });
         expect(r.ok, `source kind "${kind}" should be valid`).toBe(true);
       }
@@ -103,8 +105,7 @@ describe('validateLiveCardSchema', () => {
     it('all status values accepted', () => {
       for (const status of ['fresh', 'stale', 'loading', 'error']) {
         const r = validateLiveCardSchema({
-          id: 'x', type: 'card', state: { status },
-          view: { elements: [{ kind: 'text' }] },
+          id: 'x', state: { status },
         });
         expect(r.ok, `status "${status}" should be valid`).toBe(true);
       }
@@ -126,41 +127,23 @@ describe('validateLiveCardSchema', () => {
     });
 
     it('missing id', () => {
-      const r = validateLiveCardSchema({
-        type: 'card', state: {},
-        view: { elements: [{ kind: 'text' }] },
-      });
+      const r = validateLiveCardSchema({ state: {} });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('id'))).toBe(true);
     });
 
-    it('invalid type', () => {
-      const r = validateLiveCardSchema({
-        id: 'x', type: 'widget', state: {},
-      });
-      expect(r.ok).toBe(false);
-    });
-
     it('card with unknown top-level key', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
-        view: { elements: [{ kind: 'text' }] },
+        id: 'x', state: {},
         extra: true,
       });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('additional'))).toBe(true);
     });
 
-    it('card missing view', () => {
+    it('view.elements empty', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
-      });
-      expect(r.ok).toBe(false);
-    });
-
-    it('card view.elements empty', () => {
-      const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         view: { elements: [] },
       });
       expect(r.ok).toBe(false);
@@ -168,7 +151,7 @@ describe('validateLiveCardSchema', () => {
 
     it('invalid element kind', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         view: { elements: [{ kind: 'sparkline' }] },
       });
       expect(r.ok).toBe(false);
@@ -176,58 +159,55 @@ describe('validateLiveCardSchema', () => {
 
     it('invalid state.status', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: { status: 'bogus' },
-        view: { elements: [{ kind: 'text' }] },
+        id: 'x', state: { status: 'bogus' },
       });
       expect(r.ok).toBe(false);
     });
 
-    it('source missing source property', () => {
+    it('compute step with invalid fn', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'source', state: {},
+        id: 'x', state: {},
+        compute: [{ bindTo: 'total', fn: 'bogus_fn' }],
       });
       expect(r.ok).toBe(false);
     });
 
-    it('source.bindTo wrong prefix', () => {
+    it('compute step missing bindTo', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'source', state: {},
-        source: { kind: 'api', bindTo: 'data.raw' },
+        id: 'x', state: {},
+        compute: [{ fn: 'sum' }],
       });
       expect(r.ok).toBe(false);
     });
 
-    it('source.kind invalid', () => {
+    it('compute as object instead of array', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'source', state: {},
-        source: { kind: 'ftp', bindTo: 'state.x' },
+        id: 'x', state: {},
+        compute: { total: { fn: 'sum' } },
       });
       expect(r.ok).toBe(false);
     });
 
-    it('compute expression with invalid fn', () => {
+    it('sources entry missing bindTo', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
-        view: { elements: [{ kind: 'text' }] },
-        compute: { total: { fn: 'bogus_fn' } },
+        id: 'x', state: {},
+        sources: [{ kind: 'api' }],
       });
       expect(r.ok).toBe(false);
     });
 
     it('meta.title wrong type', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         meta: { title: 123 },
-        view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
     });
 
     it('meta.tags wrong type', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         meta: { tags: 'not-array' },
-        view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
     });
@@ -238,21 +218,18 @@ describe('validateLiveCardSchema', () => {
   describe('error messages', () => {
     it('includes instance path in errors', () => {
       const r = validateLiveCardSchema({
-        id: 'x', type: 'card', state: { status: 'bogus' },
-        view: { elements: [{ kind: 'text' }] },
+        id: 'x', state: { status: 'bogus' },
       });
       expect(r.ok).toBe(false);
-      // AJV should report the path to the invalid value
       expect(r.errors.some(e => e.includes('status') || e.includes('state'))).toBe(true);
     });
 
     it('reports multiple errors with allErrors', () => {
       const r = validateLiveCardSchema({
-        type: 'card',
-        // missing id, state, view
+        // missing id
       });
       expect(r.ok).toBe(false);
-      expect(r.errors.length).toBeGreaterThan(1);
+      expect(r.errors.length).toBeGreaterThan(0);
     });
   });
 });

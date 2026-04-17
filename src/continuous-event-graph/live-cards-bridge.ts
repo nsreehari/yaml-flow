@@ -20,8 +20,8 @@
  * import { liveCardsToReactiveGraph } from 'yaml-flow/continuous-event-graph';
  *
  * const cards = [
- *   { id: 'prices', type: 'source', source: { kind: 'api', bindTo: 'state.raw', url_template: '...' }, state: {} },
- *   { id: 'dashboard', type: 'card', data: { requires: ['prices'] }, state: {}, compute: { total: { fn: 'sum', ... } }, view: { ... } },
+ *   { id: 'prices', sources: [{ kind: 'api', bindTo: 'raw' }], state: {} },
+ *   { id: 'dashboard', requires: ['prices'], state: {}, compute: [{ bindTo: 'total', fn: 'sum', ... }], view: { ... } },
  * ];
  *
  * const rg = liveCardsToReactiveGraph(cards, {
@@ -47,27 +47,27 @@ import type { ComputeNode } from '../card-compute/index.js';
 
 /**
  * Minimal live card shape accepted by this utility.
- * Matches the live-cards.schema.json structure.
+ * Unified card — no type field. Behavior from sections present.
  */
 export interface LiveCard {
   id: string;
-  type: 'card' | 'source';
   requires?: string[];
   provides?: string[];
   meta?: { title?: string; tags?: string[] };
   state?: Record<string, unknown>;
-  compute?: Record<string, unknown>;
-  source?: {
-    kind: 'api' | 'websocket' | 'static' | 'llm';
+  compute?: { bindTo: string; fn: string; [key: string]: unknown }[];
+  sources?: {
+    script?: string;
     bindTo: string;
-    url_template?: string;
-    method?: string;
-    headers?: Record<string, unknown>;
-    body_template?: Record<string, unknown>;
-    poll_interval?: number;
-    transform?: string;
+    kind?: 'api' | 'websocket' | 'static' | 'llm';
     [key: string]: unknown;
-  };
+  }[];
+  optionalSources?: {
+    script?: string;
+    bindTo: string;
+    kind?: 'api' | 'websocket' | 'static' | 'llm';
+    [key: string]: unknown;
+  }[];
   view?: Record<string, unknown>;
 }
 
@@ -224,7 +224,7 @@ export function liveCardsToReactiveGraph(
       requires: requires.length > 0 ? requires : undefined,
       provides: card.provides ?? [card.id],
       taskHandlers: [card.id], // each card has a named handler matching its ID
-      description: card.meta?.title ?? `${card.type}: ${card.id}`,
+      description: card.meta?.title ?? card.id,
     };
   }
 
@@ -249,7 +249,7 @@ export function liveCardsToReactiveGraph(
   };
 
   for (const card of cards) {
-    if (card.type === 'source') {
+    if (card.sources && card.sources.length > 0) {
       handlers[card.id] = buildSourceHandler(card, sourceHandlers, defaultSourceHandler, sharedState, getResolve);
     } else {
       handlers[card.id] = buildCardHandler(card, cardHandlers, sharedState, cardMap, tokenToCardId, getResolve);
@@ -327,29 +327,29 @@ function buildCardHandler(
   // Default: inject upstream state → run CardCompute → return computed state
   return async (input: TaskHandlerInput): Promise<TaskHandlerReturn> => {
     // Clone the card's state to avoid mutating the original
-    const computeNode: ComputeNode = {
-      id: card.id,
-      state: { ...card.state },
-      compute: card.compute as ComputeNode['compute'],
-    };
-
-    // Inject upstream data into the card's state
+    const requiresData: Record<string, unknown> = {};
     const requires = card.requires ?? [];
     for (const token of requires) {
       // Resolve token to the card that provides it
       const producerId = tokenToCardId.get(token) ?? token;
       const upstreamState = sharedState.get(producerId);
       if (upstreamState) {
-        // Inject under the token name so compute expressions can reference state.<token>
-        computeNode.state![token] = upstreamState[token] ?? upstreamState;
+        requiresData[token] = upstreamState[token] ?? upstreamState;
       }
     }
 
-    // Run compute expressions
+    const computeNode: ComputeNode = {
+      id: card.id,
+      state: { ...card.state },
+      requires: requiresData,
+      compute: card.compute as ComputeNode['compute'],
+    };
+
+    // Run compute expressions → writes to ephemeral computed_state
     CardCompute.run(computeNode);
 
-    // Store the computed state for downstream cards
-    const resultState = { ...computeNode.state };
+    // Build result: merge state + computed_state for downstream
+    const resultState = { ...computeNode.state, ...computeNode.computed_state };
     sharedState.set(card.id, resultState);
 
     getResolve()(input.callbackToken, resultState);

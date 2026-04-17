@@ -48,11 +48,18 @@ export interface ComputeExpr {
   [key: string]: unknown;
 }
 
+/** A single compute step: bindTo is the output key, rest is the expression. */
+export interface ComputeStep extends ComputeExpr {
+  bindTo: string;
+}
+
 /** Minimal node shape expected by CardCompute. */
 export interface ComputeNode {
   id?: string;
   state?: Record<string, unknown>;
-  compute?: Record<string, ComputeExpr>;
+  requires?: Record<string, unknown>;
+  compute?: ComputeStep[];
+  computed_state?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -322,6 +329,23 @@ const _customFns: Record<string, ComputeFn> = {};
 // Expression evaluator
 // ---------------------------------------------------------------------------
 
+function resolveRef(ref: string, node: ComputeNode): unknown {
+  if (ref.startsWith('state.')) return deepGet(node, ref);
+  if (ref.startsWith('requires.')) {
+    const path = ref.slice('requires.'.length);
+    return deepGet(node.requires, path);
+  }
+  if (ref.startsWith('computed_state.')) {
+    const path = ref.slice('computed_state.'.length);
+    return deepGet(node.computed_state, path);
+  }
+  return undefined;
+}
+
+function isRef(s: string): boolean {
+  return s.startsWith('state.') || s.startsWith('requires.') || s.startsWith('computed_state.');
+}
+
 function evalExpr(expr: unknown, node: ComputeNode): unknown {
   if (expr == null) return expr;
   if (typeof expr !== 'object' || Array.isArray(expr)) return expr;
@@ -331,11 +355,11 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
 
   // Resolve input
   let input: unknown = e.input;
-  if (typeof input === 'string' && input.startsWith('state.')) {
-    input = deepGet(node, input);
+  if (typeof input === 'string' && isRef(input)) {
+    input = resolveRef(input, node);
   } else if (Array.isArray(input)) {
     input = input.map(v => {
-      if (typeof v === 'string' && (v as string).startsWith('state.')) return deepGet(node, v as string);
+      if (typeof v === 'string' && isRef(v as string)) return resolveRef(v as string, node);
       if (v && typeof v === 'object' && (v as ComputeExpr).fn) return evalExpr(v, node);
       return v;
     });
@@ -356,7 +380,7 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
   // Special: filter with where
   if (e.fn === 'filter' && Array.isArray(input) && e.where) {
     return (input as unknown[]).filter(item => {
-      const tmp: ComputeNode = { state: { ...node.state, $: item } };
+      const tmp: ComputeNode = { state: { ...node.state, $: item }, requires: node.requires, computed_state: node.computed_state };
       return evalExpr(e.where, tmp);
     });
   }
@@ -364,7 +388,7 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
   // Special: map with apply
   if (e.fn === 'map' && Array.isArray(input) && e.apply) {
     return (input as unknown[]).map(item => {
-      const tmp: ComputeNode = { state: { ...node.state, $: item } };
+      const tmp: ComputeNode = { state: { ...node.state, $: item }, requires: node.requires, computed_state: node.computed_state };
       return evalExpr(e.apply as ComputeExpr, tmp);
     });
   }
@@ -385,13 +409,14 @@ function evalExpr(expr: unknown, node: ComputeNode): unknown {
 function run(node: ComputeNode): ComputeNode {
   if (!node || !node.compute) return node;
   if (!node.state) node.state = {};
+  node.computed_state = {};
 
-  for (const key of Object.keys(node.compute)) {
+  for (const step of node.compute) {
     try {
-      const val = evalExpr(node.compute[key], node);
-      deepSet(node.state, key, val);
+      const val = evalExpr(step, node);
+      deepSet(node.computed_state, step.bindTo, val);
     } catch (err) {
-      console.error(`CardCompute.run error on "${node.id || '?'}.${key}":`, err);
+      console.error(`CardCompute.run error on "${node.id || '?'}.${step.bindTo}":`, err);
     }
   }
 
@@ -433,8 +458,7 @@ const VALID_ELEMENT_KINDS = new Set([
 const VALID_SOURCE_KINDS = new Set(['api', 'websocket', 'static', 'llm']);
 const VALID_STATUSES = new Set(['fresh', 'stale', 'loading', 'error']);
 
-const CARD_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'requires', 'provides', 'view', 'state', 'compute']);
-const SOURCE_ALLOWED_KEYS = new Set(['id', 'type', 'meta', 'requires', 'provides', 'source', 'state', 'compute']);
+const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'state', 'compute', 'sources', 'optionalSources']);
 
 /**
  * Validate a node against the LiveCards schema.
@@ -460,16 +484,9 @@ function validateNode(node: unknown): ValidationResult {
     errors.push('id: required, must be a non-empty string');
   }
 
-  // type
-  if (n.type !== 'card' && n.type !== 'source') {
-    errors.push('type: must be "card" or "source"');
-    return { ok: false, errors }; // Can't validate further without type
-  }
-
   // Check for unknown top-level keys
-  const allowed = n.type === 'card' ? CARD_ALLOWED_KEYS : SOURCE_ALLOWED_KEYS;
   for (const key of Object.keys(n)) {
-    if (!allowed.has(key)) errors.push(`Unknown top-level key: "${key}"`);
+    if (!ALLOWED_KEYS.has(key)) errors.push(`Unknown top-level key: "${key}"`);
   }
 
   // state (required)
@@ -503,33 +520,72 @@ function validateNode(node: unknown): ValidationResult {
     errors.push('provides: must be an array of strings');
   }
 
-  // compute (optional)
+  // compute (optional) — ordered array of ComputeStep
   if (n.compute != null) {
-    if (typeof n.compute !== 'object' || Array.isArray(n.compute)) {
-      errors.push('compute: must be an object');
+    if (!Array.isArray(n.compute)) {
+      errors.push('compute: must be an array of compute steps');
     } else {
-      for (const [key, expr] of Object.entries(n.compute as Record<string, unknown>)) {
-        if (!expr || typeof expr !== 'object' || Array.isArray(expr)) {
-          errors.push(`compute.${key}: must be a compute expression object`);
-        } else if (!(expr as Record<string, unknown>).fn) {
-          errors.push(`compute.${key}: missing required "fn" property`);
+      (n.compute as unknown[]).forEach((step, i) => {
+        if (!step || typeof step !== 'object' || Array.isArray(step)) {
+          errors.push(`compute[${i}]: must be a compute step object`);
         } else {
-          const fn = (expr as Record<string, unknown>).fn as string;
-          if (!_fns[fn] && !_customFns[fn]) {
-            errors.push(`compute.${key}: unknown function "${fn}"`);
+          const s = step as Record<string, unknown>;
+          if (typeof s.bindTo !== 'string' || !s.bindTo) {
+            errors.push(`compute[${i}]: missing required "bindTo" property`);
+          }
+          if (!s.fn) {
+            errors.push(`compute[${i}]: missing required "fn" property`);
+          } else {
+            const fn = s.fn as string;
+            if (!_fns[fn] && !_customFns[fn]) {
+              errors.push(`compute[${i}]: unknown function "${fn}"`);
+            }
           }
         }
-      }
+      });
     }
   }
 
-  // ---- Card-specific ----
-  if (n.type === 'card') {
-    if (n.source != null) errors.push('Card nodes must not have "source" — use type "source" instead');
+  // sources (optional) — array of { script, bindTo }
+  if (n.sources != null) {
+    if (!Array.isArray(n.sources)) {
+      errors.push('sources: must be an array');
+    } else {
+      (n.sources as unknown[]).forEach((src, i) => {
+        if (!src || typeof src !== 'object' || Array.isArray(src)) {
+          errors.push(`sources[${i}]: must be an object`);
+        } else {
+          const s = src as Record<string, unknown>;
+          if (typeof s.bindTo !== 'string' || !s.bindTo) {
+            errors.push(`sources[${i}]: missing required "bindTo" property`);
+          }
+        }
+      });
+    }
+  }
 
-    // view (required for cards)
-    if (n.view == null || typeof n.view !== 'object' || Array.isArray(n.view)) {
-      errors.push('view: required for card nodes, must be an object');
+  // optionalSources (optional) — same shape as sources
+  if (n.optionalSources != null) {
+    if (!Array.isArray(n.optionalSources)) {
+      errors.push('optionalSources: must be an array');
+    } else {
+      (n.optionalSources as unknown[]).forEach((src, i) => {
+        if (!src || typeof src !== 'object' || Array.isArray(src)) {
+          errors.push(`optionalSources[${i}]: must be an object`);
+        } else {
+          const s = src as Record<string, unknown>;
+          if (typeof s.bindTo !== 'string' || !s.bindTo) {
+            errors.push(`optionalSources[${i}]: missing required "bindTo" property`);
+          }
+        }
+      });
+    }
+  }
+
+  // view (optional) — if present, validate its structure
+  if (n.view != null) {
+    if (typeof n.view !== 'object' || Array.isArray(n.view)) {
+      errors.push('view: must be an object');
     } else {
       const view = n.view as Record<string, unknown>;
 
@@ -561,26 +617,6 @@ function validateNode(node: unknown): ValidationResult {
       // view.features (optional)
       if (view.features != null && (typeof view.features !== 'object' || Array.isArray(view.features))) {
         errors.push('view.features: must be an object');
-      }
-    }
-  }
-
-  // ---- Source-specific ----
-  if (n.type === 'source') {
-    if (n.view != null) errors.push('Source nodes must not have "view" — use type "card" instead');
-
-    // source (required for source nodes)
-    if (n.source == null || typeof n.source !== 'object' || Array.isArray(n.source)) {
-      errors.push('source: required for source nodes, must be an object');
-    } else {
-      const src = n.source as Record<string, unknown>;
-      if (!src.kind || !VALID_SOURCE_KINDS.has(src.kind as string)) {
-        errors.push(`source.kind: required, must be one of: ${[...VALID_SOURCE_KINDS].join(', ')}`);
-      }
-      if (typeof src.bindTo !== 'string' || !src.bindTo) {
-        errors.push('source.bindTo: required, must be a state path string');
-      } else if (!(src.bindTo as string).startsWith('state.')) {
-        errors.push('source.bindTo: must start with "state."');
       }
     }
   }

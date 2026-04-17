@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CardCompute } from '../../src/card-compute/index.js';
-import type { ComputeNode, ComputeExpr } from '../../src/card-compute/index.js';
+import type { ComputeNode, ComputeExpr, ComputeStep } from '../../src/card-compute/index.js';
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-function node(state: Record<string, unknown>, compute?: Record<string, ComputeExpr>): ComputeNode {
+function node(state: Record<string, unknown>, compute?: ComputeStep[]): ComputeNode {
   return { id: 'test', state, compute };
 }
 
@@ -561,25 +561,25 @@ describe('Type', () => {
 // ============================================================================
 
 describe('CardCompute.run', () => {
-  it('runs all compute expressions and writes to state', () => {
+  it('runs all compute expressions and writes to computed_state', () => {
     const n = node(
       { data: [{ revenue: 100 }, { revenue: 200 }, { revenue: 300 }] },
-      {
-        total: { fn: 'sum', input: 'state.data', field: 'revenue' },
-        avg: { fn: 'avg', input: 'state.data', field: 'revenue' },
-        cnt: { fn: 'count', input: 'state.data' },
-      },
+      [
+        { bindTo: 'total', fn: 'sum', input: 'state.data', field: 'revenue' },
+        { bindTo: 'avg', fn: 'avg', input: 'state.data', field: 'revenue' },
+        { bindTo: 'cnt', fn: 'count', input: 'state.data' },
+      ],
     );
     CardCompute.run(n);
-    expect(n.state!.total).toBe(600);
-    expect(n.state!.avg).toBe(200);
-    expect(n.state!.cnt).toBe(3);
+    expect(n.computed_state!.total).toBe(600);
+    expect(n.computed_state!.avg).toBe(200);
+    expect(n.computed_state!.cnt).toBe(3);
   });
 
   it('initialises state if missing', () => {
-    const n: ComputeNode = { id: 'x', compute: { val: { fn: 'add', input: [1, 2] } } };
+    const n: ComputeNode = { id: 'x', compute: [{ bindTo: 'val', fn: 'add', input: [1, 2] }] };
     CardCompute.run(n);
-    expect(n.state!.val).toBe(3);
+    expect(n.computed_state!.val).toBe(3);
   });
 
   it('returns node if no compute', () => {
@@ -591,25 +591,36 @@ describe('CardCompute.run', () => {
     expect(CardCompute.run(null as any)).toBeNull();
   });
 
-  it('chains compute expressions (sequential dependency)', () => {
+  it('chains compute expressions (sequential via computed_state)', () => {
     const n = node(
       { data: [10, 20, 30] },
-      {
-        total: { fn: 'sum', input: 'state.data' },
-        doubled: { fn: 'mul', input: ['state.total', 2] },
-      },
+      [
+        { bindTo: 'total', fn: 'sum', input: 'state.data' },
+        { bindTo: 'doubled', fn: 'mul', input: ['computed_state.total', 2] },
+      ],
     );
     CardCompute.run(n);
-    expect(n.state!.total).toBe(60);
-    expect(n.state!.doubled).toBe(120);
+    expect(n.computed_state!.total).toBe(60);
+    expect(n.computed_state!.doubled).toBe(120);
   });
 
-  it('writes to nested state path', () => {
-    const n = node({}, {
-      'summary.total': { fn: 'add', input: [10, 20] },
-    });
+  it('writes to nested computed_state path', () => {
+    const n = node({}, [
+      { bindTo: 'summary.total', fn: 'add', input: [10, 20] },
+    ]);
     CardCompute.run(n);
-    expect((n.state!.summary as any).total).toBe(30);
+    expect((n.computed_state!.summary as any).total).toBe(30);
+  });
+
+  it('reads from requires namespace', () => {
+    const n: ComputeNode = {
+      id: 'test',
+      state: {},
+      requires: { upstream: { values: [10, 20, 30] } },
+      compute: [{ bindTo: 'total', fn: 'sum', input: 'requires.upstream.values' }],
+    };
+    CardCompute.run(n);
+    expect(n.computed_state!.total).toBe(60);
   });
 });
 
@@ -690,9 +701,9 @@ describe('registerFunction', () => {
 
   it('custom function is accessible via run', () => {
     CardCompute.registerFunction('triple', (input) => Number(input) * 3);
-    const n = node({ x: 10 }, { y: { fn: 'triple', input: 'state.x' } });
+    const n = node({ x: 10 }, [{ bindTo: 'y', fn: 'triple', input: 'state.x' }]);
     CardCompute.run(n);
-    expect(n.state!.y).toBe(30);
+    expect(n.computed_state!.y).toBe(30);
   });
 
   it('custom function appears in functions list', () => {
@@ -739,10 +750,9 @@ describe('CardCompute.functions', () => {
 
 describe('CardCompute.validate', () => {
   describe('valid nodes', () => {
-    it('valid card', () => {
+    it('valid card with view', () => {
       const result = CardCompute.validate({
         id: 'card1',
-        type: 'card',
         state: { status: 'fresh' },
         view: { elements: [{ kind: 'metric', data: { bind: 'state.x' } }] },
       });
@@ -750,12 +760,11 @@ describe('CardCompute.validate', () => {
       expect(result.errors).toHaveLength(0);
     });
 
-    it('valid source', () => {
+    it('valid card with sources', () => {
       const result = CardCompute.validate({
         id: 'src1',
-        type: 'source',
         state: { status: 'fresh' },
-        source: { kind: 'api', bindTo: 'state.raw' },
+        sources: [{ bindTo: 'raw', script: 'fetch.sh' }],
       });
       expect(result.ok).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -764,13 +773,14 @@ describe('CardCompute.validate', () => {
     it('card with all optional fields', () => {
       const result = CardCompute.validate({
         id: 'full',
-        type: 'card',
         meta: { title: 'Test', tags: ['a', 'b'] },
         requires: ['src1'],
         provides: ['total'],
         state: { status: 'fresh' },
         view: { elements: [{ kind: 'table' }], layout: { columns: 2 }, features: { search: true } },
-        compute: { total: { fn: 'sum', input: 'state.data', field: 'v' } },
+        compute: [{ bindTo: 'total', fn: 'sum', input: 'state.data', field: 'v' }],
+        sources: [{ bindTo: 'data', script: 'fetch.sh' }],
+        optionalSources: [{ bindTo: 'news', script: 'news.sh' }],
       });
       expect(result.ok).toBe(true);
     });
@@ -789,26 +799,20 @@ describe('CardCompute.validate', () => {
     });
 
     it('missing id', () => {
-      const r = CardCompute.validate({ type: 'card', state: {}, view: { elements: [{ kind: 'text' }] } });
+      const r = CardCompute.validate({ state: {}, view: { elements: [{ kind: 'text' }] } });
       expect(r.ok).toBe(false);
       expect(r.errors).toContain('id: required, must be a non-empty string');
     });
 
     it('empty string id', () => {
-      const r = CardCompute.validate({ id: '', type: 'card', state: {}, view: { elements: [{ kind: 'text' }] } });
+      const r = CardCompute.validate({ id: '', state: {}, view: { elements: [{ kind: 'text' }] } });
       expect(r.ok).toBe(false);
       expect(r.errors[0]).toContain('id');
     });
 
-    it('invalid type', () => {
-      const r = CardCompute.validate({ id: 'x', type: 'widget', state: {} });
-      expect(r.ok).toBe(false);
-      expect(r.errors).toContain('type: must be "card" or "source"');
-    });
-
     it('unknown top-level keys', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {}, view: { elements: [{ kind: 'text' }] },
+        id: 'x', state: {}, view: { elements: [{ kind: 'text' }] },
         extra: true, another: 1,
       });
       expect(r.ok).toBe(false);
@@ -816,19 +820,19 @@ describe('CardCompute.validate', () => {
     });
 
     it('state missing', () => {
-      const r = CardCompute.validate({ id: 'x', type: 'card', view: { elements: [{ kind: 'text' }] } });
+      const r = CardCompute.validate({ id: 'x', view: { elements: [{ kind: 'text' }] } });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('state: required'))).toBe(true);
     });
 
     it('state is array', () => {
-      const r = CardCompute.validate({ id: 'x', type: 'card', state: [], view: { elements: [{ kind: 'text' }] } });
+      const r = CardCompute.validate({ id: 'x', state: [], view: { elements: [{ kind: 'text' }] } });
       expect(r.ok).toBe(false);
     });
 
     it('invalid status', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: { status: 'unknown' },
+        id: 'x', state: { status: 'unknown' },
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
@@ -837,7 +841,7 @@ describe('CardCompute.validate', () => {
 
     it('meta.title not a string', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', meta: { title: 123 }, state: {},
+        id: 'x', meta: { title: 123 }, state: {},
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
@@ -846,7 +850,7 @@ describe('CardCompute.validate', () => {
 
     it('meta.tags not an array', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', meta: { tags: 'wrong' }, state: {},
+        id: 'x', meta: { tags: 'wrong' }, state: {},
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
@@ -855,7 +859,7 @@ describe('CardCompute.validate', () => {
 
     it('requires not array', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', requires: 'src1', state: {},
+        id: 'x', requires: 'src1', state: {},
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
@@ -864,54 +868,63 @@ describe('CardCompute.validate', () => {
 
     it('provides not array', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', provides: { x: 'state.x' }, state: {},
+        id: 'x', provides: { x: 'state.x' }, state: {},
         view: { elements: [{ kind: 'text' }] },
       });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('provides'))).toBe(true);
     });
 
-    it('compute expression missing fn', () => {
+    it('compute step missing fn', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {},
-        view: { elements: [{ kind: 'text' }] },
-        compute: { total: { input: 'state.data' } as any },
+        id: 'x', state: {},
+        compute: [{ bindTo: 'total', input: 'state.data' }],
       });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('missing required "fn"'))).toBe(true);
     });
 
-    it('compute expression unknown function', () => {
+    it('compute step unknown function', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {},
-        view: { elements: [{ kind: 'text' }] },
-        compute: { total: { fn: 'bogus_function' } },
+        id: 'x', state: {},
+        compute: [{ bindTo: 'total', fn: 'bogus_function' }],
       });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('unknown function "bogus_function"'))).toBe(true);
     });
-  });
 
-  describe('card-specific validation', () => {
-    it('card missing view', () => {
-      const r = CardCompute.validate({ id: 'x', type: 'card', state: {} });
-      expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('view: required for card'))).toBe(true);
-    });
-
-    it('card with source property', () => {
+    it('compute step missing bindTo', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {},
-        view: { elements: [{ kind: 'text' }] },
-        source: { kind: 'api', bindTo: 'state.x' },
+        id: 'x', state: {},
+        compute: [{ fn: 'sum', input: 'state.data' }],
       });
       expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('must not have "source"'))).toBe(true);
+      expect(r.errors.some(e => e.includes('missing required "bindTo"'))).toBe(true);
     });
 
+    it('compute not an array', () => {
+      const r = CardCompute.validate({
+        id: 'x', state: {},
+        compute: { total: { fn: 'sum' } },
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('compute: must be an array'))).toBe(true);
+    });
+
+    it('sources entry missing bindTo', () => {
+      const r = CardCompute.validate({
+        id: 'x', state: {},
+        sources: [{ script: 'fetch.sh' }],
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('sources[0]: missing required "bindTo"'))).toBe(true);
+    });
+  });
+
+  describe('view validation', () => {
     it('view.elements empty', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         view: { elements: [] },
       });
       expect(r.ok).toBe(false);
@@ -920,7 +933,7 @@ describe('CardCompute.validate', () => {
 
     it('element missing kind', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         view: { elements: [{ data: {} }] },
       });
       expect(r.ok).toBe(false);
@@ -929,7 +942,7 @@ describe('CardCompute.validate', () => {
 
     it('element unknown kind', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'card', state: {},
+        id: 'x', state: {},
         view: { elements: [{ kind: 'sparkline' }] },
       });
       expect(r.ok).toBe(false);
@@ -940,7 +953,7 @@ describe('CardCompute.validate', () => {
       const kinds = ['metric', 'table', 'chart', 'form', 'filter', 'list', 'notes', 'todo', 'alert', 'narrative', 'badge', 'text', 'markdown', 'custom'];
       for (const kind of kinds) {
         const r = CardCompute.validate({
-          id: `k-${kind}`, type: 'card', state: {},
+          id: `k-${kind}`, state: {},
           view: { elements: [{ kind }] },
         });
         expect(r.ok).toBe(true);
@@ -948,58 +961,30 @@ describe('CardCompute.validate', () => {
     });
   });
 
-  describe('source-specific validation', () => {
-    it('source missing source property', () => {
-      const r = CardCompute.validate({ id: 'x', type: 'source', state: {} });
-      expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('source: required for source'))).toBe(true);
-    });
-
-    it('source with view property', () => {
+  describe('source validation', () => {
+    it('sources entry missing bindTo', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'source', state: {},
-        source: { kind: 'api', bindTo: 'state.x' },
-        view: { elements: [{ kind: 'text' }] },
+        id: 'x', state: {},
+        sources: [{ script: 'fetch.sh' }],
       });
       expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('must not have "view"'))).toBe(true);
+      expect(r.errors.some(e => e.includes('sources[0]: missing required "bindTo"'))).toBe(true);
     });
 
-    it('source.kind invalid', () => {
+    it('valid sources', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'source', state: {},
-        source: { kind: 'ftp', bindTo: 'state.x' },
+        id: 'x', state: {},
+        sources: [{ bindTo: 'raw', script: 'fetch.sh' }],
       });
-      expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('source.kind'))).toBe(true);
+      expect(r.ok).toBe(true);
     });
 
-    it('source.bindTo missing', () => {
+    it('valid optionalSources', () => {
       const r = CardCompute.validate({
-        id: 'x', type: 'source', state: {},
-        source: { kind: 'api' },
+        id: 'x', state: {},
+        optionalSources: [{ bindTo: 'news', script: 'news.sh' }],
       });
-      expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('source.bindTo'))).toBe(true);
-    });
-
-    it('source.bindTo does not start with state.', () => {
-      const r = CardCompute.validate({
-        id: 'x', type: 'source', state: {},
-        source: { kind: 'api', bindTo: 'data.raw' },
-      });
-      expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('must start with "state."'))).toBe(true);
-    });
-
-    it('all 4 source kinds are valid', () => {
-      for (const kind of ['api', 'websocket', 'static', 'llm']) {
-        const r = CardCompute.validate({
-          id: `s-${kind}`, type: 'source', state: {},
-          source: { kind, bindTo: 'state.raw' },
-        });
-        expect(r.ok).toBe(true);
-      }
+      expect(r.ok).toBe(true);
     });
   });
 });

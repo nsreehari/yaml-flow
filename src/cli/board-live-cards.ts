@@ -31,7 +31,7 @@ import type { GraphConfig, TaskConfig, GraphEvent } from '../event-graph/types.j
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { CardCompute } from '../card-compute/index.js';
-import type { ComputeNode, ComputeExpr } from '../card-compute/index.js';
+import type { ComputeNode, ComputeStep } from '../card-compute/index.js';
 
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
@@ -275,25 +275,19 @@ export type BoardLiveCard = LiveCard & { asyncHelpers?: Record<string, unknown> 
 /**
  * Transform a LiveCard into a TaskConfig for the reactive graph.
  *
- * All source/card types get a single handler: 'card-handler'.
- * The handler script (source-handler.js) inspects the card and
- * decides what to do: run compute, invoke source, fire asyncHelpers.
- * Unknown types get taskHandlers: [].
+ * Every card gets handler: 'card-handler'.
+ * The handler inspects the card and decides what to do:
+ * run compute, invoke sources, fire asyncHelpers.
  */
 export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
   const requires = card.requires;
   const provides = card.provides ?? [card.id];
 
-  const taskHandlers: string[] =
-    card.type === 'source' || card.type === 'card'
-      ? ['card-handler']
-      : [];
-
   return {
     requires: requires && requires.length > 0 ? requires : undefined,
     provides,
-    taskHandlers,
-    description: card.meta?.title ?? `${card.type}: ${card.id}`,
+    taskHandlers: ['card-handler'],
+    description: card.meta?.title ?? card.id,
   };
 }
 
@@ -336,53 +330,71 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         const cardState = (card.state ?? {}) as Record<string, unknown>;
 
         // Run CardCompute if the card has a compute section
+        let computedState: Record<string, unknown> = {};
         if (card.compute) {
-          // Build compute input: card's own state + upstream data as context
+          // Build compute input: card's own state + upstream requires
           const computeNode: ComputeNode = {
             id: card.id as string,
-            state: { ...cardState, ...input.state },
-            compute: card.compute as Record<string, ComputeExpr>,
+            state: { ...cardState },
+            requires: input.state ?? {},
+            compute: card.compute as ComputeStep[],
           };
           CardCompute.run(computeNode);
-
-          // Patch only compute output keys back into card.state
-          const computeKeys = Object.keys(card.compute as Record<string, unknown>);
-          for (const key of computeKeys) {
-            cardState[key] = (computeNode.state ?? {})[key];
-          }
+          computedState = computeNode.computed_state ?? {};
         }
 
-        // Persist updated state back to the card file
+        // Do NOT write computed_state to card.state on disk — it's ephemeral.
+        // Only sources mutate card.state on disk.
+
+        // Check if we need to spawn sources
+        const sources = (card.sources ?? []) as { script?: string; bindTo: string }[];
+        const undeliveredSources = sources.filter(s => cardState[s.bindTo] == null);
+
+        if (undeliveredSources.length > 0) {
+          // Spawn source subprocess — card stays in-progress
+          const scriptPath = path.join(__dirname, 'execute-card-task.js');
+          execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
+            if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
+          });
+          // Persist any state unchanged (sources haven't delivered yet)
+          card.state = cardState;
+          fs.writeFileSync(cardPath, JSON.stringify(card, null, 2));
+          return 'task-initiated';
+        }
+
+        // All sources delivered (or no sources). Build provides data.
+        const provides = (card.provides ?? [card.id]) as string[];
+        const data: Record<string, unknown> = {};
+        const requiresData = (input.state ?? {}) as Record<string, unknown>;
+        for (const key of provides) {
+          if (key in computedState) data[key] = computedState[key];
+          else if (key in cardState) data[key] = cardState[key];
+          else if (key in requiresData) data[key] = requiresData[key];
+        }
+
+        // Persist state unchanged
         card.state = cardState;
         fs.writeFileSync(cardPath, JSON.stringify(card, null, 2));
+
+        // Spawn optionalSources in background (don't gate completion)
+        const optionalSources = (card.optionalSources ?? []) as { script?: string; bindTo: string }[];
+        if (optionalSources.length > 0 || (card as any).asyncHelpers) {
+          const scriptPath = path.join(__dirname, 'execute-card-task.js');
+          execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
+            if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
+          });
+        }
+
+        appendEventToJournal(boardDir, {
+          type: 'task-completed',
+          taskName: input.nodeId,
+          data,
+          timestamp: new Date().toISOString(),
+        });
+        return 'task-initiated';
       } finally {
         releaseCard();
       }
-
-      // Source cards or cards with asyncHelpers — also spawn subprocess
-      if (card.type === 'source' || card.asyncHelpers) {
-        const scriptPath = path.join(__dirname, 'execute-card-task.js');
-        execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
-          if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
-        });
-        return 'task-initiated';
-      }
-
-      // Pure compute card — pluck only provides keys for downstream data
-      const provides = (card.provides ?? [card.id]) as string[];
-      const cardState = card.state as Record<string, unknown>;
-      const data: Record<string, unknown> = {};
-      for (const key of provides) {
-        if (key in cardState) data[key] = cardState[key];
-      }
-
-      appendEventToJournal(boardDir, {
-        type: 'task-completed',
-        taskName: input.nodeId,
-        data,
-        timestamp: new Date().toISOString(),
-      });
-      return 'task-initiated';
     },
   };
 

@@ -14,9 +14,8 @@ function sleep(ms: number): Promise<void> {
 function makeSource(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
   return {
     id,
-    type: 'source',
     state: {},
-    source: { kind: 'static', bindTo: 'state.raw' },
+    sources: [{ kind: 'static', bindTo: 'raw' }],
     ...overrides,
   };
 }
@@ -24,7 +23,6 @@ function makeSource(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
 function makeCard(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
   return {
     id,
-    type: 'card',
     state: {},
     view: { elements: [{ kind: 'text' }] },
     ...overrides,
@@ -163,10 +161,10 @@ describe('liveCardsToReactiveGraph', () => {
       const cards: LiveCard[] = [
         makeCard('calc', {
           state: { data: [{ v: 10 }, { v: 20 }, { v: 30 }] },
-          compute: {
-            total: { fn: 'sum', input: 'state.data', field: 'v' },
-            avg: { fn: 'avg', input: 'state.data', field: 'v' },
-          },
+          compute: [
+            { bindTo: 'total', fn: 'sum', input: 'state.data', field: 'v' },
+            { bindTo: 'avg', fn: 'avg', input: 'state.data', field: 'v' },
+          ],
         }),
       ];
       const { graph } = liveCardsToReactiveGraph(cards, {
@@ -210,9 +208,9 @@ describe('liveCardsToReactiveGraph', () => {
         makeSource('prices', { state: { raw: [10, 20, 30] } }),
         makeCard('stats', {
           requires: ['prices'],
-          compute: {
-            total: { fn: 'sum', input: 'state.prices.raw' },
-          },
+          compute: [
+            { bindTo: 'total', fn: 'sum', input: 'requires.prices.raw' },
+          ],
         }),
       ];
       const { graph } = liveCardsToReactiveGraph(cards, {
@@ -236,9 +234,9 @@ describe('liveCardsToReactiveGraph', () => {
         }),
         makeCard('dash', {
           requires: ['quotes'],
-          compute: {
-            total: { fn: 'sum', input: 'state.quotes' },
-          },
+          compute: [
+            { bindTo: 'total', fn: 'sum', input: 'requires.quotes' },
+          ],
         }),
       ];
       const { config, graph } = liveCardsToReactiveGraph(cards, {
@@ -264,10 +262,10 @@ describe('liveCardsToReactiveGraph', () => {
         makeSource('src', { state: { values: [5, 10, 15] } }),
         makeCard('agg', {
           requires: ['src'],
-          compute: {
-            total: { fn: 'sum', input: 'state.src.values' },
-            count: { fn: 'count', input: 'state.src.values' },
-          },
+          compute: [
+            { bindTo: 'total', fn: 'sum', input: 'requires.src.values' },
+            { bindTo: 'count', fn: 'count', input: 'requires.src.values' },
+          ],
         }),
       ];
 
@@ -295,16 +293,16 @@ describe('liveCardsToReactiveGraph', () => {
         }),
         makeCard('transform', {
           requires: ['raw_data'],
-          compute: {
-            total: { fn: 'sum', input: 'state.raw_data.items', field: 'price' },
-            avg: { fn: 'avg', input: 'state.raw_data.items', field: 'price' },
-          },
+          compute: [
+            { bindTo: 'total', fn: 'sum', input: 'requires.raw_data.items', field: 'price' },
+            { bindTo: 'avg', fn: 'avg', input: 'requires.raw_data.items', field: 'price' },
+          ],
         }),
         makeCard('dashboard', {
           requires: ['transform'],
-          compute: {
-            label: { fn: 'template', input: 'state.transform', format: 'Total: {{total}}, Avg: {{avg}}' },
-          },
+          compute: [
+            { bindTo: 'label', fn: 'template', input: 'requires.transform', format: 'Total: {{total}}, Avg: {{avg}}' },
+          ],
         }),
       ];
 
@@ -400,9 +398,9 @@ describe('liveCardsToReactiveGraph', () => {
           makeSource('feed', { state: { prices: [10, 20, 30] } }),
           makeCard('totals', {
             requires: ['feed'],
-            compute: {
-              total: { fn: 'sum', input: 'state.feed.prices' },
-            },
+            compute: [
+              { bindTo: 'total', fn: 'sum', input: 'requires.feed.prices' },
+            ],
           }),
         ],
       };

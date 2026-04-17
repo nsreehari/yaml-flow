@@ -181,10 +181,11 @@ describe('board-live-cards CLI', () => {
 // ============================================================================
 
 describe('liveCardToTaskConfig', () => {
-  it('source card → [card-handler]', () => {
+  it('card with sources → [card-handler]', () => {
     const card: BoardLiveCard = {
-      id: 'prices', type: 'source',
+      id: 'prices',
       provides: ['prices'],
+      sources: [{ script: 'fetch.sh', bindTo: 'raw' }],
       state: { prices: {} },
     };
     const tc = liveCardToTaskConfig(card);
@@ -193,11 +194,11 @@ describe('liveCardToTaskConfig', () => {
     expect(tc.requires).toBeUndefined();
   });
 
-  it('card type → [card-handler]', () => {
+  it('card with compute → [card-handler]', () => {
     const card: BoardLiveCard = {
-      id: 'total', type: 'card',
+      id: 'total',
       requires: ['prices'],
-      compute: { sum: { fn: 'sum', input: 'state.data', field: 'value' } },
+      compute: [{ bindTo: 'sum', fn: 'sum', input: 'state.data', field: 'value' }],
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
@@ -208,9 +209,9 @@ describe('liveCardToTaskConfig', () => {
 
   it('card with asyncHelpers → still just [card-handler]', () => {
     const card: BoardLiveCard = {
-      id: 'enriched', type: 'card',
+      id: 'enriched',
       requires: ['raw'],
-      compute: { x: { fn: 'sum', input: 'state.raw', field: 'v' } },
+      compute: [{ bindTo: 'x', fn: 'sum', input: 'state.raw', field: 'v' }],
       asyncHelpers: { fetchExtra: { url: 'https://example.com' } },
       state: {},
     };
@@ -218,9 +219,10 @@ describe('liveCardToTaskConfig', () => {
     expect(tc.taskHandlers).toEqual(['card-handler']);
   });
 
-  it('source with asyncHelpers → still just [card-handler]', () => {
+  it('card with sources and asyncHelpers → still just [card-handler]', () => {
     const card: BoardLiveCard = {
-      id: 'live-feed', type: 'source',
+      id: 'live-feed',
+      sources: [{ script: 'feed.sh', bindTo: 'data' }],
       asyncHelpers: { transform: { script: 'clean.py' } },
       state: {},
     };
@@ -228,18 +230,18 @@ describe('liveCardToTaskConfig', () => {
     expect(tc.taskHandlers).toEqual(['card-handler']);
   });
 
-  it('unknown type → empty taskHandlers', () => {
-    const card = {
-      id: 'custom', type: 'widget' as any,
+  it('minimal card (just id) → [card-handler]', () => {
+    const card: BoardLiveCard = {
+      id: 'custom',
       state: {},
-    } as BoardLiveCard;
+    };
     const tc = liveCardToTaskConfig(card);
-    expect(tc.taskHandlers).toEqual([]);
+    expect(tc.taskHandlers).toEqual(['card-handler']);
   });
 
   it('provides keys from card.provides', () => {
     const card: BoardLiveCard = {
-      id: 'multi', type: 'source',
+      id: 'multi',
       provides: ['alpha', 'beta'],
       state: {},
     };
@@ -249,7 +251,7 @@ describe('liveCardToTaskConfig', () => {
 
   it('falls back to [card.id] when no provides', () => {
     const card: BoardLiveCard = {
-      id: 'standalone', type: 'card',
+      id: 'standalone',
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
@@ -258,7 +260,7 @@ describe('liveCardToTaskConfig', () => {
 
   it('maps meta.title to description', () => {
     const card: BoardLiveCard = {
-      id: 'x', type: 'card',
+      id: 'x',
       meta: { title: 'My Title' },
       state: {},
     };
@@ -495,7 +497,7 @@ describe('cli add-card', () => {
 
     const cardFile = path.join(tmpDir, 'my-source.json');
     const card: BoardLiveCard = {
-      id: 'prices', type: 'source',
+      id: 'prices',
       provides: ['prices'],
       source: { kind: 'api', bindTo: 'state.prices', url_template: 'https://example.com/prices' },
       state: { prices: {} },
@@ -529,9 +531,9 @@ describe('cli add-card', () => {
 
     const cardFile = path.join(tmpDir, 'enriched.json');
     const card: BoardLiveCard = {
-      id: 'enriched', type: 'card',
+      id: 'enriched',
       requires: ['raw'],
-      compute: { total: { fn: 'sum', input: 'state.raw', field: 'v' } },
+      compute: [{ bindTo: 'total', fn: 'sum', input: 'state.raw', field: 'v' }],
       asyncHelpers: { fetch: { url: 'https://example.com' } },
       state: {},
     };
@@ -551,7 +553,7 @@ describe('cli add-card', () => {
     initBoard(dir);
 
     const cardFile = path.join(tmpDir, 'dup.json');
-    fs.writeFileSync(cardFile, JSON.stringify({ id: 'x', type: 'card', state: {} }));
+    fs.writeFileSync(cardFile, JSON.stringify({ id: 'x', state: {} }));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     cli(['add-card', '--rg', dir, '--card', cardFile]);
@@ -586,7 +588,7 @@ describe('cli remove-card', () => {
     initBoard(dir);
 
     const cardFile = path.join(tmpDir, 'temp.json');
-    fs.writeFileSync(cardFile, JSON.stringify({ id: 'temp', type: 'card', state: {} }));
+    fs.writeFileSync(cardFile, JSON.stringify({ id: 'temp', state: {} }));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     cli(['add-card', '--rg', dir, '--card', cardFile]);
@@ -631,7 +633,7 @@ describe('cli update-card', () => {
     // Add a card first
     const cardFile = path.join(tmpDir, 'my-card.json');
     const card: BoardLiveCard = {
-      id: 'prices', type: 'source',
+      id: 'prices',
       provides: ['prices'],
       state: { prices: {} },
     };
@@ -647,7 +649,7 @@ describe('cli update-card', () => {
 
     // Update the card file on disk — add a new provides key
     const updatedCard: BoardLiveCard = {
-      id: 'prices', type: 'source',
+      id: 'prices',
       provides: ['prices', 'rates'],
       state: { prices: {}, rates: {} },
     };
@@ -672,7 +674,7 @@ describe('cli update-card', () => {
 
     const cardFile = path.join(tmpDir, 'my-card.json');
     fs.writeFileSync(cardFile, JSON.stringify({
-      id: 'src', type: 'source',
+      id: 'src',
       provides: ['src'],
       state: {},
     }));
@@ -724,7 +726,7 @@ describe('cli retrigger', () => {
 
     // Add a card so the task exists
     const cardFile = path.join(tmpDir, 'src.json');
-    fs.writeFileSync(cardFile, JSON.stringify({ id: 'src', type: 'source', state: {} }));
+    fs.writeFileSync(cardFile, JSON.stringify({ id: 'src', state: {} }));
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     cli(['add-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
