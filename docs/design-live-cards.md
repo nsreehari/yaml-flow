@@ -8,7 +8,7 @@ Every card is a unified entity. No `type` field — behavior is determined by wh
 {
   "id": "portfolio",
   "requires": ["quotes", "holdings"],
-  "provides": ["portfolio_value"],
+  "provides": [{ "bindTo": "portfolio_value", "src": "computed_values.portfolio_value" }],
   "state": { "portfolio_value": 0 },
   "sources": [
     { "script": "fetch-holdings.sh", "bindTo": "holdings" }
@@ -17,8 +17,8 @@ Every card is a unified entity. No `type` field — behavior is determined by wh
     { "script": "fetch-news.sh", "bindTo": "news" }
   ],
   "compute": [
-    { "bindTo": "total", "fn": "sum", "input": "state.holdings.values" },
-    { "bindTo": "portfolio_value", "fn": "add", "input": "state.total", "args": [0] }
+    { "bindTo": "total", "expr": "$sum(state.holdings.values)" },
+    { "bindTo": "portfolio_value", "expr": "computed_values.total" }
   ]
 }
 ```
@@ -45,10 +45,33 @@ Compute expressions reference either `requires.X` or `state.X`. This prevents se
 ## Compute
 
 - **Ordered array** (not a map). Runs top-to-bottom, once per handler invocation.
-- Each step: `{ bindTo, fn, input, args? }`
+- Each step: `{ bindTo: string, expr: string }` where `expr` is a [JSONata](https://jsonata.org) expression.
+- Evaluated against `{ state, requires, computed_values }` — all three namespaces are accessible.
 - Reads from `state.*`, `requires.*`, and earlier compute outputs in `computed_values.*`
 - Writes to ephemeral `computed_values[bindTo]` — never persisted to disk.
 - `computed_values` is discarded after provides are plucked.
+- `CardCompute.run()` is **async** (returns `Promise<node>`). `CardCompute.resolve()` remains sync.
+
+### JSONata expression examples
+
+```json
+{ "bindTo": "total",    "expr": "$sum(state.data.revenue)" }
+{ "bindTo": "avg",      "expr": "$round($average(state.data.revenue), 0)" }
+{ "bindTo": "label",   "expr": "\"Total: \" & $string(computed_values.total)" }
+{ "bindTo": "topRows", "expr": "state.rows[value > 100]" }
+{ "bindTo": "fromReq", "expr": "$sum(requires.upstream.prices)" }
+```
+
+Expressions have full JSONata power: path navigation, array operators (`$sum`, `$average`, `$count`, `$min`, `$max`), `$filter`, `$map`, `$string`, `$round`, predicates, conditionals, etc.
+
+### Browser usage
+
+JSONata must be loaded before `card-compute.js`:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+<script src="browser/card-compute.js"></script>
+```
 
 ### Why no disk persistence for computed_values
 
@@ -93,7 +116,7 @@ The value at `src` is resolved and emitted under the `bindTo` token name.
 1. Compute runs exactly once per handler invocation — no iterative convergence.
 2. A card only re-fires on external events: upstream requires change, data-received from source, or manual retrigger.
 3. Compute output does NOT trigger re-fire — it's ephemeral, not written to state.
-4. The two-namespace separation (requires vs state) prevents `{ bindTo: "x", fn: "add", input: "state.x", args: [1] }` from being self-feeding — `state.x` reads the persisted seed, not the compute output.
+4. The two-namespace separation (requires vs state) prevents self-referential loops — `state.x` in an expr reads the persisted seed, not the compute output.
 
 ## Disk Layout
 
