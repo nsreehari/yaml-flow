@@ -10,15 +10,17 @@
  *   board-live-cards init <dir>
  *   board-live-cards status --rg <dir>
  *   board-live-cards add-card --rg <dir> --card <card.json>
+ *   board-live-cards run-sources --card <card.json> --token <callbackToken> --rg <dir>
  *
  * Card transform:
  *   liveCardToTaskConfig(card) — LiveCard → TaskConfig (handler mapping)
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { lockSync } from 'proper-lockfile';
 import { restore } from '../continuous-event-graph/core.js';
@@ -363,7 +365,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *
  * Single handler:
  *   card-handler — reads card.json, loads sourcesData from outputFiles, runs CardCompute,
- *                  checks undelivered sources, emits task-completed or spawns execute-card-task.
+ *                  checks undelivered sources, emits task-completed or spawns run-sources.
  *                  Fire & forget — returns 'task-initiated' immediately.
  */
 export interface BoardReactiveGraph {
@@ -376,6 +378,8 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
   const live = restore(envelope.graph);
   const journalPath = path.join(boardDir, JOURNAL_FILE);
   const journal = new BoardJournal(journalPath, envelope.lastDrainedJournalId);
+
+  const cliScript = path.join(__dirname, 'board-live-cards.js');
 
   const handlers: Record<string, TaskHandlerFn> = {
     'card-handler': async (input) => {
@@ -457,7 +461,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
 
         if (undeliveredRequired.length > 0) {
           // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
-          // and spawn execute-card-task with per-source source tokens.
+          // and spawn run-sources with per-source source tokens.
           let stampedAny = false;
           for (const src of undeliveredRequired) {
             const entry = runtime._sources[src.bindTo] ?? {};
@@ -470,8 +474,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           }
           if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
 
-          const scriptPath = path.join(__dirname, 'execute-card-task.js');
-          execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
+          execFile('node', [cliScript, 'run-sources', '--card', cardPath, '--token', input.callbackToken, '--rg', boardDir], (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
           });
           return 'task-initiated';
@@ -493,8 +496,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
         if (undeliveredOptional.length > 0) {
-          const scriptPath = path.join(__dirname, 'execute-card-task.js');
-          execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
+          execFile('node', [cliScript, 'run-sources', '--card', cardPath, '--token', input.callbackToken, '--rg', boardDir], (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
           });
         }
@@ -774,6 +776,91 @@ function cmdSourceDataFetchFailure(args: string[]): void {
   tryDrainCycle(rg);
 }
 
+function cmdRunSources(args: string[]): void {
+  const cardIdx = args.indexOf('--card');
+  const tokenIdx = args.indexOf('--token');
+  const rgIdx = args.indexOf('--rg');
+  const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+  const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+  const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  if (!cardFilePath || !callbackToken || !boardDir) {
+    console.error('Usage: board-live-cards run-sources --card <path> --token <token> --rg <dir>');
+    process.exit(1);
+  }
+
+  const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
+  console.log(`[run-sources] Processing card "${card.id as string}"`);
+
+  const cliScript = path.join(__dirname, 'board-live-cards.js');
+
+  type SourceDef = { script?: string; bindTo: string; outputFile?: string; optional?: boolean; timeout?: number };
+
+  function runSource(src: SourceDef): void {
+    if (!src.script) return;
+
+    console.log(`[run-sources] source.script: ${src.script} → bindTo=${src.bindTo}`);
+
+    const sourceToken = encodeSourceToken({
+      cbk: callbackToken!,
+      rg: boardDir!,
+      cid: card.id as string,
+      b: src.bindTo,
+      d: src.outputFile ?? '',
+    });
+
+    let stdout: string;
+    try {
+      stdout = execFileSync(src.script, {
+        cwd: boardDir!,
+        shell: true,
+        encoding: 'utf-8',
+        timeout: src.timeout ?? 120_000,
+      }).trim();
+    } catch (err: unknown) {
+      const reason = (err as Error).message ?? String(err);
+      console.error(`[run-sources] source "${src.bindTo}" script failed:`, reason);
+      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', reason], (e) => {
+        if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
+      });
+      return;
+    }
+
+    if (src.outputFile) {
+      if (stdout) {
+        // Script emitted stdout — write to tmp; CLI will rename into dest atomically
+        const tmpFile = path.join(os.tmpdir(), `card-source-${src.bindTo}-${Date.now()}.json`);
+        fs.writeFileSync(tmpFile, stdout);
+        execFile('node', [cliScript, 'source-data-fetched', '--tmp', tmpFile, '--token', sourceToken], (e, out, err) => {
+          if (e) console.error(`[run-sources] source-data-fetched call failed:`, e.message);
+          if (out) console.log(out.trim());
+          if (err) console.error(err.trim());
+        });
+      } else if (fs.existsSync(path.join(boardDir!, src.outputFile))) {
+        // Script wrote outputFile directly (no stdout) — pass it straight; CLI renames atomically
+        const existingFile = path.join(boardDir!, src.outputFile);
+        execFile('node', [cliScript, 'source-data-fetched', '--tmp', existingFile, '--token', sourceToken], (e) => {
+          if (e) console.error(`[run-sources] source-data-fetched call failed:`, e.message);
+        });
+      } else {
+        console.warn(`[run-sources] source "${src.bindTo}" produced no stdout and outputFile is absent`);
+        execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', 'script produced no output'], (e) => {
+          if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
+        });
+      }
+    } else {
+      console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', 'no outputFile configured'], (e) => {
+        if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
+      });
+    }
+  }
+
+  const sources = (card.sources ?? []) as SourceDef[];
+  for (const src of sources) {
+    runSource(src);
+  }
+}
+
 function cmdUpdateCard(args: string[]): void {
   const rgIdx = args.indexOf('--rg');
   const idIdx = args.indexOf('--card-id');
@@ -858,9 +945,10 @@ export function cli(argv: string[]): void {
     case 'task-failed':               return cmdTaskFailed(rest);
     case 'source-data-fetched':       return cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
+    case 'run-sources':               return cmdRunSources(rest);
     default:
       console.error(`Unknown command: ${cmd}`);
-      console.error('Commands: init, status, add-card, update-card, remove-card, retrigger, task-completed, task-failed, source-data-fetched, source-data-fetch-failure');
+      console.error('Commands: init, status, add-card, update-card, remove-card, retrigger, task-completed, task-failed, source-data-fetched, source-data-fetch-failure, run-sources');
       process.exit(1);
   }
 }
