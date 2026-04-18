@@ -580,13 +580,21 @@ function cmdAddCard(args: string[]): void {
 
 function cmdInit(args: string[]): void {
   const dir = args[0];
-  if (!dir) { console.error('Usage: board-live-cards init <dir>'); process.exit(1); }
+  if (!dir) { console.error('Usage: board-live-cards init <dir> [--task-executor <script>]'); process.exit(1); }
+
+  const teIdx = args.indexOf('--task-executor');
+  const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
 
   const result = initBoard(dir);
+
+  if (taskExecutor) {
+    fs.writeFileSync(path.join(dir, '.task-executor'), taskExecutor, 'utf-8');
+  }
+
   if (result === 'exists') {
-    console.log(`Board already initialized at ${path.resolve(dir)}`);
+    console.log(`Board already initialized at ${path.resolve(dir)}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''}`);
   } else {
-    console.log(`Board initialized at ${path.resolve(dir)}`);
+    console.log(`Board initialized at ${path.resolve(dir)}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''}`);
   }
 }
 
@@ -793,13 +801,13 @@ function cmdRunSources(args: string[]): void {
 
   const cliScript = path.join(__dirname, 'board-live-cards.js');
 
+  // Load registered task-executor (if any)
+  const executorFile = path.join(boardDir!, '.task-executor');
+  const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
+
   type SourceDef = { script?: string; bindTo: string; outputFile?: string; optional?: boolean; timeout?: number };
 
   function runSource(src: SourceDef): void {
-    if (!src.script) return;
-
-    console.log(`[run-sources] source.script: ${src.script} → bindTo=${src.bindTo}`);
-
     const sourceToken = encodeSourceToken({
       cbk: callbackToken!,
       rg: boardDir!,
@@ -807,6 +815,61 @@ function cmdRunSources(args: string[]): void {
       b: src.bindTo,
       d: src.outputFile ?? '',
     });
+
+    function reportFailure(reason: string): void {
+      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', reason], (e) => {
+        if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
+      });
+    }
+
+    function reportFetched(outFile: string): void {
+      execFile('node', [cliScript, 'source-data-fetched', '--tmp', outFile, '--token', sourceToken], (e, out, err) => {
+        if (e) console.error(`[run-sources] source-data-fetched call failed:`, e.message);
+        if (out) console.log(out.trim());
+        if (err) console.error(err.trim());
+      });
+    }
+
+    if (taskExecutor) {
+      // Generic executor path: write the sources[x] object to a tmp input file,
+      // provide tmp paths for out and err, then call:
+      //   <executor> --in <source_json> --out <outfile> --err <errfile>
+      if (!src.outputFile) {
+        console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+        reportFailure('no outputFile configured');
+        return;
+      }
+      const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
+      const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
+      const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
+      fs.writeFileSync(inFile, JSON.stringify(src, null, 2), 'utf-8');
+      console.log(`[run-sources] executor: ${taskExecutor} --in ${inFile} --out ${outFile} --err ${errFile}`);
+      try {
+        execFileSync(taskExecutor, ['--in', inFile, '--out', outFile, '--err', errFile], {
+          cwd: boardDir!,
+          shell: true,
+          timeout: src.timeout ?? 120_000,
+        });
+      } catch (err: unknown) {
+        const reason = (err as Error).message ?? String(err);
+        console.error(`[run-sources] executor failed for source "${src.bindTo}":`, reason);
+        reportFailure(reason);
+        return;
+      }
+      if (fs.existsSync(outFile)) {
+        reportFetched(outFile);
+      } else {
+        const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
+        console.warn(`[run-sources] source "${src.bindTo}": ${errMsg}`);
+        reportFailure(errMsg);
+      }
+      return;
+    }
+
+    // Legacy script path (src.script)
+    if (!src.script) return;
+
+    console.log(`[run-sources] source.script: ${src.script} → bindTo=${src.bindTo}`);
 
     let stdout: string;
     try {
@@ -819,9 +882,7 @@ function cmdRunSources(args: string[]): void {
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
       console.error(`[run-sources] source "${src.bindTo}" script failed:`, reason);
-      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', reason], (e) => {
-        if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
-      });
+      reportFailure(reason);
       return;
     }
 
@@ -830,28 +891,17 @@ function cmdRunSources(args: string[]): void {
         // Script emitted stdout — write to tmp; CLI will rename into dest atomically
         const tmpFile = path.join(os.tmpdir(), `card-source-${src.bindTo}-${Date.now()}.json`);
         fs.writeFileSync(tmpFile, stdout);
-        execFile('node', [cliScript, 'source-data-fetched', '--tmp', tmpFile, '--token', sourceToken], (e, out, err) => {
-          if (e) console.error(`[run-sources] source-data-fetched call failed:`, e.message);
-          if (out) console.log(out.trim());
-          if (err) console.error(err.trim());
-        });
+        reportFetched(tmpFile);
       } else if (fs.existsSync(path.join(boardDir!, src.outputFile))) {
         // Script wrote outputFile directly (no stdout) — pass it straight; CLI renames atomically
-        const existingFile = path.join(boardDir!, src.outputFile);
-        execFile('node', [cliScript, 'source-data-fetched', '--tmp', existingFile, '--token', sourceToken], (e) => {
-          if (e) console.error(`[run-sources] source-data-fetched call failed:`, e.message);
-        });
+        reportFetched(path.join(boardDir!, src.outputFile));
       } else {
         console.warn(`[run-sources] source "${src.bindTo}" produced no stdout and outputFile is absent`);
-        execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', 'script produced no output'], (e) => {
-          if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
-        });
+        reportFailure('script produced no output');
       }
     } else {
       console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
-      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', 'no outputFile configured'], (e) => {
-        if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
-      });
+      reportFailure('no outputFile configured');
     }
   }
 
