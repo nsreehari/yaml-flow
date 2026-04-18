@@ -8,6 +8,9 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "board-live-cards-cli": "./board-live-cards-cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -74,6 +77,7 @@
     "./stores/file": false
   },
   "files": [
+    "board-live-cards-cli.js",
     "dist",
     "schema",
     "browser",

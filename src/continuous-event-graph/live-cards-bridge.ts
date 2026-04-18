@@ -63,12 +63,16 @@ export interface LiveCard {
   state?: Record<string, unknown>;
   compute?: { bindTo: string; fn: string; [key: string]: unknown }[];
   sources?: {
+    cli?: string;
+    // Deprecated alias retained for compatibility with older cards.
     script?: string;
     bindTo: string;
     kind?: 'api' | 'websocket' | 'static' | 'llm';
     [key: string]: unknown;
   }[];
   optionalSources?: {
+    cli?: string;
+    // Deprecated alias retained for compatibility with older cards.
     script?: string;
     bindTo: string;
     kind?: 'api' | 'websocket' | 'static' | 'llm';

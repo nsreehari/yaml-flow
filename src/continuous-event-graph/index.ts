@@ -75,7 +75,7 @@ export { liveCardsToReactiveGraph } from './live-cards-bridge.js';
 export type { LiveCard, LiveBoard, LiveCardsToReactiveOptions, LiveCardsToReactiveResult } from './live-cards-bridge.js';
 
 // Journal: append-only event log
-export { MemoryJournal, FileJournal } from './journal.js';
+export { MemoryJournal } from './journal.js';
 export type { Journal } from './journal.js';
 
 // Types

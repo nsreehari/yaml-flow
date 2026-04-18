@@ -300,41 +300,59 @@ export function getUndrainedEntries(boardDir: string, lastDrainedId: string): Jo
   return idx === -1 ? entries : entries.slice(idx + 1);
 }
 
-/**
- * Schedule repeated drain attempts in-process until the journal settles.
- * This avoids spawning detached child processes/windows.
- */
-function spawnTryDrain(boardDir: string): void {
-  // Run drain inline in the same process (no subprocess / no cmd window).
-  // Loops until the journal is fully settled.
-  const MAX_PASSES = 200;
-  const SETTLE_DELAY_MS = 50;
-  let pass = 0;
-
-  function loop(): void {
-    if (pass++ >= MAX_PASSES) {
-      console.warn('[try-drain] Reached max passes — journal may still have pending entries');
-      return;
-    }
-    const ran = tryDrainCycle(boardDir);
-    if (!ran) return; // lock held — another drainer is running
-    setTimeout(() => {
-      if (getUndrainedEntries(boardDir, loadBoardEnvelope(boardDir).lastDrainedJournalId).length > 0) {
-        loop();
-      }
-    }, SETTLE_DELAY_MS);
+function determineLatestPendingAccumulated(boardDir: string): number {
+  const boardPath = path.join(boardDir, BOARD_FILE);
+  if (!fs.existsSync(boardPath)) return 0;
+  try {
+    const envelope = loadBoardEnvelope(boardDir);
+    return getUndrainedEntries(boardDir, envelope.lastDrainedJournalId).length;
+  } catch {
+    return 0;
   }
-
-  loop();
 }
 
+function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {
+  const { cmd, args: cliArgs } = getCliInvocation('process-accumulated-events', ['--rg', boardDir, '--inline-loop']);
+  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
+  try {
+    const child = spawn(cmd, cliArgs, {
+      shell: useShell,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function processAccumulatedEventsInlineLoop(boardDir: string, settleDelayMs = 50): Promise<boolean> {
+  while (determineLatestPendingAccumulated(boardDir) > 0) {
+    const ran = processAccumulatedEvents(boardDir);
+    if (!ran) return false;
+    await new Promise<void>(resolve => setTimeout(resolve, settleDelayMs));
+  }
+  return true;
+}
+
+function shouldAvoidDetachedProcessSpawn(): boolean {
+  return process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1';
+}
 
 /**
- * Try to acquire lock, drain the journal, and save. Non-blocking.
- * If the lock is held by another process, returns false — that process will drain.
- * Returns true if the drain cycle was executed.
+ * Run one lock-guarded processing pass for this board.
+ *
+ * GUARANTEE (single-pass only):
+ * - At most one process performs this pass at a time (board lock).
+ * - If lock is acquired, exactly one drain/apply/save cycle is executed.
+ * - If lock is busy, returns false immediately (no waiting).
+ *
+ * This function does NOT guarantee full settlement; it only advances the baton
+ * by one cycle in the relay model.
  */
-export function tryDrainCycle(boardDir: string): boolean {
+export function processAccumulatedEvents(boardDir: string): boolean {
   const boardPath = path.join(boardDir, BOARD_FILE);
   let release: (() => void) | undefined;
   try {
@@ -355,6 +373,50 @@ export function tryDrainCycle(boardDir: string): boolean {
   } finally {
     release!();
   }
+}
+
+/**
+ * Schedule continued draining until the board eventually settles.
+ *
+ * GUARANTEE (system-level eventual progress):
+ * - Default behavior launches a detached background worker process that runs
+ *   `process-accumulated-events --inline-loop`.
+ * - Returns quickly to caller; does not synchronously wait for settlement.
+ * - Under relay assumptions, pending entries eventually drain to zero:
+ *   1) at least one runner continues, 2) no crash/forced exit in relay window,
+ *   3) lock remains healthy, 4) new events do not arrive forever.
+ *
+ * INTERNAL MODE:
+ * - `inlineLoop: true` executes the while(pending) loop in the current process.
+ * - Used by the worker command to avoid recursive worker spawning.
+ */
+export async function processAccumulatedEventsInfinitePass(
+  boardDir: string,
+  settleDelayMs = 50,
+  options?: { inlineLoop?: boolean },
+): Promise<boolean> {
+  if (options?.inlineLoop || shouldAvoidDetachedProcessSpawn()) {
+    return processAccumulatedEventsInlineLoop(boardDir, settleDelayMs);
+  }
+  return spawnDetachedProcessAccumulatedWorker(boardDir);
+}
+
+/**
+ * Forced drain entrypoint: first run one immediate pass, then delegate to
+ * infinite-pass continuation.
+ *
+ * GUARANTEE:
+ * - In default mode, this guarantees immediate forward progress (single pass)
+ *   and guaranteed scheduling of eventual continuation (background worker).
+ * - In `inlineLoop` mode, this runs full in-process settle loop and returns
+ *   only after pending reaches zero (or lock contention aborts loop).
+ */
+export async function processAccumulatedEventsForced(
+  boardDir: string,
+  options?: { inlineLoop?: boolean },
+): Promise<void> {
+  processAccumulatedEvents(boardDir);
+  await processAccumulatedEventsInfinitePass(boardDir, 50, options);
 }
 
 // ============================================================================
@@ -396,41 +458,51 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 function getCliInvocation(command: string, args: string[]): { cmd: string; args: string[] } {
   // Check if we have a .js file (built/published)
-  const jsPath = path.join(__dirname, 'board-live-cards.js');
+  const jsPath = path.join(__dirname, 'board-live-cards-cli.js');
   if (fs.existsSync(jsPath)) {
     return { cmd: 'node', args: [jsPath, command, ...args] };
   }
   // Fall back to .ts with tsx runner (dev environment)
-  const tsPath = path.join(__dirname, 'board-live-cards.ts');
+  const tsPath = path.join(__dirname, 'board-live-cards-cli.ts');
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
-function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err?: Error) => void): void {
+function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('run-sources', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
+  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
   const child = spawn(cmd, args, {
-    shell: true,
+    shell: useShell,
     detached: true,
     stdio: 'ignore',
+    windowsHide: true,
   });
-  child.on('error', callback);
+  let finished = false;
+  const done = (err: Error | null) => {
+    if (finished) return;
+    finished = true;
+    callback(err);
+  };
+  child.on('error', (err) => done(err));
   child.unref();
-  callback();
+  done(null);
 }
 
-function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err?: Error) => void): void {
+function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('source-data-fetched', ['--tmp', tmpFile, '--token', sourceToken]);
-  execFile(cmd, args, { shell: true }, (err, stdout, stderr) => {
+  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
+  execFile(cmd, args, { shell: useShell, encoding: 'utf8', windowsHide: true }, (err, stdout, stderr) => {
     if (err) console.error(`[source-data-fetched] call failed:`, err.message);
     if (stdout) console.log(stdout.trim());
     if (stderr) console.error(stderr.trim());
-    callback(err);
+    callback(err ?? null);
   });
 }
 
-function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err?: Error) => void): void {
+function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('source-data-fetch-failure', ['--token', sourceToken, '--reason', reason]);
-  execFile(cmd, args, { shell: true }, callback);
+  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
+  execFile(cmd, args, { shell: useShell, encoding: 'utf8', windowsHide: true }, (err) => callback(err ?? null));
 }
 
 /**
@@ -634,7 +706,7 @@ function cmdAddCard(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  spawnTryDrain(dir);
+  void processAccumulatedEventsInfinitePass(dir);
 
   console.log(`Card "${card.id}" added to board at ${path.resolve(dir)} (drain scheduled)`);
   console.log(`  taskHandlers: [${taskConfig.taskHandlers?.join(', ') ?? ''}]`);
@@ -715,7 +787,7 @@ function cmdTaskCompleted(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  spawnTryDrain(dir);
+  void processAccumulatedEventsForced(dir);
   console.log('Task completed.');
 }
 
@@ -745,7 +817,7 @@ function cmdTaskFailed(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  spawnTryDrain(dir);
+  void processAccumulatedEventsForced(dir);
   console.log('Task failed.');
 }
 
@@ -765,7 +837,7 @@ function cmdRemoveCard(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  spawnTryDrain(dir);
+  void processAccumulatedEventsInfinitePass(dir);
   console.log(`Card "${cardId}" removed.`);
 }
 
@@ -807,7 +879,7 @@ function cmdSourceDataFetched(args: string[]): void {
     timestamp: fetchedAt,
   });
 
-  tryDrainCycle(rg);
+  void processAccumulatedEventsInfinitePass(rg);
 }
 
 function cmdSourceDataFetchFailure(args: string[]): void {
@@ -843,7 +915,7 @@ function cmdSourceDataFetchFailure(args: string[]): void {
     timestamp,
   });
 
-  tryDrainCycle(rg);
+  void processAccumulatedEventsInfinitePass(rg);
 }
 
 function cmdRunSources(args: string[]): void {
@@ -865,7 +937,15 @@ function cmdRunSources(args: string[]): void {
   const executorFile = path.join(boardDir!, '.task-executor');
   const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
 
-  type SourceDef = { script?: string; bindTo: string; outputFile?: string; optional?: boolean; timeout?: number };
+  type SourceDef = {
+    cli?: string;
+    bindTo: string;
+    outputFile?: string;
+    optional?: boolean;
+    timeout?: number;
+    cwd?: string;
+    boardDir?: string;
+  };
 
   function runSource(src: SourceDef): void {
     const sourceToken = encodeSourceToken({
@@ -877,13 +957,13 @@ function cmdRunSources(args: string[]): void {
     });
 
     function reportFailure(reason: string): void {
-      invokeSourceDataFetchFailure(sourceToken, reason, (e) => {
-        if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
+      invokeSourceDataFetchFailure(sourceToken, reason, (err) => {
+        if (err) console.error(`[run-sources] source-data-fetch-failure call failed:`, err.message);
       });
     }
 
     function reportFetched(outFile: string): void {
-      invokeSourceDataFetched(sourceToken, outFile, (e) => {
+      invokeSourceDataFetched(sourceToken, outFile, () => {
         // logging already done in helper
       });
     }
@@ -898,12 +978,14 @@ function cmdRunSources(args: string[]): void {
       const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
       const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
       const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
-      fs.writeFileSync(inFile, JSON.stringify(src, null, 2), 'utf-8');
+      const sourceForExecutor = { ...src, cwd: path.dirname(cardFilePath || ''), boardDir };
+      fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
       console.log(`[run-sources] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
       try {
         execFileSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile], {
           shell: true,
           timeout: src.timeout ?? 120_000,
+          windowsHide: true,
         });
       } catch (err: unknown) {
         const reason = (err as Error).message ?? String(err);
@@ -930,14 +1012,16 @@ function cmdRunSources(args: string[]): void {
     const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
     const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
     const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
-    fs.writeFileSync(inFile, JSON.stringify(src, null, 2), 'utf-8');
-    
+    const sourceForExecutor = { ...src, cwd: path.dirname(cardFilePath || ''), boardDir };
+    fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
+
     const { cmd, args: baseArgs } = getCliInvocation('run-source-fetch', ['--in', inFile, '--out', outFile, '--err', errFile]);
     console.log(`[run-sources] run-source-fetch: ${cmd} ${baseArgs.join(' ')}`);
     try {
       execFileSync(cmd, baseArgs, {
         shell: true,
         timeout: src.timeout ?? 120_000,
+        windowsHide: true,
       });
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
@@ -1011,6 +1095,8 @@ function cmdRunSourceFetch(args: string[]): void {
   // Execute the source cli command
   console.log(`[run-source-fetch] executing: ${source.cli}`);
   const timeout = source.timeout ?? 120_000;
+  const sourceCwd = typeof source.cwd === 'string' ? source.cwd : process.cwd();
+  const sourceBoardDir = typeof source.boardDir === 'string' ? source.boardDir : undefined;
 
   let stdout: string;
   try {
@@ -1018,6 +1104,12 @@ function cmdRunSourceFetch(args: string[]): void {
       shell: true,
       encoding: 'utf-8',
       timeout,
+      cwd: sourceCwd,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
+      },
     });
   } catch (err: unknown) {
     const msg = (err as Error).message ?? String(err);
@@ -1083,36 +1175,29 @@ function cmdUpdateCard(args: string[]): void {
     });
   }
 
-  spawnTryDrain(dir);
+  void processAccumulatedEventsInfinitePass(dir);
   console.log(`Card "${cardId}" updated${restart ? ' (restarted)' : ''}.`);
 }
 
 /**
- * try-drain — manual command to loop until the journal has fully settled:
- * no undrained entries remain after a full async drain cycle.
+ * process-accumulated-events command.
+ *
+ * Default mode: performs one immediate pass and schedules relay continuation
+ * in a detached worker process.
+ *
+ * Internal mode (--inline-loop): execute full in-process settle loop.
+ * Used only by the detached worker to avoid recursive respawn.
  */
 async function cmdTryDrain(args: string[]): Promise<void> {
   const rgIdx = args.indexOf('--rg');
+  const inlineLoop = args.includes('--inline-loop');
   const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   if (!boardDir) {
-    console.error('Usage: board-live-cards try-drain --rg <dir>');
+    console.error('Usage: board-live-cards process-accumulated-events --rg <dir>');
     process.exit(1);
   }
 
-  const MAX_PASSES = 200;
-  const SETTLE_DELAY_MS = 50;
-
-  for (let pass = 0; pass < MAX_PASSES; pass++) {
-    const ran = tryDrainCycle(boardDir);
-    if (!ran) {
-      return;
-    }
-    await new Promise<void>(resolve => setTimeout(resolve, SETTLE_DELAY_MS));
-    if (getUndrainedEntries(boardDir, loadBoardEnvelope(boardDir).lastDrainedJournalId).length === 0) {
-      return;
-    }
-  }
-  console.warn('[try-drain] Reached max passes — journal may still have pending entries');
+  await processAccumulatedEventsForced(boardDir, { inlineLoop });
 }
 
 function cmdRetrigger(args: string[]): void {
@@ -1131,7 +1216,7 @@ function cmdRetrigger(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  spawnTryDrain(dir);
+  void processAccumulatedEventsInfinitePass(dir);
   console.log(`Task "${taskName}" retriggered.`);
 }
 
@@ -1155,7 +1240,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
     case 'run-sources':               return cmdRunSources(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
-    case 'try-drain':                 return await cmdTryDrain(rest);
+    case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
       console.error(`Unknown command: ${cmd ?? '(none)'}`);
       console.error('Run: board-live-cards help');
@@ -1165,10 +1250,10 @@ export async function cli(argv: string[]): Promise<void> {
 
 function cmdHelp(): void {
   console.log(`
-bboard-live-cards — LiveCards board CLI
+board-live-cards-cli — LiveCards board CLI
 
 USAGE
-  board-live-cards <command> [options]
+  board-live-cards-cli <command> [options]
 
 BOARD MANAGEMENT
   init <dir> [--task-executor <script>]
@@ -1209,9 +1294,17 @@ SOURCE CALLBACKS  (called internally by run-sources)
     Record a source fetch failure in runtime.json and append a task-progress event.
 
 INTERNAL COMMANDS
-  try-drain --rg <dir>
-    Drains the journal until fully settled.
-    Can be run manually for diagnostics.
+  process-accumulated-events --rg <dir>
+    Executes forced drain for this board.
+    This command is also used as the background relay worker.
+    By default it schedules a detached worker and returns quickly.
+    Internal workers run with --inline-loop to perform the settle loop.
+
+    Eventual-progress guarantee is relay-based (not per-call blocking guarantee):
+    1) at least one runner continues processing,
+    2) no crash/forced exit in relay window,
+    3) lock stays healthy,
+    4) event production eventually quiesces.
 
   run-sources --card <card.json> --token <callbackToken> --rg <dir>
     Execute all source[] entries for a card, then report delivery or failure.
@@ -1239,7 +1332,7 @@ RUN-SOURCE-FETCH PROTOCOL
 
 BOARD-LIVE-CARDS BUILT-IN EXECUTOR
   Understands source.cli field only:
-    "sources": [{ "cli": "node scripts/fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
+    "sources": [{ "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
     
   The source.cli command is executed with:
     - Shell execution (allows pipes, redirects, environment variables, etc.)
@@ -1256,16 +1349,20 @@ BOARD-LIVE-CARDS BUILT-IN EXECUTOR
   External task-executors can interpret source definitions however they want.
 
 EXAMPLES
-  board-live-cards init ./my-board
-  board-live-cards init ./my-board --task-executor ./executors/my-runner.py
-  board-live-cards add-card --rg ./my-board --card cards/prices.json
-  board-live-cards status --rg ./my-board
-  board-live-cards retrigger --rg ./my-board --task price-fetch
+  board-live-cards-cli init ./my-board
+  board-live-cards-cli init ./my-board --task-executor ./executors/my-runner.py
+  board-live-cards-cli add-card --rg ./my-board --card cards/prices.json
+  board-live-cards-cli status --rg ./my-board
+  board-live-cards-cli retrigger --rg ./my-board --task price-fetch
 `.trimStart());
 }
 
 // Run when invoked directly
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 if (isMain) {
-  await cli(process.argv.slice(2));
+  cli(process.argv.slice(2)).catch((err) => {
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error(msg);
+    process.exit(1);
+  });
 }

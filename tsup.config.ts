@@ -13,6 +13,7 @@ export default defineConfig({
     'continuous-event-graph/index': 'src/continuous-event-graph/index.ts',
     'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
+    'cli/board-live-cards-cli': 'src/cli/board-live-cards-cli.ts',
     'stores/file': 'src/stores/file.ts',
   },
   format: ['esm', 'cjs'],

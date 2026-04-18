@@ -31,10 +31,12 @@ import jsonata from 'jsonata';
 // Types
 // ---------------------------------------------------------------------------
 
-/** A source definition: script writes to outputFile; bindTo names the sources.* key in compute context. */
+/** A source definition: cli writes to outputFile; bindTo names the sources.* key in compute context. */
 export interface ComputeSource {
   bindTo: string;
   outputFile?: string;
+  cli?: string;
+  // Deprecated alias retained for compatibility with older cards.
   script?: string;
   optional?: boolean;
   [key: string]: unknown;

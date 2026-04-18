@@ -205,7 +205,7 @@
     "sources": {
       "type": "array",
       "items": { "$ref": "#/definitions/source_entry" },
-      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON. The executor fetches/generates data and writes JSON to --out. If no executor is registered, the entry's 'script' field is run directly (legacy). Non-optional sources must all deliver before task-completed fires. optional: true sources don't gate completion."
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON. The executor fetches/generates data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Non-optional sources must all deliver before task-completed fires. optional: true sources don't gate completion."
     },
 
     "compute": {

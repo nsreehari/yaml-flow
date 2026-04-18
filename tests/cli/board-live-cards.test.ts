@@ -2,20 +2,24 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import {
   initBoard, loadBoard, loadBoardEnvelope, saveBoard, cli,
   liveCardToTaskConfig,
   readCardInventory, lookupCardPath, appendCardInventory,
   BoardJournal, appendEventToJournal, getUndrainedEntries,
-} from '../../src/cli/board-live-cards.js';
-import type { BoardLiveCard, CardInventoryEntry, BoardEnvelope, JournalEntry } from '../../src/cli/board-live-cards.js';
+} from '../../src/cli/board-live-cards-cli.js';
+import type { BoardLiveCard, CardInventoryEntry, BoardEnvelope, JournalEntry } from '../../src/cli/board-live-cards-cli.js';
 import { createReactiveGraph, createLiveGraph, snapshot } from '../../src/continuous-event-graph/index.js';
 import type { ReactiveGraph } from '../../src/continuous-event-graph/index.js';
 import type { GraphConfig } from '../../src/event-graph/types.js';
 
+process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
+
 const ts = () => new Date().toISOString();
 const ticks = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** Poll loadBoard until predicate passes or timeout. */
 async function pollBoard(dir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
@@ -126,9 +130,9 @@ describe('board-live-cards', () => {
     expect(live2.state.tasks.calc.status).toBe('completed');
     expect(live2.state.tasks.calc.data).toEqual({ result: 42 });
 
-    // Envelope preserves journal pointer
+    // No external journal drain happened in this roundtrip, so the pointer stays empty.
     const envelope = loadBoardEnvelope(dir);
-    expect(envelope.lastDrainedJournalId).toBeTruthy();
+    expect(envelope.lastDrainedJournalId).toBe('');
   });
 });
 
@@ -196,7 +200,7 @@ describe('liveCardToTaskConfig', () => {
     const card: BoardLiveCard = {
       id: 'prices',
       provides: [{ bindTo: 'prices', src: 'state.prices' }],
-      sources: [{ script: 'fetch.sh', bindTo: 'raw' }],
+      sources: [{ cli: 'fetch.sh', bindTo: 'raw' }],
       state: { prices: {} },
     };
     const tc = liveCardToTaskConfig(card);
@@ -234,8 +238,8 @@ describe('liveCardToTaskConfig', () => {
     const card: BoardLiveCard = {
       id: 'live-feed',
       sources: [
-        { script: 'feed.sh', bindTo: 'data', outputFile: 'data.json' },
-        { script: 'enrich.sh', bindTo: 'extra', outputFile: 'extra.json', optional: true },
+        { cli: 'feed.sh', bindTo: 'data', outputFile: 'data.json' },
+        { cli: 'enrich.sh', bindTo: 'extra', outputFile: 'extra.json', optional: true },
       ],
       state: {},
     };
@@ -563,7 +567,7 @@ describe('cli add-card', () => {
     expect(live.config.tasks.enriched.requires).toEqual(['raw']);
   });
 
-  it('rejects duplicate card id', () => {
+  it('rejects duplicate card id', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
@@ -576,7 +580,7 @@ describe('cli add-card', () => {
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
-    expect(() => cli(['add-card', '--rg', dir, '--card', cardFile])).toThrow('exit');
+    await expect(cli(['add-card', '--rg', dir, '--card', cardFile])).rejects.toThrow('exit');
     exitSpy.mockRestore();
     errSpy.mockRestore();
   });
@@ -615,6 +619,8 @@ describe('cli remove-card', () => {
     const spy2 = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
     cli(['remove-card', '--rg', dir, '--id', 'temp']);
     spy2.mockRestore();
+
+    await cli(['process-accumulated-events', '--rg', dir, '--inline-loop']);
 
     await pollBoard(dir, t => !t['temp']);
     expect(logs.join('\n')).toContain('removed');
@@ -667,6 +673,8 @@ describe('cli update-card', () => {
     cli(['update-card', '--rg', dir, '--card-id', 'prices']);
     spy2.mockRestore();
 
+    await cli(['process-accumulated-events', '--rg', dir, '--inline-loop']);
+
     await pollBoard(dir, t => (t['prices'] as any)?.provides?.length === 2);
 
     const live = loadBoard(dir);
@@ -699,13 +707,13 @@ describe('cli update-card', () => {
     expect(logs.join('\n')).toContain('restarted');
   });
 
-  it('rejects unknown card-id', () => {
+  it('rejects unknown card-id', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
-    expect(() => cli(['update-card', '--rg', dir, '--card-id', 'nope'])).toThrow('exit');
+    await expect(cli(['update-card', '--rg', dir, '--card-id', 'nope'])).rejects.toThrow('exit');
     exitSpy.mockRestore();
     errSpy.mockRestore();
   });
@@ -745,5 +753,27 @@ describe('cli retrigger', () => {
     spy2.mockRestore();
 
     expect(logs.join('\n')).toContain('retriggered');
+  });
+});
+
+// ============================================================================
+// Windows launcher regression
+// ============================================================================
+
+describe('windows launcher behavior', () => {
+  it('keeps the repo CLI wrapper hidden on Windows fallback launches', () => {
+    const wrapper = fs.readFileSync(path.join(repoRoot, 'board-live-cards-cli.js'), 'utf-8');
+    expect(wrapper).toContain('windowsHide: true');
+  });
+
+  it('keeps the portfolio tracker launches hidden on Windows', () => {
+    const tracker = fs.readFileSync(path.join(repoRoot, 'examples', 'board-live-cards', 'portfolio-tracker', 'portfolio-tracker.js'), 'utf-8');
+    expect(tracker).toContain('windowsHide: true');
+  });
+
+  it('keeps CLI child-process launches hidden on Windows', () => {
+    const cliSource = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'board-live-cards-cli.ts'), 'utf-8');
+    expect(cliSource).toContain('windowsHide: true');
+    expect((cliSource.match(/windowsHide: true/g) ?? []).length).toBeGreaterThanOrEqual(7);
   });
 });

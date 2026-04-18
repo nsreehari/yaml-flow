@@ -100,7 +100,7 @@ export {
   createCallbackHandler, createFireAndForgetHandler,
   createShellHandler, createScriptHandler, createWebhookHandler, createNoopHandler,
   liveCardsToReactiveGraph,
-  MemoryJournal, FileJournal,
+  MemoryJournal,
 } from './continuous-event-graph/index.js';
 export type {
   LiveGraph, ScheduleResult, PendingTask, UnresolvedDependency, BlockedTask, LiveGraphHealth,
