@@ -102,25 +102,16 @@
     },
 
     "source_def": {
+      "description": "One source entry. The engine only cares about 'bindTo' (compute namespace key) and 'outputFile' (delivery signal). Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
       "type": "object",
       "required": ["bindTo"],
+      "additionalProperties": true,
       "properties": {
-        "kind":           { "enum": ["api", "websocket", "static", "llm"] },
-        "bindTo":         { "type": "string", "description": "Key for the sources.* namespace in compute context" },
-        "outputFile":     { "type": "string", "description": "Relative path (from boardDir) where the source script writes its output. Presence of this file signals delivery." },
-        "script":         { "type": "string", "description": "Shell command run by execute-card-task. stdout (if any) is written to outputFile." },
-        "optional":       { "type": "boolean", "default": false, "description": "If true, absence of this source does not block task completion. Retriggers the card when its outputFile arrives." },
-        "method":         { "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET" },
-        "url_template":   { "type": "string", "description": "URL with {{var}} placeholders" },
-        "headers":        { "type": "object", "additionalProperties": { "$ref": "#/definitions/bind_or_literal" } },
-        "body_template":  { "type": "object", "description": "Request body with {{var}} placeholders or bind refs" },
-        "template_vars":  {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/bind_or_literal" },
-          "description": "Variables for url/body templates — static values or bind refs"
-        },
-        "poll_interval":  { "type": "integer", "minimum": 0, "description": "Auto-refresh in seconds (0 = manual)" },
-        "transform":      { "type": "string", "description": "Dot-path to extract from response, e.g. 'data.items'" }
+        "bindTo":     { "type": "string",  "description": "Key under sources.* available in compute expressions" },
+        "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
+        "optional":   { "type": "boolean", "default": false, "description": "When true this source does not gate task completion — the card re-evaluates when outputFile arrives later." },
+        "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
+        "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }
       }
     },
 
@@ -245,7 +236,7 @@
     },
     "sources": {
       "type": "array",
-      "description": "Source scripts invoked by execute-card-task. Each writes to outputFile; presence of that file signals delivery.\nNon-optional sources must all deliver before task-completed is emitted.\nUse optional: true on individual entries for sources that don't gate completion.",
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the entry's 'script' field is run directly (legacy). Non-optional sources must all deliver (outputFile present) before task-completed fires. optional: true sources don't gate completion.",
       "items": { "$ref": "#/definitions/source_def" }
     },
     "compute": {

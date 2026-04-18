@@ -48,59 +48,16 @@
     },
 
     "source_entry": {
-      "description": "One source definition inside sources[]. bindTo names the sources.* key in compute context. outputFile signals delivery (file present = delivered). Use optional: true for non-blocking sources.",
+      "description": "One source entry. The engine only cares about 'bindTo' (compute namespace key) and 'outputFile' (delivery signal). Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
       "type": "object",
       "required": ["bindTo"],
+      "additionalProperties": true,
       "properties": {
-        "bindTo":        { "type": "string", "description": "Key for the sources.* namespace in compute context" },
-        "outputFile":    { "type": "string", "description": "Relative path (from boardDir) where the source script writes its output" },
-        "script":        { "type": "string", "description": "Shell command or path to script (for kind: script)" },
-        "optional":      { "type": "boolean", "default": false, "description": "If true, absence of this source does not block task completion" },
-        "kind":          { "type": "string", "description": "Channel type — api | websocket | static | llm | script | mail | teams | ... (extensible)" },
-        "url_template":  { "type": "string", "description": "URL with {{var}} placeholders (for kind: api/websocket)" },
-        "method":        { "type": "string", "description": "HTTP method (for kind: api)" },
-        "headers":       { "type": "object", "additionalProperties": true },
-        "body_template": { "type": "object", "additionalProperties": true },
-        "template_vars": { "type": "object", "additionalProperties": true },
-        "poll_interval": { "type": "integer", "minimum": 0, "description": "Auto-refresh in seconds (0 = manual)" },
-        "transform":     { "type": "string", "description": "Dot-path to extract from response, e.g. 'data.items'" }
-      },
-      "additionalProperties": true
-    },
-      "description": "A declarative JSON compute expression",
-      "type": "object",
-      "required": ["fn"],
-      "properties": {
-        "fn": {
-          "type": "string",
-          "description": "Function name from the built-in vocabulary",
-          "enum": [
-            "sum", "avg", "min", "max", "count", "first", "last",
-            "add", "sub", "mul", "div", "round", "abs", "mod",
-            "gt", "gte", "lt", "lte", "eq", "neq",
-            "if", "and", "or", "not",
-            "concat", "upper", "lower", "template",
-            "filter", "pluck", "map", "sort", "slice", "flat", "unique", "group",
-            "get", "default",
-            "now", "diff_days", "format_date"
-          ]
-        },
-        "input": {
-          "description": "state.path, literal, array of inputs, or nested compute_expr",
-          "oneOf": [
-            { "type": "string" },
-            { "type": "number" },
-            { "type": "boolean" },
-            { "type": "array" },
-            { "$ref": "#/definitions/compute_expr" }
-          ]
-        },
-        "field": { "type": "string", "description": "For pluck/sum/group — the object key to extract" },
-        "where": { "$ref": "#/definitions/compute_expr", "description": "For filter — predicate expression ($ = current item)" },
-        "cond":  { "$ref": "#/definitions/compute_expr", "description": "For if — condition expression" },
-        "then":  { "description": "For if — value when cond is truthy" },
-        "else":  { "description": "For if — value when cond is falsy" },
-        "format": { "type": "string", "description": "For format_date — date format string" }
+        "bindTo":     { "type": "string",  "description": "Key under sources.* available in compute expressions" },
+        "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
+        "optional":   { "type": "boolean", "default": false, "description": "When true this source does not gate task completion — the card re-evaluates when outputFile arrives later." },
+        "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
+        "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }
       }
     },
 
@@ -248,7 +205,7 @@
     "sources": {
       "type": "array",
       "items": { "$ref": "#/definitions/source_entry" },
-      "description": "Source definitions. Non-optional sources must all deliver (outputFile present) before node is considered fresh. Use optional: true on individual entries for non-blocking sources."
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON. The executor fetches/generates data and writes JSON to --out. If no executor is registered, the entry's 'script' field is run directly (legacy). Non-optional sources must all deliver before task-completed fires. optional: true sources don't gate completion."
     },
 
     "compute": {

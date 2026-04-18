@@ -985,6 +985,9 @@ export function cli(argv: string[]): void {
   const rest = argv.slice(1);
 
   switch (cmd) {
+    case 'help':
+    case '--help':
+    case '-h':            return cmdHelp();
     case 'init':           return cmdInit(rest);
     case 'status':         return cmdStatus(rest);
     case 'add-card':       return cmdAddCard(rest);
@@ -997,10 +1000,92 @@ export function cli(argv: string[]): void {
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
     case 'run-sources':               return cmdRunSources(rest);
     default:
-      console.error(`Unknown command: ${cmd}`);
-      console.error('Commands: init, status, add-card, update-card, remove-card, retrigger, task-completed, task-failed, source-data-fetched, source-data-fetch-failure, run-sources');
+      console.error(`Unknown command: ${cmd ?? '(none)'}`);
+      console.error('Run: board-live-cards help');
       process.exit(1);
   }
+}
+
+function cmdHelp(): void {
+  console.log(`
+bboard-live-cards — LiveCards board CLI
+
+USAGE
+  board-live-cards <command> [options]
+
+BOARD MANAGEMENT
+  init <dir> [--task-executor <script>]
+    Create a new board in <dir>.
+    If --task-executor is given, writes <dir>/.task-executor with the script path.
+    Re-running init on an existing board is safe; --task-executor updates the registration.
+
+  status --rg <dir>
+    Print the current task status of every card in the board.
+
+CARD MANAGEMENT
+  add-card --rg <dir> --card <card.json>
+    Add a card to the board from a JSON file and trigger it.
+
+  update-card --rg <dir> --card-id <card-id> [--restart]
+    Re-read the card JSON from disk and patch the board.
+    --restart clears the task so it re-triggers from scratch.
+
+  remove-card --rg <dir> --id <card-id>
+    Remove a card and its task from the board.
+
+  retrigger --rg <dir> --task <task-name>
+    Mark a task not-started and drain to re-trigger it.
+
+TASK CALLBACKS  (called by task executor scripts)
+  task-completed --token <callbackToken> [--data <json>]
+    Signal successful task completion with optional JSON result data.
+
+  task-failed --token <callbackToken> [--error <message>]
+    Signal task failure with an optional error message.
+
+SOURCE CALLBACKS  (called internally by run-sources)
+  source-data-fetched --tmp <file> --token <sourceToken>
+    Atomically rename <file> into the outputFile destination and record delivery
+    in runtime.json. Appends a task-progress event to re-invoke the card handler.
+
+  source-data-fetch-failure --token <sourceToken> [--reason <message>]
+    Record a source fetch failure in runtime.json and append a task-progress event.
+
+SOURCE EXECUTION  (spawned internally by card-handler)
+  run-sources --card <card.json> --token <callbackToken> --rg <dir>
+    Execute all source[] entries for a card, then report delivery or failure.
+
+    If <dir>/.task-executor exists, the registered script is used as a generic
+    executor for every source entry:
+      <executor> --in <source_json> --out <outfile> --err <errfile>
+    where:
+      --in   tmp JSON file containing the exact sources[x] object
+      --out  path the executor must write the result JSON to
+      --err  path the executor may write an error message to
+    Delivery is signaled by the presence of --out after the executor exits.
+
+    If no .task-executor is registered, each source entry's own script field is
+    run directly (legacy mode).
+
+TASK-EXECUTOR PROTOCOL  (for .task-executor scripts)
+  The script is invoked once per source entry:
+    <executor> --in <source_json_file> --out <outfile> --err <errfile>
+
+  --in   JSON file with the full sources[x] definition (bindTo, outputFile, kind,
+         url_template, headers, timeout, etc. — whatever the card author wrote).
+  --out  Write the result JSON here to signal success.
+  --err  Write an error message here when failing (optional but recommended).
+
+  Exit 0 + --out file present → delivery recorded, card re-evaluated.
+  Exit non-zero OR --out absent  → source-data-fetch-failure recorded.
+
+EXAMPLES
+  board-live-cards init ./my-board
+  board-live-cards init ./my-board --task-executor ./executors/my-runner.py
+  board-live-cards add-card --rg ./my-board --card cards/prices.json
+  board-live-cards status --rg ./my-board
+  board-live-cards retrigger --rg ./my-board --task price-fetch
+`.trimStart());
 }
 
 // Run when invoked directly

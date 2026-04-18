@@ -3,7 +3,10 @@
 // Schema: Each node has { id, state } required; all else optional.
 //   id, meta, state, requires, provides, sources, compute, view
 //   Nodes with view render as cards; nodes with sources but no view render as source pills in canvas.
-//   compute[] — ordered array of { bindTo, fn, ... } steps → writes to node.computed_values (ephemeral)
+//   compute[] — ordered array of { bindTo, expr } JSONata steps → writes to node.computed_values (ephemeral)
+//   sources[] — open objects: only bindTo + outputFile matter to the engine; all other fields are
+//               passed verbatim to the board's task-executor (--in JSON). Users define their own
+//               shape (kind, url, mailbox, channel, model, ...) per executor.
 //   requires[] — upstream node IDs; engine subscribes automatically
 //   provides[] — [{ bindTo, src }] explicit downstream token bindings
 //
