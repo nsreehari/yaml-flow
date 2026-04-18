@@ -17,6 +17,17 @@ import type { GraphConfig } from '../../src/event-graph/types.js';
 const ts = () => new Date().toISOString();
 const ticks = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+/** Poll loadBoard until predicate passes or timeout. */
+async function pollBoard(dir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const live = loadBoard(dir);
+    if (pred(live.config.tasks as Record<string, unknown>)) return;
+    await ticks(100);
+  }
+  throw new Error('pollBoard timed out');
+}
+
 // ============================================================================
 // Board persistence (envelope format)
 // ============================================================================
@@ -493,7 +504,7 @@ describe('cli add-card', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('adds a card to the board and inventory', () => {
+  it('adds a card to the board and inventory', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
@@ -511,23 +522,23 @@ describe('cli add-card', () => {
     cli(['add-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
-    // Board has the node with card-handler
+    // Wait for background try-drain to settle the board
+    await pollBoard(dir, t => !!t['prices']);
+
     const live = loadBoard(dir);
     expect(live.config.tasks.prices).toBeDefined();
     expect(live.config.tasks.prices.taskHandlers).toEqual(['card-handler']);
     expect(live.config.tasks.prices.provides).toEqual(['prices']);
 
-    // Inventory has the entry
     const inv = readCardInventory(dir);
     expect(inv).toHaveLength(1);
     expect(inv[0].cardId).toBe('prices');
     expect(inv[0].cardFilePath).toBe(path.resolve(cardFile));
 
-    // CLI output
     expect(logs.join('\n')).toContain('Card "prices" added');
   });
 
-  it('adds a card with compute + optional source (single card-handler)', () => {
+  it('adds a card with compute + optional source (single card-handler)', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
@@ -544,6 +555,8 @@ describe('cli add-card', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     cli(['add-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
+
+    await pollBoard(dir, t => !!t['enriched']);
 
     const live = loadBoard(dir);
     expect(live.config.tasks.enriched.taskHandlers).toEqual(['card-handler']);
@@ -585,7 +598,7 @@ describe('cli remove-card', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('removes a card that was previously added', () => {
+  it('removes a card that was previously added', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
@@ -596,18 +609,14 @@ describe('cli remove-card', () => {
     cli(['add-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
-    // Verify it exists
-    let live = loadBoard(dir);
-    expect(live.config.tasks.temp).toBeDefined();
+    await pollBoard(dir, t => !!t['temp']);
 
-    // Remove it
     const logs: string[] = [];
     const spy2 = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
     cli(['remove-card', '--rg', dir, '--id', 'temp']);
     spy2.mockRestore();
 
-    live = loadBoard(dir);
-    expect(live.config.tasks.temp).toBeUndefined();
+    await pollBoard(dir, t => !t['temp']);
     expect(logs.join('\n')).toContain('removed');
   });
 });
@@ -628,11 +637,10 @@ describe('cli update-card', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('updates a card config via upsert (no restart by default)', () => {
+  it('updates a card config via upsert (no restart by default)', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
-    // Add a card first
     const cardFile = path.join(tmpDir, 'my-card.json');
     const card: BoardLiveCard = {
       id: 'prices',
@@ -645,11 +653,8 @@ describe('cli update-card', () => {
     cli(['add-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
-    // Verify initial config
-    let live = loadBoard(dir);
-    expect(live.config.tasks.prices.provides).toEqual(['prices']);
+    await pollBoard(dir, t => !!t['prices']);
 
-    // Update the card file on disk — add a new provides key
     const updatedCard: BoardLiveCard = {
       id: 'prices',
       provides: [{ bindTo: 'prices', src: 'state.prices' }, { bindTo: 'rates', src: 'state.rates' }],
@@ -657,14 +662,14 @@ describe('cli update-card', () => {
     };
     fs.writeFileSync(cardFile, JSON.stringify(updatedCard));
 
-    // Run update-card (no --restart)
     const logs: string[] = [];
     const spy2 = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
     cli(['update-card', '--rg', dir, '--card-id', 'prices']);
     spy2.mockRestore();
 
-    // Config should be updated
-    live = loadBoard(dir);
+    await pollBoard(dir, t => (t['prices'] as any)?.provides?.length === 2);
+
+    const live = loadBoard(dir);
     expect(live.config.tasks.prices.provides).toEqual(['prices', 'rates']);
     expect(logs.join('\n')).toContain('updated');
     expect(logs.join('\n')).not.toContain('restarted');

@@ -20,7 +20,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { lockSync } from 'proper-lockfile';
 import { restore } from '../continuous-event-graph/core.js';
@@ -38,7 +38,7 @@ import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/in
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
-const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'all-tasks-done' }, tasks: {} } as GraphConfig;
+const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
 /** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
 export interface BoardEnvelope {
@@ -301,6 +301,35 @@ export function getUndrainedEntries(boardDir: string, lastDrainedId: string): Jo
 }
 
 /**
+ * Schedule repeated drain attempts in-process until the journal settles.
+ * This avoids spawning detached child processes/windows.
+ */
+function spawnTryDrain(boardDir: string): void {
+  // Run drain inline in the same process (no subprocess / no cmd window).
+  // Loops until the journal is fully settled.
+  const MAX_PASSES = 200;
+  const SETTLE_DELAY_MS = 50;
+  let pass = 0;
+
+  function loop(): void {
+    if (pass++ >= MAX_PASSES) {
+      console.warn('[try-drain] Reached max passes — journal may still have pending entries');
+      return;
+    }
+    const ran = tryDrainCycle(boardDir);
+    if (!ran) return; // lock held — another drainer is running
+    setTimeout(() => {
+      if (getUndrainedEntries(boardDir, loadBoardEnvelope(boardDir).lastDrainedJournalId).length > 0) {
+        loop();
+      }
+    }, SETTLE_DELAY_MS);
+  }
+
+  loop();
+}
+
+
+/**
  * Try to acquire lock, drain the journal, and save. Non-blocking.
  * If the lock is held by another process, returns false — that process will drain.
  * Returns true if the drain cycle was executed.
@@ -316,9 +345,10 @@ export function tryDrainCycle(boardDir: string): boolean {
   }
   try {
     const { rg, journal } = createBoardReactiveGraph(boardDir);
-    while (getUndrainedEntries(boardDir, journal.lastDrainedJournalId).length > 0) {
-      rg.pushAll([]);
-    }
+    // Explicitly drain the external journal and push events into the reactive graph.
+    // The engine never reads from external storage — the caller owns that boundary.
+    const undrained = journal.drain();
+    rg.pushAll(undrained);
     saveBoard(boardDir, rg, journal);
     rg.dispose();
     return true;
@@ -361,6 +391,49 @@ export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Generalized CLI invocation: determines how to invoke this script in current environment.
+ * Returns { cmd, args } suitable for execFile() or execFileSync().
+ */
+function getCliInvocation(command: string, args: string[]): { cmd: string; args: string[] } {
+  // Check if we have a .js file (built/published)
+  const jsPath = path.join(__dirname, 'board-live-cards.js');
+  if (fs.existsSync(jsPath)) {
+    return { cmd: 'node', args: [jsPath, command, ...args] };
+  }
+  // Fall back to .ts with tsx runner (dev environment)
+  const tsPath = path.join(__dirname, 'board-live-cards.ts');
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
+}
+
+function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err?: Error) => void): void {
+  const { cmd, args } = getCliInvocation('run-sources', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
+  const child = spawn(cmd, args, {
+    shell: true,
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.on('error', callback);
+  child.unref();
+  callback();
+}
+
+function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err?: Error) => void): void {
+  const { cmd, args } = getCliInvocation('source-data-fetched', ['--tmp', tmpFile, '--token', sourceToken]);
+  execFile(cmd, args, { shell: true }, (err, stdout, stderr) => {
+    if (err) console.error(`[source-data-fetched] call failed:`, err.message);
+    if (stdout) console.log(stdout.trim());
+    if (stderr) console.error(stderr.trim());
+    callback(err);
+  });
+}
+
+function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err?: Error) => void): void {
+  const { cmd, args } = getCliInvocation('source-data-fetch-failure', ['--token', sourceToken, '--reason', reason]);
+  execFile(cmd, args, { shell: true }, callback);
+}
+
+/**
  * Spin up a ReactiveGraph from a board directory with all handlers wired.
  *
  * Single handler:
@@ -379,17 +452,12 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
   const journalPath = path.join(boardDir, JOURNAL_FILE);
   const journal = new BoardJournal(journalPath, envelope.lastDrainedJournalId);
 
-  const cliScript = path.join(__dirname, 'board-live-cards.js');
-
   const handlers: Record<string, TaskHandlerFn> = {
     'card-handler': async (input) => {
       const cardPath = lookupCardPath(boardDir, input.nodeId);
       if (!cardPath) return 'task-initiate-failure';
 
-      const releaseCard = lockSync(cardPath, { retries: { retries: 5, minTimeout: 100 } });
-      let card: Record<string, unknown>;
-      try {
-        card = JSON.parse(fs.readFileSync(cardPath, 'utf-8'));
+      const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
         const cardId = card.id as string;
         const cardState = (card.state ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
@@ -461,7 +529,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
 
         if (undeliveredRequired.length > 0) {
           // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
-          // and spawn run-sources with per-source source tokens.
+          // and invoke run-sources to deliver them.
           let stampedAny = false;
           for (const src of undeliveredRequired) {
             const entry = runtime._sources[src.bindTo] ?? {};
@@ -474,7 +542,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           }
           if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
 
-          execFile('node', [cliScript, 'run-sources', '--card', cardPath, '--token', input.callbackToken, '--rg', boardDir], (err) => {
+          invokeRunSources(boardDir, cardPath, input.callbackToken, (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
           });
           return 'task-initiated';
@@ -496,7 +564,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
         if (undeliveredOptional.length > 0) {
-          execFile('node', [cliScript, 'run-sources', '--card', cardPath, '--token', input.callbackToken, '--rg', boardDir], (err) => {
+          invokeRunSources(boardDir, cardPath, input.callbackToken, (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
           });
         }
@@ -508,13 +576,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           timestamp: new Date().toISOString(),
         });
         return 'task-initiated';
-      } finally {
-        releaseCard();
-      }
     },
   };
 
-  const rg = createReactiveGraph(live, { handlers, journal });
+  const rg = createReactiveGraph(live, { handlers });
   return { rg, journal };
 }
 
@@ -569,10 +634,9 @@ function cmdAddCard(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  // 2. Try to drain — if locked, another process will drain our entry
-  const drained = tryDrainCycle(dir);
+  spawnTryDrain(dir);
 
-  console.log(`Card "${card.id}" added to board at ${path.resolve(dir)}${drained ? '' : ' (drain deferred)'}`);
+  console.log(`Card "${card.id}" added to board at ${path.resolve(dir)} (drain scheduled)`);
   console.log(`  taskHandlers: [${taskConfig.taskHandlers?.join(', ') ?? ''}]`);
   console.log(`  provides: [${taskConfig.provides.join(', ')}]`);
   if (taskConfig.requires) console.log(`  requires: [${taskConfig.requires.join(', ')}]`);
@@ -651,9 +715,8 @@ function cmdTaskCompleted(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  // 2. Try to drain — if locked, another process will drain our entry
-  const drained = tryDrainCycle(dir);
-  console.log(drained ? 'Task completed — drained.' : 'Task completed — journaled (drain deferred).');
+  spawnTryDrain(dir);
+  console.log('Task completed.');
 }
 
 function cmdTaskFailed(args: string[]): void {
@@ -682,9 +745,8 @@ function cmdTaskFailed(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  // 2. Try to drain — if locked, another process will drain our entry
-  const drained = tryDrainCycle(dir);
-  console.log(drained ? 'Task failed — drained.' : 'Task failed — journaled (drain deferred).');
+  spawnTryDrain(dir);
+  console.log('Task failed.');
 }
 
 function cmdRemoveCard(args: string[]): void {
@@ -703,8 +765,8 @@ function cmdRemoveCard(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  const drained = tryDrainCycle(dir);
-  console.log(`Card "${cardId}" removed${drained ? '' : ' (drain deferred)'}.`);
+  spawnTryDrain(dir);
+  console.log(`Card "${cardId}" removed.`);
 }
 
 function cmdSourceDataFetched(args: string[]): void {
@@ -799,8 +861,6 @@ function cmdRunSources(args: string[]): void {
   const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
   console.log(`[run-sources] Processing card "${card.id as string}"`);
 
-  const cliScript = path.join(__dirname, 'board-live-cards.js');
-
   // Load registered task-executor (if any)
   const executorFile = path.join(boardDir!, '.task-executor');
   const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
@@ -817,23 +877,19 @@ function cmdRunSources(args: string[]): void {
     });
 
     function reportFailure(reason: string): void {
-      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', reason], (e) => {
+      invokeSourceDataFetchFailure(sourceToken, reason, (e) => {
         if (e) console.error(`[run-sources] source-data-fetch-failure call failed:`, e.message);
       });
     }
 
     function reportFetched(outFile: string): void {
-      execFile('node', [cliScript, 'source-data-fetched', '--tmp', outFile, '--token', sourceToken], (e, out, err) => {
-        if (e) console.error(`[run-sources] source-data-fetched call failed:`, e.message);
-        if (out) console.log(out.trim());
-        if (err) console.error(err.trim());
+      invokeSourceDataFetched(sourceToken, outFile, (e) => {
+        // logging already done in helper
       });
     }
 
     if (taskExecutor) {
-      // Generic executor path: write the sources[x] object to a tmp input file,
-      // provide tmp paths for out and err, then call:
-      //   <executor> --in <source_json> --out <outfile> --err <errfile>
+      // External task-executor registered: invoke run-source-fetch subcommand
       if (!src.outputFile) {
         console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
         reportFailure('no outputFile configured');
@@ -843,16 +899,15 @@ function cmdRunSources(args: string[]): void {
       const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
       const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
       fs.writeFileSync(inFile, JSON.stringify(src, null, 2), 'utf-8');
-      console.log(`[run-sources] executor: ${taskExecutor} --in ${inFile} --out ${outFile} --err ${errFile}`);
+      console.log(`[run-sources] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
       try {
-        execFileSync(taskExecutor, ['--in', inFile, '--out', outFile, '--err', errFile], {
-          cwd: boardDir!,
+        execFileSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile], {
           shell: true,
           timeout: src.timeout ?? 120_000,
         });
       } catch (err: unknown) {
         const reason = (err as Error).message ?? String(err);
-        console.error(`[run-sources] executor failed for source "${src.bindTo}":`, reason);
+        console.error(`[run-sources] task-executor failed for source "${src.bindTo}":`, reason);
         reportFailure(reason);
         return;
       }
@@ -866,48 +921,121 @@ function cmdRunSources(args: string[]): void {
       return;
     }
 
-    // Legacy script path (src.script)
-    if (!src.script) return;
-
-    console.log(`[run-sources] source.script: ${src.script} → bindTo=${src.bindTo}`);
-
-    let stdout: string;
+    // No external executor: use board-live-cards run-source-fetch as the executor
+    if (!src.outputFile) {
+      console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+      reportFailure('no outputFile configured');
+      return;
+    }
+    const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
+    const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
+    const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
+    fs.writeFileSync(inFile, JSON.stringify(src, null, 2), 'utf-8');
+    
+    const { cmd, args: baseArgs } = getCliInvocation('run-source-fetch', ['--in', inFile, '--out', outFile, '--err', errFile]);
+    console.log(`[run-sources] run-source-fetch: ${cmd} ${baseArgs.join(' ')}`);
     try {
-      stdout = execFileSync(src.script, {
-        cwd: boardDir!,
+      execFileSync(cmd, baseArgs, {
         shell: true,
-        encoding: 'utf-8',
         timeout: src.timeout ?? 120_000,
-      }).trim();
+      });
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
-      console.error(`[run-sources] source "${src.bindTo}" script failed:`, reason);
+      console.error(`[run-sources] run-source-fetch failed for source "${src.bindTo}":`, reason);
       reportFailure(reason);
       return;
     }
-
-    if (src.outputFile) {
-      if (stdout) {
-        // Script emitted stdout — write to tmp; CLI will rename into dest atomically
-        const tmpFile = path.join(os.tmpdir(), `card-source-${src.bindTo}-${Date.now()}.json`);
-        fs.writeFileSync(tmpFile, stdout);
-        reportFetched(tmpFile);
-      } else if (fs.existsSync(path.join(boardDir!, src.outputFile))) {
-        // Script wrote outputFile directly (no stdout) — pass it straight; CLI renames atomically
-        reportFetched(path.join(boardDir!, src.outputFile));
-      } else {
-        console.warn(`[run-sources] source "${src.bindTo}" produced no stdout and outputFile is absent`);
-        reportFailure('script produced no output');
-      }
+    if (fs.existsSync(outFile)) {
+      reportFetched(outFile);
     } else {
-      console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
-      reportFailure('no outputFile configured');
+      const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
+      console.warn(`[run-sources] source "${src.bindTo}": ${errMsg}`);
+      reportFailure(errMsg);
     }
   }
 
   const sources = (card.sources ?? []) as SourceDef[];
   for (const src of sources) {
     runSource(src);
+  }
+}
+
+/**
+ * Run-source-fetch protocol: execute a source definition.
+ * Board-live-cards built-in implementation understands source.cli field.
+ *
+ * Reads source definition from --in, executes its cli field,
+ * writes result to --out file. Presence of --out indicates success.
+ */
+function cmdRunSourceFetch(args: string[]): void {
+  const inIdx = args.indexOf('--in');
+  const outIdx = args.indexOf('--out');
+  const errIdx = args.indexOf('--err');
+
+  const inFile = inIdx !== -1 ? args[inIdx + 1] : undefined;
+  const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
+  const errFile = errIdx !== -1 ? args[errIdx + 1] : undefined;
+
+  if (!inFile || !outFile) {
+    console.error('Usage: board-live-cards run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]');
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(inFile)) {
+    const msg = `Input file not found: ${inFile}`;
+    if (errFile) fs.writeFileSync(errFile, msg);
+    console.error(`[run-source-fetch] ${msg}`);
+    process.exit(1);
+  }
+
+  // Parse source definition
+  let source: any;
+  try {
+    const raw = fs.readFileSync(inFile, 'utf-8');
+    source = JSON.parse(raw);
+  } catch (err) {
+    const msg = `Failed to parse input file: ${(err as Error).message}`;
+    if (errFile) fs.writeFileSync(errFile, msg);
+    console.error(`[run-source-fetch] ${msg}`);
+    process.exit(1);
+  }
+
+  // Source must have a cli field (not script)
+  if (!source.cli) {
+    const msg = 'Source definition missing cli field (board-live-cards built-in executor only understands source.cli)';
+    if (errFile) fs.writeFileSync(errFile, msg);
+    console.error(`[run-source-fetch] ${msg}`);
+    process.exit(1);
+  }
+
+  // Execute the source cli command
+  console.log(`[run-source-fetch] executing: ${source.cli}`);
+  const timeout = source.timeout ?? 120_000;
+
+  let stdout: string;
+  try {
+    stdout = execFileSync(source.cli, {
+      shell: true,
+      encoding: 'utf-8',
+      timeout,
+    });
+  } catch (err: unknown) {
+    const msg = (err as Error).message ?? String(err);
+    console.error(`[run-source-fetch] cli failed: ${msg}`);
+    if (errFile) fs.writeFileSync(errFile, msg);
+    process.exit(1);
+  }
+
+  // Write result to --out
+  const result = stdout.trim();
+  try {
+    fs.writeFileSync(outFile, result);
+    console.log(`[run-source-fetch] result written to ${outFile}`);
+  } catch (err) {
+    const msg = `Failed to write output file: ${(err as Error).message}`;
+    console.error(`[run-source-fetch] ${msg}`);
+    if (errFile) fs.writeFileSync(errFile, msg);
+    process.exit(1);
   }
 }
 
@@ -955,9 +1083,36 @@ function cmdUpdateCard(args: string[]): void {
     });
   }
 
-  // 5. Drain
-  const drained = tryDrainCycle(dir);
-  console.log(`Card "${cardId}" updated${restart ? ' (restarted)' : ''}${drained ? '' : ' (drain deferred)'}.`);
+  spawnTryDrain(dir);
+  console.log(`Card "${cardId}" updated${restart ? ' (restarted)' : ''}.`);
+}
+
+/**
+ * try-drain — manual command to loop until the journal has fully settled:
+ * no undrained entries remain after a full async drain cycle.
+ */
+async function cmdTryDrain(args: string[]): Promise<void> {
+  const rgIdx = args.indexOf('--rg');
+  const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  if (!boardDir) {
+    console.error('Usage: board-live-cards try-drain --rg <dir>');
+    process.exit(1);
+  }
+
+  const MAX_PASSES = 200;
+  const SETTLE_DELAY_MS = 50;
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const ran = tryDrainCycle(boardDir);
+    if (!ran) {
+      return;
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, SETTLE_DELAY_MS));
+    if (getUndrainedEntries(boardDir, loadBoardEnvelope(boardDir).lastDrainedJournalId).length === 0) {
+      return;
+    }
+  }
+  console.warn('[try-drain] Reached max passes — journal may still have pending entries');
 }
 
 function cmdRetrigger(args: string[]): void {
@@ -976,11 +1131,11 @@ function cmdRetrigger(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  const drained = tryDrainCycle(dir);
-  console.log(`Task "${taskName}" retriggered${drained ? '' : ' (drain deferred)'}.`);
+  spawnTryDrain(dir);
+  console.log(`Task "${taskName}" retriggered.`);
 }
 
-export function cli(argv: string[]): void {
+export async function cli(argv: string[]): Promise<void> {
   const cmd = argv[0];
   const rest = argv.slice(1);
 
@@ -999,6 +1154,8 @@ export function cli(argv: string[]): void {
     case 'source-data-fetched':       return cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
     case 'run-sources':               return cmdRunSources(rest);
+    case 'run-source-fetch':          return cmdRunSourceFetch(rest);
+    case 'try-drain':                 return await cmdTryDrain(rest);
     default:
       console.error(`Unknown command: ${cmd ?? '(none)'}`);
       console.error('Run: board-live-cards help');
@@ -1051,33 +1208,52 @@ SOURCE CALLBACKS  (called internally by run-sources)
   source-data-fetch-failure --token <sourceToken> [--reason <message>]
     Record a source fetch failure in runtime.json and append a task-progress event.
 
-SOURCE EXECUTION  (spawned internally by card-handler)
+INTERNAL COMMANDS
+  try-drain --rg <dir>
+    Drains the journal until fully settled.
+    Can be run manually for diagnostics.
+
   run-sources --card <card.json> --token <callbackToken> --rg <dir>
     Execute all source[] entries for a card, then report delivery or failure.
 
-    If <dir>/.task-executor exists, the registered script is used as a generic
-    executor for every source entry:
-      <executor> --in <source_json> --out <outfile> --err <errfile>
-    where:
-      --in   tmp JSON file containing the exact sources[x] object
-      --out  path the executor must write the result JSON to
-      --err  path the executor may write an error message to
-    Delivery is signaled by the presence of --out after the executor exits.
+    If <dir>/.task-executor exists, invokes it with run-source-fetch subcommand:
+      <executor> run-source-fetch --in <source_json> --out <outfile> --err <errfile>
+    
+    If no .task-executor is registered, uses board-live-cards built-in run-source-fetch.
 
-    If no .task-executor is registered, each source entry's own script field is
-    run directly (legacy mode).
+  run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
+    Execute a source definition. Board-live-cards reads source.cli and executes it.
+    Writes result to --out. Presence of --out after exit indicates success.
 
-TASK-EXECUTOR PROTOCOL  (for .task-executor scripts)
-  The script is invoked once per source entry:
-    <executor> --in <source_json_file> --out <outfile> --err <errfile>
+RUN-SOURCE-FETCH PROTOCOL
+  External task-executors implement:
+    <executor> run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
 
-  --in   JSON file with the full sources[x] definition (bindTo, outputFile, kind,
-         url_template, headers, timeout, etc. — whatever the card author wrote).
-  --out  Write the result JSON here to signal success.
-  --err  Write an error message here when failing (optional but recommended).
+  INPUT:   --in file contains the full sources[x] definition object
+  OUTPUT:  --out file is written with the result to signal success.
+           --err file may be written to explain failure.
+           
+  Exit code and --out presence determine success:
+    Exit 0 + --out file present → source delivery recorded, card re-evaluated.
+    Exit non-zero OR --out absent → source-data-fetch-failure recorded.
 
-  Exit 0 + --out file present → delivery recorded, card re-evaluated.
-  Exit non-zero OR --out absent  → source-data-fetch-failure recorded.
+BOARD-LIVE-CARDS BUILT-IN EXECUTOR
+  Understands source.cli field only:
+    "sources": [{ "cli": "node scripts/fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
+    
+  The source.cli command is executed with:
+    - Shell execution (allows pipes, redirects, environment variables, etc.)
+    - Stdout is captured and delivered to the card as-is
+    - Timeout from source.timeout (default 120s)
+    
+  The source.cli command must:
+    - Execute successfully (exit 0)
+    - Write output to stdout
+    - Complete within the timeout
+    
+  The output format is the concern of the card's compute function to interpret.
+    
+  External task-executors can interpret source definitions however they want.
 
 EXAMPLES
   board-live-cards init ./my-board
@@ -1091,5 +1267,5 @@ EXAMPLES
 // Run when invoked directly
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 if (isMain) {
-  cli(process.argv.slice(2));
+  await cli(process.argv.slice(2));
 }

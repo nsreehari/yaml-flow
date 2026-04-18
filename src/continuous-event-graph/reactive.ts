@@ -20,7 +20,6 @@ import type { LiveGraph, LiveGraphSnapshot, ScheduleResult } from './types.js';
 import { createLiveGraph, applyEvents, snapshot } from './core.js';
 import { schedule } from './schedule.js';
 import { MemoryJournal } from './journal.js';
-import type { Journal } from './journal.js';
 import { createHash } from 'node:crypto';
 
 // ============================================================================
@@ -158,8 +157,6 @@ export type TaskHandlerFn = (input: TaskHandlerInput) => Promise<TaskHandlerRetu
 export interface ReactiveGraphOptions {
   /** Named handler registry — handler name → handler function */
   handlers: Record<string, TaskHandlerFn>;
-  /** Journal adapter (default: MemoryJournal) */
-  journal?: Journal;
   /** Called after each drain cycle — for observability */
   onDrain?: (events: GraphEvent[], live: LiveGraph, scheduleResult: ScheduleResult) => void;
 }
@@ -223,9 +220,13 @@ export function createReactiveGraph(
 ): ReactiveGraph {
   const {
     handlers: initialHandlers,
-    journal = new MemoryJournal(),
     onDrain,
   } = options;
+
+  // Private input queue — caller pushes external events here via push()/pushAll().
+  // The engine never reads from a caller-supplied journal; all external events must be
+  // explicitly pushed in so that state mutations are always caller-controlled.
+  const inputQueue = new MemoryJournal();
 
   let live = 'state' in configOrLive && 'config' in configOrLive
     ? configOrLive as LiveGraph
@@ -234,6 +235,10 @@ export function createReactiveGraph(
 
   // Handler registry — mutable, keyed by handler name
   const handlers = new Map<string, TaskHandlerFn>(Object.entries(initialHandlers));
+
+  // Private journal for internal state transitions (task-started, task-failed from engine).
+  // Never exposed outside; keeps internal events off the caller-supplied journal.
+  const internalJournal = new MemoryJournal();
 
   // Drain lock — prevents re-entrant drain cycles
   let draining = false;
@@ -262,8 +267,12 @@ export function createReactiveGraph(
   }
 
   function drainOnce(): void {
-    // 1. Read all pending events from journal
-    const events = journal.drain();
+    // 1. Read all pending events — internal lifecycle transitions first (task-started, task-failed),
+    // then caller-pushed external events (task-upsert, task-completed, etc.).
+    // Internal must precede external so engine lifecycle always applies before caller completions.
+    const internalEvents = internalJournal.drain();
+    const inputEvents = inputQueue.drain();
+    const events = [...internalEvents, ...inputEvents];
 
     // 2. Apply events atomically (if any)
     if (events.length > 0) {
@@ -296,7 +305,7 @@ export function createReactiveGraph(
         const callbackToken = encodeCallbackToken(taskName);
         runPipeline(taskName, callbackToken, update).catch((error: Error) => {
           if (disposed) return;
-          journal.append({
+          internalJournal.append({
             type: 'task-failed',
             taskName,
             error: error.message ?? String(error),
@@ -380,19 +389,23 @@ export function createReactiveGraph(
       return;
     }
 
-    // Journal task-started
-    journal.append({
+    // Write task-started to internal journal only — not to the caller-supplied journal
+    internalJournal.append({
       type: 'task-started',
       taskName,
       timestamp: new Date().toISOString(),
     });
+    // Re-trigger drain so task-started is applied to graph state before caller saves.
+    // Since we're called from within drainOnce(), draining=true here, so this sets
+    // drainQueued=true — the do...while loop picks it up in the next pass.
+    drain();
 
     const callbackToken = encodeCallbackToken(taskName);
 
     // Fire-and-forget: run the handler pipeline
     runPipeline(taskName, callbackToken).catch((error: Error) => {
       if (disposed) return;
-      journal.append({
+      internalJournal.append({
         type: 'task-failed',
         taskName,
         error: error.message ?? String(error),
@@ -412,7 +425,7 @@ export function createReactiveGraph(
       if (event.type === 'task-completed' && event.data && !event.dataHash) {
         event = { ...event, dataHash: computeDataHash(event.data) };
       }
-      journal.append(event);
+      inputQueue.append(event);
       drain();
     },
 
@@ -420,9 +433,9 @@ export function createReactiveGraph(
       if (disposed) return;
       for (const event of events) {
         if (event.type === 'task-completed' && event.data && !event.dataHash) {
-          journal.append({ ...event, dataHash: computeDataHash(event.data) });
+          inputQueue.append({ ...event, dataHash: computeDataHash(event.data) });
         } else {
-          journal.append(event);
+          inputQueue.append(event);
         }
       }
       drain();
@@ -438,7 +451,7 @@ export function createReactiveGraph(
       if (!live.config.tasks[taskName]) return;
 
       if (errors && errors.length > 0) {
-        journal.append({
+        inputQueue.append({
           type: 'task-failed',
           taskName,
           error: errors.join('; '),
@@ -446,7 +459,7 @@ export function createReactiveGraph(
         });
       } else {
         const dataHash = data && Object.keys(data).length > 0 ? computeDataHash(data) : undefined;
-        journal.append({
+        inputQueue.append({
           type: 'task-completed',
           taskName,
           data,
@@ -459,37 +472,37 @@ export function createReactiveGraph(
 
     addNode(name: string, taskConfig: TaskConfig): void {
       if (disposed) return;
-      journal.append({ type: 'task-upsert', taskName: name, taskConfig, timestamp: new Date().toISOString() });
+      inputQueue.append({ type: 'task-upsert', taskName: name, taskConfig, timestamp: new Date().toISOString() });
       drain();
     },
 
     removeNode(name: string): void {
       if (disposed) return;
-      journal.append({ type: 'task-removal', taskName: name, timestamp: new Date().toISOString() });
+      inputQueue.append({ type: 'task-removal', taskName: name, timestamp: new Date().toISOString() });
       drain();
     },
 
     addRequires(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      journal.append({ type: 'node-requires-add', nodeName, tokens, timestamp: new Date().toISOString() });
+      inputQueue.append({ type: 'node-requires-add', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
     removeRequires(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      journal.append({ type: 'node-requires-remove', nodeName, tokens, timestamp: new Date().toISOString() });
+      inputQueue.append({ type: 'node-requires-remove', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
     addProvides(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      journal.append({ type: 'node-provides-add', nodeName, tokens, timestamp: new Date().toISOString() });
+      inputQueue.append({ type: 'node-provides-add', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
     removeProvides(nodeName: string, tokens: string[]): void {
       if (disposed) return;
-      journal.append({ type: 'node-provides-remove', nodeName, tokens, timestamp: new Date().toISOString() });
+      inputQueue.append({ type: 'node-provides-remove', nodeName, tokens, timestamp: new Date().toISOString() });
       drain();
     },
 
@@ -504,7 +517,7 @@ export function createReactiveGraph(
     retrigger(taskName: string): void {
       if (disposed) return;
       if (!live.config.tasks[taskName]) return;
-      journal.append({
+      inputQueue.append({
         type: 'task-restart',
         taskName,
         timestamp: new Date().toISOString(),
@@ -516,7 +529,7 @@ export function createReactiveGraph(
       if (disposed) return;
       for (const name of taskNames) {
         if (!live.config.tasks[name]) continue;
-        journal.append({
+        inputQueue.append({
           type: 'task-restart',
           taskName: name,
           timestamp: new Date().toISOString(),

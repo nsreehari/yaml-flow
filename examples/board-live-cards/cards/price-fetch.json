@@ -5,7 +5,7 @@
   "provides": [{ "bindTo": "prices", "src": "sources.prices" }],
   "state": {},
   "sources": [
-    { "script": "node scripts/fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }
+    { "cli": "node scripts/fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }
   ],
   "view": {
     "elements": [

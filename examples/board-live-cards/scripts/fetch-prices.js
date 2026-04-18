@@ -7,19 +7,30 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const tmpFile = path.join(process.cwd(), 'tmp_file1');
+const tmpFileCandidates = [
+  path.join(process.cwd(), 'tmp_file1'),
+  path.join(process.cwd(), 'board-runtime', 'tmp_file1'),
+];
+
+function getReadableTmpFile() {
+  for (const tmpFile of tmpFileCandidates) {
+    if (!fs.existsSync(tmpFile)) continue;
+    const content = fs.readFileSync(tmpFile, 'utf-8').trim();
+    if (content) return { tmpFile, content };
+  }
+  return undefined;
+}
 
 function waitForFile() {
   const interval = setInterval(() => {
-    if (!fs.existsSync(tmpFile)) return;
-    const content = fs.readFileSync(tmpFile, 'utf-8').trim();
-    if (!content) return;
+    const ready = getReadableTmpFile();
+    if (!ready) return;
 
     clearInterval(interval);
     // Clear the file
-    fs.writeFileSync(tmpFile, '', 'utf-8');
+    fs.writeFileSync(ready.tmpFile, '', 'utf-8');
     // Output JSON to stdout — execute-card-task.ts captures this
-    process.stdout.write(content + '\n');
+    process.stdout.write(ready.content + '\n');
   }, 500);
 }
 
