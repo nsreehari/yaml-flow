@@ -9,6 +9,22 @@ Two workflow engines in one package. Pick the model that fits your problem.
 npm install yaml-flow
 ```
 
+## Board Live Cards CLI (Canonical External Path)
+
+When installed from npm, use the package-exposed command:
+
+```bash
+npx board-live-cards-cli --help
+```
+
+If installed as a dependency in another project, invoke it the same way via your package runner:
+
+```bash
+board-live-cards-cli --help
+```
+
+This is the canonical black-box entrypoint for external usage.
+
 ## Which Mode Do I Need?
 
 yaml-flow ships two execution models. They solve fundamentally different problems.
