@@ -31,6 +31,21 @@ import jsonata from 'jsonata';
 // Types
 // ---------------------------------------------------------------------------
 
+/** A source definition: script writes to outputFile; bindTo names the sources.* key in compute context. */
+export interface ComputeSource {
+  bindTo: string;
+  outputFile?: string;
+  script?: string;
+  optional?: boolean;
+  [key: string]: unknown;
+}
+
+/** Options for CardCompute.run() */
+export interface RunOptions {
+  /** Pre-loaded sources data map (keyed by bindTo). Use in browser or when caller loads files. */
+  sourcesData?: Record<string, unknown>;
+}
+
 /** A single compute step: bindTo names the computed_values key; expr is a JSONata expression. */
 export interface ComputeStep {
   bindTo: string;
@@ -42,8 +57,11 @@ export interface ComputeNode {
   id?: string;
   state?: Record<string, unknown>;
   requires?: Record<string, unknown>;
+  sources?: ComputeSource[];
   compute?: ComputeStep[];
   computed_values?: Record<string, unknown>;
+  /** Ephemeral: populated by run() from sourcesData option. Never persisted. */
+  _sourcesData?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -78,19 +96,25 @@ function deepSet(obj: Record<string, unknown>, path: string, value: unknown): vo
 
 /**
  * Run all compute steps on a node.
- * Each step's expr is evaluated against { state, requires, computed_values }.
+ * Each step's expr is evaluated against { state, requires, sources, computed_values }.
  * Results are written to node.computed_values[bindTo].
- * computed_values is reset on each call — it is ephemeral, never persisted.
+ * computed_values and _sourcesData are reset on each call — ephemeral, never persisted.
+ *
+ * @param options.sourcesData  Pre-loaded map of { [bindTo]: data } for sources namespace.
+ *   In Node/CLI: loaded from outputFiles by the caller (card-handler).
+ *   In browser:  passed in by the caller (e.g. from fetch results).
  */
-async function run(node: ComputeNode): Promise<ComputeNode> {
+async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode> {
   if (!node?.compute?.length) return node;
   if (!node.state) node.state = {};
   node.computed_values = {};
+  node._sourcesData = options?.sourcesData ?? {};
 
-  // Context passed to JSONata — expressions navigate state.*, requires.*, computed_values.*
+  // Context passed to JSONata
   const ctx: Record<string, unknown> = {
     state: node.state,
     requires: node.requires ?? {},
+    sources: node._sourcesData,
     computed_values: node.computed_values,
   };
 
@@ -109,12 +133,13 @@ async function run(node: ComputeNode): Promise<ComputeNode> {
 
 /**
  * Evaluate a single JSONata expression against a node's context.
- * Context is { state, requires, computed_values }.
+ * Context is { state, requires, sources, computed_values }.
  */
 async function evalExpr(expr: string, node: ComputeNode): Promise<unknown> {
   const ctx = {
     state: node.state ?? {},
     requires: node.requires ?? {},
+    sources: node._sourcesData ?? {},
     computed_values: node.computed_values ?? {},
   };
   return jsonata(expr).evaluate(ctx);
@@ -125,6 +150,10 @@ async function evalExpr(expr: string, node: ComputeNode): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 function resolve(node: ComputeNode, path: string): unknown {
+  // sources.* resolves from the ephemeral _sourcesData map
+  if (path.startsWith('sources.')) {
+    return deepGet(node._sourcesData ?? {}, path.slice('sources.'.length));
+  }
   return deepGet(node, path);
 }
 
@@ -145,7 +174,7 @@ const VALID_ELEMENT_KINDS = new Set([
 ]);
 
 const VALID_STATUSES = new Set(['fresh', 'stale', 'loading', 'error']);
-const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'state', 'compute', 'sources', 'optionalSources']);
+const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'state', 'compute', 'sources']);
 
 function validateNode(node: unknown): ValidationResult {
   const errors: string[] = [];
@@ -226,21 +255,8 @@ function validateNode(node: unknown): ValidationResult {
         } else {
           const s = src as Record<string, unknown>;
           if (typeof s.bindTo !== 'string' || !s.bindTo) errors.push(`sources[${i}]: missing required "bindTo" property`);
-        }
-      });
-    }
-  }
-
-  if (n.optionalSources != null) {
-    if (!Array.isArray(n.optionalSources)) {
-      errors.push('optionalSources: must be an array');
-    } else {
-      (n.optionalSources as unknown[]).forEach((src, i) => {
-        if (!src || typeof src !== 'object' || Array.isArray(src)) {
-          errors.push(`optionalSources[${i}]: must be an object`);
-        } else {
-          const s = src as Record<string, unknown>;
-          if (typeof s.bindTo !== 'string' || !s.bindTo) errors.push(`optionalSources[${i}]: missing required "bindTo" property`);
+          if (s.outputFile != null && typeof s.outputFile !== 'string') errors.push(`sources[${i}]: outputFile must be a string`);
+          if (s.optional != null && typeof s.optional !== 'boolean') errors.push(`sources[${i}]: optional must be a boolean`);
         }
       });
     }

@@ -6,5 +6,10 @@
   "state": {},
   "compute": [
     { "bindTo": "totalValue", "expr": "$sum(requires.table.rows.value)" }
-  ]
+  ],
+  "view": {
+    "elements": [
+      { "kind": "metric", "label": "Total Portfolio Value", "data": { "bind": "computed_values.totalValue" } }
+    ]
+  }
 }

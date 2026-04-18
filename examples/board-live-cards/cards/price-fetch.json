@@ -2,9 +2,14 @@
   "id": "price-fetch",
   "meta": { "title": "Fetch Market Prices" },
   "requires": ["holdings"],
-  "provides": [{ "bindTo": "prices", "src": "state.prices" }],
+  "provides": [{ "bindTo": "prices", "src": "sources.prices" }],
   "state": {},
   "sources": [
-    { "script": "node scripts/fetch-prices.js", "bindTo": "prices" }
-  ]
+    { "script": "node scripts/fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }
+  ],
+  "view": {
+    "elements": [
+      { "kind": "table", "label": "Market Prices", "data": { "bind": "sources.prices" } }
+    ]
+  }
 }

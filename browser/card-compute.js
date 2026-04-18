@@ -4,16 +4,17 @@
 //   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
 //
 // API (all async where noted):
-//   CardCompute.run(node)                  → Promise<node>  — eval all compute steps → computed_values
+//   CardCompute.run(node, options)         → Promise<node>  — eval all compute steps → computed_values
 //   CardCompute.eval(expr, node)           → Promise<value> — eval single JSONata expression
-//   CardCompute.resolve(node, path)        → value          — sync deep-get "state.foo.bar"
+//   CardCompute.resolve(node, path)        → value          — sync deep-get "state.foo" or "sources.foo"
 //   CardCompute.validate(node)             → { ok, errors } — sync structural validator
 //
 // Compute steps shape: { bindTo: string, expr: string }
-//   expr is a JSONata expression evaluated against { state, requires, computed_values }
-//   computed_values is ephemeral — reset on each run(), never persisted.
+//   expr is a JSONata expression evaluated against { state, requires, sources, computed_values }
+//   computed_values and _sourcesData are ephemeral — reset on each run(), never persisted.
 //
 // Sequential steps: later steps see earlier results via computed_values.*
+// options.sourcesData: pre-loaded { [bindTo]: data } map for the sources.* namespace
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -55,11 +56,12 @@
   // run — evaluate all compute steps on a node (async, returns Promise<node>)
   // ===========================================================================
 
-  function run(node) {
+  function run(node, options) {
     if (!node || !node.compute || !node.compute.length) return Promise.resolve(node);
 
     if (!node.state) node.state = {};
     node.computed_values = {};
+    node._sourcesData = (options && options.sourcesData) || {};
 
     if (typeof jsonata === 'undefined') {
       console.error('CardCompute: JSONata not loaded. Add <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script> before card-compute.js');
@@ -69,6 +71,7 @@
     var ctx = {
       state: node.state,
       requires: node.requires || {},
+      sources: node._sourcesData,
       computed_values: node.computed_values,
     };
 
@@ -101,6 +104,7 @@
     var ctx = {
       state: (node && node.state) || {},
       requires: (node && node.requires) || {},
+      sources: (node && node._sourcesData) || {},
       computed_values: (node && node.computed_values) || {},
     };
     return jsonata(expr).evaluate(ctx);
@@ -111,6 +115,9 @@
   // ===========================================================================
 
   function resolve(node, path) {
+    if (path && path.indexOf('sources.') === 0) {
+      return _deepGet((node && node._sourcesData) || {}, path.slice('sources.'.length));
+    }
     return _deepGet(node, path);
   }
 
@@ -120,7 +127,7 @@
 
   var VALID_ELEMENT_KINDS = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
   var VALID_STATUSES = ['fresh','stale','loading','error'];
-  var ALLOWED_KEYS = ['id','meta','requires','provides','view','state','compute','sources','optionalSources'];
+  var ALLOWED_KEYS = ['id','meta','requires','provides','view','state','compute','sources'];
 
   function validateNode(node) {
     var errors = [];
@@ -195,18 +202,10 @@
         node.sources.forEach(function (src, i) {
           if (!src || typeof src !== 'object' || Array.isArray(src)) errors.push('sources[' + i + ']: must be an object');
           else if (typeof src.bindTo !== 'string' || !src.bindTo) errors.push('sources[' + i + ']: missing required "bindTo" property');
-        });
-      }
-    }
-
-    // optionalSources
-    if (node.optionalSources != null) {
-      if (!Array.isArray(node.optionalSources)) {
-        errors.push('optionalSources: must be an array');
-      } else {
-        node.optionalSources.forEach(function (src, i) {
-          if (!src || typeof src !== 'object' || Array.isArray(src)) errors.push('optionalSources[' + i + ']: must be an object');
-          else if (typeof src.bindTo !== 'string' || !src.bindTo) errors.push('optionalSources[' + i + ']: missing required "bindTo" property');
+          else {
+            if (src.outputFile != null && typeof src.outputFile !== 'string') errors.push('sources[' + i + ']: outputFile must be a string');
+            if (src.optional != null && typeof src.optional !== 'boolean') errors.push('sources[' + i + ']: optional must be a boolean');
+          }
         });
       }
     }

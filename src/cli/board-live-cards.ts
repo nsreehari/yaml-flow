@@ -31,7 +31,7 @@ import type { GraphConfig, TaskConfig, GraphEvent } from '../event-graph/types.j
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { CardCompute } from '../card-compute/index.js';
-import type { ComputeNode, ComputeStep } from '../card-compute/index.js';
+import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/index.js';
 
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
@@ -324,60 +324,86 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       const cardPath = lookupCardPath(boardDir, input.nodeId);
       if (!cardPath) return 'task-initiate-failure';
 
-      // Lock the card file for read → compute → write
+      // Lock the card file for read (never for write — card-handler never mutates card.json)
       const releaseCard = lockSync(cardPath, { retries: { retries: 5, minTimeout: 100 } });
       let card: Record<string, unknown>;
       try {
         card = JSON.parse(fs.readFileSync(cardPath, 'utf-8'));
         const cardState = (card.state ?? {}) as Record<string, unknown>;
 
-        // Build compute node (used for both compute and provides resolution)
+        // Merge sources and optionalSources (backward compat) into one unified array.
+        // Legacy cards may have optionalSources as a separate top-level array.
+        const allSources: ComputeSource[] = [
+          ...((card.sources ?? []) as ComputeSource[]),
+          ...((card.optionalSources ?? []) as ComputeSource[]).map(s => ({ ...s, optional: true as const })),
+        ];
+
+        // Load already-delivered sources from their outputFiles into the sources context.
+        // outputFile-based delivery: the file existing = the source has delivered.
+        // Legacy sources (no outputFile) fall back to cardState[bindTo].
+        const sourcesData: Record<string, unknown> = {};
+        for (const src of allSources) {
+          if (src.outputFile) {
+            const filePath = path.join(boardDir, src.outputFile);
+            if (fs.existsSync(filePath)) {
+              const raw = fs.readFileSync(filePath, 'utf-8').trim();
+              try { sourcesData[src.bindTo] = JSON.parse(raw); }
+              catch { sourcesData[src.bindTo] = raw; }
+            }
+          } else if (cardState[src.bindTo] != null) {
+            // Legacy: sourced via state (pre-outputFile cards)
+            sourcesData[src.bindTo] = cardState[src.bindTo];
+          }
+        }
+
+        // Build compute node with sources definitions (for resolve() and context)
         const computeNode: ComputeNode = {
           id: card.id as string,
           state: { ...cardState },
           requires: input.state ?? {},
+          sources: allSources,
           compute: card.compute as ComputeStep[] | undefined,
         };
 
-        // Run CardCompute if the card has a compute section
+        // Run compute with sources context injected
         if (card.compute) {
-          await CardCompute.run(computeNode);
-          // computeNode.computed_values available for provides resolution below
+          await CardCompute.run(computeNode, { sourcesData });
         }
 
-        // Do NOT write computed_values to card.state on disk — it's ephemeral.
-        // Only sources mutate card.state on disk.
+        // Check for undelivered required sources:
+        //   outputFile-based: undelivered iff the file does not yet exist
+        //   legacy (no outputFile): undelivered iff cardState[bindTo] is null
+        const undeliveredRequired = allSources.filter(s => {
+          if (s.optional) return false;
+          if (s.outputFile) return !fs.existsSync(path.join(boardDir, s.outputFile));
+          return cardState[s.bindTo] == null; // legacy fallback
+        });
 
-        // Check if we need to spawn sources
-        const sources = (card.sources ?? []) as { script?: string; bindTo: string }[];
-        const undeliveredSources = sources.filter(s => cardState[s.bindTo] == null);
-
-        if (undeliveredSources.length > 0) {
-          // Spawn source subprocess — card stays in-progress
+        if (undeliveredRequired.length > 0) {
+          // Spawn execute-card-task to run source scripts; it will retrigger on delivery.
+          // card-handler NEVER writes card.json — sources write to their outputFiles.
           const scriptPath = path.join(__dirname, 'execute-card-task.js');
           execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
           });
-          // Persist any state unchanged (sources haven't delivered yet)
-          card.state = cardState;
-          fs.writeFileSync(cardPath, JSON.stringify(card, null, 2));
           return 'task-initiated';
         }
 
-        // All sources delivered (or no sources). Build provides data via explicit src paths.
+        // All required sources delivered (or no sources required).
+        // Build provides data via explicit src paths — sources.* resolves from sourcesData.
         const providesBindings = (card.provides ?? [{ bindTo: card.id as string, src: `state.${card.id}` }]) as { bindTo: string; src: string }[];
         const data: Record<string, unknown> = {};
         for (const { bindTo, src } of providesBindings) {
           data[bindTo] = CardCompute.resolve(computeNode, src);
         }
 
-        // Persist state unchanged
-        card.state = cardState;
-        fs.writeFileSync(cardPath, JSON.stringify(card, null, 2));
-
-        // Spawn optionalSources in background (don't gate completion)
-        const optionalSources = (card.optionalSources ?? []) as { script?: string; bindTo: string }[];
-        if (optionalSources.length > 0 || (card as any).asyncHelpers) {
+        // Spawn undelivered optional sources in background (don't gate completion)
+        const undeliveredOptional = allSources.filter(s => {
+          if (!s.optional) return false;
+          if (s.outputFile) return !fs.existsSync(path.join(boardDir, s.outputFile));
+          return cardState[s.bindTo] == null;
+        });
+        if (undeliveredOptional.length > 0 || (card as any).asyncHelpers) {
           const scriptPath = path.join(__dirname, 'execute-card-task.js');
           execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);

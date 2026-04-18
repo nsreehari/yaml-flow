@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
   "title": "LiveCards Node Schema",
-  "description": "Schema for LiveCards nodes. All nodes share one flat shape: id + state required; requires/provides/sources/optionalSources/compute/view optional. computed_values is runtime-only (never in JSON).",
+  "description": "Schema for LiveCards nodes. All nodes share one flat shape: id + state required; requires/provides/sources/compute/view optional. computed_values is runtime-only (never in JSON). Use sources[].optional: true instead of the legacy optionalSources array.",
 
   "definitions": {
 
@@ -43,18 +43,20 @@
       "required": ["bindTo", "expr"],
       "properties": {
         "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, computed_values }" }
+        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, sources, computed_values }" }
       }
     },
 
     "source_entry": {
-      "description": "One source definition inside sources[] or optionalSources[]. bindTo is the only required field. kind indicates the channel (api, websocket, static, llm, script, mail, teams, ...) — open-ended, extensible.",
+      "description": "One source definition inside sources[]. bindTo names the sources.* key in compute context. outputFile signals delivery (file present = delivered). Set optional: true to replace the legacy optionalSources array.",
       "type": "object",
       "required": ["bindTo"],
       "properties": {
-        "bindTo":        { "type": "string", "description": "Key in state to write fetched/received data into" },
-        "kind":          { "type": "string", "description": "Channel type — api | websocket | static | llm | script | mail | teams | ... (extensible)" },
+        "bindTo":        { "type": "string", "description": "Key for the sources.* namespace in compute context" },
+        "outputFile":    { "type": "string", "description": "Relative path (from boardDir) where the source script writes its output" },
         "script":        { "type": "string", "description": "Shell command or path to script (for kind: script)" },
+        "optional":      { "type": "boolean", "default": false, "description": "If true, absence of this source does not block task completion" },
+        "kind":          { "type": "string", "description": "Channel type — api | websocket | static | llm | script | mail | teams | ... (extensible)" },
         "url_template":  { "type": "string", "description": "URL with {{var}} placeholders (for kind: api/websocket)" },
         "method":        { "type": "string", "description": "HTTP method (for kind: api)" },
         "headers":       { "type": "object", "additionalProperties": true },
@@ -222,7 +224,7 @@
   },
 
   "title": "LiveCard Node",
-  "description": "Unified node: id + state required. requires/provides/sources/optionalSources/compute/view all optional. No type discriminator — nodes with view render as cards; nodes without view and with sources render as source pills in canvas mode.",
+  "description": "Unified node: id + state required. requires/provides/sources/compute/view all optional. No type discriminator — nodes with view render as cards; nodes without view and with sources render as source pills in canvas mode.",
   "type": "object",
   "required": ["id", "state"],
   "additionalProperties": true,
@@ -246,19 +248,13 @@
     "sources": {
       "type": "array",
       "items": { "$ref": "#/definitions/source_entry" },
-      "description": "Blocking sources — all must complete before node is considered fresh. Each writes to state[bindTo]."
-    },
-
-    "optionalSources": {
-      "type": "array",
-      "items": { "$ref": "#/definitions/source_entry" },
-      "description": "Non-blocking sources — arrivals trigger re-fire but don't gate completion."
+      "description": "Source definitions. Non-optional sources must all deliver (outputFile present) before node is considered fresh. Use optional: true on individual entries instead of the legacy top-level optionalSources array."
     },
 
     "compute": {
       "type": "array",
       "items": { "$ref": "#/definitions/compute_step" },
-      "description": "Ordered compute steps. Each reads state.*/requires.*/computed_values.* and writes to ephemeral computed_values[bindTo]. computed_values is never persisted."
+      "description": "Ordered compute steps. Each reads state.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo]. computed_values is never persisted."
     },
 
     "asyncHelpers": {

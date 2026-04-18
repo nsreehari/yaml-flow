@@ -97,7 +97,7 @@
       "required": ["bindTo", "expr"],
       "properties": {
         "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, computed_values }" }
+        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, sources, computed_values }" }
       }
     },
 
@@ -106,7 +106,10 @@
       "required": ["bindTo"],
       "properties": {
         "kind":           { "enum": ["api", "websocket", "static", "llm"] },
-        "bindTo":         { "type": "string", "description": "State key to write fetched data into" },
+        "bindTo":         { "type": "string", "description": "Key for the sources.* namespace in compute context" },
+        "outputFile":     { "type": "string", "description": "Relative path (from boardDir) where the source script writes its output. Presence of this file signals delivery." },
+        "script":         { "type": "string", "description": "Shell command run by execute-card-task. stdout (if any) is written to outputFile." },
+        "optional":       { "type": "boolean", "default": false, "description": "If true, absence of this source does not block task completion. Replaces the top-level optionalSources array." },
         "method":         { "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET" },
         "url_template":   { "type": "string", "description": "URL with {{var}} placeholders" },
         "headers":        { "type": "object", "additionalProperties": { "$ref": "#/definitions/bind_or_literal" } },
@@ -242,17 +245,12 @@
     },
     "sources": {
       "type": "array",
-      "description": "Async fetches that must complete before task-completed. Each writes to state[bindTo].",
-      "items": { "$ref": "#/definitions/source_def" }
-    },
-    "optionalSources": {
-      "type": "array",
-      "description": "Async fetches that don't gate completion. Arrival triggers re-fire via data-received.",
+      "description": "Source scripts invoked by execute-card-task. Each writes to outputFile; presence of that file signals delivery.\nNon-optional sources must all deliver before task-completed is emitted.\nUse optional: true (instead of the legacy optionalSources array) for sources that don't gate completion.",
       "items": { "$ref": "#/definitions/source_def" }
     },
     "compute": {
       "type": "array",
-      "description": "Ordered array of compute steps. Each reads state.*/requires.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
+      "description": "Ordered array of compute steps. Each reads state.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
       "items": { "$ref": "#/definitions/compute_step" }
     }
   }

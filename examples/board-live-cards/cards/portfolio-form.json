@@ -7,5 +7,10 @@
       { "symbol": "AAPL", "qty": 50 },
       { "symbol": "MSFT", "qty": 30 }
     ]
+  },
+  "view": {
+    "elements": [
+      { "kind": "table", "label": "Holdings", "data": { "bind": "state.holdings", "columns": ["symbol", "qty"] } }
+    ]
   }
 }
