@@ -104,6 +104,13 @@ export interface TaskHandlerInput {
    * message queues) — any process with this token can push data back.
    */
   callbackToken: string;
+  /**
+   * Present only on task-progress re-invocations (source delivery / failure).
+   * Contains the update payload from the task-progress event.
+   * e.g. { bindTo: 'prices', fetchedAt: '...', dest: 'prices.json' }
+   *   or { bindTo: 'prices', failure: true, reason: 'timeout' }
+   */
+  update?: Record<string, unknown>;
 }
 
 /**
@@ -275,6 +282,30 @@ export function createReactiveGraph(
     for (const taskName of result.eligible) {
       dispatchTask(taskName);
     }
+
+    // 6. Re-invoke handlers for in-progress tasks that received a task-progress event.
+    //    task-progress events don't change task status (they're not applied by the engine),
+    //    so we route them here directly to their taskHandlers.
+    for (const event of events) {
+      if (event.type === 'task-progress') {
+        const { taskName, update } = event;
+        const taskConfig = live.config.tasks[taskName];
+        if (!taskConfig) continue;
+        const taskState = live.state.tasks[taskName];
+        if (!taskState || taskState.status !== 'running') continue;
+        const callbackToken = encodeCallbackToken(taskName);
+        runPipeline(taskName, callbackToken, update).catch((error: Error) => {
+          if (disposed) return;
+          journal.append({
+            type: 'task-failed',
+            taskName,
+            error: error.message ?? String(error),
+            timestamp: new Date().toISOString(),
+          });
+          drain();
+        });
+      }
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -308,7 +339,7 @@ export function createReactiveGraph(
   // Run the handler pipeline for a task
   // --------------------------------------------------------------------------
 
-  async function runPipeline(taskName: string, callbackToken: string): Promise<void> {
+  async function runPipeline(taskName: string, callbackToken: string, update?: Record<string, unknown>): Promise<void> {
     const taskConfig = live.config.tasks[taskName];
     const handlerNames = taskConfig.taskHandlers ?? [];
     const upstreamState = resolveUpstreamState(taskName);
@@ -325,6 +356,7 @@ export function createReactiveGraph(
         taskState: live.state.tasks[taskName],
         config: taskConfig,
         callbackToken,
+        update,
       };
 
       const status = await handler(input);

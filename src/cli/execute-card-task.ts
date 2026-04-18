@@ -4,19 +4,25 @@
  * Usage: node execute-card-task.js <card-file-path> <callback-token> <board-dir>
  *
  * For each entry in sources[]:
- *   - Runs source.script via execFileSync (cwd = boardDir)
- *   - If the script emits stdout, writes it to source.outputFile
- *   - If the script wrote source.outputFile directly, confirms the file is present
- *   - Never touches card.json
+ *   1. Generates a per-source sourceToken (encodes callbackToken + card metadata + source metadata)
+ *   2. Runs source.script via execFileSync (cwd = boardDir)
+ *   3. On success:
+ *        - Writes stdout to a tmp file (or notes that the script wrote outputFile directly)
+ *        - Calls: board-live-cards source-data-fetched --tmp <tmpFile> --token <sourceToken>
+ *   4. On failure:
+ *        - Calls: board-live-cards source-data-fetch-failure --token <sourceToken> --reason <msg>
  *
- * After all sources have been attempted, retriggers the card if any outputFile was written.
- * Optional sources (optional: true) are included in the same pass — they retrigger per delivery.
+ * The CLI commands append a task-progress event to the journal and drain the reactive graph.
+ * card-handler is re-invoked via the task-progress route and updates runtime.json.
+ * Never touches card.json.
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { encodeSourceToken } from './board-live-cards.js';
 
 const [cardFilePath, callbackToken, boardDir] = process.argv.slice(2);
 
@@ -27,71 +33,75 @@ if (!cardFilePath || !callbackToken || !boardDir) {
 
 const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
 
-console.log(`[card-handler] Processing card "${card.id}"`);
+console.log(`[execute-card-task] Processing card "${card.id}"`);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cliScript = path.join(__dirname, 'board-live-cards.js');
 
-function runSourceScript(source: { script?: string; bindTo: string; outputFile?: string; timeout?: number }): boolean {
-  if (!source.script) return false;
+type SourceDef = { script?: string; bindTo: string; outputFile?: string; optional?: boolean; timeout?: number };
 
-  console.log(`[card-handler] source.script: ${source.script} → outputFile=${source.outputFile ?? '(none)'}`);
+function runSource(src: SourceDef): void {
+  if (!src.script) return;
+
+  console.log(`[execute-card-task] source.script: ${src.script} → bindTo=${src.bindTo}`);
+
+  const sourceToken = encodeSourceToken({
+    cbk: callbackToken,
+    rg: boardDir,
+    cid: card.id as string,
+    b: src.bindTo,
+    d: src.outputFile ?? '',
+  });
 
   let stdout: string;
   try {
-    stdout = execFileSync(source.script, {
+    stdout = execFileSync(src.script, {
       cwd: boardDir,
       shell: true,
       encoding: 'utf-8',
-      timeout: source.timeout ?? 120_000,
+      timeout: src.timeout ?? 120_000,
     }).trim();
   } catch (err: unknown) {
-    console.error(`[card-handler] source "${source.bindTo}" script failed:`, (err as Error).message);
-    return false;
+    const reason = (err as Error).message ?? String(err);
+    console.error(`[execute-card-task] source "${src.bindTo}" script failed:`, reason);
+    execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', reason], (e) => {
+      if (e) console.error(`[execute-card-task] source-data-fetch-failure call failed:`, e.message);
+    });
+    return;
   }
 
-  // If script wrote to stdout, capture it to outputFile
-  if (stdout && source.outputFile) {
-    const outputPath = path.join(boardDir, source.outputFile);
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(outputPath, stdout);
-    console.log(`[card-handler] source delivered (stdout→file) → ${source.outputFile}`);
-    return true;
-  }
-
-  // Script may have written outputFile directly (no stdout)
-  if (source.outputFile && fs.existsSync(path.join(boardDir, source.outputFile))) {
-    console.log(`[card-handler] source delivered (file) → ${source.outputFile}`);
-    return true;
-  }
-
-  return false;
-}
-
-// Run all sources (required and optional) — same delivery path for both.
-// Required sources (optional:false) are retriggered in a single batch after all have run.
-// Optional sources (optional:true) retrigger individually on delivery.
-const sources = (card.sources ?? []) as { script?: string; bindTo: string; outputFile?: string; optional?: boolean; timeout?: number }[];
-const requiredSources = sources.filter((s) => !s.optional);
-const optionalSources = sources.filter((s) => s.optional);
-
-let anyRequiredDelivered = false;
-for (const src of requiredSources) {
-  if (runSourceScript(src)) anyRequiredDelivered = true;
-}
-
-if (requiredSources.length > 0 && anyRequiredDelivered) {
-  execFile('node', [cliScript, 'retrigger', '--rg', boardDir, '--task', card.id], (err, stdout, stderr) => {
-    if (err) console.error(`[card-handler] retrigger failed for "${card.id}":`, err.message);
-    if (stdout) console.log(stdout.trim());
-    if (stderr) console.error(stderr.trim());
-  });
-}
-
-for (const src of optionalSources) {
-  if (runSourceScript(src)) {
-    execFile('node', [cliScript, 'retrigger', '--rg', boardDir, '--task', card.id], (err) => {
-      if (err) console.error(`[card-handler] retrigger failed for "${card.id}":`, err.message);
+  if (src.outputFile) {
+    if (stdout) {
+      // Script emitted stdout — write to a tmp file; CLI will rename into dest atomically
+      const tmpFile = path.join(os.tmpdir(), `card-source-${src.bindTo}-${Date.now()}.json`);
+      fs.writeFileSync(tmpFile, stdout);
+      execFile('node', [cliScript, 'source-data-fetched', '--tmp', tmpFile, '--token', sourceToken], (e, out, err) => {
+        if (e) console.error(`[execute-card-task] source-data-fetched call failed:`, e.message);
+        if (out) console.log(out.trim());
+        if (err) console.error(err.trim());
+      });
+    } else if (fs.existsSync(path.join(boardDir, src.outputFile))) {
+      // Script wrote outputFile directly (no stdout) — use it as the tmp source
+      const tmpFile = path.join(os.tmpdir(), `card-source-${src.bindTo}-${Date.now()}.json`);
+      fs.copyFileSync(path.join(boardDir, src.outputFile), tmpFile);
+      execFile('node', [cliScript, 'source-data-fetched', '--tmp', tmpFile, '--token', sourceToken], (e) => {
+        if (e) console.error(`[execute-card-task] source-data-fetched call failed:`, e.message);
+      });
+    } else {
+      console.warn(`[execute-card-task] source "${src.bindTo}" produced no stdout and outputFile is absent`);
+      execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', 'script produced no output'], (e) => {
+        if (e) console.error(`[execute-card-task] source-data-fetch-failure call failed:`, e.message);
+      });
+    }
+  } else {
+    console.warn(`[execute-card-task] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+    execFile('node', [cliScript, 'source-data-fetch-failure', '--token', sourceToken, '--reason', 'no outputFile configured'], (e) => {
+      if (e) console.error(`[execute-card-task] source-data-fetch-failure call failed:`, e.message);
     });
   }
+}
+
+const sources = (card.sources ?? []) as SourceDef[];
+for (const src of sources) {
+  runSource(src);
 }

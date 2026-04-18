@@ -214,6 +214,66 @@ function decodeCallbackToken(token: string): { taskName: string } | null {
   } catch { return null; }
 }
 
+// ============================================================================
+// Source token — per-source opaque token carrying all delivery metadata
+// ============================================================================
+
+export interface SourceTokenPayload {
+  /** Original callback token from the reactive graph (encodes taskName) */
+  cbk: string;
+  /** Board directory (absolute path) */
+  rg: string;
+  /** Card id */
+  cid: string;
+  /** sources[].bindTo */
+  b: string;
+  /** sources[].outputFile (relative to boardDir) */
+  d: string;
+}
+
+export function encodeSourceToken(payload: SourceTokenPayload): string {
+  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+export function decodeSourceToken(token: string): SourceTokenPayload | null {
+  try {
+    const p = JSON.parse(Buffer.from(token, 'base64url').toString());
+    if (typeof p?.cbk === 'string' && typeof p?.cid === 'string' && typeof p?.b === 'string' && typeof p?.d === 'string') {
+      return p as SourceTokenPayload;
+    }
+    return null;
+  } catch { return null; }
+}
+
+// ============================================================================
+// Runtime state sidecar — <cardId>.runtime.json
+// ============================================================================
+
+export interface SourceRuntimeEntry {
+  lastRequestedAt?: string;
+  lastFetchedAt?: string;
+  lastError?: string;
+}
+
+export interface CardRuntimeState {
+  _sources: Record<string, SourceRuntimeEntry>;
+}
+
+function runtimePath(boardDir: string, cardId: string): string {
+  return path.join(boardDir, `${cardId}.runtime.json`);
+}
+
+function readRuntimeState(boardDir: string, cardId: string): CardRuntimeState {
+  const p = runtimePath(boardDir, cardId);
+  if (!fs.existsSync(p)) return { _sources: {} };
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as CardRuntimeState; }
+  catch { return { _sources: {} }; }
+}
+
+function writeRuntimeState(boardDir: string, cardId: string, state: CardRuntimeState): void {
+  fs.writeFileSync(runtimePath(boardDir, cardId), JSON.stringify(state, null, 2));
+}
+
 /**
  * Append a raw event to the journal file. No lock, no file read.
  * Safe for hundreds of concurrent callers (appendFileSync is atomic for small writes).
@@ -322,19 +382,43 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       const cardPath = lookupCardPath(boardDir, input.nodeId);
       if (!cardPath) return 'task-initiate-failure';
 
-      // Lock the card file for read (never for write — card-handler never mutates card.json)
       const releaseCard = lockSync(cardPath, { retries: { retries: 5, minTimeout: 100 } });
       let card: Record<string, unknown>;
       try {
         card = JSON.parse(fs.readFileSync(cardPath, 'utf-8'));
+        const cardId = card.id as string;
         const cardState = (card.state ?? {}) as Record<string, unknown>;
-
-        // All sources[].optional:false must have their outputFile present to proceed.
-        // sources[].optional:true sources are the only kind of non-blocking source.
         const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
+        const requiredSources = allSources.filter(s => !s.optional);
 
-        // Load delivered sources from their outputFiles into the sources context.
-        // A source is delivered iff its outputFile exists on disk.
+        // Read (or initialise) the runtime sidecar
+        const runtime = readRuntimeState(boardDir, cardId);
+        let runtimeDirty = false;
+
+        // ---- Handle a task-progress re-invocation (source delivery or failure) ----
+        if (input.update) {
+          const u = input.update;
+          const bindTo = u.bindTo as string;
+          if (!runtime._sources[bindTo]) runtime._sources[bindTo] = {};
+
+          if (u.failure) {
+            // Source fetch failed — record error, stay in-progress
+            runtime._sources[bindTo].lastError = (u.reason as string | undefined) ?? 'unknown';
+            delete runtime._sources[bindTo].lastFetchedAt;
+            runtimeDirty = true;
+            console.log(`[card-handler] source "${bindTo}" fetch failed: ${runtime._sources[bindTo].lastError}`);
+          } else {
+            // Successful delivery — dest file already renamed into place by CLI
+            runtime._sources[bindTo].lastFetchedAt = (u.fetchedAt as string | undefined) ?? new Date().toISOString();
+            delete runtime._sources[bindTo].lastError;
+            runtimeDirty = true;
+            console.log(`[card-handler] source "${bindTo}" delivered → ${u.dest}`);
+          }
+
+          if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
+        }
+
+        // ---- Load sourcesData from outputFiles ----
         const sourcesData: Record<string, unknown> = {};
         for (const src of allSources) {
           if (src.outputFile) {
@@ -347,32 +431,45 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           }
         }
 
-        // Build compute node with sources definitions (for resolve() and context)
+        // ---- Run compute ----
         const computeNode: ComputeNode = {
-          id: card.id as string,
+          id: cardId,
           state: { ...cardState },
           requires: input.state ?? {},
           sources: allSources,
           compute: card.compute as ComputeStep[] | undefined,
         };
-
-        // Run compute with sources context injected.
-        // Persist computed_values to <cardId>.computed_values.json for audit/debug.
         if (card.compute) {
           await CardCompute.run(computeNode, { sourcesData });
-          const cvPath = path.join(boardDir, `${card.id as string}.computed_values.json`);
+          const cvPath = path.join(boardDir, `${cardId}.computed_values.json`);
           fs.writeFileSync(cvPath, JSON.stringify(computeNode.computed_values ?? {}, null, 2));
         }
 
-        // Check for undelivered required sources: outputFile must exist.
-        const undeliveredRequired = allSources.filter(s => {
-          if (s.optional) return false;
-          return s.outputFile ? !fs.existsSync(path.join(boardDir, s.outputFile)) : false;
+        // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----
+        const now = new Date().toISOString();
+        const undeliveredRequired = requiredSources.filter(s => {
+          if (!s.outputFile) return false;
+          const entry = runtime._sources[s.bindTo];
+          if (!entry?.lastRequestedAt) return true;  // never requested — treat as undelivered
+          if (!entry.lastFetchedAt) return true;      // requested but not yet fetched
+          return entry.lastFetchedAt <= entry.lastRequestedAt; // stale
         });
 
         if (undeliveredRequired.length > 0) {
-          // Spawn execute-card-task to run source scripts; it will retrigger on delivery.
-          // card-handler NEVER writes card.json — sources write to their outputFiles.
+          // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
+          // and spawn execute-card-task with per-source source tokens.
+          let stampedAny = false;
+          for (const src of undeliveredRequired) {
+            const entry = runtime._sources[src.bindTo] ?? {};
+            // Only re-stamp if not already requested after last fetch (avoid double-dispatch)
+            if (!entry.lastRequestedAt || (entry.lastFetchedAt && entry.lastFetchedAt >= entry.lastRequestedAt)) {
+              entry.lastRequestedAt = now;
+              runtime._sources[src.bindTo] = entry;
+              stampedAny = true;
+            }
+          }
+          if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
+
           const scriptPath = path.join(__dirname, 'execute-card-task.js');
           execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
@@ -380,19 +477,20 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           return 'task-initiated';
         }
 
-        // All required sources delivered (or no sources required).
-        // Build provides data via explicit src paths — sources.* resolves from sourcesData.
-        const providesBindings = (card.provides ?? [{ bindTo: card.id as string, src: `state.${card.id}` }]) as { bindTo: string; src: string }[];
+        // ---- All required sources delivered — build provides + emit task-completed ----
+        const providesBindings = (card.provides ?? [{ bindTo: cardId, src: `state.${cardId}` }]) as { bindTo: string; src: string }[];
         const data: Record<string, unknown> = {};
         for (const { bindTo, src } of providesBindings) {
           data[bindTo] = CardCompute.resolve(computeNode, src);
         }
 
-        // Spawn undelivered optional sources in background (don't gate completion)
+        // Spawn undelivered optional sources in background
         const undeliveredOptional = allSources.filter(s => {
-          if (!s.optional) return false;
-          if (s.outputFile) return !fs.existsSync(path.join(boardDir, s.outputFile));
-          return false;
+          if (!s.optional || !s.outputFile) return false;
+          const entry = runtime._sources[s.bindTo];
+          if (!entry?.lastRequestedAt) return true;
+          if (!entry.lastFetchedAt) return true;
+          return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
         if (undeliveredOptional.length > 0) {
           const scriptPath = path.join(__dirname, 'execute-card-task.js');
@@ -599,6 +697,83 @@ function cmdRemoveCard(args: string[]): void {
   console.log(`Card "${cardId}" removed${drained ? '' : ' (drain deferred)'}.`);
 }
 
+function cmdSourceDataFetched(args: string[]): void {
+  const tmpIdx = args.indexOf('--tmp');
+  const tokenIdx = args.indexOf('--token');
+  const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
+  const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+  if (!tmpFile || !token) {
+    console.error('Usage: board-live-cards source-data-fetched --tmp <tmp-file> --token <sourceToken>');
+    process.exit(1);
+  }
+
+  const payload = decodeSourceToken(token);
+  if (!payload) {
+    console.error('Invalid source token');
+    process.exit(1);
+  }
+
+  const { cbk, rg, cid, b, d } = payload;
+  const destPath = path.join(rg, d);
+
+  // Atomic move: rename from tmp into boardDir destination
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.renameSync(tmpFile, destPath);
+  console.log(`[source-data-fetched] ${cid}.${b} → ${d}`);
+
+  const fetchedAt = new Date().toISOString();
+  const cbkDecoded = decodeCallbackToken(cbk);
+  if (!cbkDecoded) {
+    console.error('Invalid callback token embedded in source token');
+    process.exit(1);
+  }
+
+  appendEventToJournal(rg, {
+    type: 'task-progress',
+    taskName: cbkDecoded.taskName,
+    update: { bindTo: b, fetchedAt, dest: d },
+    timestamp: fetchedAt,
+  });
+
+  tryDrainCycle(rg);
+}
+
+function cmdSourceDataFetchFailure(args: string[]): void {
+  const tokenIdx = args.indexOf('--token');
+  const reasonIdx = args.indexOf('--reason');
+  const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+  const reason = reasonIdx !== -1 ? args[reasonIdx + 1] : 'unknown';
+  if (!token) {
+    console.error('Usage: board-live-cards source-data-fetch-failure --token <sourceToken> [--reason <msg>]');
+    process.exit(1);
+  }
+
+  const payload = decodeSourceToken(token);
+  if (!payload) {
+    console.error('Invalid source token');
+    process.exit(1);
+  }
+
+  const { cbk, rg, cid, b } = payload;
+  console.log(`[source-data-fetch-failure] ${cid}.${b}: ${reason}`);
+
+  const cbkDecoded = decodeCallbackToken(cbk);
+  if (!cbkDecoded) {
+    console.error('Invalid callback token embedded in source token');
+    process.exit(1);
+  }
+
+  const timestamp = new Date().toISOString();
+  appendEventToJournal(rg, {
+    type: 'task-progress',
+    taskName: cbkDecoded.taskName,
+    update: { bindTo: b, failure: true, reason },
+    timestamp,
+  });
+
+  tryDrainCycle(rg);
+}
+
 function cmdUpdateCard(args: string[]): void {
   const rgIdx = args.indexOf('--rg');
   const idIdx = args.indexOf('--card-id');
@@ -677,13 +852,15 @@ export function cli(argv: string[]): void {
     case 'status':         return cmdStatus(rest);
     case 'add-card':       return cmdAddCard(rest);
     case 'update-card':    return cmdUpdateCard(rest);
-    case 'remove-card':    return cmdRemoveCard(rest);
-    case 'retrigger':      return cmdRetrigger(rest);
-    case 'task-completed': return cmdTaskCompleted(rest);
-    case 'task-failed':    return cmdTaskFailed(rest);
+    case 'remove-card':              return cmdRemoveCard(rest);
+    case 'retrigger':                 return cmdRetrigger(rest);
+    case 'task-completed':            return cmdTaskCompleted(rest);
+    case 'task-failed':               return cmdTaskFailed(rest);
+    case 'source-data-fetched':       return cmdSourceDataFetched(rest);
+    case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
     default:
       console.error(`Unknown command: ${cmd}`);
-      console.error('Commands: init, status, add-card, update-card, remove-card, retrigger, task-completed, task-failed');
+      console.error('Commands: init, status, add-card, update-card, remove-card, retrigger, task-completed, task-failed, source-data-fetched, source-data-fetch-failure');
       process.exit(1);
   }
 }

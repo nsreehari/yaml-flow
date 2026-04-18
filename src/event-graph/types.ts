@@ -205,6 +205,12 @@ export interface TaskProgressEvent {
   taskName: string;
   message?: string;
   progress?: number;
+  /**
+   * Arbitrary update payload — used by source delivery to carry
+   * { bindTo, fetchedAt, dest } or { bindTo, failure, reason }.
+   * card-handler receives this via TaskHandlerInput.update.
+   */
+  update?: Record<string, unknown>;
   timestamp: string;
   executionId?: string;
 }
