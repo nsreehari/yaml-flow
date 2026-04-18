@@ -207,23 +207,25 @@ describe('liveCardToTaskConfig', () => {
     expect(tc.provides).toEqual(['total']);
   });
 
-  it('card with asyncHelpers → still just [card-handler]', () => {
+  it('card with optional source → still just [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'enriched',
       requires: ['raw'],
       compute: [{ bindTo: 'x', expr: '$sum(state.raw.v)' }],
-      asyncHelpers: { fetchExtra: { url: 'https://example.com' } },
+      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optional: true }],
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
     expect(tc.taskHandlers).toEqual(['card-handler']);
   });
 
-  it('card with sources and asyncHelpers → still just [card-handler]', () => {
+  it('card with required + optional sources → still just [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'live-feed',
-      sources: [{ script: 'feed.sh', bindTo: 'data' }],
-      asyncHelpers: { transform: { script: 'clean.py' } },
+      sources: [
+        { script: 'feed.sh', bindTo: 'data', outputFile: 'data.json' },
+        { script: 'enrich.sh', bindTo: 'extra', outputFile: 'extra.json', optional: true },
+      ],
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
@@ -525,7 +527,7 @@ describe('cli add-card', () => {
     expect(logs.join('\n')).toContain('Card "prices" added');
   });
 
-  it('adds a card with compute + asyncHelpers (single card-handler)', () => {
+  it('adds a card with compute + optional source (single card-handler)', () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
@@ -534,7 +536,7 @@ describe('cli add-card', () => {
       id: 'enriched',
       requires: ['raw'],
       compute: [{ bindTo: 'total', expr: '$sum(state.raw.v)' }],
-      asyncHelpers: { fetch: { url: 'https://example.com' } },
+      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optional: true }],
       state: {},
     };
     fs.writeFileSync(cardFile, JSON.stringify(card));

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
   "title": "LiveCards Node Schema",
-  "description": "Schema for LiveCards nodes. All nodes share one flat shape: id + state required; requires/provides/sources/compute/view optional. computed_values is runtime-only (never in JSON). Use sources[].optional: true instead of the legacy optionalSources array.",
+  "description": "Schema for LiveCards nodes. All nodes share one flat shape: id + state required; requires/provides/sources/compute/view optional. computed_values is runtime-only (never in JSON).",
 
   "definitions": {
 
@@ -48,7 +48,7 @@
     },
 
     "source_entry": {
-      "description": "One source definition inside sources[]. bindTo names the sources.* key in compute context. outputFile signals delivery (file present = delivered). Set optional: true to replace the legacy optionalSources array.",
+      "description": "One source definition inside sources[]. bindTo names the sources.* key in compute context. outputFile signals delivery (file present = delivered). Use optional: true for non-blocking sources.",
       "type": "object",
       "required": ["bindTo"],
       "properties": {
@@ -248,19 +248,13 @@
     "sources": {
       "type": "array",
       "items": { "$ref": "#/definitions/source_entry" },
-      "description": "Source definitions. Non-optional sources must all deliver (outputFile present) before node is considered fresh. Use optional: true on individual entries instead of the legacy top-level optionalSources array."
+      "description": "Source definitions. Non-optional sources must all deliver (outputFile present) before node is considered fresh. Use optional: true on individual entries for non-blocking sources."
     },
 
     "compute": {
       "type": "array",
       "items": { "$ref": "#/definitions/compute_step" },
       "description": "Ordered compute steps. Each reads state.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo]. computed_values is never persisted."
-    },
-
-    "asyncHelpers": {
-      "type": "object",
-      "description": "Named async helper definitions (CLI/board handler feature; not evaluated by the browser engine).",
-      "additionalProperties": true
     },
 
     "view": { "$ref": "#/definitions/view" }

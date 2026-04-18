@@ -269,15 +269,14 @@ export function tryDrainCycle(boardDir: string): boolean {
 // Card transform
 // ============================================================================
 
-/** LiveCard extended with optional asyncHelpers section. */
-export type BoardLiveCard = LiveCard & { asyncHelpers?: Record<string, unknown> };
+export type BoardLiveCard = LiveCard;
 
 /**
  * Transform a LiveCard into a TaskConfig for the reactive graph.
  *
  * Every card gets handler: 'card-handler'.
  * The handler inspects the card and decides what to do:
- * run compute, invoke sources, fire asyncHelpers.
+ * run compute, invoke sources.
  */
 export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
   const requires = card.requires;
@@ -303,9 +302,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Spin up a ReactiveGraph from a board directory with all handlers wired.
  *
  * Single handler:
- *   card-handler — spawns source-handler.js <card-path> <callbackToken>
- *                  source-handler.js inspects the card and handles everything:
- *                  compute (CardCompute.run), source invocation, asyncHelpers.
+ *   card-handler — reads card.json, loads sourcesData from outputFiles, runs CardCompute,
+ *                  checks undelivered sources, emits task-completed or spawns execute-card-task.
  *                  Fire & forget — returns 'task-initiated' immediately.
  */
 export interface BoardReactiveGraph {
@@ -331,16 +329,12 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         card = JSON.parse(fs.readFileSync(cardPath, 'utf-8'));
         const cardState = (card.state ?? {}) as Record<string, unknown>;
 
-        // Merge sources and optionalSources (backward compat) into one unified array.
-        // Legacy cards may have optionalSources as a separate top-level array.
-        const allSources: ComputeSource[] = [
-          ...((card.sources ?? []) as ComputeSource[]),
-          ...((card.optionalSources ?? []) as ComputeSource[]).map(s => ({ ...s, optional: true as const })),
-        ];
+        // All sources[].optional:false must have their outputFile present to proceed.
+        // sources[].optional:true sources are the only kind of non-blocking source.
+        const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
 
-        // Load already-delivered sources from their outputFiles into the sources context.
-        // outputFile-based delivery: the file existing = the source has delivered.
-        // Legacy sources (no outputFile) fall back to cardState[bindTo].
+        // Load delivered sources from their outputFiles into the sources context.
+        // A source is delivered iff its outputFile exists on disk.
         const sourcesData: Record<string, unknown> = {};
         for (const src of allSources) {
           if (src.outputFile) {
@@ -350,9 +344,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               try { sourcesData[src.bindTo] = JSON.parse(raw); }
               catch { sourcesData[src.bindTo] = raw; }
             }
-          } else if (cardState[src.bindTo] != null) {
-            // Legacy: sourced via state (pre-outputFile cards)
-            sourcesData[src.bindTo] = cardState[src.bindTo];
           }
         }
 
@@ -370,13 +361,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           await CardCompute.run(computeNode, { sourcesData });
         }
 
-        // Check for undelivered required sources:
-        //   outputFile-based: undelivered iff the file does not yet exist
-        //   legacy (no outputFile): undelivered iff cardState[bindTo] is null
+        // Check for undelivered required sources: outputFile must exist.
         const undeliveredRequired = allSources.filter(s => {
           if (s.optional) return false;
-          if (s.outputFile) return !fs.existsSync(path.join(boardDir, s.outputFile));
-          return cardState[s.bindTo] == null; // legacy fallback
+          return s.outputFile ? !fs.existsSync(path.join(boardDir, s.outputFile)) : false;
         });
 
         if (undeliveredRequired.length > 0) {
@@ -401,9 +389,9 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         const undeliveredOptional = allSources.filter(s => {
           if (!s.optional) return false;
           if (s.outputFile) return !fs.existsSync(path.join(boardDir, s.outputFile));
-          return cardState[s.bindTo] == null;
+          return false;
         });
-        if (undeliveredOptional.length > 0 || (card as any).asyncHelpers) {
+        if (undeliveredOptional.length > 0) {
           const scriptPath = path.join(__dirname, 'execute-card-task.js');
           execFile('node', [scriptPath, cardPath, input.callbackToken, boardDir], (err) => {
             if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);

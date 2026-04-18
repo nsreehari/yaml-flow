@@ -109,7 +109,7 @@
         "bindTo":         { "type": "string", "description": "Key for the sources.* namespace in compute context" },
         "outputFile":     { "type": "string", "description": "Relative path (from boardDir) where the source script writes its output. Presence of this file signals delivery." },
         "script":         { "type": "string", "description": "Shell command run by execute-card-task. stdout (if any) is written to outputFile." },
-        "optional":       { "type": "boolean", "default": false, "description": "If true, absence of this source does not block task completion. Replaces the top-level optionalSources array." },
+        "optional":       { "type": "boolean", "default": false, "description": "If true, absence of this source does not block task completion. Retriggers the card when its outputFile arrives." },
         "method":         { "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET" },
         "url_template":   { "type": "string", "description": "URL with {{var}} placeholders" },
         "headers":        { "type": "object", "additionalProperties": { "$ref": "#/definitions/bind_or_literal" } },
@@ -245,7 +245,7 @@
     },
     "sources": {
       "type": "array",
-      "description": "Source scripts invoked by execute-card-task. Each writes to outputFile; presence of that file signals delivery.\nNon-optional sources must all deliver before task-completed is emitted.\nUse optional: true (instead of the legacy optionalSources array) for sources that don't gate completion.",
+      "description": "Source scripts invoked by execute-card-task. Each writes to outputFile; presence of that file signals delivery.\nNon-optional sources must all deliver before task-completed is emitted.\nUse optional: true on individual entries for sources that don't gate completion.",
       "items": { "$ref": "#/definitions/source_def" }
     },
     "compute": {

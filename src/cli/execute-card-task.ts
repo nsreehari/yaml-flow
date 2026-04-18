@@ -1,19 +1,16 @@
 /**
- * Card Handler — CLI script that processes a card's source/optionalSource sections.
+ * execute-card-task — CLI script that runs a card's source scripts.
  *
  * Usage: node execute-card-task.js <card-file-path> <callback-token> <board-dir>
  *
- * Reads card JSON and handles all applicable sections:
- *   - sources[]:          invokes scripts, writes output to src.outputFile (NEVER touches card.json)
- *   - optionalSources[]:  same pattern but emits retrigger per source
- *   - asyncHelpers:       invokes async helper scripts
+ * For each entry in sources[]:
+ *   - Runs source.script via execFileSync (cwd = boardDir)
+ *   - If the script emits stdout, writes it to source.outputFile
+ *   - If the script wrote source.outputFile directly, confirms the file is present
+ *   - Never touches card.json
  *
- * Source delivery:
- *   If the script writes to src.outputFile directly (e.g. prices.json), execute-card-task
- *   just confirms the file exists after running.
- *   If the script writes to stdout, execute-card-task captures it and writes to src.outputFile.
- *
- * After all required sources deliver, emits task-restart so the card re-fires.
+ * After all sources have been attempted, retriggers the card if any outputFile was written.
+ * Optional sources (optional: true) are included in the same pass — they retrigger per delivery.
  */
 
 import * as fs from 'node:fs';
@@ -68,24 +65,22 @@ function runSourceScript(source: { script?: string; bindTo: string; outputFile?:
     return true;
   }
 
-  if (stdout) {
-    // stdout with no outputFile configured — log only (legacy passthrough)
-    console.log(`[card-handler] source "${source.bindTo}" produced stdout but has no outputFile configured`);
-  }
-
   return false;
 }
 
-// --- Sources section (gate required, emit retrigger once all have run) ---
-const sources = (card.sources ?? []) as { script?: string; bindTo: string; outputFile?: string; timeout?: number }[];
-let anySourceDelivered = false;
-for (const src of sources) {
-  const delivered = runSourceScript(src);
-  if (delivered) anySourceDelivered = true;
+// Run all sources (required and optional) — same delivery path for both.
+// Required sources (optional:false) are retriggered in a single batch after all have run.
+// Optional sources (optional:true) retrigger individually on delivery.
+const sources = (card.sources ?? []) as { script?: string; bindTo: string; outputFile?: string; optional?: boolean; timeout?: number }[];
+const requiredSources = sources.filter((s) => !s.optional);
+const optionalSources = sources.filter((s) => s.optional);
+
+let anyRequiredDelivered = false;
+for (const src of requiredSources) {
+  if (runSourceScript(src)) anyRequiredDelivered = true;
 }
 
-// Retrigger so card-handler re-evaluates with the now-delivered outputFiles
-if (sources.length > 0 && anySourceDelivered) {
+if (requiredSources.length > 0 && anyRequiredDelivered) {
   execFile('node', [cliScript, 'retrigger', '--rg', boardDir, '--task', card.id], (err, stdout, stderr) => {
     if (err) console.error(`[card-handler] retrigger failed for "${card.id}":`, err.message);
     if (stdout) console.log(stdout.trim());
@@ -93,21 +88,10 @@ if (sources.length > 0 && anySourceDelivered) {
   });
 }
 
-// --- OptionalSources section (backward compat: separate top-level array) ---
-// New cards embed optional: true on sources[] entries; legacy cards may use optionalSources[].
-const optionalSources = (card.optionalSources ?? []) as { script?: string; bindTo: string; outputFile?: string; timeout?: number }[];
 for (const src of optionalSources) {
-  const delivered = runSourceScript(src);
-  if (delivered) {
-    // Retrigger per optional source so the card can re-run with enriched sources context
+  if (runSourceScript(src)) {
     execFile('node', [cliScript, 'retrigger', '--rg', boardDir, '--task', card.id], (err) => {
       if (err) console.error(`[card-handler] retrigger failed for "${card.id}":`, err.message);
     });
   }
-}
-
-// --- AsyncHelpers section ---
-if (card.asyncHelpers) {
-  console.log(`[card-handler] asyncHelpers: processing`);
-  // TODO: Interpret asyncHelpers section and execute appropriate work
 }

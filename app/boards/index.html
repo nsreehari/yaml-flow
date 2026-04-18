@@ -59,8 +59,7 @@
                   <tr><td><code>state</code></td><td colspan="2">Mutable persisted state object. Element binds read from <code>state.*</code></td></tr>
                   <tr><td><code>requires</code></td><td colspan="2"><code>[nodeId, ...]</code> — upstream dependencies, engine auto-subscribes</td></tr>
                   <tr><td><code>provides</code></td><td colspan="2"><code>[{ bindTo, src }]</code> — explicit downstream token bindings. <code>src</code> is a <code>state.*</code> / <code>computed_values.*</code> path</td></tr>
-                  <tr><td><code>sources</code></td><td colspan="2"><code>[{ bindTo, kind?, script?, url_template?, ... }]</code> — blocking data sources. <code>kind</code>: api | websocket | static | llm | script | mail | teams | … (extensible)</td></tr>
-                  <tr><td><code>optionalSources</code></td><td colspan="2">Same shape as <code>sources</code>. Non-blocking — arrivals re-fire but don't gate completion</td></tr>
+                  <tr><td><code>sources</code></td><td colspan="2"><code>[{ bindTo, outputFile, script?, optional?, kind?, ... }]</code> — data sources. <code>optional: true</code> sources don’t gate completion; absence of <code>outputFile</code> = undelivered.</td></tr>
                   <tr><td><code>compute</code></td><td colspan="2"><code>[{ bindTo, expr }]</code> — ordered JSONata steps writing to ephemeral <code>computed_values[bindTo]</code>. Never persisted.</td></tr>
                   <tr><td><code>view</code></td><td colspan="2"><code>{ elements[], layout, features }</code> — present on renderable cards; absent on source-only nodes</td></tr>
                 </tbody>

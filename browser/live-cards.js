@@ -1,7 +1,7 @@
 // live-cards.js — LiveCards v3: Node-based Board/Canvas engine
 //
 // Schema: Each node has { id, state } required; all else optional.
-//   id, meta, state, requires, provides, sources, optionalSources, compute, view, asyncHelpers
+//   id, meta, state, requires, provides, sources, compute, view
 //   Nodes with view render as cards; nodes with sources but no view render as source pills in canvas.
 //   compute[] — ordered array of { bindTo, fn, ... } steps → writes to node.computed_values (ephemeral)
 //   requires[] — upstream node IDs; engine subscribes automatically
