@@ -356,9 +356,12 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           compute: card.compute as ComputeStep[] | undefined,
         };
 
-        // Run compute with sources context injected
+        // Run compute with sources context injected.
+        // Persist computed_values to <cardId>.computed_values.json for audit/debug.
         if (card.compute) {
           await CardCompute.run(computeNode, { sourcesData });
+          const cvPath = path.join(boardDir, `${card.id as string}.computed_values.json`);
+          fs.writeFileSync(cvPath, JSON.stringify(computeNode.computed_values ?? {}, null, 2));
         }
 
         // Check for undelivered required sources: outputFile must exist.
