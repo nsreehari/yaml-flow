@@ -312,17 +312,99 @@ function determineLatestPendingAccumulated(boardDir: string): number {
   }
 }
 
+function shouldUseShellForCommand(cmd: string, forceShell?: boolean): boolean {
+  if (typeof forceShell === 'boolean') return forceShell;
+  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd);
+}
+
+function spawnDetachedCommand(cmd: string, args: string[]): void {
+  const child = spawn(cmd, args, {
+    shell: shouldUseShellForCommand(cmd),
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+function execCommandSync(
+  cmd: string,
+  args: string[],
+  options?: {
+    shell?: boolean;
+    timeout?: number;
+    encoding?: BufferEncoding;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): string {
+  const output = execFileSync(cmd, args, {
+    shell: shouldUseShellForCommand(cmd, options?.shell),
+    timeout: options?.timeout,
+    encoding: options?.encoding,
+    cwd: options?.cwd,
+    windowsHide: true,
+    env: options?.env,
+  });
+  return typeof output === 'string' ? output : output.toString('utf-8');
+}
+
+function execCommandAsync(
+  cmd: string,
+  args: string[],
+  callback: (err: Error | null, stdout: string, stderr: string) => void,
+): void {
+  execFile(
+    cmd,
+    args,
+    { shell: shouldUseShellForCommand(cmd), encoding: 'utf8', windowsHide: true },
+    (err, stdout, stderr) => callback(err ?? null, stdout, stderr),
+  );
+}
+
+function splitCommandLine(command: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | '\'' | null = null;
+
+  for (const ch of command.trim()) {
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === '\'') {
+      quote = ch;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (quote) {
+    throw new Error(`Unterminated quote in command: ${command}`);
+  }
+
+  if (current) tokens.push(current);
+  return tokens;
+}
+
 function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {
   const { cmd, args: cliArgs } = getCliInvocation('process-accumulated-events', ['--rg', boardDir, '--inline-loop']);
-  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
   try {
-    const child = spawn(cmd, cliArgs, {
-      shell: useShell,
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
+    spawnDetachedCommand(cmd, cliArgs);
     return true;
   } catch {
     return false;
@@ -452,28 +534,32 @@ export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
 // ============================================================================
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const LOCAL_TSX_CLI = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 /**
  * Generalized CLI invocation: determines how to invoke this script in current environment.
  * Returns { cmd, args } suitable for execFile() or execFileSync().
  */
 function getCliInvocation(command: string, args: string[]): { cmd: string; args: string[] } {
-  // Check if we have a .js file (built/published)
   const jsPath = path.join(__dirname, 'board-live-cards-cli.js');
   if (fs.existsSync(jsPath)) {
-    return { cmd: 'node', args: [jsPath, command, ...args] };
+    return { cmd: process.execPath, args: [jsPath, command, ...args] };
   }
-  // Fall back to .ts with tsx runner (dev environment)
+
   const tsPath = path.join(__dirname, 'board-live-cards-cli.ts');
+  if (fs.existsSync(tsPath) && fs.existsSync(LOCAL_TSX_CLI)) {
+    return { cmd: process.execPath, args: [LOCAL_TSX_CLI, tsPath, command, ...args] };
+  }
+
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
 function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('run-sources', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
-  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
   const child = spawn(cmd, args, {
-    shell: useShell,
+    shell: shouldUseShellForCommand(cmd),
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
@@ -491,19 +577,17 @@ function invokeRunSources(boardDir: string, cardPath: string, callbackToken: str
 
 function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('source-data-fetched', ['--tmp', tmpFile, '--token', sourceToken]);
-  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
-  execFile(cmd, args, { shell: useShell, encoding: 'utf8', windowsHide: true }, (err, stdout, stderr) => {
+  execCommandAsync(cmd, args, (err, stdout, stderr) => {
     if (err) console.error(`[source-data-fetched] call failed:`, err.message);
     if (stdout) console.log(stdout.trim());
     if (stderr) console.error(stderr.trim());
-    callback(err ?? null);
+    callback(err);
   });
 }
 
 function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('source-data-fetch-failure', ['--token', sourceToken, '--reason', reason]);
-  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
-  execFile(cmd, args, { shell: useShell, encoding: 'utf8', windowsHide: true }, (err) => callback(err ?? null));
+  execCommandAsync(cmd, args, (err) => callback(err));
 }
 
 /**
@@ -1017,10 +1101,9 @@ function cmdRunSources(args: string[]): void {
       fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
       console.log(`[run-sources] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
       try {
-        execFileSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile], {
+        execCommandSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile], {
           shell: true,
           timeout: src.timeout ?? 120_000,
-          windowsHide: true,
         });
       } catch (err: unknown) {
         const reason = (err as Error).message ?? String(err);
@@ -1053,10 +1136,8 @@ function cmdRunSources(args: string[]): void {
     const { cmd, args: baseArgs } = getCliInvocation('run-source-fetch', ['--in', inFile, '--out', outFile, '--err', errFile]);
     console.log(`[run-sources] run-source-fetch: ${cmd} ${baseArgs.join(' ')}`);
     try {
-      execFileSync(cmd, baseArgs, {
-        shell: true,
+      execCommandSync(cmd, baseArgs, {
         timeout: src.timeout ?? 120_000,
-        windowsHide: true,
       });
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
@@ -1133,14 +1214,24 @@ function cmdRunSourceFetch(args: string[]): void {
   const sourceCwd = typeof source.cwd === 'string' ? source.cwd : process.cwd();
   const sourceBoardDir = typeof source.boardDir === 'string' ? source.boardDir : undefined;
 
+  // Parse command with quote support to preserve args like --flag "value with spaces".
+  const cmdParts = splitCommandLine(source.cli);
+  if (cmdParts.length === 0) {
+    const msg = 'Source cli command is empty';
+    if (errFile) fs.writeFileSync(errFile, msg);
+    console.error(`[run-source-fetch] ${msg}`);
+    process.exit(1);
+  }
+  const cmd = cmdParts[0];
+  const cliArgs = cmdParts.slice(1);
+
   let stdout: string;
   try {
-    stdout = execFileSync(source.cli, {
-      shell: true,
+    stdout = execCommandSync(cmd, cliArgs, {
+      shell: false,
       encoding: 'utf-8',
       timeout,
       cwd: sourceCwd,
-      windowsHide: true,
       env: {
         ...process.env,
         ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
