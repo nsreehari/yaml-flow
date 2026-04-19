@@ -9,7 +9,7 @@
  * CLI:
  *   board-live-cards init <dir>
  *   board-live-cards status --rg <dir>
- *   board-live-cards add-card --rg <dir> --card <card.json>
+ *   board-live-cards add-cards --rg <dir> --card <card.json>
  *   board-live-cards run-sources --card <card.json> --token <callbackToken> --rg <dir>
  *
  * Card transform:
@@ -22,6 +22,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import fg from 'fast-glob';
 import { lockSync } from 'proper-lockfile';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
@@ -659,16 +660,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
 // CLI
 // ============================================================================
 
-function cmdAddCard(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
-  const cardIdx = args.indexOf('--card');
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
-  if (!dir || !cardFile) {
-    console.error('Usage: board-live-cards add-card --rg <dir> --card <card.json>');
-    process.exit(1);
-  }
-
+function addSingleCardFromFile(dir: string, cardFile: string): void {
   const absCardPath = path.resolve(cardFile);
   if (!fs.existsSync(absCardPath)) {
     console.error(`Card file not found: ${absCardPath}`);
@@ -706,13 +698,56 @@ function cmdAddCard(args: string[]): void {
     timestamp: new Date().toISOString(),
   });
 
-  void processAccumulatedEventsInfinitePass(dir);
-
   console.log(`Card "${card.id}" added to board at ${path.resolve(dir)} (drain scheduled)`);
   console.log(`  taskHandlers: [${taskConfig.taskHandlers?.join(', ') ?? ''}]`);
   console.log(`  provides: [${taskConfig.provides.join(', ')}]`);
   if (taskConfig.requires) console.log(`  requires: [${taskConfig.requires.join(', ')}]`);
 }
+
+function resolveCardGlobMatches(cardGlob: string): string[] {
+  const patterns = cardGlob
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(p => p.replace(/\\/g, '/'));
+  const matches = fg.sync(patterns, {
+    absolute: true,
+    onlyFiles: true,
+    unique: true,
+    dot: false,
+  });
+  return [...matches].sort((a, b) => a.localeCompare(b));
+}
+
+function cmdAddCards(args: string[]): void {
+  const rgIdx = args.indexOf('--rg');
+  const cardIdx = args.indexOf('--card');
+  const globIdx = args.indexOf('--card-glob');
+  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+  const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+  if (!dir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
+    console.error('Usage: board-live-cards add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)');
+    process.exit(1);
+  }
+
+  if (cardFile) {
+    addSingleCardFromFile(dir, cardFile);
+  } else {
+    const matches = resolveCardGlobMatches(cardGlob!);
+    if (matches.length === 0) {
+      console.error(`No card files matched glob: ${cardGlob}`);
+      process.exit(1);
+    }
+    for (const match of matches) {
+      addSingleCardFromFile(dir, match);
+    }
+    console.log(`Added ${matches.length} cards from glob: ${cardGlob}`);
+  }
+
+  void processAccumulatedEventsInfinitePass(dir);
+}
+
 
 function cmdInit(args: string[]): void {
   const dir = args[0];
@@ -1230,7 +1265,7 @@ export async function cli(argv: string[]): Promise<void> {
     case '-h':            return cmdHelp();
     case 'init':           return cmdInit(rest);
     case 'status':         return cmdStatus(rest);
-    case 'add-card':       return cmdAddCard(rest);
+    case 'add-cards':      return cmdAddCards(rest);
     case 'update-card':    return cmdUpdateCard(rest);
     case 'remove-card':              return cmdRemoveCard(rest);
     case 'retrigger':                 return cmdRetrigger(rest);
@@ -1265,8 +1300,11 @@ BOARD MANAGEMENT
     Print the current task status of every card in the board.
 
 CARD MANAGEMENT
-  add-card --rg <dir> --card <card.json>
-    Add a card to the board from a JSON file and trigger it.
+  add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)
+    Add one card or many cards from a glob and trigger processing.
+    --card adds one JSON file.
+    --card-glob adds all matching files in deterministic order.
+    Example glob: "examples/board-live-cards/portfolio-tracker/cards/*.json"
 
   update-card --rg <dir> --card-id <card-id> [--restart]
     Re-read the card JSON from disk and patch the board.
@@ -1351,7 +1389,7 @@ BOARD-LIVE-CARDS BUILT-IN EXECUTOR
 EXAMPLES
   board-live-cards-cli init ./my-board
   board-live-cards-cli init ./my-board --task-executor ./executors/my-runner.py
-  board-live-cards-cli add-card --rg ./my-board --card cards/prices.json
+  board-live-cards-cli add-cards --rg ./my-board --card cards/prices.json
   board-live-cards-cli status --rg ./my-board
   board-live-cards-cli retrigger --rg ./my-board --task price-fetch
 `.trimStart());

@@ -36,13 +36,17 @@ function sleep(ms) {
 }
 
 function cliCommand() {
+  // In-repo demo should use current source first to avoid stale dist wrappers.
+  if (fs.existsSync(CLI_TS)) {
+    return { cmd: NPX_CMD, prefixArgs: ['tsx', CLI_TS] };
+  }
   if (fs.existsSync(CLI_WRAPPER)) {
     return { cmd: 'node', prefixArgs: [CLI_WRAPPER] };
   }
   if (fs.existsSync(CLI_JS)) {
     return { cmd: 'node', prefixArgs: [CLI_JS] };
   }
-  return { cmd: NPX_CMD, prefixArgs: ['tsx', CLI_TS] };
+  return { cmd: 'node', prefixArgs: [CLI_WRAPPER] };
 }
 
 function runCli(args, capture = false) {
@@ -124,12 +128,9 @@ function setupRuntimeCards() {
   fs.rmSync(BOARD, { recursive: true, force: true });
 
   cli('init', BOARD);
-  cli('add-card', '--rg', BOARD, '--card', path.join(CARDS, 'portfolio-form.json'));
-  cli('add-card', '--rg', BOARD, '--card', path.join(CARDS, 'price-fetch.json'));
-  cli('add-card', '--rg', BOARD, '--card', path.join(CARDS, 'holdings-table.json'));
-  cli('add-card', '--rg', BOARD, '--card', path.join(CARDS, 'portfolio-value.json'));
+  cli('add-cards', '--rg', BOARD, '--card-glob', path.join(CARDS, '*.json'));
 
-  console.log('\n--- T0 Status (after add-card) ---');
+  console.log('\n--- T0 Status (after add-cards) ---');
   process.stdout.write(statusText());
 
   console.log('\n=== T1: Writing market prices ===');

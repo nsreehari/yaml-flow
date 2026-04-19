@@ -2,12 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
   "title": "LiveCards Node Schema",
-  "description": "Schema for LiveCards nodes. All nodes share one flat shape: id + state required; requires/provides/sources/compute/view optional. computed_values is runtime-only (never in JSON).",
+  "description": "Schema for Card and ExternalSource nodes in the LiveCards Board/Canvas engine",
 
   "definitions": {
 
     "bind_ref": {
-      "description": "A path into the node's runtime namespace: state.*, requires.*, or computed_values.*",
+      "description": "A state path reference, e.g. 'state.raw_quotes' or 'requires.upstream'",
       "type": "string",
       "pattern": "^(state|requires|computed_values)\\."
     },
@@ -26,15 +26,69 @@
       ]
     },
 
-    "provides_binding": {
-      "description": "Explicit binding: publish a named token downstream from a resolved path",
+    "compute_expr": {
+      "description": "A declarative JSON compute expression",
       "type": "object",
-      "required": ["bindTo", "src"],
-      "additionalProperties": false,
+      "required": ["fn"],
       "properties": {
-        "bindTo": { "type": "string", "description": "Token name published downstream" },
-        "src":    { "type": "string", "description": "Path to read value from (state.*, requires.*, computed_values.*)" }
+        "fn": {
+          "type": "string",
+          "description": "Function name from the built-in vocabulary",
+          "enum": [
+            "sum", "avg", "min", "max", "count", "first", "last",
+            "add", "sub", "mul", "div", "round", "abs", "mod",
+            "gt", "gte", "lt", "lte", "eq", "neq",
+            "if", "and", "or", "not",
+            "concat", "upper", "lower", "template",
+            "filter", "pluck", "map", "sort", "slice", "flat", "unique", "group",
+            "get", "default",
+            "now", "diff_days", "format_date"
+          ]
+        },
+        "input": {
+          "description": "state.path, literal, array of inputs, or nested compute_expr",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array" },
+            { "$ref": "#/definitions/compute_expr" }
+          ]
+        },
+        "field": { "type": "string", "description": "For pluck/sum/group — the object key to extract" },
+        "where": { "$ref": "#/definitions/compute_expr", "description": "For filter — predicate expression ($ = current item)" },
+        "cond":  { "$ref": "#/definitions/compute_expr", "description": "For if — condition expression" },
+        "then":  { "description": "For if — value when cond is truthy" },
+        "else":  { "description": "For if — value when cond is falsy" },
+        "format": { "type": "string", "description": "For format_date — date format string" }
       }
+    },
+
+    "meta": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "tags":  { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of upstream nodes this node depends on"
+    },
+
+    "provides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bindTo", "src"],
+        "properties": {
+          "bindTo": { "type": "string", "description": "Token name published downstream" },
+          "src":    { "type": "string", "description": "Path to read value from (state.*, requires.*, computed_values.*)" }
+        }
+      },
+      "description": "Explicit bindings exposing computed/state values downstream as named tokens"
     },
 
     "compute_step": {
@@ -47,7 +101,7 @@
       }
     },
 
-    "source_entry": {
+    "source_def": {
       "description": "One source entry. The engine only cares about 'bindTo' (compute namespace key) and 'outputFile' (delivery signal). Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
       "type": "object",
       "required": ["bindTo"],
@@ -58,24 +112,6 @@
         "optional":   { "type": "boolean", "default": false, "description": "When true this source does not gate task completion — the card re-evaluates when outputFile arrives later." },
         "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
         "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }
-      }
-    },
-
-    "meta": {
-      "type": "object",
-      "properties": {
-        "title": { "type": "string" },
-        "tags":  { "type": "array", "items": { "type": "string" } }
-      }
-    },
-
-    "state_obj": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "status":  { "enum": ["fresh", "stale", "loading", "error"] },
-        "lastRun": { "type": "string", "format": "date-time" },
-        "error":   { "type": "string" }
       }
     },
 
@@ -180,40 +216,33 @@
     }
   },
 
-  "title": "LiveCard Node",
-  "description": "Unified node: id + state required. requires/provides/sources/compute/view all optional. No type discriminator — nodes with view render as cards; nodes without view and with sources render as source pills in canvas mode.",
+  "title": "LiveCard",
+  "description": "A unified card node. Behavior depends on which sections are present (sources, compute, view, etc.)",
   "type": "object",
-  "required": ["id", "state"],
-  "additionalProperties": true,
+  "required": ["id"],
+  "additionalProperties": false,
   "properties": {
-    "id":    { "type": "string", "description": "Unique node identifier" },
-    "meta":  { "$ref": "#/definitions/meta" },
-    "state": { "$ref": "#/definitions/state_obj" },
-
-    "requires": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "IDs of upstream nodes this node depends on"
+    "id":       { "type": "string" },
+    "requires": { "$ref": "#/definitions/requires" },
+    "provides": { "$ref": "#/definitions/provides" },
+    "meta":     { "$ref": "#/definitions/meta" },
+    "view":     { "$ref": "#/definitions/view" },
+    "state":    { "type": "object", "additionalProperties": true,
+      "properties": {
+        "status":  { "enum": ["fresh", "stale", "loading", "error"] },
+        "lastRun": { "type": "string", "format": "date-time" },
+        "error":   { "type": "string" }
+      }
     },
-
-    "provides": {
-      "type": "array",
-      "items": { "$ref": "#/definitions/provides_binding" },
-      "description": "Explicit bindings publishing named tokens downstream. Each item: { bindTo, src } where src is a state.*/requires.*/computed_values.* path."
-    },
-
     "sources": {
       "type": "array",
-      "items": { "$ref": "#/definitions/source_entry" },
-      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON. The executor fetches/generates data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Non-optional sources must all deliver before task-completed fires. optional: true sources don't gate completion."
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Non-optional sources must all deliver (outputFile present) before task-completed fires. optional: true sources don't gate completion.",
+      "items": { "$ref": "#/definitions/source_def" }
     },
-
     "compute": {
       "type": "array",
-      "items": { "$ref": "#/definitions/compute_step" },
-      "description": "Ordered compute steps. Each reads state.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo]. computed_values is never persisted."
-    },
-
-    "view": { "$ref": "#/definitions/view" }
+      "description": "Ordered array of compute steps. Each reads state.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
+      "items": { "$ref": "#/definitions/compute_step" }
+    }
   }
 }

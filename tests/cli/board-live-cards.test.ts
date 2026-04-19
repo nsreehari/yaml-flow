@@ -493,10 +493,10 @@ describe('cards-inventory', () => {
 });
 
 // ============================================================================
-// CLI add-card
+// CLI add-cards
 // ============================================================================
 
-describe('cli add-card', () => {
+describe('cli add-cards', () => {
   let tmpDir: string;
 
   function freshDir() {
@@ -523,7 +523,7 @@ describe('cli add-card', () => {
 
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     // Wait for background try-drain to settle the board
@@ -557,7 +557,7 @@ describe('cli add-card', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['enriched']);
@@ -575,12 +575,65 @@ describe('cli add-card', () => {
     fs.writeFileSync(cardFile, JSON.stringify({ id: 'x', state: {} }));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
-    await expect(cli(['add-card', '--rg', dir, '--card', cardFile])).rejects.toThrow('exit');
+    await expect(cli(['add-cards', '--rg', dir, '--card', cardFile])).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+});
+
+// ============================================================================
+// CLI add-cards (glob)
+// ============================================================================
+
+describe('cli add-cards with --card-glob', () => {
+  let tmpDir: string;
+
+  function freshDir() {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'addmulti-test-'));
+    return tmpDir;
+  }
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('adds multiple cards using a glob pattern', async () => {
+    const dir = path.join(freshDir(), 'board');
+    initBoard(dir);
+
+    const cardsDir = path.join(tmpDir, 'cards');
+    fs.mkdirSync(cardsDir, { recursive: true });
+    fs.writeFileSync(path.join(cardsDir, 'a.json'), JSON.stringify({ id: 'a', state: {} }));
+    fs.writeFileSync(path.join(cardsDir, 'b.json'), JSON.stringify({ id: 'b', state: {} }));
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
+    cli(['add-cards', '--rg', dir, '--card-glob', path.join(cardsDir, '*.json')]);
+    spy.mockRestore();
+
+    await pollBoard(dir, t => !!t['a'] && !!t['b']);
+
+    const live = loadBoard(dir);
+    expect(live.config.tasks.a).toBeDefined();
+    expect(live.config.tasks.b).toBeDefined();
+
+    const inv = readCardInventory(dir);
+    expect(inv.map(e => e.cardId).sort()).toEqual(['a', 'b']);
+    expect(logs.join('\n')).toContain('Added 2 cards from glob');
+  });
+
+  it('rejects when glob matches no files', async () => {
+    const dir = path.join(freshDir(), 'board');
+    initBoard(dir);
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
+    await expect(cli(['add-cards', '--rg', dir, '--card-glob', path.join(tmpDir, 'nope', '*.json')])).rejects.toThrow('exit');
     exitSpy.mockRestore();
     errSpy.mockRestore();
   });
@@ -610,7 +663,7 @@ describe('cli remove-card', () => {
     fs.writeFileSync(cardFile, JSON.stringify({ id: 'temp', state: {} }));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['temp']);
@@ -656,7 +709,7 @@ describe('cli update-card', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['prices']);
@@ -695,7 +748,7 @@ describe('cli update-card', () => {
     }));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     // Run update-card with --restart
@@ -743,7 +796,7 @@ describe('cli retrigger', () => {
     const cardFile = path.join(tmpDir, 'src.json');
     fs.writeFileSync(cardFile, JSON.stringify({ id: 'src', state: {} }));
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-card', '--rg', dir, '--card', cardFile]);
+    cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     // Retrigger
