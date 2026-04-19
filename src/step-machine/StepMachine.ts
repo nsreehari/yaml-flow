@@ -90,6 +90,16 @@ export class StepMachine {
           );
         }
       }
+
+      if (stepConfig.failure_transitions) {
+        for (const [result, target] of Object.entries(stepConfig.failure_transitions)) {
+          if (!steps[target] && !terminal_states[target]) {
+            throw new Error(
+              `Step "${stepName}" failure_transition "${result}" points to unknown step "${target}"`
+            );
+          }
+        }
+      }
     }
   }
 

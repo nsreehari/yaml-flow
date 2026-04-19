@@ -62,6 +62,9 @@ export function validateStepFlowConfig(flow: unknown): string[] {
       if (!step.transitions || typeof step.transitions !== 'object') {
         errors.push(`Step "${stepName}" must have a "transitions" object`);
       }
+      if (step.failure_transitions !== undefined && typeof step.failure_transitions !== 'object') {
+        errors.push(`Step "${stepName}" failure_transitions must be an object when provided`);
+      }
     }
   }
 

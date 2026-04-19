@@ -168,6 +168,7 @@ const result = await machine.run({ message: 'I was double-charged' });
 | Feature | Config |
 |---|---|
 | Transitions | `transitions: { success: next_step, failure: error_step }` |
+| Failure transitions | `failure_transitions: { failure: error_step, timeout: timeout_step }` |
 | Retry | `retry: { max_attempts: 3, delay_ms: 1000, backoff_multiplier: 2 }` |
 | Circuit breaker | `circuit_breaker: { max_iterations: 5, on_open: fallback }` |
 | Pause / resume | `await machine.pause(runId)` / `await machine.resume(runId)` |

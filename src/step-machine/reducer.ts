@@ -49,8 +49,10 @@ export function applyStepResult(
     }
   }
 
-  // Find transition
-  const nextStep = stepConfig.transitions[stepResult.result];
+  // Find transition. Failure transitions are explicit error-path overrides.
+  const nextStep =
+    stepConfig.failure_transitions?.[stepResult.result] ??
+    stepConfig.transitions[stepResult.result];
   if (!nextStep) {
     throw new Error(
       `No transition defined for result "${stepResult.result}" in step "${stepName}"`

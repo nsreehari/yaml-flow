@@ -80,6 +80,20 @@ describe('StepMachine', () => {
       };
       expect(() => createStepMachine(bad, {})).toThrow('unknown step "nonexistent"');
     });
+
+    it('should throw on dangling failure_transition target', () => {
+      const bad: StepFlowConfig = {
+        settings: { start_step: 'a' },
+        steps: {
+          a: {
+            transitions: { success: 'z' },
+            failure_transitions: { failure: 'nonexistent' },
+          },
+        },
+        terminal_states: { z: { return_intent: 'done' } },
+      };
+      expect(() => createStepMachine(bad, {})).toThrow('failure_transition "failure" points to unknown step "nonexistent"');
+    });
   });
 
   // ============================================================================
@@ -109,6 +123,30 @@ describe('StepMachine', () => {
 
       expect(result.status).toBe('completed');
       expect(result.intent).toBe('error');
+    });
+
+    it('should honor failure_transitions over transitions for matching results', async () => {
+      const flow: StepFlowConfig = {
+        settings: { start_step: 'start' },
+        steps: {
+          start: {
+            transitions: { failure: 'end_success', success: 'end_success' },
+            failure_transitions: { failure: 'end_error' },
+          },
+        },
+        terminal_states: {
+          end_success: { return_intent: 'success' },
+          end_error: { return_intent: 'error' },
+        },
+      };
+      const handlers: Record<string, StepHandler> = {
+        start: async () => ({ result: 'failure' }),
+      };
+
+      const sm = createStepMachine(flow, handlers);
+      const result = await sm.run();
+      expect(result.intent).toBe('error');
+      expect(result.finalStep).toBe('end_error');
     });
 
     it('should respect max_total_steps', async () => {

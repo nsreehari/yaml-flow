@@ -77,6 +77,11 @@
           "additionalProperties": { "type": "string" },
           "minProperties": 1
         },
+        "failure_transitions": {
+          "type": "object",
+          "description": "Mapping of failure-like results (e.g. failure, timeout) -> next step name",
+          "additionalProperties": { "type": "string" }
+        },
         "retry": {
           "$ref": "#/definitions/retry_config"
         },

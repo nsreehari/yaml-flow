@@ -30,6 +30,7 @@ describe('validateFlowSchema', () => {
             expects_data: ['input'],
             produces_data: ['output'],
             transitions: { success: 'b', error: 'fail' },
+            failure_transitions: { failure: 'fail', timeout: 'fail' },
             retry: { max_attempts: 3, delay_ms: 1000, backoff_multiplier: 2 },
             circuit_breaker: { max_iterations: 5, on_open: 'fail' },
           },
@@ -166,6 +167,15 @@ describe('validateFlowSchema', () => {
       const r = validateFlowSchema({
         settings: { start_step: 's' },
         steps: { s: { transitions: { ok: 'd' }, circuit_breaker: {} } },
+        terminal_states: { d: { return_intent: 'ok' } },
+      });
+      expect(r.ok).toBe(false);
+    });
+
+    it('failure_transitions must be an object', () => {
+      const r = validateFlowSchema({
+        settings: { start_step: 's' },
+        steps: { s: { transitions: { ok: 'd' }, failure_transitions: 'bad' } },
         terminal_states: { d: { return_intent: 'ok' } },
       });
       expect(r.ok).toBe(false);

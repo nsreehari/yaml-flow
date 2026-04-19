@@ -28,6 +28,7 @@ export interface StepConfig {
   expects_data?: string[];
   produces_data?: string[];
   transitions: Record<string, string>;
+  failure_transitions?: Record<string, string>;
   retry?: RetryConfig;
   circuit_breaker?: CircuitBreakerConfig;
 }
