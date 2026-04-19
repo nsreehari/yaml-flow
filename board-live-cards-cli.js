@@ -8,15 +8,15 @@ import { spawnSync } from 'node:child_process';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distCli = path.join(__dirname, 'dist', 'cli', 'board-live-cards-cli.js');
 const srcCli = path.join(__dirname, 'src', 'cli', 'board-live-cards-cli.ts');
-const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const tsxCli = path.join(__dirname, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 if (fs.existsSync(distCli)) {
   const { cli } = await import(pathToFileUrl(distCli).href);
   await cli(process.argv.slice(2));
 } else if (fs.existsSync(srcCli)) {
-  const result = spawnSync(npxCmd, ['tsx', srcCli, ...process.argv.slice(2)], {
+  const result = spawnSync(process.execPath, [tsxCli, srcCli, ...process.argv.slice(2)], {
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
     windowsHide: true,
   });
 
