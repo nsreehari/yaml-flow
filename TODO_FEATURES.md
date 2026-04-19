@@ -21,10 +21,10 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Goal: no drift between schema/live-cards.schema.json and browser/live-cards.schema.json
   - Notes: add test/guard that fails if schemas diverge
 
-- [ ] 3. board-live-cards-cli npm availability hardening
-  - Status: READY
+- [x] 3. board-live-cards-cli npm availability hardening
+  - Status: DONE
   - Goal: keep canonical CLI path stable for package consumers
-  - Notes: verify package contents and bin entry continuously
+  - Notes: wrapper/bin path stabilized, direct tsx runner path hardened, package bin cleanup applied
 
 - [ ] 4. AI agent manifest/notes for live-card schema create/update
   - Status: DISCUSS
@@ -52,9 +52,9 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Notes: include example boards showing supported card varieties
 
 - [ ] 9. generalize portfolio-tracker into reusable demo simulation framework
-  - Status: DISCUSS
+  - Status: PARTIAL (step-machine-cli based orchestration is in place)
   - Goal: run multiple scenarios and synthetic situations with shared harness
-  - Notes: evaluate using yaml-flow step engine for orchestration
+  - Notes: portfolio-tracker now runs as reusable step-machine-cli flow with e2e coverage; multi-scenario shared harness still open
 
 - [ ] 10. define standard status object shape for live cards and boards
   - Status: DISCUSS
