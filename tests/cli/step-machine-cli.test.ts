@@ -625,4 +625,33 @@ export default {
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('failure');
   });
+
+  it('e2e: portfolio-tracker example runs to success', () => {
+    const exampleDir = path.resolve(repoRoot, 'examples/step-machine-cli/portfolio-tracker');
+    const inputData = JSON.parse(
+      fs.readFileSync(path.join(exampleDir, 'portfolio-tracker.input.json'), 'utf-8')
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [stepMachineCli, 'portfolio-tracker.flow.yaml', '--data', JSON.stringify(inputData)],
+      {
+        cwd: exampleDir,
+        encoding: 'utf-8',
+        windowsHide: true,
+        env: { ...process.env, BOARD_LIVE_CARDS_NO_SPAWN: '1' },
+        timeout: 110_000,
+      }
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+
+    const output = parseLastJsonObject(result.stdout ?? '');
+    expect(output.intent).toBe('success');
+    expect(output.finalStep).toBe('success_state');
+    expect(output.data.t1_done).toBe(true);
+    expect(output.data.t2_done).toBe(true);
+    expect(output.data.t3_done).toBe(true);
+  }, 120_000);
 });

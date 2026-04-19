@@ -1,6 +1,6 @@
 id: portfolio-tracker-step-machine
 handler_vars:
-  BOARDCLI_PATH: ../../../board-live-cards-cli.js
+  BOARDCLI_CMD: ../../../board-live-cards-cli.js
 settings:
   start_step: t0_reset_board
   max_total_steps: 150
@@ -27,7 +27,7 @@ steps:
     expects_data: [runtime_root, board_name]
     produces_data: [board_dir]
     handler:
-      cli: node %%BOARDCLI_PATH%% init "%%BOARD_DIR%%"
+      cli: node %%BOARDCLI_CMD%% init "%%BOARD_DIR%%"
       result-mode: exit-code
       input-transforms:
         BOARD_DIR: runtime_root & "/" & board_name
@@ -43,7 +43,7 @@ steps:
     expects_data: [board_dir, cards_template_dir]
     produces_data: [cards_dir]
     handler:
-      cli: node %%BOARDCLI_PATH%% add-cards --rg "%%BOARD_DIR%%" --card-glob "%%CARDS_GLOB%%"
+      cli: node %%BOARDCLI_CMD%% add-cards --rg "%%BOARD_DIR%%" --card-glob "%%CARDS_GLOB%%"
       result-mode: exit-code
       input-transforms:
         BOARD_DIR: board_dir
@@ -149,7 +149,7 @@ steps:
     expects_data: [board_dir, price_fetch_task]
     produces_data: [t3_retriggered]
     handler:
-      cli: node %%BOARDCLI_PATH%% retrigger --rg "%%BOARD_DIR%%" --task "%%TASK%%"
+      cli: node %%BOARDCLI_CMD%% retrigger --rg "%%BOARD_DIR%%" --task "%%TASK%%"
       result-mode: exit-code
       input-transforms:
         BOARD_DIR: board_dir
@@ -202,7 +202,7 @@ steps:
     expects_data: [board_dir]
     produces_data: [final_status]
     handler:
-      cli: node %%BOARDCLI_PATH%% status --rg "%%BOARD_DIR%%"
+      cli: node %%BOARDCLI_CMD%% status --rg "%%BOARD_DIR%%"
       result-mode: exit-code
       input-transforms:
         BOARD_DIR: board_dir
