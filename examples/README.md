@@ -13,8 +13,6 @@ Browser view: open `examples/index.html`.
 |---|---|---|---|
 | TypeScript example runner (`tsx`) | `npx tsx <example-file.ts>` | Running most TS examples under `examples/` | Recommended default for `.ts` example files |
 | Node script runner | `node <example-file.js>` | Running JS examples and wrappers | Used by portfolio tracker + scenario runner |
-| `demo-simulator-cli.js` (root CLI) | `node demo-simulator-cli.js <scenario.yaml>` | Running scenarios — primary entry point | Root-level CLI alongside `board-live-cards-cli.js`; implementation in `demo-simulator/` |
-| Demo-simulator step-machine runner | `npx tsx demo-simulator/run-portfolio-with-step-engine.ts` | Running the portfolio scenario through yaml-flow step-machine | Uses `portfolio-tracker.step-flow.yaml` transitions |
 | Board live-cards CLI (repo wrapper) | `node board-live-cards-cli.js <command>` or `board-live-cards-cli <command>` | Interacting with board runtime directly | Wrapper resolves dist/src CLI automatically |
 | Windows portfolio launcher | `examples\\board-live-cards\\portfolio-tracker\\portfolio-tracker.bat` | Quick run on Windows shell | Calls the Node portfolio tracker script |
 | `step-machine-cli.js` (root CLI) | `node step-machine-cli.js <flow.yaml> [--handlers <handlers.js>] [--data <json>]` | Running step-machine YAML flows from the command line | Supports inline/CLI handlers, JSONata transforms, handler_vars, command templating |

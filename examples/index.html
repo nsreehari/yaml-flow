@@ -207,18 +207,6 @@
               <td>Used by portfolio tracker + scenario runner</td>
             </tr>
             <tr>
-              <td><span class="chip">CLI runner</span><br/>demo-simulator-cli (root)</td>
-              <td><code>node demo-simulator-cli.js &lt;scenario.yaml&gt;</code><button class="copy-btn" data-copy="node demo-simulator-cli.js examples/scenarios-with-demo-simulator/portfolio-tracker.yaml">Copy</button></td>
-              <td>Running declarative YAML simulation scenarios — primary entry point</td>
-              <td>Root-level CLI alongside <code>board-live-cards-cli.js</code>. Implementation in <code>demo-simulator/</code></td>
-            </tr>
-            <tr>
-              <td><span class="chip">Step-machine runner</span><br/>Scenario via step engine</td>
-              <td><code>npx tsx demo-simulator/run-portfolio-with-step-engine.ts</code><button class="copy-btn" data-copy="npx tsx demo-simulator/run-portfolio-with-step-engine.ts">Copy</button></td>
-              <td>Running portfolio scenario through yaml-flow step-machine transitions</td>
-              <td>Uses <code>portfolio-tracker.step-flow.yaml</code></td>
-            </tr>
-            <tr>
               <td><span class="chip">CLI runner</span><br/>board-live-cards CLI wrapper</td>
               <td><code>node board-live-cards-cli.js &lt;command&gt;</code><button class="copy-btn" data-copy="node board-live-cards-cli.js help">Copy</button></td>
               <td>Interacting with board runtime directly</td>
