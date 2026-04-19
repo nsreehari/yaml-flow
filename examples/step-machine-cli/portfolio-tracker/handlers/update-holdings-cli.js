@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { readStdinJson, runBoardCli, writeFailure, writeResult } from './_board-cli.js';
+
+try {
+  const input = await readStdinJson();
+  const boardDir = String(input.BOARD_DIR ?? '').trim();
+  const cardsDir = String(input.CARDS_DIR ?? '').trim();
+  const holdings = input.HOLDINGS;
+
+  if (!boardDir || !cardsDir || !Array.isArray(holdings)) {
+    writeFailure('BOARD_DIR, CARDS_DIR and HOLDINGS array are required');
+    process.exit(0);
+  }
+
+  const cardPath = path.join(cardsDir, 'portfolio-form.json');
+  const raw = fs.readFileSync(cardPath, 'utf-8');
+  const card = JSON.parse(raw);
+  card.state = card.state ?? {};
+  card.state.holdings = holdings;
+  fs.writeFileSync(cardPath, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
+
+  runBoardCli(['update-card', '--rg', boardDir, '--card-id', 'portfolio-form', '--restart']);
+
+  writeResult({
+    result: 'success',
+    data: {
+      saved: true,
+      holdings_count: holdings.length,
+    },
+  });
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  writeFailure(message);
+}

@@ -1,0 +1,19 @@
+id: one-step-cli-only
+settings:
+  start_step: run_cli
+steps:
+  run_cli:
+    expects_data: [x]
+    produces_data: [y]
+    handler:
+      cli: node ./step-cli-echo-y.js
+    transitions:
+      success: success_state
+      failure: failed_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [x, y]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]

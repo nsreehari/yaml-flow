@@ -1,0 +1,30 @@
+id: jsonata-init-board-demo
+settings:
+  start_step: t0_init_board
+  max_total_steps: 10
+  timeout_ms: 30000
+
+steps:
+  t0_init_board:
+    description: Build board path with JSONata and invoke CLI with command templating
+    expects_data: [runtime_root, board_name]
+    produces_data: [board_dir, init_message]
+    handler:
+      cli: node ./jsonata-init-board-cli.js "%%BOARD_DIR%%"
+      input-transforms:
+        BOARD_DIR: runtime_root & "/" & board_name
+      output-transforms:
+        board_dir: BOARD_DIR
+        init_message: data.message
+    transitions:
+      success: success_state
+      failure: failed_state
+
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [board_dir, init_message]
+
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]

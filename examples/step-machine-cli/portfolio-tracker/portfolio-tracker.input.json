@@ -1,0 +1,38 @@
+{
+  "runtime_root": "./runtime",
+  "board_name": "portfolio-tracker-board",
+  "cards_template_dir": "./cards",
+  "completion_tasks": [
+    "portfolio-form",
+    "price-fetch",
+    "holdings-table",
+    "portfolio-value"
+  ],
+  "price_fetch_task": "price-fetch",
+  "prices_t1": {
+    "AAPL": 198.5,
+    "MSFT": 425.3,
+    "GOOG": 178.9,
+    "AMZN": 192.4,
+    "TSLA": 168.75
+  },
+  "holdings_t2": [
+    { "symbol": "AAPL", "qty": 50 },
+    { "symbol": "MSFT", "qty": 30 },
+    { "symbol": "GOOG", "qty": 100 }
+  ],
+  "prices_t2": {
+    "AAPL": 198.5,
+    "MSFT": 425.3,
+    "GOOG": 178.9,
+    "AMZN": 192.4,
+    "TSLA": 168.75
+  },
+  "prices_t3": {
+    "AAPL": 205,
+    "MSFT": 425.3,
+    "GOOG": 178.9,
+    "AMZN": 192.4,
+    "TSLA": 168.75
+  }
+}

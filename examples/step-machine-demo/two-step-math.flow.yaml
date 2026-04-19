@@ -1,0 +1,31 @@
+id: two-step-math
+settings:
+  start_step: step1_add
+  max_total_steps: 10
+  timeout_ms: 10000
+
+steps:
+  step1_add:
+    description: Compute c = a + b
+    expects_data: [a, b]
+    produces_data: [c]
+    transitions:
+      success: step2_double
+      failure: failed_state
+
+  step2_double:
+    description: Compute d = c * 2
+    expects_data: [c]
+    produces_data: [d]
+    transitions:
+      success: success_state
+      failure: failed_state
+
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [a, b, c, d]
+
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
