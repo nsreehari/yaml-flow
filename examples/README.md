@@ -7,6 +7,13 @@ This file is split into two sections:
 
 Browser view: open `examples/index.html`.
 
+These examples are organized around yaml-flow's public surfaces:
+
+1. Library APIs (`yaml-flow/*` imports)
+2. First-class CLIs (`board-live-cards-cli`, `step-machine-cli`)
+3. Browser runtime assets (`browser/*`)
+4. Reusable live-cards / boards package patterns built on top of the above
+
 ## Runners (How To Run)
 
 | Runner | Quick usage | Use when | Notes |
@@ -55,3 +62,5 @@ Browser view: open `examples/index.html`.
 | Recommended runner for scenarios | `node examples/step-machine-cli/scenario-harness/run-scenario.js <scenario.json>` |
 | CLI docs | `docs/board-live-cards-cli.html` |
 | Step-machine docs | `docs/step-machine-cli.html` |
+| Browser runtime docs | `docs/browser-runtime.html` |
+| Docs index | `docs/index.html` |

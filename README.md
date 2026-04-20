@@ -9,6 +9,51 @@ Two workflow engines in one package. Pick the model that fits your problem.
 npm install yaml-flow
 ```
 
+## Public Surfaces
+
+yaml-flow is not only a low-level npm library. It exposes four practical consumption surfaces:
+
+1. **Library APIs**
+  Use the package imports when you want to embed workflow logic directly in your application.
+  Public modules include the main package plus subpaths like `yaml-flow/step-machine`, `yaml-flow/event-graph`, `yaml-flow/stores`, `yaml-flow/batch`, `yaml-flow/inference`, and `yaml-flow/card-compute`.
+
+2. **First-class CLIs**
+  These are batteries-included server-side utilities, not just thin wrappers:
+  - `board-live-cards-cli`
+  - `step-machine-cli`
+
+  They combine multiple yaml-flow primitives into directly usable operational tools.
+
+3. **Browser Runtime Assets**
+  The shipped files under `browser/` are a public surface for browser-side rendering and board/card integration:
+  - `browser/live-cards.js`
+  - `browser/ingest-board.js`
+  - `browser/card-compute.js`
+  - `browser/live-cards.schema.json`
+
+4. **Reusable Live-Cards / Boards Package Layer**
+  The live-cards and boards mechanism is a reusable higher abstraction built using yaml-flow engines, schemas, CLI orchestration, and browser runtime pieces together. It should be treated as a package pattern, not just a repo demo app.
+
+## Documentation Map
+
+- Main orientation: `README.md`
+- Runnable examples: `examples/README.md` and `examples/index.html`
+- Docs landing page: `docs/index.html`
+- Board live-cards CLI reference: `docs/board-live-cards-cli.html`
+- Step-machine CLI reference: `docs/step-machine-cli.html`
+- Browser runtime guide: `docs/browser-runtime.html`
+- Live-cards design notes: `docs/design-live-cards.md`
+- Schemas: `schema/` and `browser/live-cards.schema.json`
+
+## Repository Organization
+
+- `dist/` contains the built library output.
+- `schema/` contains public config and contract schemas.
+- `browser/` contains shipped browser-consumable runtime assets.
+- `examples/` contains runnable examples for the public surfaces.
+- `docs/` contains deeper reference and design material for repo/GitHub readers.
+- `app/` is best treated as demo/showcase code, not as the primary public documentation surface.
+
 ## Board Live Cards CLI (Canonical External Path)
 
 When installed from npm, use the package-exposed command:
