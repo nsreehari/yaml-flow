@@ -249,6 +249,27 @@
     </section>
 
     <section class="card">
+      <h2>Refresh Strategy</h2>
+      <p>This is part of the board runtime scheduling model, not the browser renderer. It controls when a completed card becomes eligible to run again.</p>
+      <table>
+        <thead><tr><th>Strategy</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td><code>data-changed</code></td><td>Default. Re-run when upstream output data changes.</td></tr>
+          <tr><td><code>epoch-changed</code></td><td>Re-run when upstream execution count advances, even if data is identical.</td></tr>
+          <tr><td><code>time-based</code></td><td>Re-run after <code>refreshInterval</code> seconds.</td></tr>
+          <tr><td><code>manual</code></td><td>Never auto-rerun. Only external retrigger or operator action can restart it.</td></tr>
+          <tr><td><code>once</code></td><td>Run one time and never become eligible again.</td></tr>
+        </tbody>
+      </table>
+      <pre><code>// Per-card config
+{ "refreshStrategy": "time-based", "refreshInterval": 60, "maxExecutions": 10 }
+
+// Board default
+{ "settings": { "refreshStrategy": "epoch-changed" } }</code></pre>
+      <p class="muted">In this repo, the scheduling logic for these strategies lives in the event-graph / continuous-event-graph runtime, and board-live-cards-cli uses that runtime to decide card re-eligibility.</p>
+    </section>
+
+    <section class="card">
       <h2>Infinite Loop Prevention</h2>
       <p>The runtime is designed to be loop-safe by construction:</p>
       <ol>

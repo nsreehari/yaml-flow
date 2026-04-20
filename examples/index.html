@@ -12,7 +12,9 @@
       --muted: #51607a;
       --line: #d9e1ef;
       --accent: #0f6bff;
-      --chip: #e8f0ff;
+      --accent-soft: #e8f0ff;
+      --success-soft: #e9fbf2;
+      --warm-soft: #fff6e7;
     }
 
     * { box-sizing: border-box; }
@@ -27,8 +29,11 @@
         var(--bg);
     }
 
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
     .wrap {
-      max-width: 1200px;
+      max-width: 1240px;
       margin: 24px auto;
       padding: 0 16px 32px;
     }
@@ -37,40 +42,83 @@
       background: linear-gradient(120deg, #083a7a, #0f6bff 60%, #18a4ff);
       color: #fff;
       border-radius: 14px;
-      padding: 20px;
+      padding: 22px;
       box-shadow: 0 10px 24px rgba(15, 107, 255, 0.22);
     }
 
     .hero h1 {
       margin: 0 0 8px;
-      font-size: 1.6rem;
+      font-size: 1.7rem;
     }
 
     .hero p {
       margin: 0;
       opacity: 0.95;
+      max-width: 980px;
+      line-height: 1.55;
     }
 
     .hero a {
       color: #fff;
-      font-weight: 600;
+      font-weight: 700;
     }
 
-    .panel {
+    .panel,
+    .section,
+    .howto,
+    details.catalog {
       margin-top: 16px;
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .panel-body,
+    .section-body,
+    .howto-body,
+    .catalog-body {
       padding: 14px;
     }
 
+    .section-head,
+    .howto-head,
+    .catalog summary {
+      padding: 12px 14px;
+      background: #f7faff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head h2,
+    .howto-head h2,
+    .catalog summary {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .section-head p,
+    .howto-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .catalog summary {
+      cursor: pointer;
+      font-weight: 700;
+      list-style: none;
+    }
+
+    .catalog summary::-webkit-details-marker { display: none; }
+
     .tools {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 2fr 1fr 1fr;
       gap: 10px;
     }
 
-    input, select {
+    input,
+    select {
       width: 100%;
       padding: 10px 12px;
       border: 1px solid var(--line);
@@ -79,46 +127,117 @@
       background: #fff;
     }
 
-    .section {
-      margin-top: 18px;
-      background: var(--card);
+    .subtle {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .quickstart-grid,
+    .example-grid,
+    .howto-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .quickstart-grid {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+
+    .quickstart-grid .card {
+      border: 2px solid #bfd6ff;
+      background: linear-gradient(180deg, #ffffff 0%, #f3f8ff 100%);
+      box-shadow: 0 10px 24px rgba(15, 107, 255, 0.08);
+    }
+
+    .quickstart-grid .card h3 {
+      font-size: 1.05rem;
+    }
+
+    .quickstart-grid .command code {
+      background: #eaf2ff;
+      border-color: #cfe0ff;
+    }
+
+    .example-grid {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+
+    .howto-grid {
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    }
+
+    .card,
+    .example-card,
+    .howto-card {
       border: 1px solid var(--line);
       border-radius: 12px;
-      overflow: hidden;
+      padding: 14px;
+      background: #fff;
+      min-height: 100%;
     }
 
-    .section h2 {
-      margin: 0;
-      padding: 12px 14px;
+    .card { background: linear-gradient(180deg, #ffffff, #fbfdff); }
+
+    .example-card h3,
+    .howto-card h3,
+    .card h3 {
+      margin: 8px 0 6px;
       font-size: 1rem;
-      background: #f7faff;
-      border-bottom: 1px solid var(--line);
     }
 
-    .table-wrap {
-      overflow-x: auto;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 920px;
-    }
-
-    th, td {
-      text-align: left;
-      vertical-align: top;
-      padding: 10px;
-      border-bottom: 1px solid var(--line);
+    .example-card p,
+    .howto-card p,
+    .card p {
+      margin: 0;
+      color: var(--muted);
       font-size: 13px;
-      line-height: 1.4;
+      line-height: 1.5;
     }
 
-    th {
-      position: sticky;
-      top: 0;
-      background: #fcfdff;
-      z-index: 1;
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .chip {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      border: 1px solid #cfe0ff;
+      background: var(--accent-soft);
+      color: #1e4c99;
+    }
+
+    .chip.starter {
+      background: var(--success-soft);
+      border-color: #c7edd8;
+      color: #13683a;
+    }
+
+    .quickstart-grid .chip.starter {
+      background: #dff6e8;
+      border-color: #bde7cb;
+      color: #0f6a36;
+      font-weight: 700;
+    }
+
+    .chip.advanced {
+      background: var(--warm-soft);
+      border-color: #ffe3af;
+      color: #8a5c00;
+    }
+
+    .command {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     code {
@@ -130,25 +249,20 @@
       font-size: 12px;
     }
 
-    .chip {
+    .command code {
       display: inline-block;
-      background: var(--chip);
-      color: #1e4c99;
-      border: 1px solid #cfe0ff;
-      border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 11px;
-      margin-bottom: 6px;
+      padding: 6px 8px;
+      max-width: 100%;
+      word-break: break-word;
     }
 
     .copy-btn {
       border: 1px solid #cdd8ef;
       background: #fff;
       border-radius: 6px;
-      padding: 4px 8px;
+      padding: 5px 8px;
       font-size: 11px;
       cursor: pointer;
-      margin-left: 6px;
     }
 
     .copy-btn:hover {
@@ -156,148 +270,500 @@
       color: var(--accent);
     }
 
-    .hidden { display: none; }
+    .meta-links {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
 
-    @media (max-width: 880px) {
+    .hidden { display: none !important; }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 920px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    th {
+      background: #fcfdff;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    @media (max-width: 980px) {
       .tools { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="hero">
+    <section class="hero">
       <h1>yaml-flow Examples Catalog</h1>
-      <p>Executable examples for yaml-flow public surfaces: library APIs, first-class CLIs, browser runtime assets, and reusable live-cards/boards patterns. See <a href="../docs/index.html">docs</a> for comprehensive guides.</p>
-    </div>
+      <p>Discovery-first guide to runnable yaml-flow examples across browser demos, CLI-driven workflows, and npm library surfaces. Start with a small number of recommended examples, then drill into the full catalog only if you need the exhaustive inventory. See <a href="../docs/index.html">docs</a> for architecture and reference material.</p>
+    </section>
 
-    <div class="panel">
-      <p style="margin:0 0 12px; color: var(--muted); font-size: 13px;">
-        Supporting docs: <a href="../docs/index.html">Docs index</a>, <a href="../docs/board-live-cards-cli.html">board-live-cards CLI</a>, <a href="../docs/step-machine-cli.html">step-machine CLI</a>, <a href="../docs/browser-runtime-livecards-boards.html">browser runtime</a>.
-      </p>
-      <div class="tools">
-        <input id="search" placeholder="Filter rows by example path, command, demo purpose, or feature" />
-        <select id="sectionFilter">
-          <option value="all">Show all sections</option>
-          <option value="runners">Runners only</option>
-          <option value="examples">Examples only</option>
-        </select>
-      </div>
-    </div>
-
-    <section class="section" data-section="runners">
-      <h2>Runners (How To Run)</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Runner</th>
-              <th>Quick usage</th>
-              <th>Use when</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><span class="chip">TS runner</span><br/>TypeScript example runner</td>
-              <td><code>npx tsx &lt;example-file.ts&gt;</code><button class="copy-btn" data-copy="npx tsx <example-file.ts>">Copy</button></td>
-              <td>Running most TypeScript examples under <code>examples/</code></td>
-              <td>Recommended default for TS examples</td>
-            </tr>
-            <tr>
-              <td><span class="chip">Node runner</span><br/>JavaScript script runner</td>
-              <td><code>node &lt;example-file.js&gt;</code><button class="copy-btn" data-copy="node <example-file.js>">Copy</button></td>
-              <td>Running JS examples and wrappers</td>
-              <td>Used by portfolio tracker + scenario runner</td>
-            </tr>
-            <tr>
-              <td><span class="chip">CLI runner</span><br/>board-live-cards CLI wrapper</td>
-              <td><code>node board-live-cards-cli.js &lt;command&gt;</code><button class="copy-btn" data-copy="node board-live-cards-cli.js help">Copy</button></td>
-              <td>Interacting with board runtime directly</td>
-              <td>Resolves dist/src CLI automatically</td>
-            </tr>
-            <tr>
-              <td><span class="chip">CLI runner</span><br/>step-machine-cli (root)</td>
-              <td><code>node step-machine-cli.js &lt;flow.yaml&gt; [--data &lt;json&gt;]</code><button class="copy-btn" data-copy="node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml">Copy</button></td>
-              <td>Running step-machine YAML flows from the command line with inline/CLI handlers</td>
-              <td>Supports JSONata <code>input-transforms</code>/<code>output-transforms</code>, <code>handler_vars</code>, <code>%%PLACEHOLDER%%</code> templating, <code>result-mode: exit-code</code></td>
-            </tr>
-            <tr>
-              <td><span class="chip">Scenario runner</span><br/>step-machine scenario harness</td>
-              <td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js &lt;scenario.json&gt;</code><button class="copy-btn" data-copy="node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json">Copy</button></td>
-              <td>Running reusable synthetic scenarios over shared step-machine orchestration</td>
-              <td>Scenario files provide flow path, input path, and optional overrides</td>
-            </tr>
-          </tbody>
-        </table>
+    <section class="panel">
+      <div class="panel-body">
+        <p class="subtle">Use search and filters across the example cards and the full catalog. Supporting docs: <a href="../docs/index.html">Docs index</a>, <a href="../docs/browser-runtime-livecards-boards.html">browser runtime</a>, <a href="../docs/board-live-cards-cli.html">board-live-cards CLI</a>, <a href="../docs/step-machine-cli.html">step-machine CLI</a>.</p>
+        <div class="tools">
+          <input id="search" placeholder="Search by example name, path, command, or what it demonstrates" />
+          <select id="surfaceFilter">
+            <option value="all">All surfaces</option>
+            <option value="browser">Browser</option>
+            <option value="cli">CLI</option>
+            <option value="npm-lib">npm library</option>
+          </select>
+          <select id="modelFilter">
+            <option value="all">All models</option>
+            <option value="livecards">LiveCards / Boards</option>
+            <option value="step-machine">Step Machine</option>
+            <option value="event-graph">Event Graph</option>
+            <option value="reactive">Reactive / Continuous Event Graph</option>
+            <option value="inference">Inference</option>
+            <option value="graph-of-graphs">Graph-of-Graphs</option>
+            <option value="batch">Batch / Scenario</option>
+          </select>
+        </div>
       </div>
     </section>
 
-    <section class="section" data-section="examples">
-      <h2>Executable Examples</h2>
-      <div class="table-wrap">
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>Start Here</h2>
+        <p>Recommended first stops depending on what you want to understand quickly.</p>
+      </div>
+      <div class="section-body">
+        <div class="quickstart-grid">
+          <article class="card example-card" data-surface="browser" data-model="livecards" data-search="livecards browser demo board canvas interactive renderer open browser/livecards-browser/index.html">
+            <div class="chip-row">
+              <span class="chip">Browser</span>
+              <span class="chip">LiveCards</span>
+              <span class="chip starter">Starter</span>
+            </div>
+            <h3><a href="browser/livecards-browser/index.html">LiveCards browser demo</a></h3>
+            <p>Fastest way to see the LiveCards browser renderer, element kinds, and board/canvas views in one place.</p>
+            <div class="command"><code>Open browser/livecards-browser/index.html</code><button class="copy-btn" data-copy="browser/livecards-browser/index.html">Copy path</button></div>
+          </article>
+
+          <article class="card example-card" data-surface="browser" data-model="step-machine" data-search="step machine browser demo flowengine open browser/step-machine-browser/index.html">
+            <div class="chip-row">
+              <span class="chip">Browser</span>
+              <span class="chip">Step Machine</span>
+              <span class="chip starter">Starter</span>
+            </div>
+            <h3><a href="browser/step-machine-browser/index.html">Step Machine Browser Demo</a></h3>
+            <p>Fastest way to understand the basic step-machine mental model directly in the browser.</p>
+            <div class="command"><code>Open browser/step-machine-browser/index.html</code><button class="copy-btn" data-copy="browser/step-machine-browser/index.html">Copy path</button></div>
+          </article>
+
+          <article class="card example-card" data-surface="npm-lib" data-model="step-machine" data-search="simple greeting createEngine loadFlow FileStore npx tsx examples/npm-libs/node/simple-greeting.ts">
+            <div class="chip-row">
+              <span class="chip">npm library</span>
+              <span class="chip">Step Machine</span>
+              <span class="chip starter">Starter</span>
+            </div>
+            <h3>Simple Greeting</h3>
+            <p>Best first TypeScript example for understanding the core step-machine APIs outside the browser demos.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/node/simple-greeting.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/node/simple-greeting.ts">Copy</button></div>
+          </article>
+
+          <article class="card example-card" data-surface="npm-lib" data-model="reactive" data-search="reactive pipeline self-driving graph createReactiveGraph npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts">
+            <div class="chip-row">
+              <span class="chip">npm library</span>
+              <span class="chip">Reactive Graph</span>
+              <span class="chip starter">Starter</span>
+            </div>
+            <h3>Reactive Pipeline</h3>
+            <p>Best first example for push-driven orchestration and automatic downstream execution in the reactive runtime.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="howto">
+      <div class="howto-head">
+        <h2>Execution Shortcuts</h2>
+        <p>Keep this page lightweight. Only the essential execution entrypoints are listed here; deeper operational detail lives in the linked docs.</p>
+      </div>
+      <div class="howto-body">
+        <div class="howto-grid">
+          <article class="howto-card">
+            <h3>TypeScript examples</h3>
+            <p>Most library examples under <code>examples/npm-libs</code> use the same runner.</p>
+            <div class="command"><code>npx tsx &lt;example-file.ts&gt;</code><button class="copy-btn" data-copy="npx tsx <example-file.ts>">Copy</button></div>
+          </article>
+
+          <article class="howto-card">
+            <h3>JavaScript scripts</h3>
+            <p>Used for browser-support scripts and example wrappers.</p>
+            <div class="command"><code>node &lt;example-file.js&gt;</code><button class="copy-btn" data-copy="node <example-file.js>">Copy</button></div>
+          </article>
+
+          <article class="howto-card">
+            <h3>step-machine CLI</h3>
+            <p>Use the root CLI when you want YAML-driven flow execution rather than embedding the library APIs.</p>
+            <div class="command"><code>node step-machine-cli.js &lt;flow.yaml&gt; [--data &lt;json&gt;]</code><button class="copy-btn" data-copy="node step-machine-cli.js <flow.yaml>">Copy</button></div>
+            <div class="meta-links"><a href="../docs/step-machine-cli.html">CLI reference</a></div>
+          </article>
+
+          <article class="howto-card">
+            <h3>board-live-cards CLI</h3>
+            <p>Use the board runtime CLI for orchestration, status, retriggering, and source lifecycle operations.</p>
+            <div class="command"><code>node board-live-cards-cli.js &lt;command&gt;</code><button class="copy-btn" data-copy="node board-live-cards-cli.js help">Copy</button></div>
+            <div class="meta-links"><a href="../docs/board-live-cards-cli.html">CLI reference</a></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>Browser Demos</h2>
+        <p>Open these directly in the browser to understand the client-side runtime and visual behavior.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="browser" data-model="livecards" data-search="livecards browser demo page interactive board canvas showcase">
+            <div class="chip-row"><span class="chip">Browser</span><span class="chip">LiveCards</span></div>
+            <h3><a href="browser/livecards-browser/index.html">LiveCards Browser Demo</a></h3>
+            <p>Interactive showcase for the browser runtime, including board/canvas views, element demos, and API reference material.</p>
+            <div class="command"><code>Open browser/livecards-browser/index.html</code><button class="copy-btn" data-copy="browser/livecards-browser/index.html">Copy path</button></div>
+          </article>
+
+          <article class="example-card" data-surface="browser" data-model="step-machine" data-search="step machine browser greeting demo flowengine inlined">
+            <div class="chip-row"><span class="chip">Browser</span><span class="chip">Step Machine</span></div>
+            <h3><a href="browser/step-machine-browser/index.html">Step Machine Browser Demo</a></h3>
+            <p>Simple greeting flow rendered entirely in the browser using an inlined FlowEngine-style implementation.</p>
+            <div class="command"><code>Open browser/step-machine-browser/index.html</code><button class="copy-btn" data-copy="browser/step-machine-browser/index.html">Copy path</button></div>
+          </article>
+
+          <article class="example-card" data-surface="browser" data-model="livecards" data-search="portfolio tracker browser boards portfolio-tracker node javascript board-live-cards cli">
+            <div class="chip-row"><span class="chip">Browser support</span><span class="chip">LiveCards</span><span class="chip advanced">Advanced</span></div>
+            <h3>Portfolio Tracker Board Driver</h3>
+            <p>Node-driven portfolio tracker demo that exercises end-to-end board-live-cards orchestration for a browser-facing board workflow.</p>
+            <div class="command"><code>node examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code><button class="copy-btn" data-copy="node examples/browser/boards/portfolio-tracker/portfolio-tracker.js">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>CLI Workflows and Scenario Harnesses</h2>
+        <p>Use these when you want orchestration behavior driven by YAML flows, CLI handlers, or reusable scenario inputs.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="cli" data-model="step-machine" data-search="portfolio tracker flow yaml step-machine cli run-portfolio-tracker.bat failure transitions jsonata">
+            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Step Machine</span></div>
+            <h3>Portfolio Tracker Flow</h3>
+            <p>YAML-driven step-machine workflow with JSONata transforms, handler variables, and explicit failure transitions.</p>
+            <div class="command"><code>run-portfolio-tracker.bat</code><button class="copy-btn" data-copy="run-portfolio-tracker.bat">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="cli" data-model="batch" data-search="scenario harness portfolio baseline synthetic scenario shared orchestration">
+            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Scenario</span></div>
+            <h3>Scenario Harness: Baseline</h3>
+            <p>Reusable baseline scenario that runs the shared portfolio-tracker orchestration with a fixed input pack.</p>
+            <div class="command"><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code><button class="copy-btn" data-copy="node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="cli" data-model="batch" data-search="scenario harness price shock synthetic alternate market data">
+            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Scenario</span></div>
+            <h3>Scenario Harness: Price Shock</h3>
+            <p>Uses the same orchestration as the baseline scenario but swaps in synthetic shock data to test behavior under market movement.</p>
+            <div class="command"><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code><button class="copy-btn" data-copy="node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>npm Library Examples: Step Machine</h2>
+        <p>Library-level usage for explicit flow control, stateful execution, and conversational loops.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="npm-lib" data-model="step-machine" data-search="simple greeting step machine file persistence">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Step Machine</span></div>
+            <h3>Simple Greeting</h3>
+            <p>Basic step-machine flow with file persistence. Best first TypeScript example for the core flow APIs.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/node/simple-greeting.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/node/simple-greeting.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="step-machine" data-search="ai conversation retries transition handling memory store">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Step Machine</span></div>
+            <h3>AI Conversation</h3>
+            <p>Conversation loop with retry and transition handling. Good for multi-step conversational control flow.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/node/ai-conversation.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/node/ai-conversation.ts">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>npm Library Examples: Inference</h2>
+        <p>Examples where LLM inference complements graph execution rather than replacing it.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="npm-lib" data-model="inference" data-search="pluggable adapters inference cli adapter http adapter">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Inference</span></div>
+            <h3>Pluggable Adapters</h3>
+            <p>Shows swappable LLM adapters and the inference extension points used for completion detection.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/inference/pluggable-adapters.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/inference/pluggable-adapters.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="inference" data-search="data pipeline iterative evidence accumulation inferAndApply">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Inference</span></div>
+            <h3>Data Pipeline</h3>
+            <p>Demonstrates iterative evidence accumulation and repeated inference rounds over a live graph.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/inference/data-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/inference/data-pipeline.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="inference" data-search="copilot cli inference backend github copilot">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Inference</span></div>
+            <h3>Copilot CLI</h3>
+            <p>Uses GitHub Copilot CLI as the inference backend for completion suggestions.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/inference/copilot-cli.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/inference/copilot-cli.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="inference" data-search="azure deployment logs checkpoint inference">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Inference</span></div>
+            <h3>Azure Deployment</h3>
+            <p>Deployment checkpoint inference from logs, showing how evidence becomes completion recommendations.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/inference/azure-deployment.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/inference/azure-deployment.ts">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>npm Library Examples: Event Graph</h2>
+        <p>Explicit DAG scheduling and state transitions without the long-lived reactive runtime.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="npm-lib" data-model="event-graph" data-search="research pipeline fan out fan in manual event graph driver">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Event Graph</span></div>
+            <h3>Research Pipeline</h3>
+            <p>Manual event-graph driver with fan-out and fan-in behavior for multi-branch research tasks.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/event-graph/research-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/event-graph/research-pipeline.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="event-graph" data-search="executor pipeline validations next apply createInitialExecutionState">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Event Graph</span></div>
+            <h3>Executor Pipeline</h3>
+            <p>Library-mode execution loop with runtime and static validation layered into the event graph.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/event-graph/executor-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/event-graph/executor-pipeline.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="event-graph" data-search="executor diamond parallel branch execution">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Event Graph</span></div>
+            <h3>Executor Diamond</h3>
+            <p>Diamond DAG with parallel branches to show how multiple downstream tasks can become eligible together.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/event-graph/executor-diamond.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/event-graph/executor-diamond.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="event-graph" data-search="ci cd pipeline approval gates retries failure routing">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Event Graph</span></div>
+            <h3>CI/CD Pipeline</h3>
+            <p>Approval gates, retries, and conditional failure routing using the event-graph execution model.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/event-graph/ci-cd-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/event-graph/ci-cd-pipeline.ts">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>npm Library Examples: Reactive and Continuous Event Graph</h2>
+        <p>Long-lived graphs, automatic downstream execution, runtime mutation, and LiveCards bridge examples.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="npm-lib" data-model="reactive" data-search="reactive pipeline self-driving etl createReactiveGraph">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Reactive</span></div>
+            <h3>Reactive Pipeline</h3>
+            <p>Self-driving pipeline where one push triggers a complete downstream execution cascade.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="reactive" data-search="reactive monitoring runtime changes callback handler fire and forget">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Reactive</span></div>
+            <h3>Reactive Monitoring</h3>
+            <p>Continuous monitoring topology with runtime changes, escalation paths, and side-effect handlers.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-monitoring.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/reactive-monitoring.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="reactive" data-search="stock dashboard dynamic graph mutation snapshot restore lineage queries">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Reactive</span></div>
+            <h3>Stock Dashboard</h3>
+            <p>Runtime graph mutation, snapshots, restore, and lineage queries in a continuous event graph.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/stock-dashboard.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/stock-dashboard.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="reactive" data-search="soc incident board side effect handlers">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Reactive</span></div>
+            <h3>SOC Incident Board</h3>
+            <p>Security-operations workflow with side-effect handlers in the reactive execution model.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/soc-incident-board.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/soc-incident-board.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="reactive" data-search="portfolio tracker external pushes retrigger">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Reactive</span></div>
+            <h3>Portfolio Tracker</h3>
+            <p>Portfolio workflow that mixes external pushes with retrigger behavior.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/portfolio-tracker.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/portfolio-tracker.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="livecards" data-search="live cards board bridge definitions to reactive graph">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">LiveCards</span></div>
+            <h3>Live Cards Board</h3>
+            <p>Bridges LiveCards definitions into the reactive graph runtime.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/live-cards-board.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/live-cards-board.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="livecards" data-search="live portfolio dashboard large live card portfolio">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">LiveCards</span><span class="chip advanced">Advanced</span></div>
+            <h3>Live Portfolio Dashboard</h3>
+            <p>Large LiveCards portfolio dashboard backed by reactive task handlers.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-role="examples">
+      <div class="section-head">
+        <h2>npm Library Examples: Graph-of-Graphs and Batch</h2>
+        <p>Nested orchestration and concurrent item processing patterns.</p>
+      </div>
+      <div class="section-body">
+        <div class="example-grid">
+          <article class="example-card" data-surface="npm-lib" data-model="graph-of-graphs" data-search="url processing pipeline outer dag inner dag batched">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Graph-of-Graphs</span></div>
+            <h3>URL Processing Pipeline</h3>
+            <p>Outer DAG orchestrates batched inner DAGs, demonstrating nested orchestration layers.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="graph-of-graphs" data-search="multi stage etl mixed event graph step machine nested">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Graph-of-Graphs</span></div>
+            <h3>Multi-stage ETL</h3>
+            <p>Mixed event-graph plus step-machine nested orchestration for multi-stage ETL.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/graph-of-graphs/multi-stage-etl.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/graph-of-graphs/multi-stage-etl.ts">Copy</button></div>
+          </article>
+
+          <article class="example-card" data-surface="npm-lib" data-model="batch" data-search="batch processing per item step machine flow">
+            <div class="chip-row"><span class="chip">npm library</span><span class="chip">Batch</span></div>
+            <h3>Batch Step Machine</h3>
+            <p>Concurrent processing with a per-item step-machine flow.</p>
+            <div class="command"><code>npx tsx examples/npm-libs/batch/batch-step-machine.ts</code><button class="copy-btn" data-copy="npx tsx examples/npm-libs/batch/batch-step-machine.ts">Copy</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <details class="catalog">
+      <summary>Full Catalog</summary>
+      <div class="catalog-body table-wrap">
         <table>
           <thead>
             <tr>
               <th>Example</th>
-              <th>Quick usage</th>
+              <th>Surface</th>
+              <th>Model</th>
+              <th>Run / Open</th>
               <th>Demonstrates</th>
-              <th>yaml-flow functionality used</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>examples/npm-libs/node/simple-greeting.ts</code></td><td><code>npx tsx examples/npm-libs/node/simple-greeting.ts</code></td><td>Basic step-machine flow with file persistence</td><td><code>createEngine</code>, <code>loadFlow</code>, <code>FileStore</code></td></tr>
-            <tr><td><code>examples/npm-libs/node/ai-conversation.ts</code></td><td><code>npx tsx examples/npm-libs/node/ai-conversation.ts</code></td><td>Conversation loop with retries and transition handling</td><td><code>createEngine</code>, <code>loadFlow</code>, <code>MemoryStore</code></td></tr>
-            <tr><td><code>examples/npm-libs/inference/pluggable-adapters.ts</code></td><td><code>npx tsx examples/npm-libs/inference/pluggable-adapters.ts</code></td><td>Swappable LLM adapters for inference completion</td><td><code>createLiveGraph</code>, <code>schedule</code>, <code>inferCompletions</code>, <code>applyInferences</code>, <code>createCliAdapter</code>, <code>createHttpAdapter</code></td></tr>
-            <tr><td><code>examples/npm-libs/inference/data-pipeline.ts</code></td><td><code>npx tsx examples/npm-libs/inference/data-pipeline.ts</code></td><td>Iterative evidence accumulation and inference rounds</td><td><code>createLiveGraph</code>, <code>injectTokens</code>, <code>schedule</code>, <code>inferAndApply</code></td></tr>
-            <tr><td><code>examples/npm-libs/inference/copilot-cli.ts</code></td><td><code>npx tsx examples/npm-libs/inference/copilot-cli.ts</code></td><td>Copilot CLI as inference backend</td><td><code>createLiveGraph</code>, <code>buildInferencePrompt</code>, <code>inferCompletions</code>, <code>applyInferences</code>, <code>createCliAdapter</code></td></tr>
-            <tr><td><code>examples/npm-libs/inference/azure-deployment.ts</code></td><td><code>npx tsx examples/npm-libs/inference/azure-deployment.ts</code></td><td>Deployment checkpoint inference from logs</td><td><code>createLiveGraph</code>, <code>schedule</code>, <code>buildInferencePrompt</code>, <code>inferAndApply</code></td></tr>
-            <tr><td><code>examples/npm-libs/event-graph/research-pipeline.ts</code></td><td><code>npx tsx examples/npm-libs/event-graph/research-pipeline.ts</code></td><td>Manual event-graph driver with fan-out/fan-in</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code></td></tr>
-            <tr><td><code>examples/npm-libs/event-graph/executor-pipeline.ts</code></td><td><code>npx tsx examples/npm-libs/event-graph/executor-pipeline.ts</code></td><td>Library-mode loop with runtime/static validations</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code>, <code>validateGraph</code>, <code>validateLiveGraph</code></td></tr>
-            <tr><td><code>examples/npm-libs/event-graph/executor-diamond.ts</code></td><td><code>npx tsx examples/npm-libs/event-graph/executor-diamond.ts</code></td><td>Diamond DAG parallel branch execution</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code></td></tr>
-            <tr><td><code>examples/npm-libs/event-graph/ci-cd-pipeline.ts</code></td><td><code>npx tsx examples/npm-libs/event-graph/ci-cd-pipeline.ts</code></td><td>Approval gates, retries, and failure routing</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/reactive-pipeline.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts</code></td><td>Self-driving reactive graph pipeline</td><td><code>createReactiveGraph</code>, <code>createCallbackHandler</code>, <code>validateLiveGraph</code>, <code>validateReactiveGraph</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/reactive-monitoring.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-monitoring.ts</code></td><td>Continuous monitoring with runtime changes</td><td><code>createReactiveGraph</code>, <code>MemoryJournal</code>, <code>createCallbackHandler</code>, <code>createFireAndForgetHandler</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/stock-dashboard.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/stock-dashboard.ts</code></td><td>Dynamic graph mutation, snapshots, lineage queries</td><td><code>createLiveGraph</code>, <code>applyEvent</code>, <code>mutateGraph</code>, <code>snapshot</code>, <code>restore</code>, <code>getUpstream</code>, <code>getDownstream</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/soc-incident-board.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/soc-incident-board.ts</code></td><td>SOC workflow with side-effect handlers</td><td><code>createReactiveGraph</code>, <code>createCallbackHandler</code>, <code>createFireAndForgetHandler</code>, <code>validateReactiveGraph</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/portfolio-tracker.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/portfolio-tracker.ts</code></td><td>Portfolio workflow with external pushes + retrigger</td><td><code>createReactiveGraph</code>, <code>createCallbackHandler</code>, <code>validateReactiveGraph</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/live-cards-board.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/live-cards-board.ts</code></td><td>Live-card definitions bridged to reactive graph</td><td><code>liveCardsToReactiveGraph</code>, <code>validateReactiveGraph</code></td></tr>
-            <tr><td><code>examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts</code></td><td><code>npx tsx examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts</code></td><td>Large live-card portfolio dashboard</td><td><code>liveCardsToReactiveGraph</code>, reactive task handlers</td></tr>
-            <tr><td><code>examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts</code></td><td><code>npx tsx examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts</code></td><td>Outer DAG orchestrating batched inner DAGs</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code>, <code>batch</code>, <code>resolveVariables</code>, <code>resolveConfigTemplates</code></td></tr>
-            <tr><td><code>examples/npm-libs/graph-of-graphs/multi-stage-etl.ts</code></td><td><code>npx tsx examples/npm-libs/graph-of-graphs/multi-stage-etl.ts</code></td><td>Mixed event-graph + step-machine nested orchestration</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code>, <code>createStepMachine</code>, <code>batch</code>, <code>resolveVariables</code>, <code>resolveConfigTemplates</code></td></tr>
-            <tr><td><code>examples/npm-libs/batch/batch-step-machine.ts</code></td><td><code>npx tsx examples/npm-libs/batch/batch-step-machine.ts</code></td><td>Batch processing with per-item step-machine flow</td><td><code>batch</code>, <code>createStepMachine</code></td></tr>
-            <tr><td><code>examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code></td><td><code>node examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code></td><td>End-to-end board-live-cards portfolio demo</td><td>board-live-cards CLI runtime orchestration</td></tr>
-            <tr><td><a href="browser/livecards-browser/index.html"><code>examples/browser/livecards-browser/index.html</code></a></td><td>Open in browser</td><td>LiveCards browser demo: 4-node portfolio board rendered by <code>live-cards.js</code> + <code>card-compute.js</code> with static seed data</td><td><code>LiveCard.init</code>, <code>LiveCard.Board</code>, <code>CardCompute.run</code></td></tr>
-            <tr><td><a href="browser/step-machine-browser/index.html"><code>examples/browser/step-machine-browser/index.html</code></a></td><td>Open in browser</td><td>Step-machine browser demo: Simple Greeting Flow with inlined FlowEngine</td><td>Inlined <code>FlowEngine</code>, browser-side step-machine execution</td></tr>
-            <tr><td><code>examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat</code></td><td><code>run-portfolio-tracker.bat</code> (from example folder)</td><td>Portfolio tracker orchestrated by step-machine YAML with JSONata transforms, handler_vars, failure_transitions</td><td><code>step-machine-cli</code>, <code>board-live-cards-cli</code>, JSONata, <code>failure_transitions</code></td></tr>
-            <tr><td><code>examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td>Baseline reusable scenario using shared portfolio-tracker flow</td><td>step-machine scenario harness, input override framework</td></tr>
-            <tr><td><code>examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td>Price-shock synthetic scenario with same orchestration and alternate market data</td><td>step-machine scenario harness, synthetic scenario variations</td></tr>
+            <tr data-surface="browser" data-model="livecards"><td><a href="browser/livecards-browser/index.html"><code>examples/browser/livecards-browser/index.html</code></a></td><td>Browser</td><td>LiveCards</td><td><code>Open browser/livecards-browser/index.html</code></td><td>Interactive board/canvas renderer showcase</td></tr>
+            <tr data-surface="browser" data-model="step-machine"><td><a href="browser/step-machine-browser/index.html"><code>examples/browser/step-machine-browser/index.html</code></a></td><td>Browser</td><td>Step Machine</td><td><code>Open browser/step-machine-browser/index.html</code></td><td>Simple browser-side step-machine demo</td></tr>
+            <tr data-surface="browser" data-model="livecards"><td><code>examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code></td><td>Browser support</td><td>LiveCards</td><td><code>node examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code></td><td>End-to-end board-live-cards portfolio driver</td></tr>
+            <tr data-surface="cli" data-model="step-machine"><td><code>examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat</code></td><td>CLI</td><td>Step Machine</td><td><code>run-portfolio-tracker.bat</code></td><td>Portfolio tracker YAML flow orchestration</td></tr>
+            <tr data-surface="cli" data-model="batch"><td><code>examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td>CLI</td><td>Scenario</td><td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td>Baseline reusable scenario</td></tr>
+            <tr data-surface="cli" data-model="batch"><td><code>examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td>CLI</td><td>Scenario</td><td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td>Price-shock scenario variation</td></tr>
+            <tr data-surface="npm-lib" data-model="step-machine"><td><code>examples/npm-libs/node/simple-greeting.ts</code></td><td>npm library</td><td>Step Machine</td><td><code>npx tsx examples/npm-libs/node/simple-greeting.ts</code></td><td>Basic step-machine flow with file persistence</td></tr>
+            <tr data-surface="npm-lib" data-model="step-machine"><td><code>examples/npm-libs/node/ai-conversation.ts</code></td><td>npm library</td><td>Step Machine</td><td><code>npx tsx examples/npm-libs/node/ai-conversation.ts</code></td><td>Conversation loop with retries</td></tr>
+            <tr data-surface="npm-lib" data-model="inference"><td><code>examples/npm-libs/inference/pluggable-adapters.ts</code></td><td>npm library</td><td>Inference</td><td><code>npx tsx examples/npm-libs/inference/pluggable-adapters.ts</code></td><td>Swappable LLM adapters</td></tr>
+            <tr data-surface="npm-lib" data-model="inference"><td><code>examples/npm-libs/inference/data-pipeline.ts</code></td><td>npm library</td><td>Inference</td><td><code>npx tsx examples/npm-libs/inference/data-pipeline.ts</code></td><td>Iterative evidence accumulation</td></tr>
+            <tr data-surface="npm-lib" data-model="inference"><td><code>examples/npm-libs/inference/copilot-cli.ts</code></td><td>npm library</td><td>Inference</td><td><code>npx tsx examples/npm-libs/inference/copilot-cli.ts</code></td><td>Copilot CLI inference backend</td></tr>
+            <tr data-surface="npm-lib" data-model="inference"><td><code>examples/npm-libs/inference/azure-deployment.ts</code></td><td>npm library</td><td>Inference</td><td><code>npx tsx examples/npm-libs/inference/azure-deployment.ts</code></td><td>Deployment checkpoint inference</td></tr>
+            <tr data-surface="npm-lib" data-model="event-graph"><td><code>examples/npm-libs/event-graph/research-pipeline.ts</code></td><td>npm library</td><td>Event Graph</td><td><code>npx tsx examples/npm-libs/event-graph/research-pipeline.ts</code></td><td>Manual fan-out/fan-in driver</td></tr>
+            <tr data-surface="npm-lib" data-model="event-graph"><td><code>examples/npm-libs/event-graph/executor-pipeline.ts</code></td><td>npm library</td><td>Event Graph</td><td><code>npx tsx examples/npm-libs/event-graph/executor-pipeline.ts</code></td><td>Validated event-graph loop</td></tr>
+            <tr data-surface="npm-lib" data-model="event-graph"><td><code>examples/npm-libs/event-graph/executor-diamond.ts</code></td><td>npm library</td><td>Event Graph</td><td><code>npx tsx examples/npm-libs/event-graph/executor-diamond.ts</code></td><td>Diamond DAG execution</td></tr>
+            <tr data-surface="npm-lib" data-model="event-graph"><td><code>examples/npm-libs/event-graph/ci-cd-pipeline.ts</code></td><td>npm library</td><td>Event Graph</td><td><code>npx tsx examples/npm-libs/event-graph/ci-cd-pipeline.ts</code></td><td>Approval gates and failure routing</td></tr>
+            <tr data-surface="npm-lib" data-model="reactive"><td><code>examples/npm-libs/continuous-event-graph/reactive-pipeline.ts</code></td><td>npm library</td><td>Reactive</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-pipeline.ts</code></td><td>Self-driving reactive pipeline</td></tr>
+            <tr data-surface="npm-lib" data-model="reactive"><td><code>examples/npm-libs/continuous-event-graph/reactive-monitoring.ts</code></td><td>npm library</td><td>Reactive</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/reactive-monitoring.ts</code></td><td>Continuous monitoring with runtime changes</td></tr>
+            <tr data-surface="npm-lib" data-model="reactive"><td><code>examples/npm-libs/continuous-event-graph/stock-dashboard.ts</code></td><td>npm library</td><td>Reactive</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/stock-dashboard.ts</code></td><td>Mutation, snapshots, lineage</td></tr>
+            <tr data-surface="npm-lib" data-model="reactive"><td><code>examples/npm-libs/continuous-event-graph/soc-incident-board.ts</code></td><td>npm library</td><td>Reactive</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/soc-incident-board.ts</code></td><td>SOC workflow with side effects</td></tr>
+            <tr data-surface="npm-lib" data-model="reactive"><td><code>examples/npm-libs/continuous-event-graph/portfolio-tracker.ts</code></td><td>npm library</td><td>Reactive</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/portfolio-tracker.ts</code></td><td>Portfolio workflow with external pushes</td></tr>
+            <tr data-surface="npm-lib" data-model="livecards"><td><code>examples/npm-libs/continuous-event-graph/live-cards-board.ts</code></td><td>npm library</td><td>LiveCards</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/live-cards-board.ts</code></td><td>LiveCards definitions bridged to reactive graph</td></tr>
+            <tr data-surface="npm-lib" data-model="livecards"><td><code>examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts</code></td><td>npm library</td><td>LiveCards</td><td><code>npx tsx examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts</code></td><td>Large live-card portfolio dashboard</td></tr>
+            <tr data-surface="npm-lib" data-model="graph-of-graphs"><td><code>examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts</code></td><td>npm library</td><td>Graph-of-Graphs</td><td><code>npx tsx examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts</code></td><td>Outer DAG orchestrating inner DAGs</td></tr>
+            <tr data-surface="npm-lib" data-model="graph-of-graphs"><td><code>examples/npm-libs/graph-of-graphs/multi-stage-etl.ts</code></td><td>npm library</td><td>Graph-of-Graphs</td><td><code>npx tsx examples/npm-libs/graph-of-graphs/multi-stage-etl.ts</code></td><td>Mixed nested orchestration</td></tr>
+            <tr data-surface="npm-lib" data-model="batch"><td><code>examples/npm-libs/batch/batch-step-machine.ts</code></td><td>npm library</td><td>Batch</td><td><code>npx tsx examples/npm-libs/batch/batch-step-machine.ts</code></td><td>Batch processing with step-machine per item</td></tr>
           </tbody>
         </table>
       </div>
-    </section>
+    </details>
   </div>
 
   <script>
     const searchEl = document.getElementById('search');
-    const sectionFilterEl = document.getElementById('sectionFilter');
+    const surfaceFilterEl = document.getElementById('surfaceFilter');
+    const modelFilterEl = document.getElementById('modelFilter');
+
+    function matchesFilters(text, surface, model) {
+      const q = (searchEl.value || '').toLowerCase().trim();
+      const wantedSurface = surfaceFilterEl.value;
+      const wantedModel = modelFilterEl.value;
+
+      const qMatch = !q || text.includes(q);
+      const surfaceMatch = wantedSurface === 'all' || surface === wantedSurface;
+      const modelMatch = wantedModel === 'all' || model === wantedModel;
+      return qMatch && surfaceMatch && modelMatch;
+    }
 
     function applyFilters() {
-      const q = (searchEl.value || '').toLowerCase().trim();
-      const sectionFilter = sectionFilterEl.value;
+      document.querySelectorAll('.example-card').forEach(card => {
+        const text = (card.dataset.search || card.innerText || '').toLowerCase();
+        const surface = card.dataset.surface || '';
+        const model = card.dataset.model || '';
+        card.classList.toggle('hidden', !matchesFilters(text, surface, model));
+      });
 
-      document.querySelectorAll('section[data-section]').forEach(section => {
-        const sectionKey = section.getAttribute('data-section');
-        const sectionAllowed = sectionFilter === 'all' || sectionFilter === sectionKey;
+      document.querySelectorAll('section[data-role="examples"]').forEach(section => {
+        const visibleCards = section.querySelectorAll('.example-card:not(.hidden)').length;
+        section.classList.toggle('hidden', visibleCards === 0);
+      });
 
-        let visibleRows = 0;
-        section.querySelectorAll('tbody tr').forEach(row => {
-          const text = row.innerText.toLowerCase();
-          const match = !q || text.includes(q);
-          row.classList.toggle('hidden', !(sectionAllowed && match));
-          if (sectionAllowed && match) visibleRows += 1;
-        });
-
-        section.classList.toggle('hidden', !sectionAllowed || visibleRows === 0);
+      document.querySelectorAll('.catalog tbody tr').forEach(row => {
+        const text = row.innerText.toLowerCase();
+        const surface = row.dataset.surface || '';
+        const model = row.dataset.model || '';
+        row.classList.toggle('hidden', !matchesFilters(text, surface, model));
       });
     }
 
@@ -318,7 +784,8 @@
     });
 
     searchEl.addEventListener('input', applyFilters);
-    sectionFilterEl.addEventListener('change', applyFilters);
+    surfaceFilterEl.addEventListener('change', applyFilters);
+    modelFilterEl.addEventListener('change', applyFilters);
   </script>
 </body>
 </html>

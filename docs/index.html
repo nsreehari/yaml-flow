@@ -181,6 +181,16 @@
     <section>
       <h2>Which Mode Do I Need?</h2>
       <p>yaml-flow ships two execution models solving fundamentally different problems:</p>
+      <div class="grid" style="margin-top: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+        <div class="card">
+          <h3>Known Sequence With Branching</h3>
+          <p class="muted">Choose <strong>Step Machine</strong> when the workflow order is mostly known ahead of time and each step decides what happens next.</p>
+        </div>
+        <div class="card">
+          <h3>Dependency-Driven Orchestration</h3>
+          <p class="muted">Choose <strong>Live Event Graph</strong> when execution order should emerge from available inputs and task dependencies.</p>
+        </div>
+      </div>
       
       <div class="comparison">
         <table>
@@ -248,7 +258,7 @@
     </section>
 
     <section>
-      <h2>Documentation & Reference</h2>
+      <h2>Go Deeper</h2>
       <div class="grid">
         <div class="card">
           <h3>Board Live-Cards CLI</h3>
@@ -268,12 +278,7 @@
         <div class="card">
           <h3>Runnable Examples</h3>
           <p><a href="../examples/index.html">examples catalog</a></p>
-          <p class="muted">Executable examples grouped by library APIs, CLIs, browser runtime, and reusable live-cards patterns. Includes how-to-run instructions.</p>
-        </div>
-        <div class="card">
-          <h3>Public API Source</h3>
-          <p><a href="../README.md">README.md</a> (root)</p>
-          <p class="muted">Source control view of package overview with badges, public surfaces listing, and repository organization. Also available here via this docs index.</p>
+          <p class="muted">Discovery-first catalog of runnable examples across browser demos, CLI workflows, and npm library surfaces.</p>
         </div>
       </div>
     </section>

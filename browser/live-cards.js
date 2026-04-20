@@ -91,9 +91,15 @@ var LiveCard = (function () {
     return String(str).replace(/[&<>"']/g, ch => _escMap[ch]);
   }
 
+  function _pathParts(path) {
+    if (!path || typeof path !== 'string') return [];
+    // Support both dot notation (a.b.c) and bracket notation (a.b[0].c).
+    return path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  }
+
   function _deepGet(obj, path) {
     if (!path || !obj) return undefined;
-    const parts = path.split('.');
+    const parts = _pathParts(path);
     let cur = obj;
     for (let i = 0; i < parts.length; i++) {
       if (cur == null) return undefined;
@@ -103,7 +109,8 @@ var LiveCard = (function () {
   }
 
   function _deepSet(obj, path, value) {
-    const parts = path.split('.');
+    const parts = _pathParts(path);
+    if (!parts.length) return;
     let cur = obj;
     for (let i = 0; i < parts.length - 1; i++) {
       if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
