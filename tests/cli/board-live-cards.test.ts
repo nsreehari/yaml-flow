@@ -855,7 +855,7 @@ describe('windows launcher behavior', () => {
   });
 
   it('keeps the portfolio tracker launches hidden on Windows', () => {
-    const tracker = fs.readFileSync(path.join(repoRoot, 'examples', 'board-live-cards', 'portfolio-tracker', 'portfolio-tracker.js'), 'utf-8');
+    const tracker = fs.readFileSync(path.join(repoRoot, 'examples', 'browser', 'boards', 'portfolio-tracker', 'portfolio-tracker.js'), 'utf-8');
     expect(tracker).toContain('windowsHide: true');
   });
 

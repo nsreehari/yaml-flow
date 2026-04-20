@@ -16,12 +16,13 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const NPX_CMD = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 const CARDS_TEMPLATE = path.join(__dirname, 'cards');
-const CLI_WRAPPER = path.join(__dirname, '..', '..', '..', 'board-live-cards-cli.js');
-const CLI_TS = path.join(__dirname, '..', '..', '..', 'src', 'cli', 'board-live-cards-cli.ts');
-const CLI_JS = path.join(__dirname, '..', '..', '..', 'dist', 'cli', 'board-live-cards-cli.js');
+const REPO_ROOT = path.join(__dirname, '..', '..', '..', '..');
+const CLI_WRAPPER = path.join(REPO_ROOT, 'board-live-cards-cli.js');
+const CLI_TS = path.join(REPO_ROOT, 'src', 'cli', 'board-live-cards-cli.ts');
+const CLI_JS = path.join(REPO_ROOT, 'dist', 'cli', 'board-live-cards-cli.js');
+const TSX_CLI = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 // Keep runtime artifacts out of the repository.
 const RUNTIME_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-tracker-'));
@@ -36,26 +37,29 @@ function sleep(ms) {
 }
 
 function cliCommand() {
-  // In-repo demo should use current source first to avoid stale dist wrappers.
-  if (fs.existsSync(CLI_TS)) {
-    return { cmd: NPX_CMD, prefixArgs: ['tsx', CLI_TS] };
+  // Prefer node+tsx CLI on Windows to avoid flashing transient cmd windows.
+  if (fs.existsSync(CLI_TS) && fs.existsSync(TSX_CLI)) {
+    return { cmd: process.execPath, prefixArgs: [TSX_CLI, CLI_TS] };
   }
   if (fs.existsSync(CLI_WRAPPER)) {
-    return { cmd: 'node', prefixArgs: [CLI_WRAPPER] };
+    return { cmd: process.execPath, prefixArgs: [CLI_WRAPPER] };
   }
   if (fs.existsSync(CLI_JS)) {
-    return { cmd: 'node', prefixArgs: [CLI_JS] };
+    return { cmd: process.execPath, prefixArgs: [CLI_JS] };
   }
-  return { cmd: 'node', prefixArgs: [CLI_WRAPPER] };
+  return { cmd: process.execPath, prefixArgs: [CLI_WRAPPER] };
 }
 
 function runCli(args, capture = false) {
   const { cmd, prefixArgs } = cliCommand();
-  const useShell = process.platform === 'win32' && cmd.toLowerCase().endsWith('.cmd');
   const result = spawnSync(cmd, [...prefixArgs, ...args], {
     stdio: capture ? 'pipe' : 'inherit',
-    shell: useShell,
+    shell: false,
     windowsHide: true,
+    env: {
+      ...process.env,
+      BOARD_LIVE_CARDS_NO_SPAWN: '1',
+    },
     encoding: capture ? 'utf-8' : undefined,
   });
 

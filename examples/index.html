@@ -1,3 +1,4 @@
+            <div class="command"><code>node step-machine-cli.js &lt;flow.yaml&gt; [--initial-data &lt;json&gt;]</code><button class="copy-btn" data-copy="node step-machine-cli.js <flow.yaml>">Copy</button></div>
 <!doctype html>
 <html lang="en">
 <head>
@@ -418,7 +419,7 @@
           <article class="howto-card">
             <h3>step-machine CLI</h3>
             <p>Use the root CLI when you want YAML-driven flow execution rather than embedding the library APIs.</p>
-            <div class="command"><code>node step-machine-cli.js &lt;flow.yaml&gt; [--data &lt;json&gt;]</code><button class="copy-btn" data-copy="node step-machine-cli.js <flow.yaml>">Copy</button></div>
+            <div class="command"><code>node step-machine-cli.js &lt;flow.yaml&gt; [--initial-data &lt;json&gt;]</code><button class="copy-btn" data-copy="node step-machine-cli.js <flow.yaml>">Copy</button></div>
             <div class="meta-links"><a href="../docs/step-machine-cli.html">CLI reference</a></div>
           </article>
 
@@ -465,7 +466,7 @@
 
     <section class="section" data-role="examples">
       <div class="section-head">
-        <h2>CLI Workflows and Scenario Harnesses</h2>
+        <h2>CLI Workflows</h2>
         <p>Use these when you want orchestration behavior driven by YAML flows, CLI handlers, or reusable scenario inputs.</p>
       </div>
       <div class="section-body">
@@ -477,18 +478,18 @@
             <div class="command"><code>run-portfolio-tracker.bat</code><button class="copy-btn" data-copy="run-portfolio-tracker.bat">Copy</button></div>
           </article>
 
-          <article class="example-card" data-surface="cli" data-model="batch" data-search="scenario harness portfolio baseline synthetic scenario shared orchestration">
-            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Scenario</span></div>
-            <h3>Scenario Harness: Baseline</h3>
-            <p>Reusable baseline scenario that runs the shared portfolio-tracker orchestration with a fixed input pack.</p>
-            <div class="command"><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code><button class="copy-btn" data-copy="node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json">Copy</button></div>
+          <article class="example-card" data-surface="cli" data-model="step-machine" data-search="portfolio tracker baseline direct step-machine cli initial-data">
+            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Step Machine</span></div>
+            <h3>Portfolio Tracker: Baseline Direct</h3>
+            <p>Runs the portfolio tracker flow directly through step-machine-cli with the baseline input payload inline.</p>
+            <div class="command"><code>node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml --initial-data '{...baseline...}'</code><button class="copy-btn" data-copy="node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml --initial-data '{&quot;runtime_root&quot;:&quot;./runtime&quot;,&quot;board_name&quot;:&quot;portfolio-tracker-board&quot;,&quot;cards_template_dir&quot;:&quot;./cards&quot;,&quot;completion_tasks&quot;:[&quot;portfolio-form&quot;,&quot;price-fetch&quot;,&quot;holdings-table&quot;,&quot;portfolio-value&quot;],&quot;price_fetch_task&quot;:&quot;price-fetch&quot;,&quot;prices_t1&quot;:{&quot;AAPL&quot;:198.5,&quot;MSFT&quot;:425.3,&quot;GOOG&quot;:178.9,&quot;AMZN&quot;:192.4,&quot;TSLA&quot;:168.75},&quot;holdings_t2&quot;:[{&quot;symbol&quot;:&quot;AAPL&quot;,&quot;qty&quot;:50},{&quot;symbol&quot;:&quot;MSFT&quot;,&quot;qty&quot;:30},{&quot;symbol&quot;:&quot;GOOG&quot;,&quot;qty&quot;:100}],&quot;prices_t2&quot;:{&quot;AAPL&quot;:198.5,&quot;MSFT&quot;:425.3,&quot;GOOG&quot;:178.9,&quot;AMZN&quot;:192.4,&quot;TSLA&quot;:168.75},&quot;prices_t3&quot;:{&quot;AAPL&quot;:205,&quot;MSFT&quot;:425.3,&quot;GOOG&quot;:178.9,&quot;AMZN&quot;:192.4,&quot;TSLA&quot;:168.75}}'">Copy</button></div>
           </article>
 
-          <article class="example-card" data-surface="cli" data-model="batch" data-search="scenario harness price shock synthetic alternate market data">
-            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Scenario</span></div>
-            <h3>Scenario Harness: Price Shock</h3>
-            <p>Uses the same orchestration as the baseline scenario but swaps in synthetic shock data to test behavior under market movement.</p>
-            <div class="command"><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code><button class="copy-btn" data-copy="node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json">Copy</button></div>
+          <article class="example-card" data-surface="cli" data-model="step-machine" data-search="portfolio tracker price shock direct step-machine cli initial-data">
+            <div class="chip-row"><span class="chip">CLI</span><span class="chip">Step Machine</span></div>
+            <h3>Portfolio Tracker: Price Shock Direct</h3>
+            <p>Runs the same portfolio flow directly with a shock payload so you can test the alternate market path without a harness layer.</p>
+            <div class="command"><code>node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml --initial-data '{...price-shock...}'</code><button class="copy-btn" data-copy="node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml --initial-data '{&quot;runtime_root&quot;:&quot;./runtime&quot;,&quot;board_name&quot;:&quot;portfolio-tracker-board&quot;,&quot;cards_template_dir&quot;:&quot;./cards&quot;,&quot;completion_tasks&quot;:[&quot;portfolio-form&quot;,&quot;price-fetch&quot;,&quot;holdings-table&quot;,&quot;portfolio-value&quot;],&quot;price_fetch_task&quot;:&quot;price-fetch&quot;,&quot;prices_t1&quot;:{&quot;AAPL&quot;:198.5,&quot;MSFT&quot;:425.3,&quot;GOOG&quot;:178.9,&quot;AMZN&quot;:192.4,&quot;TSLA&quot;:168.75},&quot;holdings_t2&quot;:[{&quot;symbol&quot;:&quot;AAPL&quot;,&quot;qty&quot;:50},{&quot;symbol&quot;:&quot;MSFT&quot;,&quot;qty&quot;:30},{&quot;symbol&quot;:&quot;GOOG&quot;,&quot;qty&quot;:100}],&quot;prices_t2&quot;:{&quot;AAPL&quot;:155,&quot;MSFT&quot;:390,&quot;GOOG&quot;:132,&quot;AMZN&quot;:171,&quot;TSLA&quot;:143},&quot;prices_t3&quot;:{&quot;AAPL&quot;:148,&quot;MSFT&quot;:365,&quot;GOOG&quot;:125,&quot;AMZN&quot;:160,&quot;TSLA&quot;:129}}'">Copy</button></div>
           </article>
         </div>
       </div>
@@ -702,8 +703,8 @@
             <tr data-surface="browser" data-model="step-machine"><td><a href="browser/step-machine-browser/index.html"><code>examples/browser/step-machine-browser/index.html</code></a></td><td>Browser</td><td>Step Machine</td><td><code>Open browser/step-machine-browser/index.html</code></td><td>Simple browser-side step-machine demo</td></tr>
             <tr data-surface="browser" data-model="livecards"><td><code>examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code></td><td>Browser support</td><td>LiveCards</td><td><code>node examples/browser/boards/portfolio-tracker/portfolio-tracker.js</code></td><td>End-to-end board-live-cards portfolio driver</td></tr>
             <tr data-surface="cli" data-model="step-machine"><td><code>examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat</code></td><td>CLI</td><td>Step Machine</td><td><code>run-portfolio-tracker.bat</code></td><td>Portfolio tracker YAML flow orchestration</td></tr>
-            <tr data-surface="cli" data-model="batch"><td><code>examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td>CLI</td><td>Scenario</td><td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td>Baseline reusable scenario</td></tr>
-            <tr data-surface="cli" data-model="batch"><td><code>examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td>CLI</td><td>Scenario</td><td><code>node examples/cli/step-machine-cli/scenario-harness/run-scenario.js examples/cli/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td>Price-shock scenario variation</td></tr>
+            <tr data-surface="cli" data-model="step-machine"><td><code>examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml</code></td><td>CLI</td><td>Step Machine</td><td><code>node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml --initial-data '{...baseline...}'</code></td><td>Direct baseline portfolio tracker invocation</td></tr>
+            <tr data-surface="cli" data-model="step-machine"><td><code>examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml</code></td><td>CLI</td><td>Step Machine</td><td><code>node step-machine-cli.js examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml --initial-data '{...price-shock...}'</code></td><td>Direct price-shock portfolio tracker invocation</td></tr>
             <tr data-surface="npm-lib" data-model="step-machine"><td><code>examples/npm-libs/node/simple-greeting.ts</code></td><td>npm library</td><td>Step Machine</td><td><code>npx tsx examples/npm-libs/node/simple-greeting.ts</code></td><td>Basic step-machine flow with file persistence</td></tr>
             <tr data-surface="npm-lib" data-model="step-machine"><td><code>examples/npm-libs/node/ai-conversation.ts</code></td><td>npm library</td><td>Step Machine</td><td><code>npx tsx examples/npm-libs/node/ai-conversation.ts</code></td><td>Conversation loop with retries</td></tr>
             <tr data-surface="npm-lib" data-model="inference"><td><code>examples/npm-libs/inference/pluggable-adapters.ts</code></td><td>npm library</td><td>Inference</td><td><code>npx tsx examples/npm-libs/inference/pluggable-adapters.ts</code></td><td>Swappable LLM adapters</td></tr>

@@ -109,7 +109,7 @@
       "properties": {
         "bindTo":     { "type": "string",  "description": "Key under sources.* available in compute expressions" },
         "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
-        "optional":   { "type": "boolean", "default": false, "description": "When true this source does not gate task completion — the card re-evaluates when outputFile arrives later." },
+        "optionalForCompletionGating":   { "type": "boolean", "default": false, "description": "When true this source does not gate card completion. Default false when absent, so sources are completion-gating by default." },
         "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
         "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }
       }
@@ -236,7 +236,7 @@
     },
     "sources": {
       "type": "array",
-      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Non-optional sources must all deliver (outputFile present) before task-completed fires. optional: true sources don't gate completion.",
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Sources gate completion by default. Set optionalForCompletionGating: true for enrichment-only sources that should not block task-completed.",
       "items": { "$ref": "#/definitions/source_def" }
     },
     "compute": {

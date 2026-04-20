@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const trackerScript = path.join(repoRoot, 'examples', 'board-live-cards', 'portfolio-tracker', 'portfolio-tracker.js');
+const trackerScript = path.join(repoRoot, 'examples', 'browser', 'boards', 'portfolio-tracker', 'portfolio-tracker.js');
 
 describe('portfolio tracker demo', () => {
   it('runs end-to-end as a black-box example', { timeout: 120000 }, () => {

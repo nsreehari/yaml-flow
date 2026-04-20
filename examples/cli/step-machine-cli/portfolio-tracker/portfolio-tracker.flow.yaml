@@ -1,6 +1,6 @@
 id: portfolio-tracker-step-machine
 handler_vars:
-  BOARDCLI_CMD: ../../../board-live-cards-cli.js
+  BOARDCLI_CMD: ../../../../board-live-cards-cli.js
   TMP_FILE_NAME: tmp_file1
 settings:
   start_step: t0_reset_board

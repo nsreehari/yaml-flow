@@ -1322,37 +1322,56 @@ function cmdRunSources(args: string[]): void {
       return;
     }
 
-    // No external executor: use board-live-cards run-source-fetch as the executor
+    // No external executor: execute source.cli directly in this process.
     if (!src.outputFile) {
       console.warn(`[run-sources-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
       reportFailure('no outputFile configured');
       return;
     }
-    const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
     const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
-    const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
-    const sourceForExecutor = { ...src, cwd: path.dirname(cardFilePath || ''), boardDir };
-    fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
+    if (!src.cli) {
+      const errMsg = 'source.cli is required for built-in source execution';
+      console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
+      reportFailure(errMsg);
+      return;
+    }
 
-    const { cmd, args: baseArgs } = getCliInvocation('run-source-fetch', ['--in', inFile, '--out', outFile, '--err', errFile]);
-    console.log(`[run-sources-internal] run-source-fetch: ${cmd} ${baseArgs.join(' ')}`);
+    const timeout = src.timeout ?? 120_000;
+    const sourceCwd = typeof src.cwd === 'string' ? src.cwd : path.dirname(cardFilePath || '');
+    const sourceBoardDir = typeof src.boardDir === 'string' ? src.boardDir : boardDir;
+    const cmdParts = splitCommandLine(src.cli);
+    if (cmdParts.length === 0) {
+      const errMsg = 'source.cli command is empty';
+      console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
+      reportFailure(errMsg);
+      return;
+    }
+
+    const rawCmd = cmdParts[0];
+    const cmd = /^(node|node\.exe)$/i.test(rawCmd) ? process.execPath : rawCmd;
+    const cliArgs = cmdParts.slice(1);
+
+    let stdout: string;
     try {
-      execCommandSync(cmd, baseArgs, {
-        timeout: src.timeout ?? 120_000,
+      stdout = execCommandSync(cmd, cliArgs, {
+        shell: false,
+        encoding: 'utf-8',
+        timeout,
+        cwd: sourceCwd,
+        env: {
+          ...process.env,
+          ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
+        },
       });
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
-      console.error(`[run-sources-internal] run-source-fetch failed for source "${src.bindTo}":`, reason);
+      console.error(`[run-sources-internal] source fetch failed for source "${src.bindTo}":`, reason);
       reportFailure(reason);
       return;
     }
-    if (fs.existsSync(outFile)) {
-      reportFetched(outFile);
-    } else {
-      const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
-      console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
-      reportFailure(errMsg);
-    }
+
+    fs.writeFileSync(outFile, stdout.trim(), 'utf-8');
+    reportFetched(outFile);
   }
 
   const sources = (card.sources ?? []) as SourceDef[];
@@ -1423,7 +1442,8 @@ function cmdRunSourceFetch(args: string[]): void {
     console.error(`[run-source-fetch] ${msg}`);
     process.exit(1);
   }
-  const cmd = cmdParts[0];
+  const rawCmd = cmdParts[0];
+  const cmd = /^(node|node\.exe)$/i.test(rawCmd) ? process.execPath : rawCmd;
   const cliArgs = cmdParts.slice(1);
 
   let stdout: string;

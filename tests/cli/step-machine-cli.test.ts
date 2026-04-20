@@ -54,7 +54,7 @@ describe('step-machine-cli', () => {
     expect(run.combinedOutput).toContain('Usage: step-machine-cli');
   });
 
-  it('fails fast for invalid --data json', () => {
+  it('fails fast for invalid --initial-data json', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-data-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -71,11 +71,11 @@ terminal_states:
     return_intent: success
 `);
 
-    const run = runStepMachineCli([flowPath, '--data', '{bad-json']);
+    const run = runStepMachineCli([flowPath, '--initial-data', '{bad-json']);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(1);
-    expect(run.combinedOutput).toContain('Invalid --data value');
+    expect(run.combinedOutput).toContain('Invalid --initial-data value');
   });
 
   it('fails fast for invalid --store value', () => {
@@ -153,7 +153,7 @@ terminal_states:
       'file',
       '--store-dir',
       storeDir,
-      '--data',
+      '--initial-data',
       '{"x":42}',
     ]);
 
@@ -352,7 +352,7 @@ export default {
       flowPath,
       '--handlers',
       handlersPath,
-      '--data',
+      '--initial-data',
       '{"x":7}',
     ]);
 
@@ -408,7 +408,7 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([flowPath, '--data', '{"x":7}']);
+    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":7}']);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
@@ -571,7 +571,7 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([flowPath, '--data', '{"x":9}']);
+    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":9}']);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
@@ -629,7 +629,7 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([flowPath, '--data', '{"x":10}']);
+    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":10}']);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
@@ -708,7 +708,7 @@ process.stdin.resume();
       flowPath,
       '--handlers',
       handlersPath,
-      '--data',
+      '--initial-data',
       '{"a":3,"b":4}',
     ]);
 
@@ -780,7 +780,7 @@ process.stdin.resume();
 
     const run = runStepMachineCli([
       flowPath,
-      '--data',
+      '--initial-data',
       '{"runtime_root":"/tmp/runtime","board_name":"board-a"}',
     ]);
 
@@ -819,7 +819,7 @@ terminal_states:
     return_artifacts: [error]
 `);
 
-    const run = runStepMachineCli([flowPath, '--data', '{"x":1}']);
+    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":1}']);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
@@ -870,7 +870,7 @@ export default {
   });
 
   it('e2e: portfolio-tracker example runs to success', () => {
-    const exampleDir = path.resolve(repoRoot, 'examples/step-machine-cli/portfolio-tracker');
+    const exampleDir = path.resolve(repoRoot, 'examples/cli/step-machine-cli/portfolio-tracker');
     const inputData = JSON.parse(
       fs.readFileSync(path.join(exampleDir, 'portfolio-tracker.input.json'), 'utf-8')
     );
@@ -878,7 +878,7 @@ export default {
 
     const result = spawnSync(
       process.execPath,
-      [stepMachineCli, 'portfolio-tracker.flow.yaml', '--data', JSON.stringify(inputData)],
+      [stepMachineCli, 'portfolio-tracker.flow.yaml', '--initial-data', JSON.stringify(inputData)],
       {
         cwd: exampleDir,
         encoding: 'utf-8',

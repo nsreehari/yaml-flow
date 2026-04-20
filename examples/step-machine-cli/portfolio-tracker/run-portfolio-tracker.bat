@@ -25,5 +25,5 @@ node ..\..\..\step-machine-cli.js --store file --store-dir "%STORE_DIR%" --statu
 exit /b %ERRORLEVEL%
 
 :run
-node -e "const fs=require('fs');const cp=require('child_process');const raw=JSON.parse(fs.readFileSync('portfolio-tracker.input.json','utf8'));raw.runtime_root=(process.env.RUNTIME_ROOT||'').replace(/\\\\/g,'/');const input=JSON.stringify(raw);const r=cp.spawnSync(process.execPath,['..\\..\\..\\step-machine-cli.js','portfolio-tracker.flow.yaml','--store','file','--store-dir',process.env.STORE_DIR,'--data',input],{stdio:'inherit',env:{...process.env,BOARD_LIVE_CARDS_NO_SPAWN:'1'}});process.exit(r.status??1);"
+	node -e "const fs=require('fs');const cp=require('child_process');const raw=JSON.parse(fs.readFileSync('portfolio-tracker.input.json','utf8'));raw.runtime_root=(process.env.RUNTIME_ROOT||'').replace(/\\\\/g,'/');const input=JSON.stringify(raw);const r=cp.spawnSync(process.execPath,['..\\..\\..\\step-machine-cli.js','portfolio-tracker.flow.yaml','--store','file','--store-dir',process.env.STORE_DIR,'--initial-data',input],{stdio:'inherit',windowsHide:true,env:{...process.env,BOARD_LIVE_CARDS_NO_SPAWN:'1'}});process.exit(r.status??1);"
 exit /b %ERRORLEVEL%
