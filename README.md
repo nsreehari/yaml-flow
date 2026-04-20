@@ -26,8 +26,8 @@ yaml-flow is not only a low-level npm library. It exposes three practical consum
   - `yaml-flow/card-compute`
 
 3. **Step-machine CLI**
-  `step-machine-cli` is the standalone operational runner for YAML step-machine workflows.
-  For persistence across restarts and longer-running flows, pair Step Machine with store adapters such as `MemoryStore`, `LocalStorageStore`, and `FileStore`.
+  `step-machine-cli` is the standalone operational runner for YAML step-machine workflows with inline handlers, CLI handlers, and JSONata transforms.
+  For durable and operator-controlled runs, use `--store file --store-dir ...` plus `--pause`, `--resume`, and `--status`.
 
 ## Documentation Map
 

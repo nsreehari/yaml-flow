@@ -162,11 +162,13 @@
         </div>
         <div class="card">
             <h3>Step-Machine CLI</h3>
-            <p>Batteries-included server-side runner for YAML step-machine flows with inline handlers, CLI handlers, transforms, and orchestration helpers.</p>
+            <p>Batteries-included operational runner for YAML step-machine flows with inline handlers, CLI handlers, JSONata transforms, and store-backed run control.</p>
             <ul style="margin: 8px 0;">
               <li><code>step-machine-cli</code></li>
+              <li><code>--store file --store-dir ...</code> for durable runs</li>
+              <li><code>--pause</code>, <code>--resume</code>, and <code>--status</code> for external run control</li>
             </ul>
-            <p class="muted">This is the standalone operational entrypoint for step-machine workflows. For persistence across restarts and longer-running flows, pair Step Machine with store adapters such as <code>MemoryStore</code>, <code>LocalStorageStore</code>, and <code>FileStore</code>.</p>
+            <p class="muted">This is the standalone operational entrypoint for step-machine workflows, especially when you want reproducible YAML-driven execution with restartable file-backed state and operator-friendly pause/resume/status controls.</p>
         </div>
       </div>
     </section>
