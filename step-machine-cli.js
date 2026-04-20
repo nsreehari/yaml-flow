@@ -34,7 +34,7 @@ async function main() {
   }
 
   if (resumeRequested && dataArg) {
-    throw new Error('[step-machine-cli] --data cannot be combined with --resume.');
+    throw new Error('[step-machine-cli] --initial-data cannot be combined with --resume.');
   }
 
   const storeContext = createStoreContext(storeArg, storeDirArg);
@@ -127,7 +127,7 @@ async function main() {
 }
 
 function parseCliArgs(args) {
-  const valueFlags = new Set(['--handlers', '--data', '--store', '--store-dir']);
+  const valueFlags = new Set(['--handlers', '--initial-data', '--store', '--store-dir']);
   const values = {};
   const positionals = [];
   let help = false;
@@ -182,7 +182,7 @@ function parseCliArgs(args) {
     help,
     flowArg: positionals[0],
     handlersArg: values['--handlers'],
-    dataArg: values['--data'],
+    dataArg: values['--initial-data'],
     storeArg: String(values['--store'] ?? 'memory').toLowerCase(),
     storeDirArg: values['--store-dir'],
     resumeRequested,
@@ -344,7 +344,7 @@ function parseInitialData(dataArg) {
     return parsed;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`[step-machine-cli] Invalid --data value: ${msg}`);
+    throw new Error(`[step-machine-cli] Invalid --initial-data value: ${msg}`);
   }
 }
 
@@ -655,12 +655,12 @@ function filterProducedData(data, produces) {
 }
 
 function printUsage() {
-  console.error('Usage: step-machine-cli <step-flow.yaml> [--handlers <step-handlers.js>] [--data <json>] [--store <memory|file>] [--store-dir <directory>] [--resume]');
+  console.error('Usage: step-machine-cli <step-flow.yaml> [--handlers <step-handlers.js>] [--initial-data <json>] [--store <memory|file>] [--store-dir <directory>] [--resume]');
   console.error('       step-machine-cli --store file --store-dir <directory> --pause');
   console.error('       step-machine-cli --store file --store-dir <directory> --status');
   console.error('');
   console.error('Example:');
-  console.error('  step-machine-cli examples/step-machine-demo/two-step-mixed.flow.yaml --handlers examples/step-machine-demo/two-step-mixed-handlers.js --data "{\"a\":3,\"b\":4}"');
+  console.error('  step-machine-cli examples/step-machine-demo/two-step-mixed.flow.yaml --handlers examples/step-machine-demo/two-step-mixed-handlers.js --initial-data "{\"a\":3,\"b\":4}"');
   console.error('  step-machine-cli ./flow.yaml --store file --store-dir ./.runs');
   console.error('  step-machine-cli ./flow.yaml --store file --store-dir ./.runs --resume');
   console.error('  step-machine-cli --store file --store-dir ./.runs --pause');
