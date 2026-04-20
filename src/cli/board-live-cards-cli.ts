@@ -318,12 +318,19 @@ function shouldUseShellForCommand(cmd: string, forceShell?: boolean): boolean {
 }
 
 function spawnDetachedCommand(cmd: string, args: string[]): void {
-  const child = spawn(cmd, args, {
-    shell: shouldUseShellForCommand(cmd),
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+  // On Windows, detached:true maps to CREATE_NEW_CONSOLE which causes a visible
+  // popup even with windowsHide:true. Use `cmd /c start /b` instead (/b = no new
+  // console window), equivalent to shell `&` background.
+  const child = process.platform === 'win32'
+    ? spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    : spawn(cmd, args, {
+        shell: false,
+        detached: true,
+        stdio: 'ignore',
+      });
   child.unref();
 }
 
@@ -558,12 +565,20 @@ function getCliInvocation(command: string, args: string[]): { cmd: string; args:
 
 function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('run-sources-internal', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
-  const child = spawn(cmd, args, {
-    shell: shouldUseShellForCommand(cmd),
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+  // On Windows, `detached: true` maps to CREATE_NEW_CONSOLE which overrides
+  // windowsHide and causes a visible console popup. Use `cmd /c start /b` instead:
+  // the /b flag starts the process without a new console window, equivalent to
+  // shell `&` background, and the transient cmd.exe itself is hidden via windowsHide.
+  const child = process.platform === 'win32'
+    ? spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    : spawn(cmd, args, {
+        shell: false,
+        detached: true,
+        stdio: 'ignore',
+      });
   let finished = false;
   const done = (err: Error | null) => {
     if (finished) return;
