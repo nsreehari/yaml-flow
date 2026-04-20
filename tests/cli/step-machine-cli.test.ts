@@ -78,6 +78,249 @@ terminal_states:
     expect(run.combinedOutput).toContain('Invalid --data value');
   });
 
+  it('fails fast for invalid --store value', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-store-invalid-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+
+    writeFile(flowPath, `
+id: invalid-store-flow
+settings:
+  start_step: s1
+steps:
+  s1:
+    transitions:
+      success: success_state
+terminal_states:
+  success_state:
+    return_intent: success
+`);
+
+    const run = runStepMachineCli([flowPath, '--store', 'redis']);
+
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(1);
+    expect(run.combinedOutput).toContain('Invalid --store value');
+  });
+
+  it('requires --store-dir when --store file is used', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-store-dir-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+
+    writeFile(flowPath, `
+id: file-store-flow
+settings:
+  start_step: s1
+steps:
+  s1:
+    transitions:
+      success: success_state
+terminal_states:
+  success_state:
+    return_intent: success
+`);
+
+    const run = runStepMachineCli([flowPath, '--store', 'file']);
+
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(1);
+    expect(run.combinedOutput).toContain('--store file requires --store-dir');
+  });
+
+  it('persists run state when using --store file', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-file-store-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+    const storeDir = path.join(tmpRoot, 'runs');
+
+    writeFile(flowPath, `
+id: persist-flow
+settings:
+  start_step: s1
+steps:
+  s1:
+    expects_data: [x]
+    produces_data: [x]
+    transitions:
+      success: success_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [x]
+`);
+
+    const run = runStepMachineCli([
+      flowPath,
+      '--store',
+      'file',
+      '--store-dir',
+      storeDir,
+      '--data',
+      '{"x":42}',
+    ]);
+
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(0);
+
+    const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.intent).toBe('success');
+    expect(output.data).toEqual({ x: 42 });
+
+    const runStatePath = path.join(storeDir, `${output.runId}.run.json`);
+    const runDataPath = path.join(storeDir, `${output.runId}.data.json`);
+    expect(fs.existsSync(runStatePath)).toBe(true);
+    expect(fs.existsSync(runDataPath)).toBe(true);
+  });
+
+  it('resumes the latest paused run when using --resume with --store file', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-resume-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+    const storeDir = path.join(tmpRoot, 'runs');
+    const runId = 'resume-run-1';
+    const startedAt = Date.now() - 1000;
+
+    fs.mkdirSync(storeDir, { recursive: true });
+
+    writeFile(flowPath, `
+id: resume-flow
+settings:
+  start_step: s1
+steps:
+  s1:
+    expects_data: [x]
+    produces_data: [x]
+    transitions:
+      success: success_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [x]
+`);
+
+    writeFile(path.join(storeDir, `${runId}.run.json`), `
+{
+  "runId": "${runId}",
+  "flowId": "resume-flow",
+  "currentStep": "s1",
+  "status": "paused",
+  "stepHistory": [],
+  "iterationCounts": {},
+  "retryCounts": {},
+  "startedAt": ${startedAt},
+  "updatedAt": ${startedAt},
+  "pausedAt": ${startedAt}
+}
+`);
+
+    writeFile(path.join(storeDir, `${runId}.data.json`), `
+{
+  "x": 7
+}
+`);
+
+    const run = runStepMachineCli([
+      flowPath,
+      '--store',
+      'file',
+      '--store-dir',
+      storeDir,
+      '--resume',
+    ]);
+
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(0);
+
+    const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.intent).toBe('success');
+    expect(output.runId).toBe(runId);
+    expect(output.data).toEqual({ x: 7 });
+  });
+
+  it('writes a pause request marker when using --pause with --store file', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pause-'));
+    const storeDir = path.join(tmpRoot, 'runs');
+    const runId = 'pause-run-1';
+    const startedAt = Date.now() - 1000;
+
+    fs.mkdirSync(storeDir, { recursive: true });
+
+    writeFile(path.join(storeDir, `${runId}.run.json`), `
+{
+  "runId": "${runId}",
+  "flowId": "pause-flow",
+  "currentStep": "s1",
+  "status": "running",
+  "stepHistory": [],
+  "iterationCounts": {},
+  "retryCounts": {},
+  "startedAt": ${startedAt},
+  "updatedAt": ${startedAt}
+}
+`);
+
+    writeFile(path.join(storeDir, `${runId}.data.json`), `
+{}
+`);
+
+    const run = runStepMachineCli([
+      '--store',
+      'file',
+      '--store-dir',
+      storeDir,
+      '--pause',
+    ]);
+
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(0);
+
+    const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.status).toBe('pause-requested');
+    expect(fs.existsSync(path.join(storeDir, '.pause'))).toBe(true);
+  });
+
+  it('shows store status with --status for file store directory', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-status-'));
+    const storeDir = path.join(tmpRoot, 'runs');
+    const runId = 'status-run-1';
+    const startedAt = Date.now() - 1000;
+
+    fs.mkdirSync(storeDir, { recursive: true });
+
+    writeFile(path.join(storeDir, `${runId}.run.json`), `
+{
+  "runId": "${runId}",
+  "flowId": "status-flow",
+  "currentStep": "s1",
+  "status": "paused",
+  "stepHistory": [],
+  "iterationCounts": {},
+  "retryCounts": {},
+  "startedAt": ${startedAt},
+  "updatedAt": ${startedAt},
+  "pausedAt": ${startedAt}
+}
+`);
+
+    writeFile(path.join(storeDir, `${runId}.data.json`), `
+{}
+`);
+
+    const run = runStepMachineCli([
+      '--store',
+      'file',
+      '--store-dir',
+      storeDir,
+      '--status',
+    ]);
+
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(0);
+
+    const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.totalRuns).toBe(1);
+    expect(output.runs[0].runId).toBe(runId);
+    expect(output.runs[0].status).toBe('paused');
+
+  });
+
   it('uses passthrough when no step handler is configured', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pass-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
@@ -631,6 +874,7 @@ export default {
     const inputData = JSON.parse(
       fs.readFileSync(path.join(exampleDir, 'portfolio-tracker.input.json'), 'utf-8')
     );
+    inputData.runtime_root = path.join(os.tmpdir(), 'yaml-flow-step-machine-portfolio-tracker-test');
 
     const result = spawnSync(
       process.execPath,

@@ -1,40 +1,114 @@
 #!/usr/bin/env node
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import jsonata from 'jsonata';
 
-const { loadStepFlow, createEngine } = await import('./dist/index.js');
+const { loadStepFlow, createStepMachine, MemoryStore, FileStore } = await import('./dist/index.js');
+const PAUSE_FILE_NAME = '.pause';
 
 async function main() {
   const args = process.argv.slice(2);
+  const parsed = parseCliArgs(args);
 
-  if (args.includes('-h') || args.includes('--help') || args.length === 0) {
+  if (parsed.help || args.length === 0) {
     printUsage();
     process.exit(args.length === 0 ? 1 : 0);
   }
 
-  const flowArg = args[0];
-  const handlersArg = getFlagValue(args, '--handlers');
-  const dataArg = getFlagValue(args, '--data');
+  const {
+    flowArg,
+    handlersArg,
+    dataArg,
+    storeArg,
+    storeDirArg,
+    resumeRequested,
+    pauseRequested,
+    statusRequested,
+  } = parsed;
+
+  if ((pauseRequested || statusRequested) && (handlersArg || dataArg || resumeRequested || flowArg)) {
+    throw new Error('[step-machine-cli] --pause and --status are store-level operations. Do not provide flow, handlers, data, or --resume.');
+  }
+
+  if (resumeRequested && dataArg) {
+    throw new Error('[step-machine-cli] --data cannot be combined with --resume.');
+  }
+
+  const storeContext = createStoreContext(storeArg, storeDirArg);
+
+  if (statusRequested) {
+    await printStoreStatus(storeContext);
+    return;
+  }
+
+  if (pauseRequested) {
+    await requestPause(storeContext);
+    return;
+  }
 
   if (!flowArg) {
-    printUsage();
-    process.exit(1);
+    throw new Error('[step-machine-cli] Flow path is required for run/resume operations.');
   }
 
   const flowPath = resolveInputPath(flowArg);
   const flowDir = path.dirname(flowPath);
   const handlersPath = handlersArg ? resolveInputPath(handlersArg) : undefined;
   const initialData = parseInitialData(dataArg);
+  const { store } = storeContext;
 
   const flow = await loadStepFlow(flowPath);
   const inlineHandlers = handlersPath ? await loadHandlers(handlersPath) : {};
   const handlers = buildStepHandlers(flow, inlineHandlers, flowDir, flow.handler_vars);
 
-  const machine = createEngine(flow, handlers);
-  const result = await machine.run(initialData);
+  // Resume/start should ignore stale pause markers from previous runs.
+  clearPauseRequest(storeContext);
+
+  const abortController = new AbortController();
+  let pauseSignalSeen = false;
+
+  const machine = createStepMachine(flow, handlers, {
+    store,
+    signal: abortController.signal,
+    onStep: () => {
+      if (!pauseSignalSeen && hasPauseRequest(storeContext)) {
+        pauseSignalSeen = true;
+        abortController.abort();
+      }
+    },
+  });
+
+  let runIdToResume;
+  if (resumeRequested) {
+    runIdToResume = await resolveRunIdToResume(storeContext);
+    if (!runIdToResume) {
+      console.warn('[step-machine-cli] No paused run found in store directory.');
+      console.log(JSON.stringify({ status: 'noop', reason: 'no-paused-run' }, null, 2));
+      return;
+    }
+  } else if (storeContext.storeType === 'file' && !initialData) {
+    runIdToResume = await resolveRunIdToResume(storeContext);
+  }
+
+  const result = runIdToResume
+    ? await machine.resume(runIdToResume)
+    : await machine.run(initialData);
+
+  if (pauseSignalSeen && result.status === 'cancelled') {
+    const pausedState = await markRunPaused(store, result.runId);
+    clearPauseRequest(storeContext);
+    console.log(JSON.stringify({
+      runId: result.runId,
+      status: 'paused',
+      currentStep: pausedState?.currentStep,
+      pausedAt: pausedState?.pausedAt,
+      stepHistory: result.stepHistory,
+      data: result.data,
+    }, null, 2));
+    return;
+  }
 
   if (result.status !== 'completed') {
     const reason = result.error?.message ?? result.intent ?? result.status;
@@ -52,16 +126,209 @@ async function main() {
   }, null, 2));
 }
 
-function getFlagValue(args, flag) {
-  const idx = args.indexOf(flag);
-  if (idx < 0) return undefined;
-  return args[idx + 1];
+function parseCliArgs(args) {
+  const valueFlags = new Set(['--handlers', '--data', '--store', '--store-dir']);
+  const values = {};
+  const positionals = [];
+  let help = false;
+  let resumeRequested = false;
+  let pauseRequested = false;
+  let statusRequested = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-h' || arg === '--help') {
+      help = true;
+      continue;
+    }
+
+    if (arg === '--resume') {
+      resumeRequested = true;
+      continue;
+    }
+
+    if (arg === '--pause') {
+      pauseRequested = true;
+      continue;
+    }
+
+    if (arg === '--status') {
+      statusRequested = true;
+      continue;
+    }
+
+    if (valueFlags.has(arg)) {
+      const value = args[i + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error(`[step-machine-cli] Missing value for ${arg}.`);
+      }
+      values[arg] = value;
+      i++;
+      continue;
+    }
+
+    if (arg.startsWith('--')) {
+      throw new Error(`[step-machine-cli] Unknown flag: ${arg}`);
+    }
+
+    positionals.push(arg);
+  }
+
+  if ([resumeRequested, pauseRequested, statusRequested].filter(Boolean).length > 1) {
+    throw new Error('[step-machine-cli] Use only one of --resume, --pause, or --status at a time.');
+  }
+
+  return {
+    help,
+    flowArg: positionals[0],
+    handlersArg: values['--handlers'],
+    dataArg: values['--data'],
+    storeArg: String(values['--store'] ?? 'memory').toLowerCase(),
+    storeDirArg: values['--store-dir'],
+    resumeRequested,
+    pauseRequested,
+    statusRequested,
+  };
 }
 
 function resolveInputPath(inputPath) {
   return path.isAbsolute(inputPath)
     ? inputPath
     : path.resolve(process.cwd(), inputPath);
+}
+
+function createStoreContext(storeType, storeDirArg) {
+  if (storeType !== 'memory' && storeType !== 'file') {
+    throw new Error(`[step-machine-cli] Invalid --store value "${storeType}". Expected "memory" or "file".`);
+  }
+
+  if (storeType === 'memory') {
+    return {
+      storeType,
+      storeDir: undefined,
+      pauseFilePath: undefined,
+      store: new MemoryStore(),
+    };
+  }
+
+  if (!storeDirArg || storeDirArg.trim().length === 0) {
+    throw new Error('[step-machine-cli] --store file requires --store-dir <directory>.');
+  }
+
+  const storeDir = resolveInputPath(storeDirArg);
+  return {
+    storeType,
+    storeDir,
+    pauseFilePath: path.join(storeDir, PAUSE_FILE_NAME),
+    store: new FileStore({ directory: storeDir }),
+  };
+}
+
+async function listRunStates(store) {
+  if (!store.listRuns) {
+    return [];
+  }
+
+  const runIds = await store.listRuns();
+  const states = [];
+  for (const runId of runIds) {
+    const state = await store.loadRunState(runId);
+    if (state) {
+      states.push(state);
+    }
+  }
+
+  states.sort((a, b) => (b.updatedAt ?? b.startedAt ?? 0) - (a.updatedAt ?? a.startedAt ?? 0));
+  return states;
+}
+
+function hasPauseRequest(storeContext) {
+  if (storeContext.storeType !== 'file' || !storeContext.pauseFilePath) {
+    return false;
+  }
+  return fs.existsSync(storeContext.pauseFilePath);
+}
+
+function clearPauseRequest(storeContext) {
+  if (!hasPauseRequest(storeContext)) {
+    return;
+  }
+  fs.unlinkSync(storeContext.pauseFilePath);
+}
+
+async function requestPause(storeContext) {
+  if (storeContext.storeType !== 'file' || !storeContext.pauseFilePath) {
+    throw new Error('[step-machine-cli] --pause requires --store file --store-dir <directory>.');
+  }
+
+  const states = await listRunStates(storeContext.store);
+  if (states.length === 0) {
+    console.warn('[step-machine-cli] No runs found in store directory. Pause is a no-op.');
+    console.log(JSON.stringify({ status: 'noop', reason: 'no-runs' }, null, 2));
+    return;
+  }
+
+  const running = states.find((s) => s.status === 'running');
+  if (!running) {
+    console.warn('[step-machine-cli] No running run found. Pause is a no-op.');
+    console.log(JSON.stringify({ status: 'noop', reason: 'no-running-run' }, null, 2));
+    return;
+  }
+
+  fs.mkdirSync(storeContext.storeDir, { recursive: true });
+  fs.writeFileSync(storeContext.pauseFilePath, JSON.stringify({ requestedAt: Date.now() }), 'utf-8');
+  console.log(JSON.stringify({ status: 'pause-requested', storeDir: storeContext.storeDir }, null, 2));
+}
+
+async function resolveRunIdToResume(storeContext) {
+  const states = await listRunStates(storeContext.store);
+  const pausedStates = states.filter((s) => s.status === 'paused');
+  if (pausedStates.length === 0) {
+    return undefined;
+  }
+  if (pausedStates.length > 1) {
+    console.warn('[step-machine-cli] Multiple paused runs found; resuming the most recently updated run.');
+  }
+  return pausedStates[0].runId;
+}
+
+async function markRunPaused(store, runId) {
+  const state = await store.loadRunState(runId);
+  if (!state) {
+    return null;
+  }
+  const pausedState = {
+    ...state,
+    status: 'paused',
+    pausedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  await store.saveRunState(runId, pausedState);
+  return pausedState;
+}
+
+async function printStoreStatus(storeContext) {
+  if (storeContext.storeType !== 'file') {
+    throw new Error('[step-machine-cli] --status requires --store file --store-dir <directory>.');
+  }
+
+  const states = await listRunStates(storeContext.store);
+  const summary = {
+    store: 'file',
+    storeDir: storeContext.storeDir,
+    pauseRequested: hasPauseRequest(storeContext),
+    totalRuns: states.length,
+    runs: states.map((s) => ({
+      runId: s.runId,
+      status: s.status,
+      currentStep: s.currentStep,
+      startedAt: s.startedAt,
+      updatedAt: s.updatedAt,
+      pausedAt: s.pausedAt,
+    })),
+  };
+
+  console.log(JSON.stringify(summary, null, 2));
 }
 
 function parseInitialData(dataArg) {
@@ -388,10 +655,16 @@ function filterProducedData(data, produces) {
 }
 
 function printUsage() {
-  console.error('Usage: step-machine-cli <step-flow.yaml> [--handlers <step-handlers.js>] [--data <json>]');
+  console.error('Usage: step-machine-cli <step-flow.yaml> [--handlers <step-handlers.js>] [--data <json>] [--store <memory|file>] [--store-dir <directory>] [--resume]');
+  console.error('       step-machine-cli --store file --store-dir <directory> --pause');
+  console.error('       step-machine-cli --store file --store-dir <directory> --status');
   console.error('');
   console.error('Example:');
   console.error('  step-machine-cli examples/step-machine-demo/two-step-mixed.flow.yaml --handlers examples/step-machine-demo/two-step-mixed-handlers.js --data "{\"a\":3,\"b\":4}"');
+  console.error('  step-machine-cli ./flow.yaml --store file --store-dir ./.runs');
+  console.error('  step-machine-cli ./flow.yaml --store file --store-dir ./.runs --resume');
+  console.error('  step-machine-cli --store file --store-dir ./.runs --pause');
+  console.error('  step-machine-cli --store file --store-dir ./.runs --status');
 }
 
 main().catch((error) => {

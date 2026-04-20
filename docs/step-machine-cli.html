@@ -86,8 +86,10 @@
 
     <section class="card">
       <h2>Invocation</h2>
-      <pre><code>step-machine-cli &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--data &lt;json&gt;]</code></pre>
-      <p class="muted">Equivalent repo wrapper usage: <code>node step-machine-cli.js &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--data &lt;json&gt;]</code></p>
+      <pre><code>step-machine-cli &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--data &lt;json&gt;] [--store &lt;memory|file&gt;] [--store-dir &lt;dir&gt;] [--resume]
+    step-machine-cli --store file --store-dir &lt;dir&gt; --pause
+    step-machine-cli --store file --store-dir &lt;dir&gt; --status</code></pre>
+      <p class="muted">Equivalent repo wrapper usage: <code>node step-machine-cli.js ...</code> with the same flags.</p>
     </section>
 
     <section class="card">
@@ -100,6 +102,11 @@
           <tr><td><code>&lt;step-flow.yaml&gt;</code></td><td>Required path to the step-machine flow file.</td><td>Resolved relative to current working directory.</td></tr>
           <tr><td><code>--handlers &lt;step-handlers.js&gt;</code></td><td>Optional module exporting inline step handlers.</td><td>Used when steps declare <code>handler.inline</code>.</td></tr>
           <tr><td><code>--data &lt;json&gt;</code></td><td>Optional initial input object for the run.</td><td>Must parse as a JSON object, not an array or scalar.</td></tr>
+          <tr><td><code>--store &lt;memory|file&gt;</code></td><td>Optional store backend selector.</td><td>Default is <code>memory</code>. Use <code>file</code> for durable run state.</td></tr>
+          <tr><td><code>--store-dir &lt;dir&gt;</code></td><td>Directory for file-backed run state.</td><td>Required when <code>--store file</code> is used.</td></tr>
+          <tr><td><code>--resume</code></td><td>Resume the latest paused run from the configured store directory.</td><td>No run ID is required. Cannot be combined with <code>--data</code>, <code>--pause</code>, or <code>--status</code>.</td></tr>
+          <tr><td><code>--pause</code></td><td>Request a pause via the store directory sentinel file.</td><td>Store-level operation; used with <code>--store file --store-dir</code>. Cannot be combined with flow execution flags.</td></tr>
+          <tr><td><code>--status</code></td><td>Print store-level run status summary for the configured store directory.</td><td>Store-level operation; used with <code>--store file --store-dir</code>.</td></tr>
         </tbody>
       </table>
     </section>

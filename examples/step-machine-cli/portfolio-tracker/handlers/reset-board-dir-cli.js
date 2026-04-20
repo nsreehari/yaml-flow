@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { readStdinJson, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
-  const boardDir = String(input.BOARD_DIR ?? '').trim();
+  const boardDirInput = String(input.BOARD_DIR ?? '').trim();
 
-  if (!boardDir) {
+  if (!boardDirInput) {
     writeFailure('BOARD_DIR is required');
     process.exit(0);
   }
 
+  const boardDir = path.resolve(boardDirInput);
   fs.rmSync(boardDir, { recursive: true, force: true });
 
   writeResult({

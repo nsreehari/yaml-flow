@@ -1,6 +1,7 @@
 id: portfolio-tracker-step-machine
 handler_vars:
   BOARDCLI_CMD: ../../../board-live-cards-cli.js
+  TMP_FILE_NAME: tmp_file1
 settings:
   start_step: t0_reset_board
   max_total_steps: 150
@@ -16,7 +17,7 @@ steps:
       input-transforms:
         BOARD_DIR: runtime_root & "/" & board_name
       output-transforms:
-        board_dir: BOARD_DIR
+        board_dir: data.board_dir
     transitions:
       success: t0_init_board
     failure_transitions:
@@ -24,13 +25,13 @@ steps:
 
   t0_init_board:
     description: Initialize board runtime directory
-    expects_data: [runtime_root, board_name]
+    expects_data: [board_dir]
     produces_data: [board_dir]
     handler:
       cli: node %%BOARDCLI_CMD%% init "%%BOARD_DIR%%"
       result-mode: exit-code
       input-transforms:
-        BOARD_DIR: runtime_root & "/" & board_name
+        BOARD_DIR: board_dir
       output-transforms:
         board_dir: BOARD_DIR
     transitions:
@@ -63,6 +64,7 @@ steps:
       cli: node ./handlers/write-prices-cli.js
       input-transforms:
         BOARD_DIR: board_dir
+        TMP_FILE_NAME: TMP_FILE_NAME
         PRICES: prices_t1
       output-transforms:
         prices_written_t1: data.wrote
@@ -116,6 +118,7 @@ steps:
       cli: node ./handlers/write-prices-cli.js
       input-transforms:
         BOARD_DIR: board_dir
+        TMP_FILE_NAME: TMP_FILE_NAME
         PRICES: prices_t2
       output-transforms:
         prices_written_t2: data.wrote
@@ -169,6 +172,7 @@ steps:
       cli: node ./handlers/write-prices-cli.js
       input-transforms:
         BOARD_DIR: board_dir
+        TMP_FILE_NAME: TMP_FILE_NAME
         PRICES: prices_t3
       output-transforms:
         prices_written_t3: data.wrote
