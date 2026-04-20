@@ -16,6 +16,7 @@ Browser view: open `examples/index.html`.
 | Board live-cards CLI (repo wrapper) | `node board-live-cards-cli.js <command>` or `board-live-cards-cli <command>` | Interacting with board runtime directly | Wrapper resolves dist/src CLI automatically |
 | Windows portfolio launcher | `examples\\board-live-cards\\portfolio-tracker\\portfolio-tracker.bat` | Quick run on Windows shell | Calls the Node portfolio tracker script |
 | `step-machine-cli.js` (root CLI) | `node step-machine-cli.js <flow.yaml> [--handlers <handlers.js>] [--data <json>]` | Running step-machine YAML flows from the command line | Supports inline/CLI handlers, JSONata transforms, handler_vars, command templating |
+| Step-machine scenario harness | `node examples/step-machine-cli/scenario-harness/run-scenario.js <scenario.json>` | Running reusable step-machine scenarios with shared flow + input + overrides | Supports multiple synthetic scenarios without duplicating orchestration logic |
 
 ## Executable Examples
 
@@ -41,13 +42,16 @@ Browser view: open `examples/index.html`.
 | `examples/graph-of-graphs/url-processing-pipeline.ts` | `npx tsx examples/graph-of-graphs/url-processing-pipeline.ts` | Outer DAG orchestrating batched inner DAGs | `next`, `apply`, `createInitialExecutionState`, `batch`, `resolveVariables`, `resolveConfigTemplates` |
 | `examples/graph-of-graphs/multi-stage-etl.ts` | `npx tsx examples/graph-of-graphs/multi-stage-etl.ts` | Mixed event-graph + step-machine nested orchestration | `next`, `apply`, `createInitialExecutionState`, `createStepMachine`, `batch`, `resolveVariables`, `resolveConfigTemplates` |
 | `examples/batch/batch-step-machine.ts` | `npx tsx examples/batch/batch-step-machine.ts` | Batch processing with per-item step-machine flow | `batch`, `createStepMachine` |
-| `examples/board-live-cards/portfolio-tracker/portfolio-tracker.js` | `node examples/board-live-cards/portfolio-tracker/portfolio-tracker.js` | End-to-end board-live-cards portfolio demo | board-live-cards CLI via demo simulator |
+| `examples/board-live-cards/portfolio-tracker/portfolio-tracker.js` | `node examples/board-live-cards/portfolio-tracker/portfolio-tracker.js` | End-to-end board-live-cards portfolio demo | board-live-cards CLI runtime orchestration |
 | `examples/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat` | `run-portfolio-tracker.bat` (from example folder) | Portfolio tracker orchestrated by step-machine YAML with JSONata transforms, handler_vars, failure_transitions | `step-machine-cli`, `board-live-cards-cli`, JSONata, `failure_transitions` |
+| `examples/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json` | `node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json` | Baseline reusable scenario using shared portfolio-tracker flow | step-machine scenario harness, input override framework |
+| `examples/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json` | `node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json` | Price-shock synthetic scenario using same orchestration flow | step-machine scenario harness, synthetic scenario variations |
 
 ## Notes
 
 | Item | Value |
 |---|---|
 | Recommended runner for TS examples | `npx tsx <file>` |
-| Recommended runner for scenarios | `node demo-simulator-cli.js examples/scenarios-with-demo-simulator/<name>.yaml` |
-| Simulator docs | `demo-simulator/README.md` |
+| Recommended runner for scenarios | `node examples/step-machine-cli/scenario-harness/run-scenario.js <scenario.json>` |
+| CLI docs | `docs/board-live-cards-cli.html` |
+| Step-machine docs | `docs/step-machine-cli.html` |

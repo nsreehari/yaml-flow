@@ -218,6 +218,12 @@
               <td>Running step-machine YAML flows from the command line with inline/CLI handlers</td>
               <td>Supports JSONata <code>input-transforms</code>/<code>output-transforms</code>, <code>handler_vars</code>, <code>%%PLACEHOLDER%%</code> templating, <code>result-mode: exit-code</code></td>
             </tr>
+            <tr>
+              <td><span class="chip">Scenario runner</span><br/>step-machine scenario harness</td>
+              <td><code>node examples/step-machine-cli/scenario-harness/run-scenario.js &lt;scenario.json&gt;</code><button class="copy-btn" data-copy="node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json">Copy</button></td>
+              <td>Running reusable synthetic scenarios over shared step-machine orchestration</td>
+              <td>Scenario files provide flow path, input path, and optional overrides</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -256,8 +262,10 @@
             <tr><td><code>examples/graph-of-graphs/url-processing-pipeline.ts</code></td><td><code>npx tsx examples/graph-of-graphs/url-processing-pipeline.ts</code></td><td>Outer DAG orchestrating batched inner DAGs</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code>, <code>batch</code>, <code>resolveVariables</code>, <code>resolveConfigTemplates</code></td></tr>
             <tr><td><code>examples/graph-of-graphs/multi-stage-etl.ts</code></td><td><code>npx tsx examples/graph-of-graphs/multi-stage-etl.ts</code></td><td>Mixed event-graph + step-machine nested orchestration</td><td><code>next</code>, <code>apply</code>, <code>createInitialExecutionState</code>, <code>createStepMachine</code>, <code>batch</code>, <code>resolveVariables</code>, <code>resolveConfigTemplates</code></td></tr>
             <tr><td><code>examples/batch/batch-step-machine.ts</code></td><td><code>npx tsx examples/batch/batch-step-machine.ts</code></td><td>Batch processing with per-item step-machine flow</td><td><code>batch</code>, <code>createStepMachine</code></td></tr>
-            <tr><td><code>examples/board-live-cards/portfolio-tracker/portfolio-tracker.js</code></td><td><code>node examples/board-live-cards/portfolio-tracker/portfolio-tracker.js</code></td><td>End-to-end board-live-cards portfolio demo</td><td>board-live-cards CLI via demo simulator</td></tr>
+            <tr><td><code>examples/board-live-cards/portfolio-tracker/portfolio-tracker.js</code></td><td><code>node examples/board-live-cards/portfolio-tracker/portfolio-tracker.js</code></td><td>End-to-end board-live-cards portfolio demo</td><td>board-live-cards CLI runtime orchestration</td></tr>
             <tr><td><code>examples/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat</code></td><td><code>run-portfolio-tracker.bat</code> (from example folder)</td><td>Portfolio tracker orchestrated by step-machine YAML with JSONata transforms, handler_vars, failure_transitions</td><td><code>step-machine-cli</code>, <code>board-live-cards-cli</code>, JSONata, <code>failure_transitions</code></td></tr>
+            <tr><td><code>examples/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td><code>node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-baseline.json</code></td><td>Baseline reusable scenario using shared portfolio-tracker flow</td><td>step-machine scenario harness, input override framework</td></tr>
+            <tr><td><code>examples/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td><code>node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></td><td>Price-shock synthetic scenario with same orchestration and alternate market data</td><td>step-machine scenario harness, synthetic scenario variations</td></tr>
           </tbody>
         </table>
       </div>

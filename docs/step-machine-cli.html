@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>step-machine CLI Reference</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --ink: #13233d;
+      --card: #ffffff;
+      --line: #d9e2f1;
+      --accent: #0a5acb;
+      --muted: #5b6a84;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at 95% 0%, #fff3e5 0, transparent 28%), var(--bg);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 20px auto;
+      padding: 0 16px 28px;
+    }
+    .hero {
+      background: linear-gradient(120deg, #6a2d00, #b14d00 60%, #df7a12);
+      color: white;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .hero h1 { margin: 0 0 8px; }
+    .hero p { margin: 0; opacity: 0.95; }
+    .card {
+      margin-top: 14px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.05rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      vertical-align: top;
+    }
+    code {
+      background: #fff4ea;
+      border: 1px solid #ffd9bc;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fafcff;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .muted { color: var(--muted); }
+    ul { margin: 8px 0 0 18px; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>step-machine CLI Reference</h1>
+      <p>Generic CLI runner for yaml-flow step-machine YAML files with inline handlers, subprocess handlers, JSONata transforms, and reusable scenario orchestration.</p>
+    </section>
+
+    <section class="card">
+      <h2>Invocation</h2>
+      <pre><code>step-machine-cli &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--data &lt;json&gt;]</code></pre>
+      <p class="muted">Equivalent repo wrapper usage: <code>node step-machine-cli.js &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--data &lt;json&gt;]</code></p>
+    </section>
+
+    <section class="card">
+      <h2>Arguments</h2>
+      <table>
+        <thead>
+          <tr><th>Argument</th><th>Purpose</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>&lt;step-flow.yaml&gt;</code></td><td>Required path to the step-machine flow file.</td><td>Resolved relative to current working directory.</td></tr>
+          <tr><td><code>--handlers &lt;step-handlers.js&gt;</code></td><td>Optional module exporting inline step handlers.</td><td>Used when steps declare <code>handler.inline</code>.</td></tr>
+          <tr><td><code>--data &lt;json&gt;</code></td><td>Optional initial input object for the run.</td><td>Must parse as a JSON object, not an array or scalar.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Step Handler Modes</h2>
+      <table>
+        <thead>
+          <tr><th>Mode</th><th>Config</th><th>Behavior</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Passthrough</td><td>No <code>handler</code> block</td><td>Step input passes through unchanged, filtered by <code>produces_data</code> if present.</td></tr>
+          <tr><td>Inline</td><td><code>handler: { inline: stepFn }</code></td><td>Calls a JS function from the handlers module.</td></tr>
+          <tr><td>CLI</td><td><code>handler: { cli: "..." }</code></td><td>Runs a subprocess with stdin JSON payload and stdout result parsing.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>CLI Handler Features</h2>
+      <ul>
+        <li><code>handler_vars</code>: top-level reusable variables. Literal strings by default; prefix with <code>=</code> for JSONata evaluation.</li>
+        <li><code>input-transforms</code>: JSONata expressions evaluated against step input to produce subprocess input.</li>
+        <li><code>output-transforms</code>: JSONata expressions evaluated against effective input plus subprocess result.</li>
+        <li><code>%%PLACEHOLDER%%</code> templating: command placeholders resolved from transformed input.</li>
+        <li><code>result-mode: exit-code</code>: treat zero exit as success without requiring JSON stdout.</li>
+        <li><code>produces_data</code>: final handler output is filtered to documented data keys.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Expected Output</h2>
+      <p>Successful runs print a normalized JSON result:</p>
+      <pre><code>{
+  "runId": "uuid",
+  "status": "completed",
+  "intent": "success",
+  "finalStep": "success_state",
+  "stepHistory": ["s1", "s2"],
+  "data": {
+    "some_key": true
+  }
+}</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Examples</h2>
+      <pre><code>node step-machine-cli.js examples/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml
+node step-machine-cli.js examples/step-machine-demo/two-step-math.flow.yaml --handlers examples/step-machine-demo/two-step-math-handlers.js --data '{"x": 7}'
+node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></pre>
+      <p class="muted">Portfolio example and reusable scenarios live under <code>examples/step-machine-cli/</code>.</p>
+    </section>
+  </div>
+</body>
+</html>

@@ -31,10 +31,10 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Goal: define simple manifest and guardrails before writing notes
   - Notes: pending user-guided discussion on required explanations
 
-- [ ] 5. board-live-cards CLI command reference page and docs linking
-  - Status: READY
+- [x] 5. board-live-cards CLI command reference page and docs linking
+  - Status: DONE
   - Goal: create docs page (for example docs/board-live-cards-cli.html) and link from docs index
-  - Notes: include command purpose, options, examples, expected outputs
+  - Notes: added docs/board-live-cards-cli.html and linked from README/examples catalog
 
 - [ ] 6. AI tool manifest for board-live-cards-cli (agent + MCP style)
   - Status: DISCUSS
@@ -51,15 +51,15 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Goal: improve browser rendering and define server payload shape for these card types
   - Notes: include example boards showing supported card varieties
 
-- [ ] 9. generalize portfolio-tracker into reusable demo simulation framework
-  - Status: PARTIAL (step-machine-cli based orchestration is in place)
+- [x] 9. generalize portfolio-tracker into reusable demo simulation framework
+  - Status: DONE
   - Goal: run multiple scenarios and synthetic situations with shared harness
-  - Notes: portfolio-tracker now runs as reusable step-machine-cli flow with e2e coverage; multi-scenario shared harness still open
+  - Notes: added step-machine scenario harness with reusable runner and multiple scenario files (baseline + price-shock)
 
-- [ ] 10. define standard status object shape for live cards and boards
-  - Status: DISCUSS
+- [x] 10. define standard status object shape for live cards and boards
+  - Status: DONE
   - Goal: stable status schema for runtime, UI, and integration contracts
-  - Notes: include state transitions and lifecycle semantics
+  - Notes: added `status --json` output contract and schema/board-status.schema.json (v1)
 
 ## Completed Recently
 
@@ -68,3 +68,5 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
 - [x] CLI-focused test suite stabilized for no-popup test mode
 - [x] add-cards glob support added to board-live-cards-cli
 - [x] schema parity guard test added for browser vs server live-cards schema
+- [x] board-live-cards status object schema (v1) + `status --json`
+- [x] step-machine scenario harness for reusable synthetic portfolio runs

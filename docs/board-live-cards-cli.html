@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>board-live-cards CLI Reference</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --ink: #13233d;
+      --card: #ffffff;
+      --line: #d9e2f1;
+      --accent: #0a5acb;
+      --muted: #5b6a84;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at 95% 0%, #e4fff6 0, transparent 28%), var(--bg);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 20px auto;
+      padding: 0 16px 28px;
+    }
+    .hero {
+      background: linear-gradient(120deg, #0f2f66, #0a5acb 60%, #149ce5);
+      color: white;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .hero h1 { margin: 0 0 8px; }
+    .hero p { margin: 0; opacity: 0.95; }
+    .card {
+      margin-top: 14px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.05rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      vertical-align: top;
+    }
+    code {
+      background: #eff4ff;
+      border: 1px solid #d7e5ff;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fafcff;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>board-live-cards CLI Reference</h1>
+      <p>Canonical command reference for board runtime initialization, card lifecycle operations, source execution, and status contracts.</p>
+    </section>
+
+    <section class="card">
+      <h2>Invocation</h2>
+      <pre><code>board-live-cards-cli &lt;command&gt; [options]</code></pre>
+      <p class="muted">Equivalent repo wrapper usage: <code>node board-live-cards-cli.js &lt;command&gt;</code></p>
+    </section>
+
+    <section class="card">
+      <h2>Commands</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>init &lt;dir&gt; [--task-executor &lt;script&gt;]</code></td><td>Create or reinitialize a board runtime directory.</td><td><code>board-live-cards-cli init ./my-board</code></td></tr>
+          <tr><td><code>status --rg &lt;dir&gt; [--json]</code></td><td>Print human status or machine-readable status object.</td><td><code>board-live-cards-cli status --rg ./my-board --json</code></td></tr>
+          <tr><td><code>add-cards --rg &lt;dir&gt; (--card &lt;file&gt; | --card-glob &lt;glob&gt;)</code></td><td>Add one or many card JSON files to the board.</td><td><code>board-live-cards-cli add-cards --rg ./my-board --card-glob "cards/*.json"</code></td></tr>
+          <tr><td><code>update-card --rg &lt;dir&gt; --card-id &lt;id&gt; [--restart]</code></td><td>Reload card JSON from disk and update task config.</td><td><code>board-live-cards-cli update-card --rg ./my-board --card-id portfolio-form --restart</code></td></tr>
+          <tr><td><code>remove-card --rg &lt;dir&gt; --id &lt;id&gt;</code></td><td>Remove a card/task from the board.</td><td><code>board-live-cards-cli remove-card --rg ./my-board --id portfolio-form</code></td></tr>
+          <tr><td><code>retrigger --rg &lt;dir&gt; --task &lt;name&gt;</code></td><td>Mark task as not-started and schedule reevaluation.</td><td><code>board-live-cards-cli retrigger --rg ./my-board --task price-fetch</code></td></tr>
+          <tr><td><code>task-completed --token &lt;token&gt; [--data &lt;json&gt;]</code></td><td>Task callback for successful completion.</td><td><code>board-live-cards-cli task-completed --token TOKEN --data '{"x":1}'</code></td></tr>
+          <tr><td><code>task-failed --token &lt;token&gt; [--error &lt;msg&gt;]</code></td><td>Task callback for failure.</td><td><code>board-live-cards-cli task-failed --token TOKEN --error "timeout"</code></td></tr>
+          <tr><td><code>run-sources --card &lt;file&gt; --token &lt;token&gt; --rg &lt;dir&gt;</code></td><td>Execute card source entries and report delivery/failure.</td><td><code>board-live-cards-cli run-sources --card cards/price-fetch.json --token TOKEN --rg ./my-board</code></td></tr>
+          <tr><td><code>run-source-fetch --in &lt;file&gt; --out &lt;file&gt; [--err &lt;file&gt;]</code></td><td>Execute one source definition using <code>source.cli</code>.</td><td><code>board-live-cards-cli run-source-fetch --in source.json --out out.json</code></td></tr>
+          <tr><td><code>process-accumulated-events --rg &lt;dir&gt; [--inline-loop]</code></td><td>Drain accumulated board journal events.</td><td><code>board-live-cards-cli process-accumulated-events --rg ./my-board</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Status Contract (v1)</h2>
+      <p><code>status --json</code> emits a stable status object:</p>
+      <pre><code>{
+  "schema_version": "v1",
+  "board": { "path": "C:/.../board" },
+  "summary": { "task_count": 4 },
+  "schedule": {
+    "eligible": 0,
+    "pending": 0,
+    "blocked": 0,
+    "unresolved": 0
+  },
+  "tasks": [
+    {
+      "name": "price-fetch",
+      "status": "completed",
+      "data_keys": ["prices"],
+      "error": "optional"
+    }
+  ]
+}</code></pre>
+      <p class="muted">Schema file: <code>schema/board-status.schema.json</code></p>
+    </section>
+
+    <section class="card">
+      <h2>Source Execution Notes</h2>
+      <ul>
+        <li><code>source.cli</code> is parsed with quote-aware argument splitting and executed without shell wrapping.</li>
+        <li>Stdout is captured and written to source output artifacts.</li>
+        <li>Timeout defaults to 120s unless overridden by <code>source.timeout</code>.</li>
+      </ul>
+    </section>
+  </div>
+</body>
+</html>

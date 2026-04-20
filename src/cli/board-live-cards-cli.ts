@@ -855,6 +855,7 @@ function cmdInit(args: string[]): void {
 
 function cmdStatus(args: string[]): void {
   const rgIdx = args.indexOf('--rg');
+  const asJson = args.includes('--json');
   const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   if (!dir) { console.error('Usage: board-live-cards status --rg <dir>'); process.exit(1); }
 
@@ -863,18 +864,71 @@ function cmdStatus(args: string[]): void {
   const taskNames = Object.keys(tasks);
   const sched = schedule(live);
 
-  console.log(`Board: ${path.resolve(dir)}`);
-  console.log(`Tasks: ${taskNames.length}`);
+  const statusObject: BoardStatusObject = {
+    schema_version: 'v1',
+    board: {
+      path: path.resolve(dir),
+    },
+    summary: {
+      task_count: taskNames.length,
+    },
+    schedule: {
+      eligible: sched.eligible.length,
+      pending: sched.pending.length,
+      blocked: sched.blocked.length,
+      unresolved: sched.unresolved.length,
+    },
+    tasks: taskNames.sort().map((name) => {
+      const t = tasks[name] as { status: string; data?: Record<string, unknown>; error?: string };
+      return {
+        name,
+        status: t.status,
+        data_keys: t.data ? Object.keys(t.data).sort() : [],
+        error: t.error,
+      };
+    }),
+  };
+
+  if (asJson) {
+    console.log(JSON.stringify(statusObject, null, 2));
+    return;
+  }
+
+  console.log(`Board: ${statusObject.board.path}`);
+  console.log(`Tasks: ${statusObject.summary.task_count}`);
   console.log('');
 
-  for (const name of taskNames.sort()) {
-    const t = tasks[name];
-    const dataKeys = t.data ? Object.keys(t.data).join(', ') : '';
-    console.log(`  ${t.status.padEnd(12)} ${name}${dataKeys ? ` — [${dataKeys}]` : ''}`);
+  for (const task of statusObject.tasks) {
+    const dataKeys = task.data_keys.join(', ');
+    console.log(`  ${task.status.padEnd(12)} ${task.name}${dataKeys ? ` — [${dataKeys}]` : ''}`);
   }
 
   console.log('');
-  console.log(`Schedule: ${sched.eligible.length} eligible, ${sched.pending.length} pending, ${sched.blocked.length} blocked, ${sched.unresolved.length} unresolved`);
+  console.log(`Schedule: ${statusObject.schedule.eligible} eligible, ${statusObject.schedule.pending} pending, ${statusObject.schedule.blocked} blocked, ${statusObject.schedule.unresolved} unresolved`);
+}
+
+export interface BoardStatusTask {
+  name: string;
+  status: string;
+  data_keys: string[];
+  error?: string;
+}
+
+export interface BoardStatusObject {
+  schema_version: 'v1';
+  board: {
+    path: string;
+  };
+  summary: {
+    task_count: number;
+  };
+  schedule: {
+    eligible: number;
+    pending: number;
+    blocked: number;
+    unresolved: number;
+  };
+  tasks: BoardStatusTask[];
 }
 
 function cmdTaskCompleted(args: string[]): void {
@@ -1387,8 +1441,9 @@ BOARD MANAGEMENT
     If --task-executor is given, writes <dir>/.task-executor with the script path.
     Re-running init on an existing board is safe; --task-executor updates the registration.
 
-  status --rg <dir>
+  status --rg <dir> [--json]
     Print the current task status of every card in the board.
+    --json emits a stable machine-readable status object.
 
 CARD MANAGEMENT
   add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)
@@ -1464,7 +1519,7 @@ BOARD-LIVE-CARDS BUILT-IN EXECUTOR
     "sources": [{ "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
     
   The source.cli command is executed with:
-    - Shell execution (allows pipes, redirects, environment variables, etc.)
+    - Direct command invocation (no shell; quote-aware argument parsing)
     - Stdout is captured and delivered to the card as-is
     - Timeout from source.timeout (default 120s)
     

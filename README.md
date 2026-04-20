@@ -25,6 +25,11 @@ board-live-cards-cli --help
 
 This is the canonical black-box entrypoint for external usage.
 
+Command reference: `docs/board-live-cards-cli.html`
+Status JSON schema: `schema/board-status.schema.json`
+
+Step-machine CLI reference: `docs/step-machine-cli.html`
+
 ## Which Mode Do I Need?
 
 yaml-flow ships two execution models. They solve fundamentally different problems.

@@ -189,6 +189,32 @@ describe('board-live-cards CLI', () => {
     expect(output).toContain('Tasks: 0');
     expect(output).toContain('0 eligible');
   });
+
+  it('cli status --rg <dir> --json prints stable status object', () => {
+    const dir = path.join(freshDir(), 'board');
+    initBoard(dir);
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
+
+    cli(['status', '--rg', dir, '--json']);
+    spy.mockRestore();
+
+    const output = logs.join('\n').trim();
+    const parsed = JSON.parse(output) as {
+      schema_version: string;
+      board: { path: string };
+      summary: { task_count: number };
+      schedule: { eligible: number; pending: number; blocked: number; unresolved: number };
+      tasks: unknown[];
+    };
+
+    expect(parsed.schema_version).toBe('v1');
+    expect(parsed.board.path).toContain(path.resolve(dir));
+    expect(parsed.summary.task_count).toBe(0);
+    expect(parsed.schedule).toEqual({ eligible: 0, pending: 0, blocked: 0, unresolved: 0 });
+    expect(parsed.tasks).toEqual([]);
+  });
 });
 
 // ============================================================================

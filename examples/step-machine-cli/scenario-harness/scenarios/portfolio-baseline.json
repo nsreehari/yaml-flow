@@ -1,0 +1,5 @@
+{
+  "id": "portfolio-baseline",
+  "flow": "../../portfolio-tracker/portfolio-tracker.flow.yaml",
+  "input": "../../portfolio-tracker/portfolio-tracker.input.json"
+}

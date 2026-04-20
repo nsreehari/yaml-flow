@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yaml-flow.dev/schema/board-status.schema.json",
+  "title": "Board Status Object",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "board", "summary", "schedule", "tasks"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_count"],
+      "properties": {
+        "task_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "pending", "blocked", "unresolved"],
+      "properties": {
+        "eligible": { "type": "integer", "minimum": 0 },
+        "pending": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "unresolved": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "data_keys"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string" },
+          "data_keys": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "error": { "type": "string" }
+        }
+      }
+    }
+  }
+}
