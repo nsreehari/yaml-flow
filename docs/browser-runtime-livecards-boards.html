@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>yaml-flow Browser Runtime: LiveCards & Boards</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --ink: #15243b;
+      --card: #ffffff;
+      --line: #d8e1ef;
+      --accent: #0f6bff;
+      --muted: #596a82;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at 90% 0%, #eef9ff 0, transparent 32%), var(--bg);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1050px;
+      margin: 20px auto;
+      padding: 0 16px 28px;
+    }
+    .hero {
+      background: linear-gradient(120deg, #004c5f, #00728d 60%, #0ea5c6);
+      color: white;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .card {
+      margin-top: 14px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    code {
+      background: #eef8ff;
+      border: 1px solid #d6ebff;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fafcff;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+    ul { margin-left: 18px; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Browser Runtime: LiveCards & Boards</h1>
+      <p>The files in <code>browser/</code> are a public browser-facing runtime surface that complements yaml-flow library APIs and CLIs. They are plain scripts — no bundler required — designed to be dropped into any HTML page.</p>
+    </section>
+
+    <section class="card">
+      <h2>Core Concepts</h2>
+
+      <h3>LiveCard (Node)</h3>
+      <p>A <strong>LiveCard</strong> is a JSON entity (also called a node) that declares its data shape and visual presentation declaratively. Behavior is determined by which sections are present — there is no explicit <code>type</code> field:</p>
+      <ul>
+        <li><code>id</code> — unique identifier within a board</li>
+        <li><code>state</code> — seed data; the card's persistent data namespace, mutated by sources at runtime</li>
+        <li><code>requires</code> — upstream node IDs whose output tokens this card depends on (read-only at runtime)</li>
+        <li><code>provides</code> — output tokens exposed to downstream cards</li>
+        <li><code>sources</code> — opaque data-fetch descriptors; dispatched by the task executor, not the browser engine. Only <code>bindTo</code> and <code>outputFile</code> matter to the engine; all other fields are passed verbatim.</li>
+        <li><code>compute</code> — ordered JSONata expressions derived from <code>state.*</code>, <code>requires.*</code>, and earlier compute results; writes to ephemeral <code>computed_values.*</code> (never persisted)</li>
+        <li><code>view</code> — declarative rendering spec; if present the node renders as a visual card; if absent but <code>sources</code> are present, it renders as a <strong>source pill</strong> — a compact inline indicator showing the source name and fetch status, without a full card UI</li>
+      </ul>
+
+      <h3>Board</h3>
+      <p>A <strong>Board</strong> is a collection of LiveCard nodes arranged in a 2D layout. It wraps an engine and a DOM container and manages spatial layout, node addition/removal, and two display modes:</p>
+      <ul>
+        <li><strong>board mode</strong> — standard grid/list layout of cards</li>
+        <li><strong>canvas mode</strong> — free-form positioning with dependency edges visible</li>
+      </ul>
+      <p>Boards are created via <code>LiveCard.Board(engine, containerEl, { nodes, positions?, mode, canvas })</code>.</p>
+
+      <h3>Engine</h3>
+      <p>The <strong>engine</strong> (<code>LiveCard.init({...})</code>) is the core runtime object. It manages rendering individual nodes into DOM elements, tracks subscriptions between dependent nodes, runs compute expressions when upstream data changes, and dispatches notifications. Multiple boards can share one engine.</p>
+    </section>
+
+    <section class="card">
+      <h2>What Is Shipped</h2>
+      <ul>
+        <li>
+          <code>browser/live-cards.js</code> — the Board/Canvas engine and card rendering runtime.
+          Exposes <code>LiveCard.init(cfg)</code> to create an engine and <code>LiveCard.Board(engine, el, opts)</code> to mount a board.
+          Depends on <strong>Bootstrap 5</strong> for layout; uses <code>card-compute.js</code> for compute expressions; optionally uses <strong>Chart.js</strong> for chart elements.
+        </li>
+        <li>
+          <code>browser/card-compute.js</code> — the JSONata-powered compute engine for LiveCard nodes.
+          Isomorphic: the same logic is also available as the <code>yaml-flow/card-compute</code> npm import for Node.js / bundler use.
+          Requires <strong>JSONata</strong> to be loaded first (<code>&lt;script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"&gt;</code>).
+          API: <code>CardCompute.run(node)</code>, <code>CardCompute.eval(expr, node)</code>, <code>CardCompute.resolve(node, path)</code>, <code>CardCompute.validate(node)</code>.
+        </li>
+        <li>
+          <code>browser/ingest-board.js</code> — a specialized zero-I/O board component for <strong>batch ingest UIs</strong> (chat + file-upload + confirm/discard workflow).
+          All side-effects (fetch, SSE, POST) are delegated to the host via required callbacks (<code>onSend</code>, <code>onConfirm</code>, <code>onDiscard</code>).
+          Wraps a <code>LiveCard</code> engine internally; an existing engine can be passed via <code>opts.engine</code>.
+        </li>
+        <li>
+          <code>browser/live-cards.schema.json</code> — the live-cards JSON Schema contract, mirrored here so browser consumers can validate card definitions without a server-side dependency.
+        </li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Runtime Dependencies</h2>
+      <ul>
+        <li><strong>Bootstrap 5</strong> — required by <code>live-cards.js</code> for layout, modals, and component classes</li>
+        <li><strong>JSONata</strong> — required by <code>card-compute.js</code>; must be loaded before it</li>
+        <li><strong>Chart.js</strong> — optional; if present enables chart elements in card views; falls back to a table if absent</li>
+        <li><strong>marked</strong> — optional; if present enables markdown rendering in card text elements</li>
+        <li><strong>DOMPurify</strong> — optional; recommended alongside marked to sanitize rendered HTML</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>How It Fits</h2>
+      <p>The browser runtime is not a separate product. It is the browser-facing layer of the live-cards / boards package, which spans:</p>
+      <ul>
+        <li><strong>Server side</strong>: <code>board-live-cards-cli</code> orchestrates task lifecycle, manages board state on disk, and communicates with the browser page via SSE or file polling.</li>
+        <li><strong>Compute</strong>: <code>yaml-flow/card-compute</code> (Node) / <code>browser/card-compute.js</code> (browser) — same isomorphic engine for JSONata expressions in both environments.</li>
+        <li><strong>Browser side</strong>: <code>browser/live-cards.js</code> renders cards and boards, re-runs compute when upstream data changes, and delegates all data-fetch and state-persistence side-effects back to the host.</li>
+      </ul>
+      <p class="muted">Note: <code>sources[]</code> on nodes are opaque to the browser engine — only <code>bindTo</code> and <code>outputFile</code> are consumed by the engine. All other fields are owned by the task executor and passed through verbatim.</p>
+    </section>
+
+    <section class="card">
+      <h2>Typical Usage Pattern</h2>
+      <pre><code>&lt;!-- 1. Load dependencies --&gt;
+&lt;script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"&gt;&lt;/script&gt;
+&lt;link rel="stylesheet" href="bootstrap.min.css" /&gt;
+&lt;script src="bootstrap.bundle.min.js"&gt;&lt;/script&gt;
+
+&lt;!-- 2. Load browser runtime --&gt;
+&lt;script src="browser/card-compute.js"&gt;&lt;/script&gt;
+&lt;script src="browser/live-cards.js"&gt;&lt;/script&gt;
+
+&lt;script&gt;
+// 3. Build a lookup map from your card definitions
+const nodesMap = Object.fromEntries(cardDefinitions.map(n => [n.id, n]));
+
+// 4. Create engine — host supplies resolve + side-effect callbacks
+const engine = LiveCard.init({
+  resolve:      id =&gt; nodesMap[id],          // return node by id
+  onPatch:      (id, patch) =&gt; { /* persist sources/compute results */ },
+  onPatchState: (id, patch) =&gt; { /* persist state mutations */ },
+  onRefresh:    () =&gt; { /* re-fetch board state */ },
+});
+
+// 5. Mount a board
+const board = LiveCard.Board(engine, document.getElementById('board'), {
+  nodes: cardDefinitions,
+  mode: 'board',
+});
+&lt;/script&gt;</code></pre>
+      <p class="muted">Server-side CLI (<code>board-live-cards-cli</code>) or your own task executor handles all data fetching, source dispatch, and disk state management. The browser engine is a pure render + compute layer.</p>
+    </section>
+
+    <section class="card">
+      <h2>Built-in View Element Kinds</h2>
+      <p>Each card's <code>view.elements[]</code> array defines what renders on that card. Each element has a required <code>kind</code> field and an optional <code>label</code>. Data-display elements take a <code>data.bind</code> path pointing into the card's data namespaces — <code>state.*</code>, <code>requires.*</code>, <code>computed_values.*</code>, or <code>sources.*</code>. Interactive elements like <code>chat</code>, <code>file-upload</code>, and <code>actions</code> do not require a data binding. The 16 built-in kinds are:</p>
+
+      <h3>Data Display</h3>
+      <ul>
+        <li><strong><code>table</code></strong> — render an array of objects as a table</li>
+        <li><strong><code>list</code></strong> — render an array as a bulleted list (falls back to table if no data)</li>
+        <li><strong><code>chart</code></strong> — render array data as a line/bar/pie chart (requires Chart.js; falls back to table if absent)</li>
+        <li><strong><code>metric</code></strong> — large, bold number with optional label and detail text</li>
+        <li><strong><code>badge</code></strong> — colored badge/pill with status or category</li>
+      </ul>
+
+      <h3>Text & Markdown</h3>
+      <ul>
+        <li><strong><code>text</code></strong> — plain text (inline or wrapping)</li>
+        <li><strong><code>markdown</code></strong> — markdown-rendered text (requires marked; falls back to plain text if absent)</li>
+        <li><strong><code>narrative</code></strong> — block of markdown for longer-form narrative content</li>
+      </ul>
+
+      <h3>User Input & Interaction</h3>
+      <ul>
+        <li><strong><code>form</code></strong> — declarative form with text, checkbox, select, and textarea fields; writes back to card state via optional <code>writeTo</code></li>
+        <li><strong><code>filter</code></strong> — key-value input fields bound to state; typically used for filtering or search parameters</li>
+        <li><strong><code>notes</code></strong> — textarea with markdown preview side-by-side; persistent in state</li>
+        <li><strong><code>todo</code></strong> — checklist of todo items; each can be marked complete</li>
+      </ul>
+
+      <h3>Status & Alerts</h3>
+      <ul>
+        <li><strong><code>alert</code></strong> — colored alert box (green, amber, red) with status dot and text</li>
+      </ul>
+
+      <h3>Special Elements</h3>
+      <ul>
+        <li><strong><code>chat</code></strong> — built-in chat interface (messages + input); commonly used in IngestBoard batch cards</li>
+        <li><strong><code>file-upload</code></strong> — drag-drop or click-to-upload zone; typically paired with chat</li>
+        <li><strong><code>actions</code></strong> — buttons or action controls (e.g., confirm, discard, retry); host-wired callbacks</li>
+      </ul>
+
+      <h3>Custom Elements</h3>
+      <p>Register custom rendering functions via <code>engine.registerRenderer(name, fn)</code>. The function receives <code>(data, el, elemDef, node)</code> and renders into the DOM element.</p>
+      <pre><code>// Register a custom "timeline" renderer
+engine.registerRenderer('timeline', (data, el, elemDef, node) => {
+  // data is the resolved JSONata expression
+  // el is the container div
+  // elemDef is the view element definition { kind, label, data, ... }
+  // node is the full LiveCard node
+  el.innerHTML = '&lt;div class="timeline"&gt;...&lt;/div&gt;';
+});</code></pre>
+      <p>Then use it in card views:</p>
+      <pre><code>"view": {
+  "elements": [
+    { "kind": "timeline", "label": "Activity Feed", "data": { "bind": "state.events" } }
+  ]
+}</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>IngestBoard: Specialized Board for Interactive Batch File Upload</h2>
+      <p><code>IngestBoard</code> is a specialized <strong>Board</strong> component built for interactive batch document ingestion workflows. It displays multiple batches as a board grid; each batch is a <strong>LiveCard node</strong> with an integrated chat element for user interaction. All I/O is zero — the component is pure; all side-effects delegate to host callbacks.</p>
+
+      <h3>Architecture</h3>
+      <ul>
+        <li><strong>IngestBoard</strong> = a Board instance configured for batch workflows</li>
+        <li><strong>Each batch</strong> = one LiveCard node with <code>id</code>, <code>state</code>, <code>view</code>, and a built-in chat element</li>
+        <li><strong>Chat interaction</strong> = built into the card; user messages + host responses appear in the card itself</li>
+        <li><strong>Actions</strong> = confirm (trigger backend processing) and discard (remove the batch)</li>
+      </ul>
+      <p>Because each batch is a full LiveCard, it can also have <code>requires</code>, <code>provides</code>, <code>compute</code>, and <code>sources</code> — making batch cards as rich as any other card on a board.</p>
+
+      <h3>What Is a Batch?</h3>
+      <p>A <strong>batch</strong> is a logical grouping of items (documents, records, transactions, etc.) that arrive together and need interactive review or feedback before processing. Each batch is one LiveCard on the board. Examples:</p>
+      <ul>
+        <li>A batch of uploaded documents needing OCR validation, data extraction, or enrichment</li>
+        <li>A batch of user records needing quality review or entity resolution</li>
+        <li>A batch of transactions flagged for fraud review or compliance checks</li>
+        <li>A batch of form submissions needing clarification, correction, or approval</li>
+      </ul>
+      <p>Users interact with each batch card via chat (ask questions, provide feedback), upload additional files, confirm it's ready (triggering backend processing), or discard it. The board displays all batches in a grid; users work through them one by one or in parallel.</p>
+
+      <h3>API</h3>
+      <pre><code>const ib = IngestBoard.create(containerEl, {
+  onSend:    (batchId, { text, files }) => { /* host: upload + message */ },
+  onConfirm: (batchId) => { /* host: POST confirm → SSE → ib.setBatches() */ },
+  onDiscard: (batchId) => { /* host: POST discard → ib.setBatches() */ },
+  onViewChat: (batchId) => { /* optional: fetch chat history */ },
+  onRefresh: () => { /* optional: re-fetch batches */ },
+  engine: existingLiveCardEngine,  // optional; one created if omitted
+  markdown: markedFn,              // optional
+  sanitize: DOMPurifyFn,           // optional
+});
+
+// Render batches — each becomes a LiveCard on the board
+ib.setBatches(batchArray);
+
+// Get element APIs for a batch card
+ib.getChat(batchId);               // chat element API
+ib.getFileUpload(batchId);         // file-upload element API
+ib.getActions(batchId);            // actions element API
+ib.showChatModal(batchId, msgs);   // open Bootstrap modal with chat history
+
+// Cleanup
+ib.destroy();</code></pre>
+
+      <h3>Callback Flow</h3>
+      <ul>
+        <li><code>onSend</code> — required. User types message + attaches files in the batch card's chat. Host collects them, uploads to server, awaits response, then calls <code>ib.getChat(batchId).appendMessage('assistant', response)</code> to display the result in the card.</li>
+        <li><code>onConfirm</code> — required. User clicks "Confirm" on batch card. Host POSTs confirmation to server, subscribes to SSE updates, and as new state arrives calls <code>ib.setBatches(updatedArray)</code> to re-render the board with live updates.</li>
+        <li><code>onDiscard</code> — required. User clicks "Discard" on batch card. Host POSTs discard request, then calls <code>ib.setBatches(newArray)</code> to refresh the board (removing or updating the discarded batch).</li>
+      </ul>
+
+      <h3>Example: Document Ingest with Chat</h3>
+      <pre><code>// Batch schema — each is a LiveCard node
+const batches = [
+  {
+    id: 'batch-001',
+    meta: { title: 'Invoice Batch - 2025-04-15' },
+    state: { status: 'pending_review', document_count: 5 },
+    view: {
+      elements: [
+        { kind: 'text', label: 'Status', data: { bind: 'state.status' } },
+        { kind: 'text', label: 'Documents', data: { bind: 'state.document_count' } },
+        { kind: 'chat', label: 'Questions?' },  // Built-in chat element
+      ],
+    },
+  },
+  // ... more batches
+];
+
+// Mount IngestBoard
+const ib = IngestBoard.create(document.getElementById('ingest-board'), {
+  onSend: async (batchId, { text, files }) => {
+    const chat = ib.getChat(batchId);
+    // 1. Upload files
+    const fileData = await uploadFiles(files);
+    // 2. POST message + files
+    const response = await fetch('/batch/' + batchId + '/message', {
+      method: 'POST',
+      body: JSON.stringify({ text, fileData }),
+    });
+    // 3. Append assistant response to the batch card's chat
+    chat.appendMessage('assistant', await response.text());
+  },
+  onConfirm: (batchId) => {
+    // 1. POST confirmation to server
+    // 2. Open EventSource to /batch/:id/confirm
+    // 3. Stream updates back to client
+    // 4. As updates arrive, call ib.setBatches() to refresh board
+    const eventSource = new EventSource('/batch/' + batchId + '/confirm');
+    eventSource.onmessage = (e) => {
+      const updated = JSON.parse(e.data);
+      ib.setBatches(updated);
+    };
+  },
+  onDiscard: async (batchId) => {
+    // POST and remove batch from board
+    await fetch('/batch/' + batchId, { method: 'DELETE' });
+    ib.setBatches([]);  // or fetch fresh list
+  },
+});
+
+// Render the batches
+ib.setBatches(batches);</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Related Docs</h2>
+      <ul>
+        <li><a href="index.html">Docs index</a></li>
+        <li><a href="board-live-cards-cli.html">board-live-cards-cli reference</a></li>
+        <li><a href="step-machine-cli.html">step-machine-cli reference</a></li>
+        <li><a href="../examples/livecards-browser/index.html">LiveCards browser example</a></li>
+      </ul>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LiveCards Browser Example — yaml-flow</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsonata@2.0.5/jsonata.min.js"></script>
+  <script src="../../browser/card-compute.js"></script>
+  <script src="../../browser/live-cards.js"></script>
+  <style>
+    body  { background: #f4f7fb; padding: 24px; font-family: system-ui, sans-serif; }
+    h1    { font-size: 1.4rem; margin-bottom: 4px; color: #0f6bff; }
+    .meta { color: #596a82; font-size: 0.9rem; margin-bottom: 20px; }
+    .section-label { font-size: 0.72rem; font-weight: 600; color: #596a82; text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 8px; }
+    pre.code-box { background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 14px; font-size: 11.5px; overflow-x: auto; }
+    #board { padding: 4px 0; }
+  </style>
+</head>
+<body>
+<h1>LiveCards Browser Example</h1>
+<p class="meta">
+  Static seed-data portfolio board using <code>browser/live-cards.js</code> + <code>browser/card-compute.js</code>.
+  No server. No bundler. | <a href="../../docs/browser-runtime-livecards-boards.html">Browser runtime docs</a>
+</p>
+<p class="section-label">Live Board</p>
+<div id="board"></div>
+<p class="section-label">Node definitions (seed data)</p>
+<pre class="code-box" id="nodeDefsOutput"></pre>
+<script>
+// ---------------------------------------------------------------------------
+// HOW requires WORKS IN THE BROWSER
+//
+// CardCompute.run(node) builds a JSONata context:
+//   { state, requires, sources, computed_values }
+// node.requires must be an OBJECT keyed by token name, e.g.:
+//   { holdings: [...], prices: { AAPL: 185 } }
+//
+// In the full CLI flow the board engine resolves upstream provides and injects
+// that object. This demo replicates that step in resolveAndCompute() below.
+// ---------------------------------------------------------------------------
+
+const nodeDefs = [
+  // ---- Seed-data nodes (state only, no compute) ----------------------------
+  {
+    id: 'holdings-data',
+    meta: { title: 'Holdings (seed data)' },
+    state: {
+      rows: [
+        { symbol: 'AAPL', qty: 10 },
+        { symbol: 'MSFT', qty: 5  },
+        { symbol: 'TSLA', qty: 8  }
+      ]
+    },
+    provides: [{ bindTo: 'holdings', src: 'state.rows' }],
+    view: {
+      elements: [
+        { kind: 'table', label: 'Holdings', data: { bind: 'state.rows', columns: ['symbol', 'qty'] } }
+      ]
+    }
+  },
+  {
+    id: 'prices-data',
+    meta: { title: 'Prices (seed data)' },
+    state: {
+      prices: { AAPL: 185.4, MSFT: 420.1, TSLA: 172.5 }
+    },
+    provides: [{ bindTo: 'prices', src: 'state.prices' }],
+    view: {
+      elements: [
+        { kind: 'text', label: 'AAPL ($)', data: { bind: 'state.prices.AAPL' } },
+        { kind: 'text', label: 'MSFT ($)', data: { bind: 'state.prices.MSFT' } },
+        { kind: 'text', label: 'TSLA ($)', data: { bind: 'state.prices.TSLA' } }
+      ]
+    }
+  },
+
+  // ---- Compute nodes -------------------------------------------------------
+  {
+    id: 'positions',
+    meta: { title: 'Positions' },
+    // requires is an array of token names — resolveAndCompute() replaces it
+    // with a resolved object before CardCompute.run() is called.
+    requires: ['holdings', 'prices'],
+    provides: [{ bindTo: 'positions', src: 'computed_values.rows' }],
+    state: {},
+    compute: [
+      {
+        bindTo: 'rows',
+        expr: '$map(requires.holdings, function($h) {{ "symbol": $h.symbol, "qty": $h.qty, "price": $lookup(requires.prices, $h.symbol), "value": $round($h.qty * $lookup(requires.prices, $h.symbol), 2) }})'
+      }
+    ],
+    view: {
+      elements: [
+        { kind: 'table', label: 'Positions', data: { bind: 'computed_values.rows', columns: ['symbol', 'qty', 'price', 'value'] } }
+      ]
+    }
+  },
+  {
+    id: 'summary',
+    meta: { title: 'Portfolio Summary' },
+    requires: ['positions'],
+    state: {},
+    compute: [
+      { bindTo: 'total',     expr: '$sum(requires.positions.value)' },
+      { bindTo: 'topSymbol', expr: 'requires.positions[value = $max(requires.positions.value)].symbol' }
+    ],
+    view: {
+      elements: [
+        { kind: 'metric', label: 'Total Value ($)', data: { bind: 'computed_values.total'    } },
+        { kind: 'text',   label: 'Top Holding',    data: { bind: 'computed_values.topSymbol' } },
+        { kind: 'badge',  label: 'Status',         data: { value: 'fresh'                   } }
+      ]
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
+// Deep-get helper: resolveSrc(node, 'computed_values.rows') → node.computed_values.rows
+// ---------------------------------------------------------------------------
+function resolveSrc(node, src) {
+  return src.split('.').reduce(function (v, k) { return v == null ? undefined : v[k]; }, node);
+}
+
+// ---------------------------------------------------------------------------
+// resolveAndCompute — run nodes in definition order.
+// For each node with compute[], replace the requires array with a resolved
+// object so that JSONata expressions like requires.holdings work correctly.
+// ---------------------------------------------------------------------------
+async function resolveAndCompute(nodes) {
+  // Build lazy getters for every provided token
+  var getters = {};
+  nodes.forEach(function (n) {
+    if (!n.provides) return;
+    n.provides.forEach(function (p) {
+      var node = n, src = p.src;
+      getters[p.bindTo] = function () { return resolveSrc(node, src); };
+    });
+  });
+
+  for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i];
+    if (!node.compute || !node.compute.length) continue;
+
+    // Replace array with resolved object
+    var ids = Array.isArray(node.requires) ? node.requires : [];
+    if (ids.length) {
+      var resolved = {};
+      ids.forEach(function (t) { resolved[t] = getters[t] ? getters[t]() : undefined; });
+      node.requires = resolved;
+    }
+
+    await CardCompute.run(node);
+
+    // Refresh getters so downstream nodes see updated computed_values
+    if (node.provides) {
+      node.provides.forEach(function (p) {
+        var n2 = node, s = p.src;
+        getters[p.bindTo] = function () { return resolveSrc(n2, s); };
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mount
+// ---------------------------------------------------------------------------
+async function main() {
+  document.getElementById('nodeDefsOutput').textContent = JSON.stringify(nodeDefs, null, 2);
+
+  await resolveAndCompute(nodeDefs);
+
+  var nodesMap = {};
+  nodeDefs.forEach(function (n) { nodesMap[n.id] = n; });
+
+  var engine = LiveCard.init({
+    resolve:      function (id) { return nodesMap[id]; },
+    onPatch:      function () {},
+    onPatchState: function () {}
+  });
+
+  LiveCard.Board(engine, document.getElementById('board'), {
+    nodes: nodeDefs,
+    mode: 'board'
+  });
+}
+
+main();
+</script>
+</body>
+</html>

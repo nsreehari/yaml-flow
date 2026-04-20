@@ -128,8 +128,9 @@
   <div class="wrap">
     <section class="hero">
       <h1>yaml-flow</h1>
-      <p>Two workflow engines in one package. Pick the model that fits your problem.</p>
-      <p style="font-size: 1rem; margin: 12px 0;"><strong>Install:</strong> <code>npm install yaml-flow</code></p>
+      <p>Workflow orchestration framework with two execution models: sequential step machines and reactive dependency graphs. Powers compliance engines, agent routing, multi-stage pipelines, eligibility systems, and interactive task boards.</p>
+      <p style="font-size: 1rem; margin: 12px 0;"><strong>Consume as:</strong> npm library • CLI tools • drop-in browser runtime</p>
+      <p style="font-size: 0.95rem; margin: 12px 0;"><strong>Server:</strong> <code>npm install yaml-flow</code> &nbsp; <strong>Browser:</strong> <a href="browser-runtime-livecards-boards.html">see runtime setup →</a></p>
       <div class="badges">
         <span>MIT License</span> • 
         <span><a href="https://www.npmjs.com/package/yaml-flow" style="color: inherit;">npm package</a></span>
@@ -152,14 +153,16 @@
         </div>
         <div class="card">
             <h3>Live-Cards / Boards Package</h3>
-            <p>Reusable higher-level abstraction built using yaml-flow engines, schemas, CLI orchestration, and browser runtime pieces. It includes:</p>
+            <p>Complete package for building task-based, dependency-driven board UIs with sources (data fetches), computed fields (JSONata), and interactive rendering. Spans server-side orchestration, browser-side rendering, and shared compute logic:</p>
           <ul style="margin: 8px 0;">
-              <li><code>board-live-cards-cli</code></li>
-              <li>browser runtime assets</li>
-              <li><code>yaml-flow/card-compute</code></li>
+              <li><code>board-live-cards-cli</code> — server-side task orchestrator; handles source dispatch, completion gating, and board state management</li>
+              <li><code>browser/*</code> runtime — client-side engine for rendering cards/boards and evaluating JSONata compute expressions (<code>live-cards.js</code>, <code>card-compute.js</code>, <code>ingest-board.js</code>)</li>
+              <li><code>yaml-flow/card-compute</code> — isomorphic (Node + browser) JSONata compute engine; also shipped as <code>browser/card-compute.js</code></li>
+              <li><code>live-cards.schema.json</code> — JSON Schema contract for card definitions</li>
           </ul>
-            <p class="muted">Treat this as a package layer, not just a demo. It bundles the pieces needed to build and operate LiveCards / Boards.</p>
-            <p><a href="board-live-cards-cli.html">board-live-cards-cli reference &rarr;</a></p>
+            <p class="muted">This is a complete, production-ready package layer for orchestrating and rendering declarative task/card workflows across server and browser.</p>
+            <p><a href="board-live-cards-cli.html">board-live-cards-cli reference &rarr;</a><br/>
+            <a href="browser-runtime-livecards-boards.html">browser runtime reference &rarr;</a></p>
         </div>
         <div class="card">
             <h3>Step-Machine CLI</h3>
@@ -259,18 +262,13 @@
         </div>
         <div class="card">
           <h3>Browser Runtime</h3>
-          <p><a href="browser-runtime.html">browser runtime guide</a></p>
+          <p><a href="browser-runtime-livecards-boards.html">browser runtime guide</a></p>
           <p class="muted">Shipped browser files, how they complement library and CLI usage, integration patterns, and live-cards browser bridge.</p>
         </div>
         <div class="card">
           <h3>Runnable Examples</h3>
           <p><a href="../examples/index.html">examples catalog</a></p>
           <p class="muted">Executable examples grouped by library APIs, CLIs, browser runtime, and reusable live-cards patterns. Includes how-to-run instructions.</p>
-        </div>
-        <div class="card">
-          <h3>Live Cards Design (Internal)</h3>
-          <p><a href="design/live-cards.md">design/live-cards.md</a></p>
-          <p class="muted">Internal design notes covering schema, compute lifecycle, sources, board runtime layout, and infinite loop prevention. Not part of public API surface.</p>
         </div>
         <div class="card">
           <h3>Public API Source</h3>

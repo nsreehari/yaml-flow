@@ -190,7 +190,7 @@
         <li><code>requires</code>: array of token names that must be available before this card runs.</li>
         <li><code>provides</code>: expressions that bind card outputs to tokens for downstream cards; uses JSONata <code>src</code>.</li>
         <li><code>state</code>: initial data object available during compute as <code>state.*</code>.</li>
-        <li><code>sources</code>: external CLI commands to fetch or compute data; results available as <code>sources.*</code>.</li>
+        <li><code>sources</code>: task executor-owned data-fetch descriptors; opaque to this CLI tool — interpreted and dispatched by the consuming system's task executor. Results are made available as <code>sources.*</code>. See <em>Source Execution Notes</em> below.</li>
         <li><code>compute</code>: JSONata expressions that derive new values from state, requires, sources, and earlier compute results.</li>
       </ul>
     </section>
@@ -218,7 +218,59 @@
     </section>
 
     <section class="card">
-      <h2>Composition Patterns</h2>
+      <h2>Card Runtime Lifecycle</h2>
+      <p>When a card becomes eligible (all <code>requires</code> tokens satisfied), the runtime executes the following sequence:</p>
+      <pre><code>1. Card becomes eligible — all requires tokens satisfied by upstream task-completed events
+2. Read card.state from disk
+3. Inject requires data (read-only, from upstream task-completed.data — immutable during this run)
+4. Run compute array top-to-bottom → ephemeral computed_values (never persisted)
+5. Check: all sources[].bindTo keys present in state?
+   YES → Build provides data (pluck paths from state, requires, computed_values per provides[].src)
+         Emit task-completed with provides data → unblocks downstream cards
+         Spawn any non-gating sources (optionalForCompletionGating: true) in background
+   NO  → Spawn all outstanding gating sources
+         Emit task-initiated (card stays in-progress, downstream stays blocked)
+6. Source delivers → writes state[bindTo] on disk → emits source-data-fetched → card re-fires from step 1
+7. Non-gating source delivers → same write/re-fire → card re-completes with richer data</code></pre>
+      <p class="muted">The two data namespaces are intentionally separate: <code>requires.*</code> is read-only, injected from upstream tokens and immutable during the card's execution. <code>state.*</code> is the card's persistent local store on disk, seeded by the card author and mutated only by source delivery at runtime. This separation prevents self-referential compute loops.</p>
+
+      <h3>Events</h3>
+      <table>
+        <thead><tr><th>Event</th><th>Who emits</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>task-completed</code></td><td>card handler</td><td>Sets task status=completed, stores provides data in board graph. Unblocks downstream cards.</td></tr>
+          <tr><td><code>task-initiated</code></td><td>card handler</td><td>Sets task status=in-progress when sources are outstanding. Card stays blocked for downstream.</td></tr>
+          <tr><td><code>source-data-fetched</code></td><td>source subprocess</td><td>Delivers source output. Triggers card re-fire (task-restart internally).</td></tr>
+          <tr><td><code>source-data-fetch-failure</code></td><td>source subprocess</td><td>Reports source failure. Card may remain in-progress or fail depending on executor policy.</td></tr>
+          <tr><td><code>task-failed</code></td><td>handler / subprocess</td><td>Sets task status=failed. Downstream cards depending on this card's tokens remain blocked.</td></tr>
+          <tr><td><code>task-restart</code> / <code>retrigger</code></td><td>CLI operator</td><td>Manual re-fire. Resets card to not-started so it re-runs from step 1 above.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Infinite Loop Prevention</h2>
+      <p>The runtime is designed to be loop-safe by construction:</p>
+      <ol>
+        <li><strong>Compute runs exactly once per invocation</strong> — no iterative convergence, no polling. The array runs top-to-bottom and stops.</li>
+        <li><strong>A card re-fires only on external events</strong> — upstream requires change, <code>source-data-fetched</code> delivery, or manual retrigger. Not on its own compute output.</li>
+        <li><strong>Compute output is ephemeral</strong> — <code>computed_values</code> are never written to disk or emitted as events. Downstream cards receive values through explicit <code>provides</code> tokens only.</li>
+        <li><strong>Namespace separation prevents self-reference</strong> — <code>state.x</code> in a compute expr reads the persisted seed value, never the current invocation's compute output. Writing to <code>computed_values.x</code> does not overwrite <code>state.x</code>.</li>
+      </ol>
+    </section>
+
+    <section class="card">
+      <h2>Disk Layout</h2>
+      <p>The board runtime maintains three types of files on disk under the board directory:</p>
+      <ul>
+        <li><strong><code>cards/&lt;id&gt;.json</code></strong> — the card definition files (authored by the user). Contains <code>id</code>, <code>requires</code>, <code>provides</code>, <code>state</code>, <code>sources</code>, <code>compute</code>, <code>meta</code>, <code>view</code>. Sources are the only runtime writers to a card's <code>state</code>; the card definition file itself is not modified by the runtime.</li>
+        <li><strong><code>board-graph.json</code></strong> — runtime task graph. Stores task statuses (<code>not-started</code>, <code>in-progress</code>, <code>completed</code>, <code>failed</code>) and the data emitted by each card's <code>task-completed</code> event (the provides tokens). This is what downstream cards read as their <code>requires.*</code> namespace.</li>
+        <li><strong><code>board-journal.jsonl</code></strong> — append-only event log. Every event (<code>task-completed</code>, <code>source-data-fetched</code>, <code>task-failed</code>, etc.) is appended here. Used for audit, debugging, and replay.</li>
+      </ul>
+      <p class="muted">Source output files are written to <code>&lt;boardDir&gt;/&lt;cardId&gt;/&lt;bindTo&gt;.json</code> (or <code>.txt</code>) by the built-in local executor and are the mechanism by which source delivery is communicated back to the card runtime.</p>
+    </section>
+
+    <section class="card">
       <p><strong>Sequential Data Flow:</strong> Cards depend on tokens provided by upstream cards. The board scheduler ensures dependencies are satisfied.</p>
       <pre><code>holdings (card) —[provides: holdings]—&gt; portfolio-value (requires: holdings)</code></pre>
       <p><strong>Compute Chaining:</strong> Later compute steps in a single card can reference results from earlier steps via <code>computed_values.*</code>:</p>
@@ -246,12 +298,14 @@
 
     <section class="card">
       <h2>Source Execution Notes</h2>
+      <p>The <code>sources</code> array on a card is <strong>opaque to this CLI tool</strong>. It is passed through as-is to whatever task executor the consuming system provides. Systems integrating this tool are expected to bring their own task executor that understands the <code>sources</code> shape and handles dispatch, retries, and output delivery.</p>
+      <p>The notes below apply only to the <strong>built-in local executor</strong>, which is used as a fallback when no external task executor is configured (e.g. in standalone or development use):</p>
       <ul>
         <li><code>source.cli</code> is parsed with quote-aware argument splitting and executed without shell wrapping.</li>
         <li>Stdout is captured and written to source output artifacts (filepath: boardDir/cardId/bindTo.json or .txt).</li>
         <li>Timeout defaults to 120s unless overridden by <code>source.timeout</code>.</li>
-        <li>Sources gate completion by default (including when <code>optionalForCompletionGating</code> is omitted or set to <code>false</code>). Set <code>optionalForCompletionGating: true</code> for view-enrichment-only sources: they run in the background and never block task-completed or downstream cards.</li>
       </ul>
+      <p><strong>Completion gating</strong> (regardless of executor): Sources gate completion by default (including when <code>optionalForCompletionGating</code> is omitted or set to <code>false</code>). Set <code>optionalForCompletionGating: true</code> for view-enrichment-only sources: they run in the background and never block <code>task-completed</code> or downstream cards.</p>
     </section>
 
     <section class="card">

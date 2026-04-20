@@ -36,8 +36,7 @@ yaml-flow is not only a low-level npm library. It exposes three practical consum
 - Docs landing page: `docs/index.html`
 - Board live-cards CLI reference: `docs/board-live-cards-cli.html`
 - Step-machine CLI reference: `docs/step-machine-cli.html`
-- Browser runtime guide: `docs/browser-runtime.html`
-- Live-cards design notes: `docs/design/live-cards.md`
+- Browser runtime guide: `docs/browser-runtime-livecards-boards.html`
 - Schemas: `schema/` and `browser/live-cards.schema.json`
 
 ## Repository Organization
