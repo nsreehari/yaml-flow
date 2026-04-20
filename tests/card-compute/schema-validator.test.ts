@@ -52,7 +52,7 @@ describe('validateLiveCardSchema', () => {
         compute: [
           { bindTo: 'total', expr: '$sum(state.data.revenue)' },
         ],
-        sources: [{ bindTo: 'data', kind: 'api' }, { bindTo: 'news', optional: true }],
+        sources: [{ bindTo: 'data', kind: 'api' }, { bindTo: 'news', optionalForCompletionGating: true }],
       });
       expect(r.ok).toBe(true);
     });

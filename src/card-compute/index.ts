@@ -38,7 +38,7 @@ export interface ComputeSource {
   cli?: string;
   // Deprecated alias retained for compatibility with older cards.
   script?: string;
-  optional?: boolean;
+  optionalForCompletionGating?: boolean;
   [key: string]: unknown;
 }
 
@@ -258,7 +258,9 @@ function validateNode(node: unknown): ValidationResult {
           const s = src as Record<string, unknown>;
           if (typeof s.bindTo !== 'string' || !s.bindTo) errors.push(`sources[${i}]: missing required "bindTo" property`);
           if (s.outputFile != null && typeof s.outputFile !== 'string') errors.push(`sources[${i}]: outputFile must be a string`);
-          if (s.optional != null && typeof s.optional !== 'boolean') errors.push(`sources[${i}]: optional must be a boolean`);
+          if (s.optionalForCompletionGating != null && typeof s.optionalForCompletionGating !== 'boolean') {
+            errors.push(`sources[${i}]: optionalForCompletionGating must be a boolean`);
+          }
         }
       });
     }

@@ -47,38 +47,40 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
-          "board": { "path": "C:/.../board" }
-        },
-        "summary": {
-          "card_count": 4,
-          "completed": 4,
-          "eligible": 0,
-          "pending": 0,
-          "blocked": 0,
-          "unresolved": 0
-        },
-        "cards": [
-          {
-            "name": "price-fetch",
-            "status": "completed",
-            "requires": ["holdings"],
-            "requires_satisfied": ["holdings"],
-            "requires_missing": [],
-            "provides_declared": ["prices"],
-            "provides_runtime": ["prices"],
-            "blocked_by": [],
-            "unblocks": ["portfolio-value"],
-            "runtime": {
-              "attempt_count": 1,
-              "restart_count": 0,
-              "in_progress_since": null,
-              "last_transition_at": "2026-04-20T00:00:00.000Z",
-              "last_completed_at": "2026-04-20T00:00:00.000Z",
-              "last_restarted_at": "2026-04-20T00:00:00.000Z",
-              "status_age_ms": 1200
-            }
-          }
-        ]
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      vertical-align: top;
+    }
+    code {
+      background: #e8f4ff;
+      border: 1px solid #b8d9f8;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fafcff;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .muted { color: var(--muted); }
+    ul { margin: 8px 0 0 18px; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>board-live-cards CLI Reference</h1>
       <p>Canonical command reference for board runtime initialization, card lifecycle operations, source execution, and status contracts.</p>
     </section>
 
@@ -101,10 +103,11 @@
           <tr><td><code>update-card --rg &lt;dir&gt; --card-id &lt;id&gt; [--restart]</code></td><td>Reload card JSON from disk and update task config.</td><td><code>board-live-cards-cli update-card --rg ./my-board --card-id portfolio-form --restart</code></td></tr>
           <tr><td><code>remove-card --rg &lt;dir&gt; --id &lt;id&gt;</code></td><td>Remove a card/task from the board.</td><td><code>board-live-cards-cli remove-card --rg ./my-board --id portfolio-form</code></td></tr>
           <tr><td><code>retrigger --rg &lt;dir&gt; --task &lt;name&gt;</code></td><td>Mark task as not-started and schedule reevaluation.</td><td><code>board-live-cards-cli retrigger --rg ./my-board --task price-fetch</code></td></tr>
-          <tr><td><code>task-completed --token &lt;token&gt; [--data &lt;json&gt;]</code></td><td>Task callback for successful completion.</td><td><code>board-live-cards-cli task-completed --token TOKEN --data '{"x":1}'</code></td></tr>
-          <tr><td><code>task-failed --token &lt;token&gt; [--error &lt;msg&gt;]</code></td><td>Task callback for failure.</td><td><code>board-live-cards-cli task-failed --token TOKEN --error "timeout"</code></td></tr>
-          <tr><td><code>run-sources --card &lt;file&gt; --token &lt;token&gt; --rg &lt;dir&gt;</code></td><td>Execute card source entries and report delivery/failure.</td><td><code>board-live-cards-cli run-sources --card cards/price-fetch.json --token TOKEN --rg ./my-board</code></td></tr>
-          <tr><td><code>run-source-fetch --in &lt;file&gt; --out &lt;file&gt; [--err &lt;file&gt;]</code></td><td>Execute one source definition using <code>source.cli</code>.</td><td><code>board-live-cards-cli run-source-fetch --in source.json --out out.json</code></td></tr>
+          <tr><td><code>task-completed --rg &lt;dir&gt; --token &lt;token&gt; [--data &lt;json&gt;]</code></td><td>Task callback for successful completion.</td><td><code>board-live-cards-cli task-completed --rg ./my-board --token TOKEN --data '{"x":1}'</code></td></tr>
+          <tr><td><code>task-failed --rg &lt;dir&gt; --token &lt;token&gt; [--error &lt;msg&gt;]</code></td><td>Task callback for failure.</td><td><code>board-live-cards-cli task-failed --rg ./my-board --token TOKEN --error "timeout"</code></td></tr>
+          <tr><td><code>source-data-fetched --tmp &lt;file&gt; --token &lt;sourceToken&gt;</code></td><td>Source callback: atomically move tmp file to output destination and record delivery.</td><td><code>board-live-cards-cli source-data-fetched --tmp /tmp/out.json --token TOKEN</code></td></tr>
+          <tr><td><code>source-data-fetch-failure --token &lt;sourceToken&gt; [--reason &lt;msg&gt;]</code></td><td>Source callback: record a source fetch failure.</td><td><code>board-live-cards-cli source-data-fetch-failure --token TOKEN --reason "timeout"</code></td></tr>
+          <tr><td><code>run-source-fetch --in &lt;file&gt; --out &lt;file&gt; [--err &lt;file&gt;]</code></td><td>Execute one source definition using <code>source.cli</code>. Also the protocol entry point for custom <code>.task-executor</code> scripts.</td><td><code>board-live-cards-cli run-source-fetch --in source.json --out out.json</code></td></tr>
           <tr><td><code>process-accumulated-events --rg &lt;dir&gt; [--inline-loop]</code></td><td>Drain accumulated board journal events.</td><td><code>board-live-cards-cli process-accumulated-events --rg ./my-board</code></td></tr>
         </tbody>
       </table>
@@ -116,38 +119,46 @@
       <pre><code>{
   "schema_version": "v1",
   "meta": {
-    "board": { "path": "C:/.../board" },
-    "summary": {
-      "card_count": 4,
-      "completed": 4,
-      "eligible": 0,
-      "pending": 0,
-      "blocked": 0,
-      "unresolved": 0
-    },
-    "cards": [
-      {
-        "name": "price-fetch",
-        "status": "completed",
-        "requires": ["holdings"],
-        "requires_satisfied": ["holdings"],
-        "requires_missing": [],
-        "provides_declared": ["prices"],
-        "provides_runtime": ["prices"],
-        "blocked_by": [],
-        "unblocks": ["portfolio-value"],
-        "runtime": {
-          "attempt_count": 1,
-          "restart_count": 0,
-          "in_progress_since": null,
-          "last_transition_at": "2026-04-20T00:00:00.000Z",
-          "last_completed_at": "2026-04-20T00:00:00.000Z",
-          "last_restarted_at": "2026-04-20T00:00:00.000Z",
-          "status_age_ms": 1200
-        }
+    "board": { "path": "C:/.../board" }
+  },
+  "summary": {
+    "card_count": 4,
+    "completed": 4,
+    "eligible": 0,
+    "pending": 0,
+    "blocked": 0,
+    "unresolved": 0,
+    "failed": 0,
+    "in_progress": 0,
+    "orphan_cards": 0,
+    "topology": {
+      "edge_count": 3,
+      "max_fan_out_card": "holdings",
+      "max_fan_out": 2
+    }
+  },
+  "cards": [
+    {
+      "name": "price-fetch",
+      "status": "completed",
+      "requires": ["holdings"],
+      "requires_satisfied": ["holdings"],
+      "requires_missing": [],
+      "provides_declared": ["prices"],
+      "provides_runtime": ["prices"],
+      "blocked_by": [],
+      "unblocks": ["portfolio-value"],
+      "runtime": {
+        "attempt_count": 1,
+        "restart_count": 0,
+        "in_progress_since": null,
+        "last_transition_at": "2026-04-20T00:00:00.000Z",
+        "last_completed_at": "2026-04-20T00:00:00.000Z",
+        "last_restarted_at": "2026-04-20T00:00:00.000Z",
+        "status_age_ms": 1200
       }
-    ]
-  }
+    }
+  ]
 }</code></pre>
       <p class="muted">Schema file: <code>schema/board-status.schema.json</code></p>
     </section>
@@ -227,7 +238,7 @@
         <li><strong>Declare requires:</strong> Name all token dependencies explicitly.</li>
         <li><strong>Use provides for outputs:</strong> Even leaf cards should declare what they provide to downstream consumers.</li>
         <li><strong>Keep compute expressions simple:</strong> Test each JSONata expression in isolation if possible.</li>
-        <li><strong>Optional sources:</strong> Set <code>optional: true</code> for sources that may fail gracefully.</li>
+        <li><strong>Required vs enrichment sources:</strong> By default, all sources gate card completion — the card stays <code>in-progress</code> and downstream cards remain blocked until every source is delivered. Set <code>optionalForCompletionGating: true</code> on sources that are <em>view enrichment only</em>: they run in the background and their data enhances the card's display (e.g. an LLM sentiment indicator, a secondary metric, a sparkline), but the card completes and unblocks downstream cards without waiting for them.</li>
         <li><strong>Timeout sources:</strong> Set <code>timeout</code> (ms) for long-running CLIs.</li>
         <li><strong>Test with status --json:</strong> Verify card state and topology before running the full board.</li>
       </ul>
@@ -239,7 +250,7 @@
         <li><code>source.cli</code> is parsed with quote-aware argument splitting and executed without shell wrapping.</li>
         <li>Stdout is captured and written to source output artifacts (filepath: boardDir/cardId/bindTo.json or .txt).</li>
         <li>Timeout defaults to 120s unless overridden by <code>source.timeout</code>.</li>
-        <li>Failed sources block the card unless marked <code>optional: true</code>.</li>
+        <li>Sources gate completion by default (including when <code>optionalForCompletionGating</code> is omitted or set to <code>false</code>). Set <code>optionalForCompletionGating: true</code> for view-enrichment-only sources: they run in the background and never block task-completed or downstream cards.</li>
       </ul>
     </section>
 

@@ -10,7 +10,7 @@
  *   board-live-cards init <dir>
  *   board-live-cards status --rg <dir>
  *   board-live-cards add-cards --rg <dir> --card <card.json>
- *   board-live-cards run-sources --card <card.json> --token <callbackToken> --rg <dir>
+ *   board-live-cards run-sources-internal --card <card.json> --token <callbackToken> --rg <dir>
  *
  * Card transform:
  *   liveCardToTaskConfig(card) — LiveCard → TaskConfig (handler mapping)
@@ -557,7 +557,7 @@ function getCliInvocation(command: string, args: string[]): { cmd: string; args:
 }
 
 function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err: Error | null) => void): void {
-  const { cmd, args } = getCliInvocation('run-sources', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
+  const { cmd, args } = getCliInvocation('run-sources-internal', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
   const child = spawn(cmd, args, {
     shell: shouldUseShellForCommand(cmd),
     detached: true,
@@ -595,7 +595,7 @@ function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callb
  *
  * Single handler:
  *   card-handler — reads card.json, loads sourcesData from outputFiles, runs CardCompute,
- *                  checks undelivered sources, emits task-completed or spawns run-sources.
+ *                  checks undelivered sources, emits task-completed or spawns run-sources-internal.
  *                  Fire & forget — returns 'task-initiated' immediately.
  */
 export interface BoardReactiveGraph {
@@ -618,7 +618,8 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         const cardId = card.id as string;
         const cardState = (card.state ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
-        const requiredSources = allSources.filter(s => !s.optional);
+        // optionalForCompletionGating defaults to false when absent.
+        const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
 
         // Read (or initialise) the runtime sidecar
         const runtime = readRuntimeState(boardDir, cardId);
@@ -686,7 +687,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
 
         if (undeliveredRequired.length > 0) {
           // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
-          // and invoke run-sources to deliver them.
+          // and invoke run-sources-internal to deliver them.
           let stampedAny = false;
           for (const src of undeliveredRequired) {
             const entry = runtime._sources[src.bindTo] ?? {};
@@ -712,9 +713,9 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           data[bindTo] = CardCompute.resolve(computeNode, src);
         }
 
-        // Spawn undelivered optional sources in background
+        // Spawn undelivered non-gating sources in background.
         const undeliveredOptional = allSources.filter(s => {
-          if (!s.optional || !s.outputFile) return false;
+          if (s.optionalForCompletionGating !== true || !s.outputFile) return false;
           const entry = runtime._sources[s.bindTo];
           if (!entry?.lastRequestedAt) return true;
           if (!entry.lastFetchedAt) return true;
@@ -1245,12 +1246,12 @@ function cmdRunSources(args: string[]): void {
   const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
   const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   if (!cardFilePath || !callbackToken || !boardDir) {
-    console.error('Usage: board-live-cards run-sources --card <path> --token <token> --rg <dir>');
+    console.error('Usage: board-live-cards run-sources-internal --card <path> --token <token> --rg <dir>');
     process.exit(1);
   }
 
   const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
-  console.log(`[run-sources] Processing card "${card.id as string}"`);
+  console.log(`[run-sources-internal] Processing card "${card.id as string}"`);
 
   // Load registered task-executor (if any)
   const executorFile = path.join(boardDir!, '.task-executor');
@@ -1260,7 +1261,7 @@ function cmdRunSources(args: string[]): void {
     cli?: string;
     bindTo: string;
     outputFile?: string;
-    optional?: boolean;
+    optionalForCompletionGating?: boolean;
     timeout?: number;
     cwd?: string;
     boardDir?: string;
@@ -1277,7 +1278,7 @@ function cmdRunSources(args: string[]): void {
 
     function reportFailure(reason: string): void {
       invokeSourceDataFetchFailure(sourceToken, reason, (err) => {
-        if (err) console.error(`[run-sources] source-data-fetch-failure call failed:`, err.message);
+        if (err) console.error(`[run-sources-internal] source-data-fetch-failure call failed:`, err.message);
       });
     }
 
@@ -1290,7 +1291,7 @@ function cmdRunSources(args: string[]): void {
     if (taskExecutor) {
       // External task-executor registered: invoke run-source-fetch subcommand
       if (!src.outputFile) {
-        console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+        console.warn(`[run-sources-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
         reportFailure('no outputFile configured');
         return;
       }
@@ -1299,7 +1300,7 @@ function cmdRunSources(args: string[]): void {
       const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
       const sourceForExecutor = { ...src, cwd: path.dirname(cardFilePath || ''), boardDir };
       fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
-      console.log(`[run-sources] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
+      console.log(`[run-sources-internal] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
       try {
         execCommandSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile], {
           shell: true,
@@ -1307,7 +1308,7 @@ function cmdRunSources(args: string[]): void {
         });
       } catch (err: unknown) {
         const reason = (err as Error).message ?? String(err);
-        console.error(`[run-sources] task-executor failed for source "${src.bindTo}":`, reason);
+        console.error(`[run-sources-internal] task-executor failed for source "${src.bindTo}":`, reason);
         reportFailure(reason);
         return;
       }
@@ -1315,7 +1316,7 @@ function cmdRunSources(args: string[]): void {
         reportFetched(outFile);
       } else {
         const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
-        console.warn(`[run-sources] source "${src.bindTo}": ${errMsg}`);
+        console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
         reportFailure(errMsg);
       }
       return;
@@ -1323,7 +1324,7 @@ function cmdRunSources(args: string[]): void {
 
     // No external executor: use board-live-cards run-source-fetch as the executor
     if (!src.outputFile) {
-      console.warn(`[run-sources] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+      console.warn(`[run-sources-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
       reportFailure('no outputFile configured');
       return;
     }
@@ -1334,14 +1335,14 @@ function cmdRunSources(args: string[]): void {
     fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
 
     const { cmd, args: baseArgs } = getCliInvocation('run-source-fetch', ['--in', inFile, '--out', outFile, '--err', errFile]);
-    console.log(`[run-sources] run-source-fetch: ${cmd} ${baseArgs.join(' ')}`);
+    console.log(`[run-sources-internal] run-source-fetch: ${cmd} ${baseArgs.join(' ')}`);
     try {
       execCommandSync(cmd, baseArgs, {
         timeout: src.timeout ?? 120_000,
       });
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
-      console.error(`[run-sources] run-source-fetch failed for source "${src.bindTo}":`, reason);
+      console.error(`[run-sources-internal] run-source-fetch failed for source "${src.bindTo}":`, reason);
       reportFailure(reason);
       return;
     }
@@ -1349,7 +1350,7 @@ function cmdRunSources(args: string[]): void {
       reportFetched(outFile);
     } else {
       const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
-      console.warn(`[run-sources] source "${src.bindTo}": ${errMsg}`);
+      console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
       reportFailure(errMsg);
     }
   }
@@ -1564,7 +1565,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'task-failed':               return cmdTaskFailed(rest);
     case 'source-data-fetched':       return cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
-    case 'run-sources':               return cmdRunSources(rest);
+    case 'run-sources-internal':      return cmdRunSources(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
     case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
@@ -1615,7 +1616,7 @@ TASK CALLBACKS  (called by task executor scripts)
   task-failed --token <callbackToken> [--error <message>]
     Signal task failure with an optional error message.
 
-SOURCE CALLBACKS  (called internally by run-sources)
+SOURCE CALLBACKS  (called internally by run-sources-internal)
   source-data-fetched --tmp <file> --token <sourceToken>
     Atomically rename <file> into the outputFile destination and record delivery
     in runtime.json. Appends a task-progress event to re-invoke the card handler.
@@ -1636,8 +1637,9 @@ INTERNAL COMMANDS
     3) lock stays healthy,
     4) event production eventually quiesces.
 
-  run-sources --card <card.json> --token <callbackToken> --rg <dir>
+  run-sources-internal-internal --card <card.json> --token <callbackToken> --rg <dir>
     Execute all source[] entries for a card, then report delivery or failure.
+    (Internal command — invoked by the card-handler. Not intended for direct use.)
 
     If <dir>/.task-executor exists, invokes it with run-source-fetch subcommand:
       <executor> run-source-fetch --in <source_json> --out <outfile> --err <errfile>

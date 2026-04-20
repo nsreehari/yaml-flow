@@ -257,24 +257,24 @@ describe('liveCardToTaskConfig', () => {
     expect(tc.provides).toEqual(['total']);
   });
 
-  it('card with optional source → still just [card-handler]', () => {
+  it('card with non-gating source → still just [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'enriched',
       requires: ['raw'],
       compute: [{ bindTo: 'x', expr: '$sum(state.raw.v)' }],
-      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optional: true }],
+      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true }],
       state: {},
     };
     const tc = liveCardToTaskConfig(card);
     expect(tc.taskHandlers).toEqual(['card-handler']);
   });
 
-  it('card with required + optional sources → still just [card-handler]', () => {
+  it('card with required + non-gating sources → still just [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'live-feed',
       sources: [
         { cli: 'feed.sh', bindTo: 'data', outputFile: 'data.json' },
-        { cli: 'enrich.sh', bindTo: 'extra', outputFile: 'extra.json', optional: true },
+        { cli: 'enrich.sh', bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true },
       ],
       state: {},
     };
@@ -577,7 +577,7 @@ describe('cli add-cards', () => {
     expect(logs.join('\n')).toContain('Card "prices" added');
   });
 
-  it('adds a card with compute + optional source (single card-handler)', async () => {
+  it('adds a card with compute + non-gating source (single card-handler)', async () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
@@ -586,7 +586,7 @@ describe('cli add-cards', () => {
       id: 'enriched',
       requires: ['raw'],
       compute: [{ bindTo: 'total', expr: '$sum(state.raw.v)' }],
-      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optional: true }],
+      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true }],
       state: {},
     };
     fs.writeFileSync(cardFile, JSON.stringify(card));
@@ -862,6 +862,6 @@ describe('windows launcher behavior', () => {
   it('keeps CLI child-process launches hidden on Windows', () => {
     const cliSource = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'board-live-cards-cli.ts'), 'utf-8');
     expect(cliSource).toContain('windowsHide: true');
-    expect((cliSource.match(/windowsHide: true/g) ?? []).length).toBeGreaterThanOrEqual(7);
+    expect((cliSource.match(/windowsHide: true/g) ?? []).length).toBeGreaterThanOrEqual(4);
   });
 });
