@@ -223,7 +223,7 @@
             if (!elem.kind || typeof elem.kind !== 'string') {
               errors.push('view.elements[' + i + '].kind: required, must be a string');
             } else if (VALID_ELEMENT_KINDS.indexOf(elem.kind) === -1) {
-              errors.push('view.elements[' + i + '].kind: unknown kind "' + elem.kind + '"');
+              errors.push('view.elements[' + i + '].kind: unknown kind "' + elem.kind + '". Valid: ' + VALID_ELEMENT_KINDS.join(', '));
             }
           });
         }

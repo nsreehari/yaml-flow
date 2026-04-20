@@ -203,17 +203,26 @@ describe('board-live-cards CLI', () => {
     const output = logs.join('\n').trim();
     const parsed = JSON.parse(output) as {
       schema_version: string;
-      board: { path: string };
-      summary: { task_count: number };
-      schedule: { eligible: number; pending: number; blocked: number; unresolved: number };
-      tasks: unknown[];
+      meta: {
+        board: { path: string };
+      };
+      summary: {
+        card_count: number;
+        completed: number;
+        eligible: number;
+        pending: number;
+        blocked: number;
+        unresolved: number;
+      };
+      cards: unknown[];
     };
 
     expect(parsed.schema_version).toBe('v1');
-    expect(parsed.board.path).toContain(path.resolve(dir));
-    expect(parsed.summary.task_count).toBe(0);
-    expect(parsed.schedule).toEqual({ eligible: 0, pending: 0, blocked: 0, unresolved: 0 });
-    expect(parsed.tasks).toEqual([]);
+    expect(parsed.meta.board.path).toContain(path.resolve(dir));
+    expect(parsed.summary.card_count).toBe(0);
+    expect(parsed.summary.completed).toBe(0);
+    expect(parsed.summary).toMatchObject({ eligible: 0, pending: 0, blocked: 0, unresolved: 0 });
+    expect(parsed.cards).toEqual([]);
   });
 });
 

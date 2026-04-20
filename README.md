@@ -11,38 +11,33 @@ npm install yaml-flow
 
 ## Public Surfaces
 
-yaml-flow is not only a low-level npm library. It exposes four practical consumption surfaces:
+yaml-flow is not only a low-level npm library. It exposes three practical consumption surfaces:
 
 1. **Library APIs**
   Use the package imports when you want to embed workflow logic directly in your application.
-  Public modules include the main package plus subpaths like `yaml-flow/step-machine`, `yaml-flow/event-graph`, `yaml-flow/stores`, `yaml-flow/batch`, `yaml-flow/inference`, and `yaml-flow/card-compute`.
+  The primary library APIs are `yaml-flow/step-machine`, `yaml-flow/continuous-event-graph`, and `yaml-flow/inference`.
+  `yaml-flow/batch` is also available as a convenience utility for concurrent processing of item collections using Step Machine, Live Event Graph, or graph-of-graphs execution patterns.
 
-2. **First-class CLIs**
-  These are batteries-included server-side utilities, not just thin wrappers:
+2. **Live-Cards / Boards Package Layer**
+  This is a reusable higher-level package pattern built from yaml-flow engines, schemas, browser runtime assets, and CLI orchestration.
+  It includes:
   - `board-live-cards-cli`
-  - `step-machine-cli`
+  - browser runtime assets under `browser/`
+  - `yaml-flow/card-compute`
 
-  They combine multiple yaml-flow primitives into directly usable operational tools.
-
-3. **Browser Runtime Assets**
-  The shipped files under `browser/` are a public surface for browser-side rendering and board/card integration:
-  - `browser/live-cards.js`
-  - `browser/ingest-board.js`
-  - `browser/card-compute.js`
-  - `browser/live-cards.schema.json`
-
-4. **Reusable Live-Cards / Boards Package Layer**
-  The live-cards and boards mechanism is a reusable higher abstraction built using yaml-flow engines, schemas, CLI orchestration, and browser runtime pieces together. It should be treated as a package pattern, not just a repo demo app.
+3. **Step-machine CLI**
+  `step-machine-cli` is the standalone operational runner for YAML step-machine workflows.
+  For persistence across restarts and longer-running flows, pair Step Machine with store adapters such as `MemoryStore`, `LocalStorageStore`, and `FileStore`.
 
 ## Documentation Map
 
 - Main orientation: `README.md`
-- Runnable examples: `examples/README.md` and `examples/index.html`
+- Runnable examples: `examples/index.html`
 - Docs landing page: `docs/index.html`
 - Board live-cards CLI reference: `docs/board-live-cards-cli.html`
 - Step-machine CLI reference: `docs/step-machine-cli.html`
 - Browser runtime guide: `docs/browser-runtime.html`
-- Live-cards design notes: `docs/design-live-cards.md`
+- Live-cards design notes: `docs/design/live-cards.md`
 - Schemas: `schema/` and `browser/live-cards.schema.json`
 
 ## Repository Organization

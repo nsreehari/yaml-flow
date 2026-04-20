@@ -47,38 +47,38 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
-    }
-    th, td {
-      text-align: left;
-      border-bottom: 1px solid var(--line);
-      padding: 8px;
-      vertical-align: top;
-    }
-    code {
-      background: #eff4ff;
-      border: 1px solid #d7e5ff;
-      border-radius: 6px;
-      padding: 1px 5px;
-      font-family: Consolas, monospace;
-      font-size: 12px;
-    }
-    pre {
-      margin: 0;
-      padding: 10px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fafcff;
-      overflow-x: auto;
-      font-size: 12px;
-      line-height: 1.45;
-    }
-    .muted { color: var(--muted); }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <h1>board-live-cards CLI Reference</h1>
+          "board": { "path": "C:/.../board" }
+        },
+        "summary": {
+          "card_count": 4,
+          "completed": 4,
+          "eligible": 0,
+          "pending": 0,
+          "blocked": 0,
+          "unresolved": 0
+        },
+        "cards": [
+          {
+            "name": "price-fetch",
+            "status": "completed",
+            "requires": ["holdings"],
+            "requires_satisfied": ["holdings"],
+            "requires_missing": [],
+            "provides_declared": ["prices"],
+            "provides_runtime": ["prices"],
+            "blocked_by": [],
+            "unblocks": ["portfolio-value"],
+            "runtime": {
+              "attempt_count": 1,
+              "restart_count": 0,
+              "in_progress_since": null,
+              "last_transition_at": "2026-04-20T00:00:00.000Z",
+              "last_completed_at": "2026-04-20T00:00:00.000Z",
+              "last_restarted_at": "2026-04-20T00:00:00.000Z",
+              "status_age_ms": 1200
+            }
+          }
+        ]
       <p>Canonical command reference for board runtime initialization, card lifecycle operations, source execution, and status contracts.</p>
     </section>
 
@@ -115,33 +115,160 @@
       <p><code>status --json</code> emits a stable status object:</p>
       <pre><code>{
   "schema_version": "v1",
-  "board": { "path": "C:/.../board" },
-  "summary": { "task_count": 4 },
-  "schedule": {
-    "eligible": 0,
-    "pending": 0,
-    "blocked": 0,
-    "unresolved": 0
-  },
-  "tasks": [
-    {
-      "name": "price-fetch",
-      "status": "completed",
-      "data_keys": ["prices"],
-      "error": "optional"
-    }
-  ]
+  "meta": {
+    "board": { "path": "C:/.../board" },
+    "summary": {
+      "card_count": 4,
+      "completed": 4,
+      "eligible": 0,
+      "pending": 0,
+      "blocked": 0,
+      "unresolved": 0
+    },
+    "cards": [
+      {
+        "name": "price-fetch",
+        "status": "completed",
+        "requires": ["holdings"],
+        "requires_satisfied": ["holdings"],
+        "requires_missing": [],
+        "provides_declared": ["prices"],
+        "provides_runtime": ["prices"],
+        "blocked_by": [],
+        "unblocks": ["portfolio-value"],
+        "runtime": {
+          "attempt_count": 1,
+          "restart_count": 0,
+          "in_progress_since": null,
+          "last_transition_at": "2026-04-20T00:00:00.000Z",
+          "last_completed_at": "2026-04-20T00:00:00.000Z",
+          "last_restarted_at": "2026-04-20T00:00:00.000Z",
+          "status_age_ms": 1200
+        }
+      }
+    ]
+  }
 }</code></pre>
       <p class="muted">Schema file: <code>schema/board-status.schema.json</code></p>
+    </section>
+
+    <section class="card">
+      <h2>LiveCard JSON Structure</h2>
+      <p>Each card is a JSON file that declares dependencies, data sources, and computed outputs:</p>
+      <pre><code>{
+  "id": "portfolio-value",
+  "meta": { "title": "Portfolio Valuation" },
+  "requires": ["holdings", "prices"],
+  "provides": [{ "bindTo": "total_value", "src": "computed_values.value" }],
+  "state": { "initial_data": 100 },
+  "sources": [
+    { "cli": "node fetch-market.js", "bindTo": "market", "outputFile": "market.json" }
+  ],
+  "compute": [
+    { "bindTo": "value", "expr": "$sum(requires.holdings.(qty * $lookup(requires.prices, symbol).price))" }
+  ],
+  "view": {
+    "elements": [
+      { "kind": "metric", "label": "Total Value", "data": { "bind": "computed_values.value" } }
+    ]
+  }
+}</code></pre>
+      <p><strong>Key fields:</strong></p>
+      <ul style="margin: 8px 0 0 18px;">
+        <li><code>id</code>: unique card identifier (becomes a task in the board graph).</li>
+        <li><code>requires</code>: array of token names that must be available before this card runs.</li>
+        <li><code>provides</code>: expressions that bind card outputs to tokens for downstream cards; uses JSONata <code>src</code>.</li>
+        <li><code>state</code>: initial data object available during compute as <code>state.*</code>.</li>
+        <li><code>sources</code>: external CLI commands to fetch or compute data; results available as <code>sources.*</code>.</li>
+        <li><code>compute</code>: JSONata expressions that derive new values from state, requires, sources, and earlier compute results.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Understanding JSONata in LiveCards</h2>
+      <p><strong>JSONata</strong> is a lightweight query and transformation language for JSON. In card <code>compute</code> steps and <code>provides[].src</code>, you write JSONata expressions that transform data:</p>
+      <pre><code>// Access state properties
+"state.price"
+
+// Array operations
+"$sum(state.quantities)"
+"$average(requires.history.values)"
+
+// Conditional logic
+"state.quantity > 100 ? state.quantity * 0.9 : state.quantity"
+
+// Lookup and grouping
+"$lookup(requires.prices, symbol).price"
+"requires.transactions{category: [$sum(amount)]}"
+
+// Multi-step chains (access previous compute results)
+"computed_values.subtotal * computed_values.discount_factor"</code></pre>
+      <p class="muted">Learn more at <a href="https://jsonata.org" target="_blank">jsonata.org</a></p>
+    </section>
+
+    <section class="card">
+      <h2>Composition Patterns</h2>
+      <p><strong>Sequential Data Flow:</strong> Cards depend on tokens provided by upstream cards. The board scheduler ensures dependencies are satisfied.</p>
+      <pre><code>holdings (card) —[provides: holdings]—&gt; portfolio-value (requires: holdings)</code></pre>
+      <p><strong>Compute Chaining:</strong> Later compute steps in a single card can reference results from earlier steps via <code>computed_values.*</code>:</p>
+      <pre><code>"compute": [
+  { "bindTo": "subtotal", "expr": "$sum(state.items.price)" },
+  { "bindTo": "tax", "expr": "computed_values.subtotal * 0.1" },
+  { "bindTo": "total", "expr": "computed_values.subtotal + computed_values.tax" }
+]</code></pre>
+      <p><strong>Source Output Binding:</strong> CLI sources write JSON or text to <code>outputFile</code>. Use <code>provides</code> to expose the result as a token:</p>
+      <pre><code>"sources": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
+"provides": [{ "bindTo": "prices", "src": "sources.prices" }]</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Card Composition Checklist</h2>
+      <ul>
+        <li><strong>Declare requires:</strong> Name all token dependencies explicitly.</li>
+        <li><strong>Use provides for outputs:</strong> Even leaf cards should declare what they provide to downstream consumers.</li>
+        <li><strong>Keep compute expressions simple:</strong> Test each JSONata expression in isolation if possible.</li>
+        <li><strong>Optional sources:</strong> Set <code>optional: true</code> for sources that may fail gracefully.</li>
+        <li><strong>Timeout sources:</strong> Set <code>timeout</code> (ms) for long-running CLIs.</li>
+        <li><strong>Test with status --json:</strong> Verify card state and topology before running the full board.</li>
+      </ul>
     </section>
 
     <section class="card">
       <h2>Source Execution Notes</h2>
       <ul>
         <li><code>source.cli</code> is parsed with quote-aware argument splitting and executed without shell wrapping.</li>
-        <li>Stdout is captured and written to source output artifacts.</li>
+        <li>Stdout is captured and written to source output artifacts (filepath: boardDir/cardId/bindTo.json or .txt).</li>
         <li>Timeout defaults to 120s unless overridden by <code>source.timeout</code>.</li>
+        <li>Failed sources block the card unless marked <code>optional: true</code>.</li>
       </ul>
+    </section>
+
+    <section class="card">
+      <h2>Example: Multi-Card Portfolio Workflow</h2>
+      <pre><code>// cards/holdings.json
+{
+  "id": "holdings",
+  "state": { "portfolio": [{ "symbol": "AAPL", "qty": 10 }] },
+  "provides": [{ "bindTo": "holdings", "src": "state.portfolio" }]
+}
+
+// cards/price-fetch.json
+{
+  "id": "price-fetch",
+  "requires": ["holdings"],
+  "sources": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
+  "provides": [{ "bindTo": "prices", "src": "sources.prices" }]
+}
+
+// cards/portfolio-value.json
+{
+  "id": "portfolio-value",
+  "requires": ["holdings", "prices"],
+  "compute": [
+    { "bindTo": "total", "expr": "$sum(requires.holdings.(qty * requires.prices[symbol].price))" }
+  ],
+  "provides": [{ "bindTo": "portfolio_value", "src": "computed_values.total" }]
+}</code></pre>
     </section>
   </div>
 </body>

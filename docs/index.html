@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>yaml-flow Docs Index</title>
+  <title>yaml-flow Documentation</title>
   <style>
     :root {
       --bg: #f4f7fb;
@@ -18,80 +18,262 @@
       font-family: "Segoe UI", Tahoma, sans-serif;
       background: radial-gradient(circle at 90% 0%, #e8f2ff 0, transparent 32%), var(--bg);
       color: var(--ink);
+      line-height: 1.6;
     }
     .wrap {
       max-width: 1100px;
-      margin: 20px auto;
-      padding: 0 16px 28px;
+      margin: 0 auto;
+      padding: 28px 16px;
     }
     .hero {
       background: linear-gradient(120deg, #07316b, #0f6bff 60%, #19a1f6);
       color: white;
-      border-radius: 12px;
-      padding: 18px;
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 28px;
+    }
+    .hero h1 {
+      margin: 0 0 12px;
+      font-size: 2rem;
+    }
+    .hero p {
+      margin: 0 0 16px;
+      opacity: 0.95;
+      font-size: 1.05rem;
+    }
+    .hero code {
+      background: rgba(255,255,255,0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: Consolas, monospace;
+      font-size: 0.9em;
+    }
+    .badges {
+      margin-top: 12px;
+      font-size: 0.9rem;
+    }
+    section {
+      margin-bottom: 32px;
+    }
+    h2 {
+      margin: 24px 0 12px;
+      font-size: 1.4rem;
+      border-bottom: 2px solid var(--line);
+      padding-bottom: 8px;
+    }
+    h3 {
+      margin: 18px 0 10px;
+      font-size: 1.1rem;
     }
     .grid {
-      margin-top: 16px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
     }
     .card {
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 14px;
+      padding: 16px;
+      transition: box-shadow 0.2s;
     }
-    h1, h2 { margin-top: 0; }
+    .card:hover {
+      box-shadow: 0 4px 12px rgba(15, 107, 255, 0.1);
+    }
+    .card h3 {
+      margin-top: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      vertical-align: top;
+    }
+    th {
+      background: #f7faff;
+      font-weight: 600;
+    }
+    code {
+      background: #f3f7ff;
+      border: 1px solid #dde8ff;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Consolas, monospace;
+      font-size: 0.9em;
+    }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    p { line-height: 1.45; }
     .muted { color: var(--muted); }
+    ul {
+      margin: 12px 0;
+      padding-left: 20px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    .comparison {
+      overflow-x: auto;
+      margin: 16px 0;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <section class="hero">
-      <h1>yaml-flow Docs</h1>
-      <p>Reference and design material for yaml-flow library APIs, first-class CLIs, browser runtime assets, and the reusable live-cards / boards package layer.</p>
+      <h1>yaml-flow</h1>
+      <p>Two workflow engines in one package. Pick the model that fits your problem.</p>
+      <p style="font-size: 1rem; margin: 12px 0;"><strong>Install:</strong> <code>npm install yaml-flow</code></p>
+      <div class="badges">
+        <span>MIT License</span> • 
+        <span><a href="https://www.npmjs.com/package/yaml-flow" style="color: inherit;">npm package</a></span>
+      </div>
     </section>
 
-    <section class="grid">
-      <article class="card">
-        <h2>Project Orientation</h2>
-        <p><a href="../README.md">README.md</a></p>
-        <p class="muted">Main package overview, engine selection guidance, and public surface map.</p>
-      </article>
+    <section>
+      <h2>What Is yaml-flow?</h2>
+      <p>yaml-flow is not only a low-level npm library. It exposes three practical consumption surfaces:</p>
+      <div class="grid">
+        <div class="card">
+          <h3>Library APIs</h3>
+          <p>Embed workflow logic directly in your application:</p>
+          <ul>
+            <li><code>yaml-flow/step-machine</code> — sequential step execution with explicit control flow</li>
+            <li><code>yaml-flow/continuous-event-graph</code> — Reactive DAG where tasks auto-trigger when their dependencies arrive. External events and token injections flow through a dynamic task topology. Supports runtime node mutations, cascading computation, and self-driving orchestration without explicit imperative coordination.</li>
+            <li><code>yaml-flow/batch</code> — convenience utility for concurrent processing of item collections using Step Machine, Live Event Graph, or graph-of-graphs execution patterns</li>
+            <li><code>yaml-flow/inference</code> — optional LLM layer for automatic task completion detection (complements continuous-event-graph)</li>
+          </ul>
+        </div>
+        <div class="card">
+            <h3>Live-Cards / Boards Package</h3>
+            <p>Reusable higher-level abstraction built using yaml-flow engines, schemas, CLI orchestration, and browser runtime pieces. It includes:</p>
+          <ul style="margin: 8px 0;">
+              <li><code>board-live-cards-cli</code></li>
+              <li>browser runtime assets</li>
+              <li><code>yaml-flow/card-compute</code></li>
+          </ul>
+            <p class="muted">Treat this as a package layer, not just a demo. It bundles the pieces needed to build and operate LiveCards / Boards.</p>
+        </div>
+        <div class="card">
+            <h3>Step-Machine CLI</h3>
+            <p>Batteries-included server-side runner for YAML step-machine flows with inline handlers, CLI handlers, transforms, and orchestration helpers.</p>
+            <ul style="margin: 8px 0;">
+              <li><code>step-machine-cli</code></li>
+            </ul>
+            <p class="muted">This is the standalone operational entrypoint for step-machine workflows. For persistence across restarts and longer-running flows, pair Step Machine with store adapters such as <code>MemoryStore</code>, <code>LocalStorageStore</code>, and <code>FileStore</code>.</p>
+        </div>
+      </div>
+    </section>
 
-      <article class="card">
-        <h2>Board CLI</h2>
-        <p><a href="board-live-cards-cli.html">board-live-cards-cli reference</a></p>
-        <p class="muted">Command reference, status contract, source execution details, and examples.</p>
-      </article>
+    <section>
+      <h2>Which Mode Do I Need?</h2>
+      <p>yaml-flow ships two execution models solving fundamentally different problems:</p>
+      
+      <div class="comparison">
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th><strong>Step Machine</strong></th>
+              <th><strong>Live Event Graph</strong></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Mental model</strong></td>
+              <td>Flowchart — each step decides what runs next</td>
+              <td>Dependency graph — tasks self-select when inputs are ready</td>
+            </tr>
+            <tr>
+              <td><strong>Core API</strong></td>
+              <td><code>flow.run(input)</code></td>
+              <td><code>applyEvent(live, event)</code>, <code>schedule(live)</code>, <code>inspect(live)</code>, <code>addNode(live, ...)</code></td>
+            </tr>
+            <tr>
+              <td><strong>Config shape</strong></td>
+              <td><code>steps:</code> with <code>transitions:</code></td>
+              <td><code>tasks:</code> with <code>requires:</code> / <code>provides:</code></td>
+            </tr>
+            <tr>
+              <td><strong>Who decides next?</strong></td>
+              <td>The sender (current step's result picks the transition)</td>
+              <td>The receivers (tasks become eligible when their tokens appear)</td>
+            </tr>
+            <tr>
+              <td><strong>Import</strong></td>
+              <td><code>yaml-flow/step-machine</code></td>
+              <td><code>yaml-flow/continuous-event-graph</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-      <article class="card">
-        <h2>Step-machine CLI</h2>
-        <p><a href="step-machine-cli.html">step-machine-cli reference</a></p>
-        <p class="muted">Flow runner reference covering inline handlers, CLI handlers, JSONata transforms, and templating.</p>
-      </article>
+      <h3>Use Step Machine when…</h3>
+      <ul>
+        <li>Your workflow is a <strong>known sequence</strong> of steps with conditional branching</li>
+        <li>You need <strong>pause/resume</strong> built in</li>
+        <li>The work is conversational: receive input → process → decide next step → repeat</li>
+        <li>You want to hand the library a YAML file and handler functions and call <code>.run()</code></li>
+      </ul>
+      <p class="muted"><strong>Examples:</strong> form wizards, approval chains, AI chat loops, order processing pipelines, ETL with linear stages.</p>
 
-      <article class="card">
-        <h2>Browser Runtime</h2>
-        <p><a href="browser-runtime.html">browser runtime guide</a></p>
-        <p class="muted">What the shipped browser files are for and how they complement library and CLI usage.</p>
-      </article>
+      <h3>Use Live Event Graph when…</h3>
+      <ul>
+        <li>Your workflow has <strong>complex dependencies</strong> — diamonds, fan-out, fan-in, optional paths</li>
+        <li>You don't know the execution order up front; it <strong>emerges from the data flow</strong></li>
+        <li>Multiple tasks can run <strong>in parallel</strong> once their inputs are satisfied</li>
+        <li>You need to <strong>dynamically add or remove tasks</strong> as your system evolves</li>
+        <li>You need <strong>conflict resolution</strong> when two tasks compete to produce the same output</li>
+        <li>Your system is <strong>event-driven</strong>: external events inject tokens that unblock downstream tasks</li>
+      </ul>
+      <p class="muted"><strong>Examples:</strong> compliance engines (GRC, audit cascades), agent tool orchestration, multi-stage data pipelines, CI/CD systems, research workflows, build systems, multi-model AI routing, eligibility engines, and perpetual monitoring topologies.</p>
 
-      <article class="card">
-        <h2>Live Cards Design</h2>
-        <p><a href="design-live-cards.md">design-live-cards.md</a></p>
-        <p class="muted">Schema and lifecycle design notes for cards, compute, sources, and board runtime layout.</p>
-      </article>
+      <h3>When in doubt</h3>
+      <p>Start with <strong>Step Machine</strong> if your workflow diagram is a straight line with branches.  
+      Start with <strong>Live Event Graph</strong> if your workflow diagram has diamonds, parallel lanes, or needs to evolve over time.  
+      Both shift control: Step Machine puts it in the sender; Live Event Graph puts it in the data tokens.</p>
+    </section>
 
-      <article class="card">
-        <h2>Runnable Examples</h2>
-        <p><a href="../examples/README.md">examples/README.md</a> and <a href="../examples/index.html">examples/index.html</a></p>
-        <p class="muted">Catalog of runnable examples grouped around public surfaces and usage modes.</p>
-      </article>
+    <section>
+      <h2>Documentation & Reference</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Board Live-Cards CLI</h3>
+          <p><a href="board-live-cards-cli.html">board-live-cards-cli reference</a></p>
+          <p class="muted">Command reference, LiveCard JSON structure, JSONata composition patterns, status contract, and source execution details.</p>
+        </div>
+        <div class="card">
+          <h3>Step-Machine CLI</h3>
+          <p><a href="step-machine-cli.html">step-machine-cli reference</a></p>
+          <p class="muted">YAML flow runner reference covering inline/CLI handlers, JSONata transforms, handler_vars, failure_transitions, and templating.</p>
+        </div>
+        <div class="card">
+          <h3>Browser Runtime</h3>
+          <p><a href="browser-runtime.html">browser runtime guide</a></p>
+          <p class="muted">Shipped browser files, how they complement library and CLI usage, integration patterns, and live-cards browser bridge.</p>
+        </div>
+        <div class="card">
+          <h3>Runnable Examples</h3>
+          <p><a href="../examples/index.html">examples catalog</a></p>
+          <p class="muted">Executable examples grouped by library APIs, CLIs, browser runtime, and reusable live-cards patterns. Includes how-to-run instructions.</p>
+        </div>
+        <div class="card">
+          <h3>Live Cards Design (Internal)</h3>
+          <p><a href="design/live-cards.md">design/live-cards.md</a></p>
+          <p class="muted">Internal design notes covering schema, compute lifecycle, sources, board runtime layout, and infinite loop prevention. Not part of public API surface.</p>
+        </div>
+        <div class="card">
+          <h3>Public API Source</h3>
+          <p><a href="../README.md">README.md</a> (root)</p>
+          <p class="muted">Source control view of package overview with badges, public surfaces listing, and repository organization. Also available here via this docs index.</p>
+        </div>
+      </div>
     </section>
   </div>
 </body>

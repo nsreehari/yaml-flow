@@ -4,53 +4,113 @@
   "title": "Board Status Object",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "board", "summary", "schedule", "tasks"],
+  "required": ["schema_version", "meta", "summary", "cards"],
   "properties": {
     "schema_version": {
       "type": "string",
       "const": "v1"
     },
-    "board": {
+    "meta": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path"],
+      "required": ["board"],
       "properties": {
-        "path": { "type": "string" }
+        "board": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "type": "string" }
+          }
+        }
       }
     },
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["task_count"],
+      "required": ["card_count", "completed", "eligible", "pending", "blocked", "unresolved"],
       "properties": {
-        "task_count": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "schedule": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["eligible", "pending", "blocked", "unresolved"],
-      "properties": {
+        "card_count": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 },
         "eligible": { "type": "integer", "minimum": 0 },
         "pending": { "type": "integer", "minimum": 0 },
         "blocked": { "type": "integer", "minimum": 0 },
-        "unresolved": { "type": "integer", "minimum": 0 }
+        "unresolved": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "in_progress": { "type": "integer", "minimum": 0 },
+        "orphan_cards": { "type": "integer", "minimum": 0 },
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["edge_count", "max_fan_out_card", "max_fan_out"],
+          "properties": {
+            "edge_count": { "type": "integer", "minimum": 0 },
+            "max_fan_out_card": { "type": ["string", "null"] },
+            "max_fan_out": { "type": "integer", "minimum": 0 }
+          }
+        }
       }
     },
-    "tasks": {
+    "cards": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "status", "data_keys"],
+        "required": [
+          "name",
+          "status",
+          "requires",
+          "requires_satisfied",
+          "requires_missing",
+          "provides_declared",
+          "provides_runtime",
+          "blocked_by",
+          "unblocks",
+          "runtime"
+        ],
         "properties": {
           "name": { "type": "string" },
           "status": { "type": "string" },
-          "data_keys": {
-            "type": "array",
-            "items": { "type": "string" }
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["message"],
+            "properties": {
+              "message": { "type": "string" },
+              "code": { "type": "string" },
+              "at": { "type": ["string", "null"] },
+              "source": { "type": "string" }
+            }
           },
-          "error": { "type": "string" }
+          "requires": { "type": "array", "items": { "type": "string" } },
+          "requires_satisfied": { "type": "array", "items": { "type": "string" } },
+          "requires_missing": { "type": "array", "items": { "type": "string" } },
+          "provides_declared": { "type": "array", "items": { "type": "string" } },
+          "provides_runtime": { "type": "array", "items": { "type": "string" } },
+          "blocked_by": { "type": "array", "items": { "type": "string" } },
+          "unblocks": { "type": "array", "items": { "type": "string" } },
+          "runtime": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "attempt_count",
+              "restart_count",
+              "in_progress_since",
+              "last_transition_at",
+              "last_completed_at",
+              "last_restarted_at",
+              "status_age_ms"
+            ],
+            "properties": {
+              "attempt_count": { "type": "integer", "minimum": 0 },
+              "restart_count": { "type": "integer", "minimum": 0 },
+              "in_progress_since": { "type": ["string", "null"] },
+              "last_transition_at": { "type": ["string", "null"] },
+              "last_completed_at": { "type": ["string", "null"] },
+              "last_restarted_at": { "type": ["string", "null"] },
+              "status_age_ms": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          }
         }
       }
     }

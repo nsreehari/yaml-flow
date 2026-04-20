@@ -860,33 +860,150 @@ function cmdStatus(args: string[]): void {
   if (!dir) { console.error('Usage: board-live-cards status --rg <dir>'); process.exit(1); }
 
   const live = loadBoard(dir);
-  const tasks = live.state.tasks;
-  const taskNames = Object.keys(tasks);
+  const taskState = live.state.tasks;
+  const taskConfig = live.config.tasks;
+  const cardNames = Object.keys(taskState);
   const sched = schedule(live);
+
+  const statusCounts = {
+    completed: 0,
+    failed: 0,
+    in_progress: 0,
+    pending: 0,
+    blocked: 0,
+    unresolved: 0,
+  };
+
+  const waitingByCard = new Map<string, string[]>();
+  for (const p of sched.pending) waitingByCard.set(p.taskName, p.waitingOn);
+  for (const u of sched.unresolved) waitingByCard.set(u.taskName, u.missingTokens);
+  for (const b of sched.blocked) waitingByCard.set(b.taskName, b.failedTokens);
+
+  const providersByToken = new Map<string, string[]>();
+  const dependentsByToken = new Map<string, string[]>();
+  for (const [name, cfg] of Object.entries(taskConfig)) {
+    for (const token of cfg.provides ?? []) {
+      const providers = providersByToken.get(token) ?? [];
+      providers.push(name);
+      providersByToken.set(token, providers);
+    }
+    for (const token of cfg.requires ?? []) {
+      const dependents = dependentsByToken.get(token) ?? [];
+      dependents.push(name);
+      dependentsByToken.set(token, dependents);
+    }
+  }
+
+  const cards: BoardStatusCard[] = cardNames.sort().map((name) => {
+    const state = taskState[name] as {
+      status: string;
+      data?: Record<string, unknown>;
+      error?: string;
+      startedAt?: string;
+      completedAt?: string;
+      failedAt?: string;
+      lastUpdated?: string;
+      executionCount?: number;
+      retryCount?: number;
+    };
+    const cfg = taskConfig[name] ?? { requires: [], provides: [] };
+
+    if (state.status === 'completed') statusCounts.completed += 1;
+    else if (state.status === 'failed') statusCounts.failed += 1;
+    else if (state.status === 'in-progress') statusCounts.in_progress += 1;
+
+    const requires = cfg.requires ?? [];
+    const provides = cfg.provides ?? [];
+    const runtimeKeys = Object.keys(state.data ?? {}).sort();
+    const requiresSatisfied = requires.filter((token) => live.state.availableOutputs.includes(token));
+    const requiresMissing = requires.filter((token) => !live.state.availableOutputs.includes(token));
+    const blockedBy = waitingByCard.get(name) ?? requiresMissing;
+
+    const unblocks = new Set<string>();
+    for (const token of provides) {
+      for (const dependent of dependentsByToken.get(token) ?? []) {
+        if (dependent !== name) unblocks.add(dependent);
+      }
+    }
+
+    const lastFailureAt = state.failedAt;
+    const error = state.error
+      ? {
+          message: state.error,
+          code: 'TASK_FAILED',
+          at: lastFailureAt,
+          source: 'task-runtime' as const,
+        }
+      : undefined;
+
+    return {
+      name,
+      status: state.status,
+      error,
+      requires,
+      requires_satisfied: requiresSatisfied,
+      requires_missing: requiresMissing,
+      provides_declared: provides,
+      provides_runtime: runtimeKeys,
+      blocked_by: blockedBy,
+      unblocks: Array.from(unblocks).sort(),
+      runtime: {
+        attempt_count: state.executionCount ?? 0,
+        restart_count: state.retryCount ?? 0,
+        in_progress_since: state.status === 'in-progress' ? (state.startedAt ?? null) : null,
+        last_transition_at: state.lastUpdated ?? null,
+        last_completed_at: state.completedAt ?? null,
+        last_restarted_at: state.startedAt ?? null,
+        status_age_ms: state.lastUpdated ? Math.max(0, Date.now() - Date.parse(state.lastUpdated)) : null,
+      },
+    };
+  });
+
+  statusCounts.pending = sched.pending.length;
+  statusCounts.blocked = sched.blocked.length;
+  statusCounts.unresolved = sched.unresolved.length;
+
+  const fanOut = cards
+    .map((c) => ({ name: c.name, fanOut: c.unblocks.length }))
+    .sort((a, b) => b.fanOut - a.fanOut || a.name.localeCompare(b.name));
+  const maxFanOut = fanOut.length > 0 ? fanOut[0] : { name: null, fanOut: 0 };
+
+  const allRequires = new Set<string>();
+  for (const cfg of Object.values(taskConfig)) {
+    for (const r of cfg.requires ?? []) allRequires.add(r);
+  }
+  let orphanCards = 0;
+  for (const [name, cfg] of Object.entries(taskConfig)) {
+    const requiresNone = (cfg.requires ?? []).length === 0;
+    const provides = cfg.provides ?? [];
+    const feedsAny = provides.some((p) => (dependentsByToken.get(p) ?? []).some((d) => d !== name));
+    if (requiresNone && !feedsAny) orphanCards += 1;
+  }
 
   const statusObject: BoardStatusObject = {
     schema_version: 'v1',
-    board: {
-      path: path.resolve(dir),
+    meta: {
+      board: {
+        path: path.resolve(dir),
+      },
     },
     summary: {
-      task_count: taskNames.length,
-    },
-    schedule: {
+      card_count: cardNames.length,
+      completed: statusCounts.completed,
       eligible: sched.eligible.length,
-      pending: sched.pending.length,
-      blocked: sched.blocked.length,
-      unresolved: sched.unresolved.length,
+      pending: statusCounts.pending,
+      blocked: statusCounts.blocked,
+      unresolved: statusCounts.unresolved,
+      failed: statusCounts.failed,
+      in_progress: statusCounts.in_progress,
+      orphan_cards: orphanCards,
+      topology: {
+        edge_count: Array.from(allRequires).length,
+        max_fan_out_card: maxFanOut.name,
+        max_fan_out: maxFanOut.fanOut,
+      },
     },
-    tasks: taskNames.sort().map((name) => {
-      const t = tasks[name] as { status: string; data?: Record<string, unknown>; error?: string };
-      return {
-        name,
-        status: t.status,
-        data_keys: t.data ? Object.keys(t.data).sort() : [],
-        error: t.error,
-      };
-    }),
+    cards,
   };
 
   if (asJson) {
@@ -894,41 +1011,70 @@ function cmdStatus(args: string[]): void {
     return;
   }
 
-  console.log(`Board: ${statusObject.board.path}`);
-  console.log(`Tasks: ${statusObject.summary.task_count}`);
+  console.log(`Board: ${statusObject.meta.board.path}`);
+  console.log(`Tasks: ${statusObject.summary.card_count}`);
   console.log('');
 
-  for (const task of statusObject.tasks) {
-    const dataKeys = task.data_keys.join(', ');
-    console.log(`  ${task.status.padEnd(12)} ${task.name}${dataKeys ? ` — [${dataKeys}]` : ''}`);
+  for (const card of statusObject.cards) {
+    const dataKeys = card.provides_runtime.join(', ');
+    console.log(`  ${card.status.padEnd(12)} ${card.name}${dataKeys ? ` — [${dataKeys}]` : ''}`);
   }
 
   console.log('');
-  console.log(`Schedule: ${statusObject.schedule.eligible} eligible, ${statusObject.schedule.pending} pending, ${statusObject.schedule.blocked} blocked, ${statusObject.schedule.unresolved} unresolved`);
+  console.log(`Schedule: ${statusObject.summary.eligible} eligible, ${statusObject.summary.pending} pending, ${statusObject.summary.blocked} blocked, ${statusObject.summary.unresolved} unresolved`);
 }
 
-export interface BoardStatusTask {
+export interface BoardStatusCard {
   name: string;
   status: string;
-  data_keys: string[];
-  error?: string;
+  error?: {
+    message: string;
+    code?: string;
+    at?: string;
+    source?: 'task-runtime' | 'source-fetch' | 'timeout' | 'unknown';
+  };
+  requires: string[];
+  requires_satisfied: string[];
+  requires_missing: string[];
+  provides_declared: string[];
+  provides_runtime: string[];
+  blocked_by: string[];
+  unblocks: string[];
+  runtime: {
+    attempt_count: number;
+    restart_count: number;
+    in_progress_since: string | null;
+    last_transition_at: string | null;
+    last_completed_at: string | null;
+    last_restarted_at: string | null;
+    status_age_ms: number | null;
+  };
 }
 
 export interface BoardStatusObject {
   schema_version: 'v1';
-  board: {
-    path: string;
+  meta: {
+    board: {
+      path: string;
+    };
   };
   summary: {
-    task_count: number;
-  };
-  schedule: {
+    card_count: number;
+    completed: number;
     eligible: number;
     pending: number;
     blocked: number;
     unresolved: number;
+    failed?: number;
+    in_progress?: number;
+    orphan_cards?: number;
+    topology?: {
+      edge_count: number;
+      max_fan_out_card: string | null;
+      max_fan_out: number;
+    };
   };
-  tasks: BoardStatusTask[];
+  cards: BoardStatusCard[];
 }
 
 function cmdTaskCompleted(args: string[]): void {

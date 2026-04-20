@@ -146,11 +146,188 @@
     </section>
 
     <section class="card">
-      <h2>Examples</h2>
-      <pre><code>node step-machine-cli.js examples/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml
-node step-machine-cli.js examples/step-machine-demo/two-step-math.flow.yaml --handlers examples/step-machine-demo/two-step-math-handlers.js --data '{"x": 7}'
-node examples/step-machine-cli/scenario-harness/run-scenario.js examples/step-machine-cli/scenario-harness/scenarios/portfolio-price-shock.json</code></pre>
-      <p class="muted">Portfolio example and reusable scenarios live under <code>examples/step-machine-cli/</code>.</p>
+      <h2>YAML Flow Structure</h2>
+      <p>A step-machine YAML file defines a sequential workflow with steps, handlers, and branching logic:</p>
+      <pre><code>name: portfolio-tracker
+initial_state: idle
+steps:
+  holdings:
+    handler:
+      inline: loadHoldings
+    transition_on_complete: fetch-prices
+  fetch-prices:
+    handler:
+      cli: node fetch.js
+      input-transforms: ["$rename(state, { holdings: '$x' })"]
+      output-transforms: ["prices: sources.prices"]
+    requires:
+      - holdings
+    transition_on_complete: compute-value
+  compute-value:
+    handler:
+      inline: calculateTotal
+    produces_data: [total_value, currency]
+    transition_on_complete: success_state
+  success_state:
+    handler:
+    produces_data: [total_value, currency]
+failure_transitions:
+  - from: "*"
+    to: failure_state
+    if: "error"
+  failure_state:
+    handler:</code></pre>
+      <p><strong>Key fields:</strong></p>
+      <ul style="margin: 8px 0 0 18px;">
+        <li><code>steps</code>: map of step definitions; keys are step names.</li>
+        <li><code>handler</code>: defines how the step executes (inline, CLI, or passthrough).</li>
+        <li><code>transition_on_complete</code>: next step name after success.</li>
+        <li><code>requires</code> (CLI handlers): array of data keys that must be in input.</li>
+        <li><code>input-transforms</code>: JSONata expressions to shape input before passing to handler.</li>
+        <li><code>output-transforms</code>: JSONata expressions to shape handler result.</li>
+        <li><code>produces_data</code>: filter final output to only these keys.</li>
+        <li><code>failure_transitions</code>: routes to error states on failure.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Understanding JSONata in Step Machine</h2>
+      <p><strong>JSONata</strong> is used in transformations to reshape and derive data at each step:</p>
+      <pre><code>// Rename and restructure
+"$rename(state, { old_key: 'new_key' })"
+
+// Pick specific fields
+"{ price: state.price, qty: state.qty }"
+
+// Array mapping
+"state.items.{ id, quantity * 2 as double_qty }"
+
+// Conditional transforms
+"state.discount_rate > 0 ? { final_price: state.price * (1 - state.discount_rate) } : { final_price: state.price }"
+
+// Merge state with handler result
+"state &amp; { result_field: sources.handler_result }"
+
+// Combine multiple sources
+"{ summary: sources.prices, transactions: requires.history }"</code></pre>
+      <p>In <code>input-transforms</code>, the context is the step input. In <code>output-transforms</code>, you have access to both.</p>
+    </section>
+
+    <section class="card">
+      <h2>Handler Types and Composition</h2>
+      <p><strong>Inline Handlers:</strong> JavaScript functions exported from <code>--handlers</code> module.</p>
+      <pre><code>// step-handlers.js
+export async function loadHoldings(input) {
+  return { portfolio: [...] };
+}
+
+// flow.yaml
+handler:
+  inline: loadHoldings</code></pre>
+
+      <p><strong>CLI Handlers:</strong> External processes with optional input/output transformation.</p>
+      <pre><code>handler:
+  cli: node transform.js
+  handler_vars:
+    ENV: "production"
+    DEBUG: "=state.debug"  // JSONata evaluation (= prefix)
+  input-transforms:
+    - "{ holdings: state.holdings, env: handler_vars.ENV }"
+  output-transforms:
+    - "{ total: sources.result, timestamp: $now() }"
+  result-mode: exit-code</code></pre>
+
+      <p><strong>handler_vars:</strong> Reusable variables injected into CLI command environment. Prefix with <code>=</code> for JSONata evaluation:</p>
+      <ul style="margin: 8px 0 0 18px;">
+        <li><code>SIMPLE: "value"</code> — literal string.</li>
+        <li><code>COMPUTED: "=state.user_id"</code> — evaluated JSONata.</li>
+        <li><code>ARRAY: "=requires.items.$map($string(id))"</code> — array transform to string.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Composition Patterns</h2>
+      <p><strong>Sequential Steps:</strong> Each step's output passes to the next via transition_on_complete.</p>
+      <pre><code>load_config → validate → fetch_data → compute → save</code></pre>
+
+      <p><strong>Multi-Transform Pipeline:</strong> Chain multiple JSONata expressions to progressively reshape data:</p>
+      <pre><code>input-transforms:
+  - "requires.raw_data"
+  - "{ normalized: $uppercase($) }"
+  - "{ final: { value: $, timestamp: $now() } }"</code></pre>
+
+      <p><strong>Error Handling with failure_transitions:</strong> Catch failures and route to error steps:</p>
+      <pre><code>failure_transitions:
+  - from: fetch_data
+    to: retry_fetch
+  - from: "*"
+    to: log_error
+    if: "error"</code></pre>
+
+      <p><strong>Data Passing Between Steps:</strong> Use <code>produces_data</code> to explicitly declare outputs, and <code>requires</code> to document inputs:</p>
+      <pre><code>step_a:
+  produces_data: [user_id, token]
+step_b:
+  requires: [user_id, token]
+  handler:
+    inline: processWithAuth</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Composition Checklist</h2>
+      <ul>
+        <li><strong>Name steps clearly:</strong> Use verbs and domain terms (fetch_config, validate, compute).</li>
+        <li><strong>Test transforms in isolation:</strong> JSONata expressions can be complex; test each one before integrating.</li>
+        <li><strong>Use produces_data:</strong> Explicitly declare what each step outputs to avoid unintended data leakage.</li>
+        <li><strong>Validate input with requires:</strong> CLI handlers should list data dependencies.</li>
+        <li><strong>Handle errors with failure_transitions:</strong> Define fallback paths for robustness.</li>
+        <li><strong>Use handler_vars for config:</strong> Environment-specific values, timeouts, API keys (via = prefix).</li>
+        <li><strong>Test with --data:</strong> Use <code>--data '{"key": "value"}'</code> to inject initial state and verify the flow.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Example: Portfolio Tracker Flow</h2>
+      <pre><code>name: portfolio-tracker
+initial_state: idle
+
+steps:
+  load-holdings:
+    handler:
+      inline: loadHoldings
+    produces_data: [holdings, user_id]
+    transition_on_complete: fetch-prices
+
+  fetch-prices:
+    handler:
+      cli: node fetch-market-prices.js
+      handler_vars:
+        SYMBOLS: "=requires.holdings[*].symbol"
+        TIMEOUT: "30"
+      input-transforms: ["{ symbols: handler_vars.SYMBOLS }"]
+      output-transforms: ["prices: sources.market_data"]
+    requires: [holdings]
+    produces_data: [prices]
+    transition_on_complete: compute-total
+
+  compute-total:
+    handler:
+      inline: calculatePortfolioValue
+      input-transforms: ["{ holdings: requires.holdings, prices: requires.prices }"]
+    requires: [holdings, prices]
+    produces_data: [total_value, composition]
+    transition_on_complete: success_state
+
+  success_state:
+    handler:
+
+failure_transitions:
+  - from: "*"
+    to: failure_state
+    if: error
+
+failure_state:
+  handler:</code></pre>
     </section>
   </div>
 </body>
