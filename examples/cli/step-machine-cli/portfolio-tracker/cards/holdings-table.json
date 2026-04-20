@@ -1,0 +1,22 @@
+{
+  "id": "holdings-table",
+  "meta": { "title": "Holdings Table" },
+  "requires": ["holdings", "prices"],
+  "provides": [{ "bindTo": "table", "src": "computed_values.table" }],
+  "state": {},
+  "compute": [
+    {
+      "bindTo": "table",
+      "expr": "{ \"rows\": $map(requires.holdings, function($h) { { \"symbol\": $h.symbol, \"qty\": $h.qty, \"price\": $lookup(requires.prices, $h.symbol), \"value\": $h.qty * $lookup(requires.prices, $h.symbol) } }) }"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "table",
+        "label": "Portfolio Positions",
+        "data": { "bind": "computed_values.table.rows", "columns": ["symbol", "qty", "price", "value"] }
+      }
+    ]
+  }
+}

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Step Machine Browser Example — yaml-flow</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 { color: #333; }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .step-list {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 10px 0;
+    }
+    .step {
+      padding: 8px 16px;
+      border-radius: 20px;
+      background: #e0e0e0;
+      font-size: 14px;
+    }
+    .step.active {
+      background: #2196F3;
+      color: white;
+    }
+    .step.completed {
+      background: #4CAF50;
+      color: white;
+    }
+    button {
+      background: #2196F3;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover { background: #1976D2; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+        .log {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .log-entry { margin: 5px 0; }
+        .log-entry.error { color: #ef5350; }
+        .log-entry.transition { color: #64B5F6; }
+        .result {
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+        .result.success { background: #C8E6C9; }
+        .result.error { background: #FFCDD2; }
+        input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <h1>yaml-flow Step Machine Browser Example</h1>
+    
+    <div class="card">
+        <h2>Simple Greeting Flow</h2>
+        <p>Enter your name and run the flow to see it in action.</p>
+        
+        <div style="margin: 15px 0;">
+            <input type="text" id="nameInput" placeholder="Enter your name" value="Developer">
+            <button onclick="runFlow()">Run Flow</button>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+
+        <h3>Steps</h3>
+        <div class="step-list" id="stepList">
+            <div class="step" data-step="greet">greet</div>
+            <div class="step" data-step="validate">validate</div>
+            <div class="step" data-step="personalize">personalize</div>
+            <div class="step" data-step="success_state">✓ success</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Execution Log</h3>
+        <div class="log" id="log"></div>
+        
+        <div id="result"></div>
+    </div>
+
+    <script type="module">
+        // Import from CDN (in production) or local build
+        // For this demo, we'll inline a simplified version
+        
+        // ============= Inline yaml-flow (simplified for demo) =============
+        
+        class MemoryStore {
+            constructor() {
+                this.runs = new Map();
+                this.data = new Map();
+            }
+            async saveRunState(runId, state) { this.runs.set(runId, {...state}); }
+            async loadRunState(runId) { return this.runs.get(runId) || null; }
+            async deleteRunState(runId) { this.runs.delete(runId); this.data.delete(runId); }
+            async setData(runId, key, value) {
+                if (!this.data.has(runId)) this.data.set(runId, {});
+                this.data.get(runId)[key] = value;
+            }
+            async getData(runId, key) { return this.data.get(runId)?.[key]; }
+            async getAllData(runId) { return {...(this.data.get(runId) || {})}; }
+            async clearData(runId) { this.data.delete(runId); }
+        }
+
+        class FlowEngine {
+            constructor(flow, handlers, options = {}) {
+                this.flow = flow;
+                this.handlers = handlers;
+                this.store = options.store || new MemoryStore();
+                this.components = options.components || {};
+                this.options = options;
+            }
+
+            async run(initialData = {}) {
+                const runId = crypto.randomUUID();
+                const startedAt = Date.now();
+                
+                const runState = {
+                    runId,
+                    currentStep: this.flow.settings.start_step,
+                    status: 'running',
+                    stepHistory: [],
+                    iterationCounts: {},
+                    retryCounts: {},
+                    startedAt,
+                    updatedAt: startedAt,
+                };
+
+                await this.store.saveRunState(runId, runState);
+                for (const [key, value] of Object.entries(initialData)) {
+                    await this.store.setData(runId, key, value);
+                }
+
+                let iterations = 0;
+                const maxSteps = this.flow.settings.max_total_steps || 100;
+
+                while (iterations < maxSteps) {
+                    const currentStep = runState.currentStep;
+
+                    // Check terminal state
+                    const terminalState = this.flow.terminal_states[currentStep];
+                    if (terminalState) {
+                        const allData = await this.store.getAllData(runId);
+                        return {
+                            runId,
+                            status: 'completed',
+                            intent: terminalState.return_intent,
+                            data: this.extractReturnData(terminalState.return_artifacts, allData),
+                            finalStep: currentStep,
+                            stepHistory: runState.stepHistory,
+                            durationMs: Date.now() - startedAt,
+                        };
+                    }
+
+                    const stepConfig = this.flow.steps[currentStep];
+                    const handler = this.handlers[currentStep];
+                    
+                    // Build input
+                    const allData = await this.store.getAllData(runId);
+                    const input = stepConfig.expects_data 
+                        ? Object.fromEntries(stepConfig.expects_data.map(k => [k, allData[k]]))
+                        : allData;
+
+                    // Execute
+                    this.options.onStep?.(currentStep, 'start');
+                    const result = await handler(input, { runId, stepName: currentStep, components: this.components, store: this.store });
+                    this.options.onStep?.(currentStep, result.result);
+
+                    // Store output
+                    if (result.data) {
+                        for (const [key, value] of Object.entries(result.data)) {
+                            await this.store.setData(runId, key, value);
+                        }
+                    }
+
+                    // Transition
+                    const nextStep = stepConfig.transitions[result.result];
+                    this.options.onTransition?.(currentStep, nextStep);
+                    
+                    runState.stepHistory.push(currentStep);
+                    runState.currentStep = nextStep;
+                    iterations++;
+                }
+
+                return { runId, status: 'max_iterations', data: {}, stepHistory: runState.stepHistory };
+            }
+
+            extractReturnData(artifacts, allData) {
+                if (!artifacts || artifacts === false) return {};
+                if (typeof artifacts === 'string') return { [artifacts]: allData[artifacts] };
+                if (Array.isArray(artifacts)) return Object.fromEntries(artifacts.map(k => [k, allData[k]]));
+                return allData;
+            }
+        }
+        
+        // ============= Flow Definition =============
+        
+        const flow = {
+            settings: {
+                start_step: 'greet',
+                max_total_steps: 10
+            },
+            steps: {
+                greet: {
+                    produces_data: ['greeting', 'user_name'],
+                    transitions: { success: 'validate', failure: 'error_state' }
+                },
+                validate: {
+                    expects_data: ['greeting', 'user_name'],
+                    produces_data: ['is_valid'],
+                    transitions: { success: 'personalize', invalid: 'error_state', failure: 'error_state' }
+                },
+                personalize: {
+                    expects_data: ['greeting', 'user_name'],
+                    produces_data: ['final_message'],
+                    transitions: { success: 'success_state', failure: 'error_state' }
+                }
+            },
+            terminal_states: {
+                success_state: { return_intent: 'success', return_artifacts: ['final_message', 'user_name'] },
+                error_state: { return_intent: 'error', return_artifacts: false }
+            }
+        };
+
+        // ============= Step Handlers =============
+        
+        const handlers = {
+            async greet(input) {
+                const userName = input.initial_name || 'World';
+                await sleep(300); // Simulate async work
+                return {
+                    result: 'success',
+                    data: { greeting: 'Hello', user_name: userName }
+                };
+            },
+            
+            async validate(input) {
+                const { greeting, user_name } = input;
+                await sleep(200);
+                const isValid = greeting && user_name;
+                return {
+                    result: isValid ? 'success' : 'invalid',
+                    data: { is_valid: isValid }
+                };
+            },
+            
+            async personalize(input) {
+                const { greeting, user_name } = input;
+                await sleep(200);
+                return {
+                    result: 'success',
+                    data: { final_message: `${greeting}, ${user_name}! Welcome to yaml-flow in the browser! 🎉` }
+                };
+            }
+        };
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // ============= UI Functions =============
+        
+        const logEl = document.getElementById('log');
+        const resultEl = document.getElementById('result');
+        const stepEls = document.querySelectorAll('.step');
+
+        function log(message, type = '') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function updateStep(stepName, status) {
+            stepEls.forEach(el => {
+                if (el.dataset.step === stepName) {
+                    el.classList.remove('active', 'completed');
+                    el.classList.add(status);
+                }
+            });
+        }
+
+        function resetSteps() {
+            stepEls.forEach(el => el.classList.remove('active', 'completed'));
+        }
+
+        window.clearLog = function() {
+            logEl.innerHTML = '';
+            resultEl.innerHTML = '';
+            resetSteps();
+        };
+
+        window.runFlow = async function() {
+            resetSteps();
+            resultEl.innerHTML = '';
+            
+            const name = document.getElementById('nameInput').value || 'World';
+            log(`Starting flow with name: "${name}"`);
+
+            const engine = new FlowEngine(flow, handlers, {
+                store: new MemoryStore(),
+                onStep: (step, status) => {
+                    log(`Step [${step}]: ${status}`);
+                    updateStep(step, status === 'start' ? 'active' : 'completed');
+                },
+                onTransition: (from, to) => {
+                    log(`Transition: ${from} → ${to}`, 'transition');
+                }
+            });
+
+            try {
+                const result = await engine.run({ initial_name: name });
+                
+                log(`Flow completed: ${result.intent}`);
+                updateStep(result.finalStep, 'completed');
+
+                resultEl.innerHTML = `
+                    <div class="result ${result.intent === 'success' ? 'success' : 'error'}">
+                        <strong>Result:</strong> ${result.intent}<br>
+                        <strong>Message:</strong> ${result.data.final_message || 'N/A'}<br>
+                        <strong>Duration:</strong> ${result.durationMs}ms<br>
+                        <strong>Steps:</strong> ${result.stepHistory.join(' → ')} → ${result.finalStep}
+                    </div>
+                `;
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+                resultEl.innerHTML = `<div class="result error">Error: ${error.message}</div>`;
+            }
+        };
+
+        log('yaml-flow browser demo loaded. Click "Run Flow" to start.');
+    </script>
+</body>
+</html>

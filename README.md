@@ -851,7 +851,7 @@ while (true) {
 - Every deployment customizes how sub-tasks execute: in-process, `execSync`, HTTP, serverless.
 - The primitives (`batch` + `resolveVariables` + `resolveConfigTemplates` + both engines) compose without coupling.
 
-See the [examples/graph-of-graphs/](./examples/graph-of-graphs/) directory for complete runnable examples.
+See the [examples/npm-libs/graph-of-graphs/](./examples/npm-libs/graph-of-graphs/) directory for complete runnable examples.
 
 ---
 
@@ -1555,25 +1555,25 @@ See the [examples/](./examples) directory:
 
 | Example | Mode | Demonstrates |
 |---|---|---|
-| [Simple Greeting](./examples/node/simple-greeting.ts) | Step Machine | Basic flow with file store |
-| [AI Conversation](./examples/node/ai-conversation.ts) | Step Machine | Retry, circuit breakers, component injection |
-| [Research Pipeline](./examples/event-graph/research-pipeline.ts) | Event Graph | Parallel tasks, goal-based completion |
-| [CI/CD Pipeline](./examples/event-graph/ci-cd-pipeline.ts) | Event Graph | External events, conditional routing, failure tokens |
-| [Batch Tickets](./examples/batch/batch-step-machine.ts) | Batch | Concurrent processing, progress tracking |
-| [URL Pipeline](./examples/graph-of-graphs/url-processing-pipeline.ts) | Graph-of-Graphs | Outer event-graph → batch × inner event-graph per item |
-| [Multi-Stage ETL](./examples/graph-of-graphs/multi-stage-etl.ts) | Graph-of-Graphs | Mixed modes: event-graph outer → step-machine + event-graph subs |
-| [Stock Dashboard](./examples/continuous-event-graph/stock-dashboard.ts) | Continuous Event Graph | Runtime mutations, token drain, upstream/downstream, snapshot |
-| [Reactive Pipeline](./examples/continuous-event-graph/reactive-pipeline.ts) | Reactive Graph | Self-driving ETL — push once, 4 tasks complete automatically |
-| [Reactive Monitoring](./examples/continuous-event-graph/reactive-monitoring.ts) | Reactive Graph | Conditional routing, on_failure escalation, runtime addNode |
-| [Live Portfolio Dashboard](./examples/continuous-event-graph/live-portfolio-dashboard.ts) | Reactive Graph + Live Cards | 15+ cards, disk roundtrip, addRequires/removeRequires, addProvides/removeProvides, pushAll, retriggerAll |
-| [Executor Pipeline](./examples/event-graph/executor-pipeline.ts) | Event Graph (library) | You-drive-the-loop ETL with random async delays |
-| [Executor Diamond](./examples/event-graph/executor-diamond.ts) | Event Graph (library) | Parallel fan-out/fan-in diamond DAG with async executors |
-| [Azure Deployment](./examples/inference/azure-deployment.ts) | Inference | LLM analyzes deployment logs, auto-completes checkpoints |
-| [Data Pipeline](./examples/inference/data-pipeline.ts) | Inference | Iterative inference — evidence arrives in waves |
-| [Pluggable Adapters](./examples/inference/pluggable-adapters.ts) | Inference | OpenAI, Anthropic, Azure, CLI, HTTP adapter factories |
-| [Copilot CLI](./examples/inference/copilot-cli.ts) | Inference | GitHub Copilot CLI as inference adapter via `createCliAdapter` |
-| [Order Processing](./examples/flows/order-processing.yaml) | Step Machine | YAML flow definition |
-| [Browser Demo](./examples/browser/index.html) | Step Machine | In-browser usage |
+| [Simple Greeting](./examples/npm-libs/node/simple-greeting.ts) | Step Machine | Basic flow with file store |
+| [AI Conversation](./examples/npm-libs/node/ai-conversation.ts) | Step Machine | Retry, circuit breakers, component injection |
+| [Research Pipeline](./examples/npm-libs/event-graph/research-pipeline.ts) | Event Graph | Parallel tasks, goal-based completion |
+| [CI/CD Pipeline](./examples/npm-libs/event-graph/ci-cd-pipeline.ts) | Event Graph | External events, conditional routing, failure tokens |
+| [Batch Tickets](./examples/npm-libs/batch/batch-step-machine.ts) | Batch | Concurrent processing, progress tracking |
+| [URL Pipeline](./examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts) | Graph-of-Graphs | Outer event-graph → batch × inner event-graph per item |
+| [Multi-Stage ETL](./examples/npm-libs/graph-of-graphs/multi-stage-etl.ts) | Graph-of-Graphs | Mixed modes: event-graph outer → step-machine + event-graph subs |
+| [Stock Dashboard](./examples/npm-libs/continuous-event-graph/stock-dashboard.ts) | Continuous Event Graph | Runtime mutations, token drain, upstream/downstream, snapshot |
+| [Reactive Pipeline](./examples/npm-libs/continuous-event-graph/reactive-pipeline.ts) | Reactive Graph | Self-driving ETL — push once, 4 tasks complete automatically |
+| [Reactive Monitoring](./examples/npm-libs/continuous-event-graph/reactive-monitoring.ts) | Reactive Graph | Conditional routing, on_failure escalation, runtime addNode |
+| [Live Portfolio Dashboard](./examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts) | Reactive Graph + Live Cards | 15+ cards, disk roundtrip, addRequires/removeRequires, addProvides/removeProvides, pushAll, retriggerAll |
+| [Executor Pipeline](./examples/npm-libs/event-graph/executor-pipeline.ts) | Event Graph (library) | You-drive-the-loop ETL with random async delays |
+| [Executor Diamond](./examples/npm-libs/event-graph/executor-diamond.ts) | Event Graph (library) | Parallel fan-out/fan-in diamond DAG with async executors |
+| [Azure Deployment](./examples/npm-libs/inference/azure-deployment.ts) | Inference | LLM analyzes deployment logs, auto-completes checkpoints |
+| [Data Pipeline](./examples/npm-libs/inference/data-pipeline.ts) | Inference | Iterative inference — evidence arrives in waves |
+| [Pluggable Adapters](./examples/npm-libs/inference/pluggable-adapters.ts) | Inference | OpenAI, Anthropic, Azure, CLI, HTTP adapter factories |
+| [Copilot CLI](./examples/npm-libs/inference/copilot-cli.ts) | Inference | GitHub Copilot CLI as inference adapter via `createCliAdapter` |
+| [Order Processing](./examples/npm-libs/flows/order-processing.yaml) | Step Machine | YAML flow definition |
+| [Browser Demo](./examples/browser/step-machine-browser/index.html) | Step Machine | In-browser usage |
 
 ---
 

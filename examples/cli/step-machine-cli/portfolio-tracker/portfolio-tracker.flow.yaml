@@ -1,0 +1,227 @@
+id: portfolio-tracker-step-machine
+handler_vars:
+  BOARDCLI_CMD: ../../../board-live-cards-cli.js
+  TMP_FILE_NAME: tmp_file1
+settings:
+  start_step: t0_reset_board
+  max_total_steps: 150
+  timeout_ms: 300000
+
+steps:
+  t0_reset_board:
+    description: Reset board runtime directory for idempotent reruns
+    expects_data: [runtime_root, board_name]
+    produces_data: [board_dir]
+    handler:
+      cli: node ./handlers/reset-board-dir-cli.js
+      input-transforms:
+        BOARD_DIR: runtime_root & "/" & board_name
+      output-transforms:
+        board_dir: data.board_dir
+    transitions:
+      success: t0_init_board
+    failure_transitions:
+      failure: failed_state
+
+  t0_init_board:
+    description: Initialize board runtime directory
+    expects_data: [board_dir]
+    produces_data: [board_dir]
+    handler:
+      cli: node %%BOARDCLI_CMD%% init "%%BOARD_DIR%%"
+      result-mode: exit-code
+      input-transforms:
+        BOARD_DIR: board_dir
+      output-transforms:
+        board_dir: BOARD_DIR
+    transitions:
+      success: t0_add_cards
+    failure_transitions:
+      failure: failed_state
+
+  t0_add_cards:
+    description: Add local portfolio cards
+    expects_data: [board_dir, cards_template_dir]
+    produces_data: [cards_dir]
+    handler:
+      cli: node %%BOARDCLI_CMD%% add-cards --rg "%%BOARD_DIR%%" --card-glob "%%CARDS_GLOB%%"
+      result-mode: exit-code
+      input-transforms:
+        BOARD_DIR: board_dir
+        CARDS_GLOB: cards_template_dir & "/*.json"
+      output-transforms:
+        cards_dir: cards_template_dir
+    transitions:
+      success: t1_write_prices
+    failure_transitions:
+      failure: failed_state
+
+  t1_write_prices:
+    description: Write baseline prices
+    expects_data: [board_dir, prices_t1]
+    produces_data: [prices_written_t1]
+    handler:
+      cli: node ./handlers/write-prices-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        TMP_FILE_NAME: TMP_FILE_NAME
+        PRICES: prices_t1
+      output-transforms:
+        prices_written_t1: data.wrote
+    transitions:
+      success: t1_wait
+    failure_transitions:
+      failure: failed_state
+
+  t1_wait:
+    description: Wait for cards to complete after T1
+    expects_data: [board_dir, completion_tasks]
+    produces_data: [t1_done]
+    handler:
+      cli: node ./handlers/wait-completed-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        COMPLETION_TASKS: completion_tasks
+        LABEL: "'T1'"
+        TIMEOUT_MS: "60000"
+        POLL_MS: "500"
+      output-transforms:
+        t1_done: data.completed
+    transitions:
+      success: t2_update_holdings
+    failure_transitions:
+      timeout: failed_state
+      failure: failed_state
+
+  t2_update_holdings:
+    description: Add GOOG position to holdings
+    expects_data: [board_dir, cards_dir, holdings_t2]
+    produces_data: [t2_holdings_saved]
+    handler:
+      cli: node ./handlers/update-holdings-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        CARDS_DIR: cards_dir
+        HOLDINGS: holdings_t2
+      output-transforms:
+        t2_holdings_saved: data.saved
+    transitions:
+      success: t2_write_prices
+    failure_transitions:
+      failure: failed_state
+
+  t2_write_prices:
+    description: Write prices after T2 holdings update
+    expects_data: [board_dir, prices_t2]
+    produces_data: [prices_written_t2]
+    handler:
+      cli: node ./handlers/write-prices-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        TMP_FILE_NAME: TMP_FILE_NAME
+        PRICES: prices_t2
+      output-transforms:
+        prices_written_t2: data.wrote
+    transitions:
+      success: t2_wait
+    failure_transitions:
+      failure: failed_state
+
+  t2_wait:
+    description: Wait for cards to complete after T2
+    expects_data: [board_dir, completion_tasks]
+    produces_data: [t2_done]
+    handler:
+      cli: node ./handlers/wait-completed-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        COMPLETION_TASKS: completion_tasks
+        LABEL: "'T2'"
+        TIMEOUT_MS: "60000"
+        POLL_MS: "500"
+      output-transforms:
+        t2_done: data.completed
+    transitions:
+      success: t3_retrigger
+    failure_transitions:
+      timeout: failed_state
+      failure: failed_state
+
+  t3_retrigger:
+    description: Retrigger price-fetch task
+    expects_data: [board_dir, price_fetch_task]
+    produces_data: [t3_retriggered]
+    handler:
+      cli: node %%BOARDCLI_CMD%% retrigger --rg "%%BOARD_DIR%%" --task "%%TASK%%"
+      result-mode: exit-code
+      input-transforms:
+        BOARD_DIR: board_dir
+        TASK: price_fetch_task
+      output-transforms:
+        t3_retriggered: true
+    transitions:
+      success: t3_write_prices
+    failure_transitions:
+      failure: failed_state
+
+  t3_write_prices:
+    description: Write final refreshed prices
+    expects_data: [board_dir, prices_t3]
+    produces_data: [prices_written_t3]
+    handler:
+      cli: node ./handlers/write-prices-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        TMP_FILE_NAME: TMP_FILE_NAME
+        PRICES: prices_t3
+      output-transforms:
+        prices_written_t3: data.wrote
+    transitions:
+      success: t3_wait
+    failure_transitions:
+      failure: failed_state
+
+  t3_wait:
+    description: Wait for cards to complete after T3
+    expects_data: [board_dir, completion_tasks]
+    produces_data: [t3_done]
+    handler:
+      cli: node ./handlers/wait-completed-cli.js
+      input-transforms:
+        BOARD_DIR: board_dir
+        COMPLETION_TASKS: completion_tasks
+        LABEL: "'T3'"
+        TIMEOUT_MS: "60000"
+        POLL_MS: "500"
+      output-transforms:
+        t3_done: data.completed
+    transitions:
+      success: t4_status
+    failure_transitions:
+      timeout: failed_state
+      failure: failed_state
+
+  t4_status:
+    description: Capture final board status
+    expects_data: [board_dir]
+    produces_data: [final_status]
+    handler:
+      cli: node %%BOARDCLI_CMD%% status --rg "%%BOARD_DIR%%"
+      result-mode: exit-code
+      input-transforms:
+        BOARD_DIR: board_dir
+      output-transforms:
+        final_status: stdout
+    transitions:
+      success: success_state
+    failure_transitions:
+      failure: failed_state
+
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [board_dir, t1_done, t2_done, t3_done, final_status]
+
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error, board_dir, final_status]

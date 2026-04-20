@@ -1597,7 +1597,7 @@ CARD MANAGEMENT
     Add one card or many cards from a glob and trigger processing.
     --card adds one JSON file.
     --card-glob adds all matching files in deterministic order.
-    Example glob: "examples/board-live-cards/portfolio-tracker/cards/*.json"
+    Example glob: "examples/browser/boards/portfolio-tracker/cards/*.json"
 
   update-card --rg <dir> --card-id <card-id> [--restart]
     Re-read the card JSON from disk and patch the board.
