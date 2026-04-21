@@ -21,7 +21,7 @@ export interface BrowserSourceAdapterContext {
 export type BrowserSourceAdapter =
   (ctx: BrowserSourceAdapterContext) => Promise<Record<string, unknown>> | Record<string, unknown>;
 
-export interface BrowserBoardRuntimeOptions {
+export interface BoardLiveGraphRuntimeOptions {
   sourceAdapters?: Record<string, BrowserSourceAdapter>;
   defaultSourceAdapter?: BrowserSourceAdapter;
   reactiveOptions?: Partial<Omit<ReactiveGraphOptions, 'handlers'>>;
@@ -29,19 +29,19 @@ export interface BrowserBoardRuntimeOptions {
   executionId?: string;
 }
 
-export interface BrowserBoardRuntimeUpdate {
+export interface BoardLiveGraphRuntimeUpdate {
   events: GraphEvent[];
   graph: LiveGraph;
   nodes: LiveCard[];
 }
 
-export interface BrowserBoardRuntime {
+export interface BoardLiveGraphRuntime {
   getGraph(): ReactiveGraph;
   getState(): LiveGraph;
   getNodes(): LiveCard[];
   getBoard(): LiveBoard;
   getSchedule(): ReturnType<typeof schedule>;
-  subscribe(listener: (update: BrowserBoardRuntimeUpdate) => void): () => void;
+  subscribe(listener: (update: BoardLiveGraphRuntimeUpdate) => void): () => void;
   addCard(card: LiveCard): void;
   upsertCard(card: LiveCard): void;
   removeCard(cardId: string): void;
@@ -93,10 +93,10 @@ function validateRequires(cards: Map<string, LiveCard>, changedCardId: string): 
   }
 }
 
-export function createBrowserBoardRuntime(
+export function createBoardLiveGraphRuntime(
   input: LiveCard[] | LiveBoard,
-  options: BrowserBoardRuntimeOptions = {},
-): BrowserBoardRuntime {
+  options: BoardLiveGraphRuntimeOptions = {},
+): BoardLiveGraphRuntime {
   const boardMeta: Pick<LiveBoard, 'id' | 'title' | 'mode' | 'positions' | 'settings'> = Array.isArray(input)
     ? {}
     : {
@@ -114,14 +114,14 @@ export function createBrowserBoardRuntime(
     cards.set(card.id, deepClone(card));
   }
 
-  const listeners = new Set<(update: BrowserBoardRuntimeUpdate) => void>();
+  const listeners = new Set<(update: BoardLiveGraphRuntimeUpdate) => void>();
   const sourceAdapters = options.sourceAdapters ?? {};
   const defaultSourceAdapter = options.defaultSourceAdapter;
 
   let graphRef: ReactiveGraph | null = null;
 
   const notifyListeners = (events: GraphEvent[], graph: LiveGraph): void => {
-    const update: BrowserBoardRuntimeUpdate = {
+    const update: BoardLiveGraphRuntimeUpdate = {
       events,
       graph,
       nodes: getRenderableNodes(),
@@ -267,7 +267,7 @@ export function createBrowserBoardRuntime(
     return out;
   }
 
-  const runtime: BrowserBoardRuntime = {
+  const runtime: BoardLiveGraphRuntime = {
     getGraph: () => graph,
     getState: () => graph.getState(),
     getSchedule: () => graph.getSchedule(),
@@ -276,7 +276,7 @@ export function createBrowserBoardRuntime(
       ...boardMeta,
       nodes: getRenderableNodes(),
     }),
-    subscribe(listener: (update: BrowserBoardRuntimeUpdate) => void): () => void {
+    subscribe(listener: (update: BoardLiveGraphRuntimeUpdate) => void): () => void {
       listeners.add(listener);
       listener({ events: [], graph: graph.getState(), nodes: getRenderableNodes() });
       return () => listeners.delete(listener);

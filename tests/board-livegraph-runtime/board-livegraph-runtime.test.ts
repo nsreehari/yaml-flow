@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { createBrowserBoardRuntime } from '../../src/browser-board-runtime/index.js';
+import { createBoardLiveGraphRuntime } from '../../src/board-livegraph-runtime/index.js';
 import type { LiveCard } from '../../src/continuous-event-graph/live-cards-bridge.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-describe('createBrowserBoardRuntime', () => {
+describe('createBoardLiveGraphRuntime', () => {
   it('runs source adapter + compute chain and returns updated board nodes', async () => {
     const cards: LiveCard[] = [
       {
@@ -24,7 +24,7 @@ describe('createBrowserBoardRuntime', () => {
       },
     ];
 
-    const runtime = createBrowserBoardRuntime(cards, {
+    const runtime = createBoardLiveGraphRuntime(cards, {
       sourceAdapters: {
         prices: () => ({ raw: [2, 3, 5] }),
       },
@@ -45,7 +45,7 @@ describe('createBrowserBoardRuntime', () => {
   });
 
   it('supports dynamic add/upsert/remove card mutations', async () => {
-    const runtime = createBrowserBoardRuntime([
+    const runtime = createBoardLiveGraphRuntime([
       { id: 'seed', state: { value: 7 } },
     ]);
 
@@ -82,7 +82,7 @@ describe('createBrowserBoardRuntime', () => {
   });
 
   it('patchCardState retriggers card and emits subscriber updates', async () => {
-    const runtime = createBrowserBoardRuntime([
+    const runtime = createBoardLiveGraphRuntime([
       {
         id: 'counter',
         state: { n: 1 },

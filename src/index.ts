@@ -118,14 +118,14 @@ export type {
 // ============================================================================
 // Browser Board Runtime
 // ============================================================================
-export { createBrowserBoardRuntime } from './browser-board-runtime/index.js';
+export { createBoardLiveGraphRuntime } from './board-livegraph-runtime/index.js';
 export type {
-  BrowserBoardRuntime,
-  BrowserBoardRuntimeOptions,
-  BrowserBoardRuntimeUpdate,
+  BoardLiveGraphRuntime,
+  BoardLiveGraphRuntimeOptions,
+  BoardLiveGraphRuntimeUpdate,
   BrowserSourceAdapter,
   BrowserSourceAdapterContext,
-} from './browser-board-runtime/index.js';
+} from './board-livegraph-runtime/index.js';
 
 // ============================================================================
 // Inference
