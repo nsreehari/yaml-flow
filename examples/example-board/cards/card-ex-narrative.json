@@ -9,10 +9,10 @@
   "requires": ["orders", "prices"],
   "view": {
     "elements": [
-      { "kind": "narrative", "data": { "bind": "state.narrative" } }
+      { "kind": "narrative", "data": { "bind": "card_data.narrative" } }
     ],
     "layout": { "board": { "col": 6, "order": 10 }, "canvas": { "x": 600, "y": 800, "w": 350, "h": 250 } },
     "features": { "refresh": true, "chat": true }
   },
-  "state": {}
+  "card_data": {}
 }

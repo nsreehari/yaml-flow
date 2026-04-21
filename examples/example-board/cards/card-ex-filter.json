@@ -6,10 +6,10 @@
     "desc": "Interactive filter controls — user selects region and product"
   },
   "requires": ["orders"],
-  "provides": [{ "bindTo": "selections", "src": "state.fieldValues" }],
+  "provides": [{ "bindTo": "selections", "src": "card_data.fieldValues" }],
   "compute": [
-    { "bindTo": "regions",  "expr": "$sort($distinct(requires.orders.region))" },
-    { "bindTo": "products", "expr": "$sort($distinct(requires.orders.product))" }
+    { "bindTo": "region",  "expr": "$sort($distinct(requires.orders.region))" },
+    { "bindTo": "product", "expr": "$sort($distinct(requires.orders.product))" }
   ],
   "view": {
     "elements": [
@@ -17,7 +17,7 @@
         "kind": "filter",
         "data": {
           "bind": "computed_values",
-          "writeTo": "state.fieldValues",
+          "writeTo": "card_data.fieldValues",
           "fields": {
             "type": "object",
             "properties": {
@@ -30,7 +30,7 @@
     ],
     "layout": { "board": { "col": 4, "order": 3 }, "canvas": { "x": 50, "y": 320, "w": 220, "h": 160 } }
   },
-  "state": {
+  "card_data": {
     "fieldValues": {}
   }
 }

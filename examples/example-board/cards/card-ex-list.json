@@ -18,5 +18,5 @@
     ],
     "layout": { "board": { "col": 3, "order": 5 }, "canvas": { "x": 550, "y": 320, "w": 220, "h": 180 } }
   },
-  "state": {}
+  "card_data": {}
 }

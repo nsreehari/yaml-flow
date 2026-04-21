@@ -1,0 +1,59 @@
+{
+  "id": "card-ex-filtered-by-preference",
+  "meta": {
+    "title": "Orders by Favorite Product",
+    "tags": ["filtered", "computed"],
+    "desc": "Shows orders filtered by the Favorite Product selected in the preferences form. Demonstrates cascading updates: when form changes, this card auto-recomputes."
+  },
+  "requires": ["orders", "card-ex-form"],
+  "compute": [
+    {
+      "bindTo": "favoriteProduct",
+      "expr": "($lookup(requires, 'card-ex-form').preferences.favoriteProduct) ? $lookup(requires, 'card-ex-form').preferences.favoriteProduct : 'Widget A'"
+    },
+    {
+      "bindTo": "filteredOrders",
+      "expr": "$filter(requires.orders, function($v){ $v.product = computed_values.favoriteProduct })"
+    },
+    {
+      "bindTo": "filteredCount",
+      "expr": "$count(computed_values.filteredOrders)"
+    },
+    {
+      "bindTo": "filteredRevenue",
+      "expr": "$round($sum(computed_values.filteredOrders.amount), 2)"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "metric",
+        "label": "Filtered Product",
+        "data": { "bind": "computed_values.favoriteProduct" }
+      },
+      {
+        "kind": "metric",
+        "label": "Order Count",
+        "data": { "bind": "computed_values.filteredCount" }
+      },
+      {
+        "kind": "metric",
+        "label": "Total Revenue",
+        "data": { "bind": "computed_values.filteredRevenue" }
+      },
+      {
+        "kind": "list",
+        "label": "Orders",
+        "data": {
+          "bind": "computed_values.filteredOrders",
+          "template": "{id} | {product} | Qty {quantity} | ${amount} | {region}"
+        }
+      }
+    ],
+    "layout": {
+      "board": { "col": 4, "order": 13 },
+      "canvas": { "x": 920, "y": 400, "w": 300, "h": 250 }
+    }
+  },
+  "card_data": {}
+}

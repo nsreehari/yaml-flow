@@ -7,11 +7,11 @@
   },
   "view": {
     "elements": [
-      { "kind": "markdown", "data": { "bind": "state.content" } }
+      { "kind": "markdown", "data": { "bind": "card_data.content" } }
     ],
     "layout": { "board": { "col": 4, "order": 9 }, "canvas": { "x": 700, "y": 530, "w": 260, "h": 200 } }
   },
-  "state": {
+  "card_data": {
     "content": "## Quick Notes\n\n- Review regional targets quarterly\n- Check supplier delivery SLAs\n- Update pricing model before next sprint"
   }
 }

@@ -1,21 +1,21 @@
 {
-  "id": "card-ex-source",
+  "id": "card-demo-orders",
   "meta": {
-    "title": "Order Data",
-    "tags": ["data"],
-    "desc": "Root data source — fetches order records via a script"
+    "title": "Demo Orders (Mock)",
+    "tags": ["demo", "mock"],
+    "desc": "Test card using demo-task-executor with mock.db lookup"
   },
   "provides": [{ "bindTo": "orders", "src": "sources.raw" }],
   "sources": [{
     "bindTo": "raw",
-    "outputFile": "card-ex-source-raw.json",
+    "outputFile": "card-demo-orders-raw.json",
     "mock": "orders"
   }],
   "view": {
     "elements": [
       { "kind": "table", "data": { "bind": "sources.raw", "columns": ["id", "product", "quantity", "amount", "region"], "maxRows": 10 } }
     ],
-    "layout": { "board": { "col": 6, "order": 1 }, "canvas": { "x": 50, "y": 50, "w": 350, "h": 220 } }
+    "layout": { "board": { "col": 6, "order": 1 } }
   },
   "card_data": {}
 }

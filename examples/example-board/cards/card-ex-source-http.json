@@ -10,7 +10,7 @@
   "sources": [{
     "bindTo": "raw",
     "outputFile": "card-ex-source-http-raw.json",
-    "script": "node scripts/fetch-prices.js --products {{PRODUCT_LIST}} --out card-ex-source-http-raw.json"
+    "mock": "prices"
   }],
   "compute": [
     {
@@ -24,5 +24,5 @@
     ],
     "layout": { "board": { "col": 6, "order": 2 }, "canvas": { "x": 450, "y": 50, "w": 350, "h": 220 } }
   },
-  "state": {}
+  "card_data": {}
 }

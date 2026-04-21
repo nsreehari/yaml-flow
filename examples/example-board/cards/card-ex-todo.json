@@ -11,15 +11,15 @@
         "kind": "todo",
         "label": "Tasks",
         "data": {
-          "bind": "state.items",
-          "writeTo": "state.items",
+          "bind": "card_data.items",
+          "writeTo": "card_data.items",
           "placeholder": "No tasks yet — add one above"
         }
       }
     ],
     "layout": { "board": { "col": 4, "order": 11 }, "canvas": { "x": 700, "y": 320, "w": 260, "h": 180 } }
   },
-  "state": {
+  "card_data": {
     "items": [
       { "text": "Set up task-executor for your data sources", "done": false },
       { "text": "Configure board.yaml connections", "done": false },
