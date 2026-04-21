@@ -6,7 +6,9 @@
  * This is a BLACK-BOX client of board-live-cards CLI.
  * It only calls CLI commands and does NOT inspect board internals.
  *
- * Usage: node portfolio-tracker.js
+ * Usage:
+ *   node portfolio-tracker.js
+ *   node portfolio-tracker.js --task-executor <path>
  */
 
 import * as fs from 'node:fs';
@@ -29,6 +31,28 @@ const RUNTIME_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-tracker-')
 const BOARD = path.join(RUNTIME_ROOT, 'board-runtime');
 const CARDS = path.join(RUNTIME_ROOT, 'cards');
 const TMP_FILE = path.join(BOARD, 'tmp_file1');
+
+function parseArgs(argv) {
+  let taskExecutor;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--task-executor') {
+      const value = argv[i + 1];
+      if (!value || value.startsWith('--')) {
+        console.error('[ERROR] Missing value for --task-executor');
+        process.exit(1);
+      }
+      taskExecutor = value;
+      i += 1;
+      continue;
+    }
+    console.error(`[ERROR] Unknown argument: ${arg}`);
+    process.exit(1);
+  }
+  return { taskExecutor };
+}
+
+const options = parseArgs(process.argv.slice(2));
 
 console.log(`Runtime root: ${RUNTIME_ROOT}`);
 
@@ -131,7 +155,11 @@ function setupRuntimeCards() {
   console.log('\n=== T0: Init board ===');
   fs.rmSync(BOARD, { recursive: true, force: true });
 
-  cli('init', BOARD);
+  if (options.taskExecutor) {
+    cli('init', BOARD, '--task-executor', options.taskExecutor);
+  } else {
+    cli('init', BOARD);
+  }
   cli('add-cards', '--rg', BOARD, '--card-glob', path.join(CARDS, '*.json'));
 
   console.log('\n--- T0 Status (after add-cards) ---');
