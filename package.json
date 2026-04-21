@@ -63,6 +63,11 @@
       "import": "./dist/continuous-event-graph/index.js",
       "require": "./dist/continuous-event-graph/index.cjs"
     },
+    "./browser-board-runtime": {
+      "types": "./dist/browser-board-runtime/index.d.ts",
+      "import": "./dist/browser-board-runtime/index.js",
+      "require": "./dist/browser-board-runtime/index.cjs"
+    },
     "./inference": {
       "types": "./dist/inference/index.d.ts",
       "import": "./dist/inference/index.js",

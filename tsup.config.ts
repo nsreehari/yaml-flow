@@ -11,6 +11,7 @@ export default defineConfig({
     'batch/index': 'src/batch/index.ts',
     'config/index': 'src/config/index.ts',
     'continuous-event-graph/index': 'src/continuous-event-graph/index.ts',
+    'browser-board-runtime/index': 'src/browser-board-runtime/index.ts',
     'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'cli/board-live-cards-cli': 'src/cli/board-live-cards-cli.ts',

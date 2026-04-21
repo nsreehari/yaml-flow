@@ -116,6 +116,18 @@ export type {
 } from './continuous-event-graph/index.js';
 
 // ============================================================================
+// Browser Board Runtime
+// ============================================================================
+export { createBrowserBoardRuntime } from './browser-board-runtime/index.js';
+export type {
+  BrowserBoardRuntime,
+  BrowserBoardRuntimeOptions,
+  BrowserBoardRuntimeUpdate,
+  BrowserSourceAdapter,
+  BrowserSourceAdapterContext,
+} from './browser-board-runtime/index.js';
+
+// ============================================================================
 // Inference
 // ============================================================================
 export {

@@ -20,7 +20,6 @@ import type { LiveGraph, LiveGraphSnapshot, ScheduleResult } from './types.js';
 import { createLiveGraph, applyEvents, snapshot } from './core.js';
 import { schedule } from './schedule.js';
 import { MemoryJournal } from './journal.js';
-import { createHash } from 'node:crypto';
 
 // ============================================================================
 // Internal helpers
@@ -28,13 +27,13 @@ import { createHash } from 'node:crypto';
 
 /**
  * Deterministic hash of a data payload.
- * Recursively-sorted JSON → SHA-256 hex (first 16 chars for compactness).
+ * Recursively-sorted JSON → stable 64-bit hex.
  * Used to auto-compute dataHash when the handler doesn't provide one.
  * Exported so handler authors can pre-compute or test hashes.
  */
 export function computeDataHash(data: Record<string, unknown>): string {
   const json = stableStringify(data);
-  return createHash('sha256').update(json).digest('hex').slice(0, 16);
+  return fnv1a64Hex(json);
 }
 
 /** Recursively produce a JSON string with sorted keys at every level. */
@@ -51,12 +50,55 @@ function stableStringify(value: unknown): string {
 }
 
 /**
+ * Stable 64-bit FNV-1a hash as 16-char hex.
+ * Fast, deterministic, and browser/Node portable.
+ */
+function fnv1a64Hex(input: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mod = 0xffffffffffffffffn;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= BigInt(input.charCodeAt(i));
+    hash = (hash * prime) & mod;
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
+function base64UrlEncode(input: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(input, 'utf8').toString('base64url');
+  }
+  if (typeof btoa === 'function') {
+    const bytes = new TextEncoder().encode(input);
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+  throw new Error('No base64 encoder available in this runtime');
+}
+
+function base64UrlDecode(input: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(input, 'base64url').toString('utf8');
+  }
+  if (typeof atob === 'function') {
+    const base64 = input.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+  throw new Error('No base64 decoder available in this runtime');
+}
+
+/**
  * Encode a callback token for a task.
  * Opaque base64url string — can be sent to external systems.
  */
 function encodeCallbackToken(taskName: string): string {
   const payload = JSON.stringify({ t: taskName, n: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
-  return Buffer.from(payload).toString('base64url');
+  return base64UrlEncode(payload);
 }
 
 /**
@@ -64,7 +106,7 @@ function encodeCallbackToken(taskName: string): string {
  */
 function decodeCallbackToken(token: string): { taskName: string } | null {
   try {
-    const payload = JSON.parse(Buffer.from(token, 'base64url').toString());
+    const payload = JSON.parse(base64UrlDecode(token));
     if (typeof payload?.t === 'string') return { taskName: payload.t };
     return null;
   } catch { return null; }
