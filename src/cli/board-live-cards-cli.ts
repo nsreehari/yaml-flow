@@ -1,19 +1,5 @@
 /**
  * Board Live Cards — Disk persistence + CLI for ReactiveGraph.
- *
- * Library:
- *   initBoard(dir)     — create dir + board-graph.json (idempotent)
- *   loadBoard(dir)     — read board-graph.json → LiveGraph
- *   saveBoard(dir, rg) — rg.snapshot() → write board-graph.json
- *
- * CLI:
- *   board-live-cards init <dir>
- *   board-live-cards status --rg <dir>
- *   board-live-cards add-cards --rg <dir> --card <card.json>
- *   board-live-cards run-sources-internal --card <card.json> --token <callbackToken> --rg <dir>
- *
- * Card transform:
- *   liveCardToTaskConfig(card) — LiveCard → TaskConfig (handler mapping)
  */
 
 import * as fs from 'node:fs';
@@ -39,6 +25,10 @@ import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/in
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
+const RUNTIME_OUT_FILE = '.runtime-out';
+const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
+const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
+const RUNTIME_CARDS_DIR = 'cards';
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
 /** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
@@ -115,6 +105,11 @@ export interface CardInventoryEntry {
   addedAt: string;
 }
 
+export interface CardInventoryIndex {
+  byCardId: Map<string, CardInventoryEntry>;
+  byCardPath: Map<string, CardInventoryEntry>;
+}
+
 export function readCardInventory(boardDir: string): CardInventoryEntry[] {
   const inventoryPath = path.join(boardDir, INVENTORY_FILE);
   if (!fs.existsSync(inventoryPath)) return [];
@@ -131,6 +126,40 @@ export function lookupCardPath(boardDir: string, cardId: string): string | null 
 export function appendCardInventory(boardDir: string, entry: CardInventoryEntry): void {
   const inventoryPath = path.join(boardDir, INVENTORY_FILE);
   fs.appendFileSync(inventoryPath, JSON.stringify(entry) + '\n');
+}
+
+export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
+  const byCardId = new Map<string, CardInventoryEntry>();
+  const byCardPath = new Map<string, CardInventoryEntry>();
+
+  for (const entry of readCardInventory(boardDir)) {
+    const normalizedPath = path.resolve(entry.cardFilePath);
+    const normalizedEntry: CardInventoryEntry = {
+      ...entry,
+      cardFilePath: normalizedPath,
+    };
+
+    const existingById = byCardId.get(entry.cardId);
+    if (existingById && existingById.cardFilePath !== normalizedPath) {
+      throw new Error(
+        `Inventory invariant violation: card id "${entry.cardId}" maps to multiple files: ` +
+        `"${existingById.cardFilePath}" and "${normalizedPath}"`
+      );
+    }
+
+    const existingByPath = byCardPath.get(normalizedPath);
+    if (existingByPath && existingByPath.cardId !== entry.cardId) {
+      throw new Error(
+        `Inventory invariant violation: file "${normalizedPath}" maps to multiple ids: ` +
+        `"${existingByPath.cardId}" and "${entry.cardId}"`
+      );
+    }
+
+    byCardId.set(entry.cardId, normalizedEntry);
+    byCardPath.set(normalizedPath, normalizedEntry);
+  }
+
+  return { byCardId, byCardPath };
 }
 
 // ============================================================================
@@ -184,7 +213,58 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journal: BoardJournal)
     lastDrainedJournalId: journal.lastDrainedJournalId,
     graph: snap,
   };
-  fs.writeFileSync(path.join(dir, BOARD_FILE), JSON.stringify(envelope, null, 2));
+  writeJsonAtomic(path.join(dir, BOARD_FILE), envelope);
+
+  // Publish status snapshot in the same persistence path as board writes.
+  const live = restore(snap);
+  const statusObject = buildBoardStatusObject(dir, live);
+  writeJsonAtomic(resolveStatusSnapshotPath(dir), statusObject);
+}
+
+function runtimeOutConfigPath(boardDir: string): string {
+  return path.join(boardDir, RUNTIME_OUT_FILE);
+}
+
+function resolveConfiguredRuntimeOutDir(boardDir: string): string {
+  const cfgPath = runtimeOutConfigPath(boardDir);
+  if (fs.existsSync(cfgPath)) {
+    const configured = fs.readFileSync(cfgPath, 'utf-8').trim();
+    if (configured) {
+      return path.isAbsolute(configured) ? configured : path.resolve(boardDir, configured);
+    }
+  }
+
+  const defaultDir = path.join(boardDir, DEFAULT_RUNTIME_OUT_DIR);
+  fs.writeFileSync(cfgPath, defaultDir, 'utf-8');
+  return defaultDir;
+}
+
+function configureRuntimeOutDir(boardDir: string, runtimeOut?: string): string {
+  let resolved: string;
+  if (runtimeOut) {
+    resolved = path.isAbsolute(runtimeOut) ? runtimeOut : path.resolve(boardDir, runtimeOut);
+  } else {
+    resolved = path.join(boardDir, DEFAULT_RUNTIME_OUT_DIR);
+  }
+
+  fs.mkdirSync(resolved, { recursive: true });
+  fs.writeFileSync(runtimeOutConfigPath(boardDir), resolved, 'utf-8');
+  return resolved;
+}
+
+function resolveStatusSnapshotPath(boardDir: string): string {
+  return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_STATUS_FILE);
+}
+
+function resolveComputedValuesPath(boardDir: string, cardId: string): string {
+  return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_CARDS_DIR, `${cardId}.computed.json`);
+}
+
+function writeJsonAtomic(filePath: string, payload: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
 }
 
 /**
@@ -317,20 +397,66 @@ function shouldUseShellForCommand(cmd: string, forceShell?: boolean): boolean {
   return process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd);
 }
 
+/** Cached git-bash path (resolved once per process, persisted to disk across invocations). */
+let _gitBashPath: string | false | undefined;
+const GIT_BASH_CACHE_FILE = path.join(os.tmpdir(), '.board-live-cards-git-bash-cache.json');
+
+function findGitBash(): string | false {
+  if (_gitBashPath !== undefined) return _gitBashPath;
+  if (process.platform !== 'win32') return (_gitBashPath = false);
+
+  // Try disk cache first
+  try {
+    const cached = JSON.parse(fs.readFileSync(GIT_BASH_CACHE_FILE, 'utf8'));
+    if (cached.path === false || (typeof cached.path === 'string' && fs.existsSync(cached.path))) {
+      return (_gitBashPath = cached.path);
+    }
+  } catch { /* cache miss or corrupt — probe fresh */ }
+
+  const candidates = [
+    process.env.SHELL,
+    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Git', 'usr', 'bin', 'bash.exe'),
+    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Git', 'bin', 'bash.exe'),
+    process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Git', 'bin', 'bash.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ];
+  for (const c of candidates) {
+    if (c && /bash(\.exe)?$/i.test(c) && fs.existsSync(c)) {
+      _gitBashPath = c;
+      try { fs.writeFileSync(GIT_BASH_CACHE_FILE, JSON.stringify({ path: c })); } catch { /* best-effort */ }
+      return _gitBashPath;
+    }
+  }
+  _gitBashPath = false;
+  try { fs.writeFileSync(GIT_BASH_CACHE_FILE, JSON.stringify({ path: false })); } catch { /* best-effort */ }
+  return _gitBashPath;
+}
+
+function shellQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 function spawnDetachedCommand(cmd: string, args: string[]): void {
-  // On Windows, detached:true maps to CREATE_NEW_CONSOLE which causes a visible
-  // popup even with windowsHide:true. Use `cmd /c start /b` instead (/b = no new
-  // console window), equivalent to shell `&` background.
-  const child = process.platform === 'win32'
-    ? spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
-        stdio: 'ignore',
-        windowsHide: true,
-      })
-    : spawn(cmd, args, {
-        shell: false,
-        detached: true,
-        stdio: 'ignore',
-      });
+  if (process.platform === 'win32') {
+    const bash = findGitBash();
+    if (bash) {
+      // Git-bash background: no console popup, survives parent exit.
+      const shellCmd = [cmd, ...args].map((a) => shellQuote(a.replace(/\\/g, '/'))).join(' ');
+      const child = spawn(bash, ['-c', shellCmd], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.unref();
+      return;
+    }
+    // Fallback: cmd /c start /b + detached so child survives parent exit.
+    const child = spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    return;
+  }
+  // Unix: straightforward detached spawn.
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
   child.unref();
 }
 
@@ -565,29 +691,12 @@ function getCliInvocation(command: string, args: string[]): { cmd: string; args:
 
 function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('run-sources-internal', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
-  // On Windows, `detached: true` maps to CREATE_NEW_CONSOLE which overrides
-  // windowsHide and causes a visible console popup. Use `cmd /c start /b` instead:
-  // the /b flag starts the process without a new console window, equivalent to
-  // shell `&` background, and the transient cmd.exe itself is hidden via windowsHide.
-  const child = process.platform === 'win32'
-    ? spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
-        stdio: 'ignore',
-        windowsHide: true,
-      })
-    : spawn(cmd, args, {
-        shell: false,
-        detached: true,
-        stdio: 'ignore',
-      });
-  let finished = false;
-  const done = (err: Error | null) => {
-    if (finished) return;
-    finished = true;
-    callback(err);
-  };
-  child.on('error', (err) => done(err));
-  child.unref();
-  done(null);
+  try {
+    spawnDetachedCommand(cmd, args);
+    callback(null);
+  } catch (err) {
+    callback(err instanceof Error ? err : new Error(String(err)));
+  }
 }
 
 function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
@@ -631,7 +740,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
 
       const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
         const cardId = card.id as string;
-        const cardState = (card.state ?? {}) as Record<string, unknown>;
+        const cardState = (card.card_data ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
         // optionalForCompletionGating defaults to false when absent.
         const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
@@ -679,16 +788,20 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         // ---- Run compute ----
         const computeNode: ComputeNode = {
           id: cardId,
-          state: { ...cardState },
+          card_data: { ...cardState },
           requires: input.state ?? {},
           sources: allSources,
           compute: card.compute as ComputeStep[] | undefined,
         };
         if (card.compute) {
           await CardCompute.run(computeNode, { sourcesData });
-          const cvPath = path.join(boardDir, `${cardId}.computed_values.json`);
-          fs.writeFileSync(cvPath, JSON.stringify(computeNode.computed_values ?? {}, null, 2));
         }
+        const cvPath = resolveComputedValuesPath(boardDir, cardId);
+        writeJsonAtomic(cvPath, {
+          schema_version: 'v1',
+          card_id: cardId,
+          computed_values: computeNode.computed_values ?? {},
+        });
 
         // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----
         const now = new Date().toISOString();
@@ -722,7 +835,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         }
 
         // ---- All required sources delivered — build provides + emit task-completed ----
-        const providesBindings = (card.provides ?? [{ bindTo: cardId, src: `state.${cardId}` }]) as { bindTo: string; src: string }[];
+        const providesBindings = (card.provides ?? [{ bindTo: cardId, src: 'card_data' }]) as { bindTo: string; src: string }[];
         const data: Record<string, unknown> = {};
         for (const { bindTo, src } of providesBindings) {
           data[bindTo] = CardCompute.resolve(computeNode, src);
@@ -851,10 +964,16 @@ function cmdAddCards(args: string[]): void {
 
 function cmdInit(args: string[]): void {
   const dir = args[0];
-  if (!dir) { console.error('Usage: board-live-cards init <dir> [--task-executor <script>]'); process.exit(1); }
+  if (!dir) { console.error('Usage: board-live-cards init <dir> [--task-executor <script>] [--runtime-out <dir>]'); process.exit(1); }
 
   const teIdx = args.indexOf('--task-executor');
   const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
+  const roIdx = args.indexOf('--runtime-out');
+  const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
+  if (roIdx !== -1 && !runtimeOut) {
+    console.error('Usage: board-live-cards init <dir> [--task-executor <script>] [--runtime-out <dir>]');
+    process.exit(1);
+  }
 
   const result = initBoard(dir);
 
@@ -862,20 +981,19 @@ function cmdInit(args: string[]): void {
     fs.writeFileSync(path.join(dir, '.task-executor'), taskExecutor, 'utf-8');
   }
 
+  const runtimeOutDir = configureRuntimeOutDir(dir, runtimeOut);
+  // Ensure status snapshot exists right after init.
+  const live = loadBoard(dir);
+  writeJsonAtomic(resolveStatusSnapshotPath(dir), buildBoardStatusObject(dir, live));
+
   if (result === 'exists') {
-    console.log(`Board already initialized at ${path.resolve(dir)}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''}`);
+    console.log(`Board already initialized at ${path.resolve(dir)}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
   } else {
-    console.log(`Board initialized at ${path.resolve(dir)}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''}`);
+    console.log(`Board initialized at ${path.resolve(dir)}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
   }
 }
 
-function cmdStatus(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
-  const asJson = args.includes('--json');
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  if (!dir) { console.error('Usage: board-live-cards status --rg <dir>'); process.exit(1); }
-
-  const live = loadBoard(dir);
+function buildBoardStatusObject(dir: string, live: LiveGraph): BoardStatusObject {
   const taskState = live.state.tasks;
   const taskConfig = live.config.tasks;
   const cardNames = Object.keys(taskState);
@@ -895,14 +1013,8 @@ function cmdStatus(args: string[]): void {
   for (const u of sched.unresolved) waitingByCard.set(u.taskName, u.missingTokens);
   for (const b of sched.blocked) waitingByCard.set(b.taskName, b.failedTokens);
 
-  const providersByToken = new Map<string, string[]>();
   const dependentsByToken = new Map<string, string[]>();
   for (const [name, cfg] of Object.entries(taskConfig)) {
-    for (const token of cfg.provides ?? []) {
-      const providers = providersByToken.get(token) ?? [];
-      providers.push(name);
-      providersByToken.set(token, providers);
-    }
     for (const token of cfg.requires ?? []) {
       const dependents = dependentsByToken.get(token) ?? [];
       dependents.push(name);
@@ -996,7 +1108,7 @@ function cmdStatus(args: string[]): void {
     if (requiresNone && !feedsAny) orphanCards += 1;
   }
 
-  const statusObject: BoardStatusObject = {
+  return {
     schema_version: 'v1',
     meta: {
       board: {
@@ -1021,6 +1133,23 @@ function cmdStatus(args: string[]): void {
     },
     cards,
   };
+}
+
+function cmdStatus(args: string[]): void {
+  const rgIdx = args.indexOf('--rg');
+  const asJson = args.includes('--json');
+  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  if (!dir) { console.error('Usage: board-live-cards status --rg <dir>'); process.exit(1); }
+
+  const statusOutPath = resolveStatusSnapshotPath(dir);
+  let statusObject: BoardStatusObject;
+  if (fs.existsSync(statusOutPath)) {
+    statusObject = JSON.parse(fs.readFileSync(statusOutPath, 'utf-8')) as BoardStatusObject;
+  } else {
+    // Backfill once if snapshot file doesn't exist yet.
+    statusObject = buildBoardStatusObject(dir, loadBoard(dir));
+    writeJsonAtomic(statusOutPath, statusObject);
+  }
 
   if (asJson) {
     console.log(JSON.stringify(statusObject, null, 2));
@@ -1541,6 +1670,156 @@ function cmdUpdateCard(args: string[]): void {
   console.log(`Card "${cardId}" updated${restart ? ' (restarted)' : ''}.`);
 }
 
+function cmdUpsertCard(args: string[]): void {
+  const rgIdx = args.indexOf('--rg');
+  const cardIdx = args.indexOf('--card');
+  const globIdx = args.indexOf('--card-glob');
+  const cardIdIdx = args.indexOf('--card-id');
+  const restart = args.includes('--restart');
+  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+  const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+  const requestedCardId = cardIdIdx !== -1 ? args[cardIdIdx + 1] : undefined;
+
+  if (!dir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
+    console.error('Usage: board-live-cards upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]');
+    process.exit(1);
+  }
+
+  if (cardGlob && requestedCardId) {
+    console.error('Usage: --card-id may be used only with --card (single file), not with --card-glob');
+    process.exit(1);
+  }
+
+  const cardFiles = cardFile
+    ? [path.resolve(cardFile)]
+    : resolveCardGlobMatches(cardGlob!);
+
+  if (!cardFile && cardFiles.length === 0) {
+    console.error(`No card files matched glob: ${cardGlob}`);
+    process.exit(1);
+  }
+
+  const idx = buildCardInventoryIndex(dir);
+  const batchByCardId = new Map<string, string>();
+  const batchByCardPath = new Map<string, string>();
+  const plans: Array<{
+    card: BoardLiveCard;
+    absCardPath: string;
+    isInsert: boolean;
+  }> = [];
+  const logs: string[] = [];
+
+  // Phase 1: pre-validate entire batch (atomicity guard)
+  for (const absCardPath of cardFiles) {
+    if (!fs.existsSync(absCardPath)) {
+      console.error(`Card file not found: ${absCardPath}`);
+      process.exit(1);
+    }
+
+    const card: BoardLiveCard = JSON.parse(fs.readFileSync(absCardPath, 'utf-8'));
+    if (!card.id) {
+      console.error(`Card JSON must have an "id" field (${absCardPath})`);
+      process.exit(1);
+    }
+
+    if (requestedCardId && requestedCardId !== card.id) {
+      console.error(
+        `Card id mismatch: --card-id "${requestedCardId}" does not match file id "${card.id}" (${absCardPath})`
+      );
+      process.exit(1);
+    }
+
+    const seenPathCardId = batchByCardPath.get(absCardPath);
+    if (seenPathCardId && seenPathCardId !== card.id) {
+      console.error(
+        `Upsert rejected: file "${absCardPath}" appears multiple times in batch with conflicting ids ` +
+        `("${seenPathCardId}" vs "${card.id}")`
+      );
+      process.exit(1);
+    }
+
+    const seenCardPath = batchByCardId.get(card.id);
+    if (seenCardPath && seenCardPath !== absCardPath) {
+      console.error(
+        `Upsert rejected: card id "${card.id}" appears multiple times in batch with conflicting files ` +
+        `("${seenCardPath}" vs "${absCardPath}")`
+      );
+      process.exit(1);
+    }
+
+    const existingById = idx.byCardId.get(card.id);
+    const existingByPath = idx.byCardPath.get(absCardPath);
+
+    // Enforce strict one-to-one mapping between card id and file path.
+    if (existingByPath && existingByPath.cardId !== card.id) {
+      console.error(
+        `Upsert rejected: file "${absCardPath}" is already mapped to card id "${existingByPath.cardId}", ` +
+        `cannot remap to "${card.id}"`
+      );
+      process.exit(1);
+    }
+
+    if (existingById && existingById.cardFilePath !== absCardPath) {
+      console.error(
+        `Upsert rejected: card id "${card.id}" is already mapped to file "${existingById.cardFilePath}", ` +
+        `cannot remap to "${absCardPath}"`
+      );
+      process.exit(1);
+    }
+
+    batchByCardPath.set(absCardPath, card.id);
+    batchByCardId.set(card.id, absCardPath);
+
+    plans.push({
+      card,
+      absCardPath,
+      isInsert: !existingById,
+    });
+  }
+
+  // Phase 2: commit writes after full pre-validation succeeds
+  for (const plan of plans) {
+    const { card, absCardPath, isInsert } = plan;
+
+    if (isInsert) {
+      const newEntry: CardInventoryEntry = {
+        cardId: card.id,
+        cardFilePath: absCardPath,
+        addedAt: new Date().toISOString(),
+      };
+      appendCardInventory(dir, newEntry);
+      idx.byCardId.set(card.id, newEntry);
+      idx.byCardPath.set(absCardPath, newEntry);
+    }
+
+    const taskConfig = liveCardToTaskConfig(card);
+    appendEventToJournal(dir, {
+      type: 'task-upsert',
+      taskName: card.id,
+      taskConfig,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (restart) {
+      appendEventToJournal(dir, {
+        type: 'task-restart',
+        taskName: card.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    logs.push(`Card "${card.id}" ${isInsert ? 'upserted (inserted)' : 'upserted (updated)'}${restart ? ' (restarted)' : ''}.`);
+  }
+
+  void processAccumulatedEventsInfinitePass(dir);
+  if (cardGlob) {
+    console.log(`Upserted ${cardFiles.length} cards from glob: ${cardGlob}${restart ? ' (restarted)' : ''}`);
+  } else {
+    console.log(logs[0]);
+  }
+}
+
 /**
  * process-accumulated-events command.
  *
@@ -1594,6 +1873,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'status':         return cmdStatus(rest);
     case 'add-cards':      return cmdAddCards(rest);
     case 'update-card':    return cmdUpdateCard(rest);
+    case 'upsert-card':    return cmdUpsertCard(rest);
     case 'remove-card':              return cmdRemoveCard(rest);
     case 'retrigger':                 return cmdRetrigger(rest);
     case 'task-completed':            return cmdTaskCompleted(rest);
@@ -1618,14 +1898,18 @@ USAGE
   board-live-cards-cli <command> [options]
 
 BOARD MANAGEMENT
-  init <dir> [--task-executor <script>]
+  init <dir> [--task-executor <script>] [--runtime-out <dir>]
     Create a new board in <dir>.
     If --task-executor is given, writes <dir>/.task-executor with the script path.
+    Writes <dir>/.runtime-out (default: <dir>/runtime-out).
+    Published runtime files:
+      <runtime-out>/board-livegraph-status.json
+      <runtime-out>/cards/<card-id>.computed.json
     Re-running init on an existing board is safe; --task-executor updates the registration.
 
   status --rg <dir> [--json]
-    Print the current task status of every card in the board.
-    --json emits a stable machine-readable status object.
+    Read and print the published status snapshot from <runtime-out>/board-livegraph-status.json.
+    --json emits the stable machine-readable status object.
 
 CARD MANAGEMENT
   add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)
@@ -1636,6 +1920,16 @@ CARD MANAGEMENT
 
   update-card --rg <dir> --card-id <card-id> [--restart]
     Re-read the card JSON from disk and patch the board.
+    --restart clears the task so it re-triggers from scratch.
+
+  upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]
+    Insert or update one or many cards.
+    Enforces strict one-to-one mapping between card id and file path:
+      - same id + same file path: update
+      - new id + new file path: insert
+      - id remap or file remap: rejected
+    If --card-id is provided, it must match the id inside the file.
+    --card-id is valid only with --card (single file), not with --card-glob.
     --restart clears the task so it re-triggers from scratch.
 
   remove-card --rg <dir> --id <card-id>
