@@ -249,6 +249,30 @@
     </section>
 
     <section class="card">
+      <h2>Task-Executor Protocol</h2>
+      <p>When <code>.task-executor</code> is registered in the board directory, the board runtime delegates source execution to that external script. The executor must implement the <code>run-source-fetch</code> subcommand contract:</p>
+      <pre><code>&lt;executor-command&gt; run-source-fetch --in &lt;sourceDefFile&gt; --out &lt;resultFile&gt; --err &lt;errorFile&gt;</code></pre>
+      <p>All paths are file paths (not JSON strings). The executor receives a JSON source definition on disk and must produce output files atomically:</p>
+      <table>
+        <thead><tr><th>Argument</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>--in &lt;file&gt;</code></td><td>Path to source definition JSON file. Contains <code>{ cli, bindTo, cwd, timeout, ... }</code> properties.</td></tr>
+          <tr><td><code>--out &lt;file&gt;</code></td><td>Path where executor must write the execution result (typically <code>stdout</code> from running <code>source.cli</code>).</td></tr>
+          <tr><td><code>--err &lt;file&gt;</code></td><td>Optional path where executor writes error messages if execution fails.</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Exit Codes &amp; Behavior:</strong></p>
+      <ul>
+        <li><strong>Exit 0</strong> — Success. The runtime reads <code>--out</code> file and invokes <code>source-data-fetched</code> callback.</li>
+        <li><strong>Exit non-zero</strong> — Failure. The runtime reads <code>--err</code> file and invokes <code>source-data-fetch-failure</code> callback.</li>
+      </ul>
+      <p><strong>Executor Registration:</strong> Place the executor command (as a single-line string) in a <code>.task-executor</code> file at the board root, or pass <code>--task-executor &lt;command&gt;</code> during <code>init</code>:</p>
+      <pre><code>board-live-cards-cli init ./my-board --task-executor "node ./my-executor.js"
+echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
+      <p><strong>Example Implementation:</strong> See <code>examples/browser/boards/portfolio-tracker/portfolio-tracker-task-executor.cjs</code> for a complete working executor that runs CLI commands synchronously and captures output.</p>
+    </section>
+
+    <section class="card">
       <h2>Refresh Strategy</h2>
       <p>This is part of the board runtime scheduling model, not the browser renderer. It controls when a completed card becomes eligible to run again.</p>
       <table>
