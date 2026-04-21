@@ -221,11 +221,12 @@
       <h2>Card Runtime Lifecycle</h2>
       <p>When a card becomes eligible (all <code>requires</code> tokens satisfied), the runtime executes the following sequence:</p>
       <pre><code>1. Card becomes eligible — all requires tokens satisfied by upstream task-completed events
-2. Read card.state from disk
-3. Inject requires data (read-only, from upstream task-completed.data — immutable during this run)
-4. Run compute array top-to-bottom → ephemeral computed_values (never persisted)
-5. Check: all sources[].bindTo keys present in state?
+    2. Read card.state from disk
+    3. Inject requires data (read-only, from upstream task-completed.data — immutable during this run)
+    4. Run compute array top-to-bottom → export a per-run runtime snapshot with computed_values, card_data, and sources_data for file-based consumers
+    5. Check: all sources[].bindTo keys present in state?
    YES → Build provides data (pluck paths from state, requires, computed_values per provides[].src)
+         Persist each provided token to runtime-out/data-objects/&lt;tokenName&gt;
          Emit task-completed with provides data → unblocks downstream cards
          Spawn any non-gating sources (optionalForCompletionGating: true) in background
    NO  → Spawn all outstanding gating sources
@@ -273,6 +274,29 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
     </section>
 
     <section class="card">
+      <h2>Runtime Files</h2>
+      <p>The CLI keeps two runtime file surfaces in sync for server and UI consumers. The location is controlled by <code>&lt;boardDir&gt;/.runtime-out</code>; if that file is absent, the default is <code>&lt;boardDir&gt;/runtime-out</code>.</p>
+      <table>
+        <thead><tr><th>Surface</th><th>Path</th><th>What is stored</th><th>How it is used</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Data objects</strong></td><td><code>runtime-out/data-objects/&lt;tokenName&gt;</code></td><td>One JSON payload per provided token. Token names are sanitized for filenames by replacing path separators with <code>__</code>.</td><td>Server/SSE layers publish this as <code>dataObjectsByToken</code>. Downstream cards resolve <code>requires</code> from this token map.</td></tr>
+          <tr><td><strong>Computed snapshots</strong></td><td><code>runtime-out/cards/&lt;cardId&gt;.computed.json</code></td><td>A per-card runtime artifact containing <code>schema_version</code>, <code>card_id</code>, <code>computed_values</code>, and <code>sources_data</code>. It is rewritten on each card run.</td><td>Used by board status views, server adapters, and browser shells that need a file-based view of the latest per-card render state.</td></tr>
+        </tbody>
+      </table>
+      <pre><code>runtime-out/
+├── data-objects/
+│   ├── orders
+│   ├── prices
+│   └── selections
+├── cards/
+│   ├── card-ex-source.computed.json
+│   ├── card-ex-chart.computed.json
+│   └── ...
+└── board-livegraph-status.json</code></pre>
+      <p class="muted"><code>computed_values</code> are exported as the latest per-run snapshot for inspection and rendering on every card run. They are recomputed every iteration, and the snapshot file is rewritten each time the card runs.</p>
+    </section>
+
+    <section class="card">
       <h2>Refresh Strategy</h2>
       <p>This is part of the board runtime scheduling model, not the browser renderer. It controls when a completed card becomes eligible to run again.</p>
       <table>
@@ -299,18 +323,21 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
       <ol>
         <li><strong>Compute runs exactly once per invocation</strong> — no iterative convergence, no polling. The array runs top-to-bottom and stops.</li>
         <li><strong>A card re-fires only on external events</strong> — upstream requires change, <code>source-data-fetched</code> delivery, or manual retrigger. Not on its own compute output.</li>
-        <li><strong>Compute output is ephemeral</strong> — <code>computed_values</code> are never written to disk or emitted as events. Downstream cards receive values through explicit <code>provides</code> tokens only.</li>
+        <li><strong>Compute output is an exported snapshot, not durable graph state</strong> — all <code>computed_values</code> are rewritten to the per-card runtime artifact on each run so file-based consumers can read the latest computed result set.</li>
         <li><strong>Namespace separation prevents self-reference</strong> — <code>state.x</code> in a compute expr reads the persisted seed value, never the current invocation's compute output. Writing to <code>computed_values.x</code> does not overwrite <code>state.x</code>.</li>
       </ol>
     </section>
 
     <section class="card">
       <h2>Disk Layout</h2>
-      <p>The board runtime maintains three types of files on disk under the board directory:</p>
+      <p>The board runtime maintains board state under the board directory and render/runtime artifacts under the configured runtime-out directory:</p>
       <ul>
         <li><strong><code>cards/&lt;id&gt;.json</code></strong> — the card definition files (authored by the user). Contains <code>id</code>, <code>requires</code>, <code>provides</code>, <code>state</code>, <code>sources</code>, <code>compute</code>, <code>meta</code>, <code>view</code>. Sources are the only runtime writers to a card's <code>state</code>; the card definition file itself is not modified by the runtime.</li>
         <li><strong><code>board-graph.json</code></strong> — runtime task graph. Stores task statuses (<code>not-started</code>, <code>in-progress</code>, <code>completed</code>, <code>failed</code>) and the data emitted by each card's <code>task-completed</code> event (the provides tokens). This is what downstream cards read as their <code>requires.*</code> namespace.</li>
         <li><strong><code>board-journal.jsonl</code></strong> — append-only event log. Every event (<code>task-completed</code>, <code>source-data-fetched</code>, <code>task-failed</code>, etc.) is appended here. Used for audit, debugging, and replay.</li>
+        <li><strong><code>.runtime-out</code></strong> — pointer file storing the runtime artifact directory path. Defaults to <code>&lt;boardDir&gt;/runtime-out</code> when first resolved.</li>
+        <li><strong><code>runtime-out/data-objects/&lt;tokenName&gt;</code></strong> — persisted JSON payload for each provided token.</li>
+        <li><strong><code>runtime-out/cards/&lt;cardId&gt;.computed.json</code></strong> — exported per-card runtime snapshot used by server and UI layers; rewritten each time the card computes.</li>
       </ul>
       <p class="muted">Source output files are written to <code>&lt;boardDir&gt;/&lt;cardId&gt;/&lt;bindTo&gt;.json</code> (or <code>.txt</code>) by the built-in local executor and are the mechanism by which source delivery is communicated back to the card runtime.</p>
     </section>

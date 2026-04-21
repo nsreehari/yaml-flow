@@ -29,6 +29,7 @@ const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
 const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
 const RUNTIME_CARDS_DIR = 'cards';
+const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
 /** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
@@ -125,7 +126,8 @@ export function lookupCardPath(boardDir: string, cardId: string): string | null 
 
 export function appendCardInventory(boardDir: string, entry: CardInventoryEntry): void {
   const inventoryPath = path.join(boardDir, INVENTORY_FILE);
-  fs.appendFileSync(inventoryPath, JSON.stringify(entry) + '\n');
+  const normalized: CardInventoryEntry = { ...entry, cardFilePath: path.resolve(entry.cardFilePath) };
+  fs.appendFileSync(inventoryPath, JSON.stringify(normalized) + '\n');
 }
 
 export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
@@ -258,6 +260,25 @@ function resolveStatusSnapshotPath(boardDir: string): string {
 
 function resolveComputedValuesPath(boardDir: string, cardId: string): string {
   return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_CARDS_DIR, `${cardId}.computed.json`);
+}
+
+function resolveDataObjectsDirPath(boardDir: string): string {
+  return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_DATA_OBJECTS_DIR);
+}
+
+function toDataObjectFileName(token: string): string {
+  // Keep token recognizable in filenames while avoiding path traversal.
+  return token.replace(/[\\/]/g, '__');
+}
+
+function writeRuntimeDataObjects(boardDir: string, data: Record<string, unknown>): void {
+  for (const [token, payload] of Object.entries(data)) {
+    if (!token) continue;
+    const fileName = toDataObjectFileName(token);
+    if (!fileName) continue;
+    const filePath = path.join(resolveDataObjectsDirPath(boardDir), fileName);
+    writeJsonAtomic(filePath, payload);
+  }
 }
 
 function writeJsonAtomic(filePath: string, payload: unknown): void {
@@ -650,9 +671,7 @@ export type BoardLiveCard = LiveCard;
  */
 export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
   const requires = card.requires;
-  const provides = card.provides
-    ? card.provides.map(p => p.bindTo)
-    : [card.id];
+  const provides = card.provides?.map(p => p.bindTo) ?? [];
 
   return {
     requires: requires && requires.length > 0 ? requires : undefined,
@@ -793,6 +812,8 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           sources: allSources,
           compute: card.compute as ComputeStep[] | undefined,
         };
+        // Always populate _sourcesData so resolve("sources.*") works even without compute steps.
+        computeNode._sourcesData = sourcesData;
         if (card.compute) {
           await CardCompute.run(computeNode, { sourcesData });
         }
@@ -801,6 +822,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           schema_version: 'v1',
           card_id: cardId,
           computed_values: computeNode.computed_values ?? {},
+          sources_data: computeNode._sourcesData ?? {},
         });
 
         // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----
@@ -835,11 +857,14 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         }
 
         // ---- All required sources delivered — build provides + emit task-completed ----
-        const providesBindings = (card.provides ?? [{ bindTo: cardId, src: 'card_data' }]) as { bindTo: string; src: string }[];
+        const providesBindings = (card.provides ?? []) as { bindTo: string; src: string }[];
         const data: Record<string, unknown> = {};
         for (const { bindTo, src } of providesBindings) {
           data[bindTo] = CardCompute.resolve(computeNode, src);
         }
+
+        // Persist task-completed token objects for SSE/runtime consumers.
+        writeRuntimeDataObjects(boardDir, data);
 
         // Spawn undelivered non-gating sources in background.
         const undeliveredOptional = allSources.filter(s => {
@@ -929,7 +954,9 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
     unique: true,
     dot: false,
   });
-  return [...matches].sort((a, b) => a.localeCompare(b));
+  // fast-glob returns forward-slash paths; normalise to native so comparisons
+  // against inventory entries (which use path.resolve → backslash on Windows) match.
+  return [...matches].map(m => path.resolve(m)).sort((a, b) => a.localeCompare(b));
 }
 
 function cmdAddCards(args: string[]): void {
@@ -1242,6 +1269,9 @@ function cmdTaskCompleted(args: string[]): void {
   const data: Record<string, unknown> = dataIdx !== -1
     ? JSON.parse(args[dataIdx + 1])
     : {};
+
+  // Persist task-completed token objects for SSE/runtime consumers.
+  writeRuntimeDataObjects(dir, data);
 
   // 1. Append event to journal (no lock)
   appendEventToJournal(dir, {
