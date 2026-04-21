@@ -805,10 +805,23 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         }
 
         // ---- Run compute ----
+        // input.state[token] = the full task-completed data object from the producer
+        // (e.g. { orders: [...] }). Unwrap to the specific token value so that
+        // compute expressions see requires.orders = [...] not requires.orders = { orders: [...] }.
+        const requires: Record<string, unknown> = {};
+        for (const [token, taskData] of Object.entries(input.state ?? {})) {
+          if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
+            const unwrapped = (taskData as Record<string, unknown>)[token];
+            requires[token] = unwrapped !== undefined ? unwrapped : taskData;
+          } else {
+            requires[token] = taskData;
+          }
+        }
+
         const computeNode: ComputeNode = {
           id: cardId,
           card_data: { ...cardState },
-          requires: input.state ?? {},
+          requires,
           sources: allSources,
           compute: card.compute as ComputeStep[] | undefined,
         };

@@ -1,7 +1,7 @@
 // live-cards.js — LiveCards v3: Node-based Board/Canvas engine
 //
-// Schema: Each node has { id, state } required; all else optional.
-//   id, meta, state, requires, provides, sources, compute, view
+// Schema: Each node has { id } required; all else optional.
+//   id, meta, card_data, requires, provides, sources, compute, view
 //   Nodes with view render as cards; nodes with sources but no view render as source pills in canvas.
 //   compute[] — ordered array of { bindTo, expr } JSONata steps → writes to node.computed_values (ephemeral)
 //   sources[] — open objects: only bindTo + outputFile matter to the engine; all other fields are
@@ -226,7 +226,9 @@ var LiveCard = (function () {
     }
 
     function _autoSubscribe(node) {
-      const requires = node.requires || [];
+      // When the server adapter resolves requires into an object for compute
+      // expressions, the original token array is preserved on _requiresTokens.
+      const requires = node._requiresTokens || node.requires || [];
       if (!requires.length) return;
       const cleanup = _getCleanup(node.id);
       cleanup.unsubs = requires.map(upId => subscribe(upId, () => {
@@ -1064,10 +1066,10 @@ var LiveCard = (function () {
       // Header bar: status dot + time-ago + refresh button
       const showRefresh = features.refresh !== false && cfg.onRefresh;
       h += `<div class="d-flex align-items-center gap-2 mb-2">`;
-      h += _statusDot(node.state && node.state.status);
-      h += `<span class="text-muted small">${_timeAgo(node.state && node.state.lastRun)}</span>`;
-      if (node.state && node.state.status === 'error' && node.state.error) {
-        h += `<span class="badge bg-danger small" title="${_esc(node.state.error)}">Error</span>`;
+      h += _statusDot(node.card_data && node.card_data.status);
+      h += `<span class="text-muted small">${_timeAgo(node.card_data && node.card_data.lastRun)}</span>`;
+      if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
+        h += `<span class="badge bg-danger small" title="${_esc(node.card_data.error)}">Error</span>`;
       }
       if (showRefresh) {
         h += `<button class="btn btn-sm btn-outline-secondary ms-auto" id="${uid}-refresh" title="Refresh">`;
@@ -1082,7 +1084,7 @@ var LiveCard = (function () {
       // Notes section (feature toggle)
       if (features.notes && opts.showNotes !== false) {
         h += `<details class="mt-2"><summary class="small fw-medium">Notes</summary>`;
-        h += `<textarea class="form-control form-control-sm mt-1" id="${uid}-notes" rows="3" placeholder="Add notes...">${_esc((node.state && node.state._notes) || '')}</textarea></details>`;
+        h += `<textarea class="form-control form-control-sm mt-1" id="${uid}-notes" rows="3" placeholder="Add notes...">${_esc((node.card_data && node.card_data._notes) || '')}</textarea></details>`;
       }
 
       // Chat section (feature toggle)
@@ -1103,10 +1105,10 @@ var LiveCard = (function () {
       const resultEl = document.getElementById(uid + '-result');
       _nodeEls[node.id] = { container: containerEl, resultEl, uid };
 
-      if (node.state && node.state.status === 'loading') {
+      if (node.card_data && node.card_data.status === 'loading') {
         resultEl.innerHTML = '<div class="d-flex align-items-center gap-2"><span class="spinner-border spinner-border-sm text-muted"></span><span class="text-muted small">Loading…</span></div>';
-      } else if (node.state && node.state.status === 'error' && node.state.error) {
-        resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.state.error)}</pre>`;
+      } else if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
+        resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.card_data.error)}</pre>`;
       } else {
         _runCompute(node).then(function () { _renderElements(node, resultEl); });
       }
@@ -1128,8 +1130,8 @@ var LiveCard = (function () {
         notesEl.addEventListener('input', () => {
           clearTimeout(nTimer);
           nTimer = setTimeout(() => {
-            if (!node.state) node.state = {};
-            node.state._notes = notesEl.value;
+            if (!node.card_data) node.card_data = {};
+            node.card_data._notes = notesEl.value;
             cfg.onPatch(node.id, { _notes: notesEl.value });
           }, 800);
           cleanup.timers.push(nTimer);
@@ -1182,18 +1184,18 @@ var LiveCard = (function () {
         if (ts) ts.textContent = _timeAgo(patch.lastRun);
       }
 
-      // Merge into node state
+      // Merge into node card_data
       const node = cfg.resolve(nodeId);
       if (!node) return;
-      if (!node.state) node.state = {};
-      if (patch.status) node.state.status = patch.status;
-      if (patch.lastRun) node.state.lastRun = patch.lastRun;
-      if (patch.error !== undefined) node.state.error = patch.error;
+      if (!node.card_data) node.card_data = {};
+      if (patch.status) node.card_data.status = patch.status;
+      if (patch.lastRun) node.card_data.lastRun = patch.lastRun;
+      if (patch.error !== undefined) node.card_data.error = patch.error;
 
-      if (node.state.status === 'loading') {
+      if (node.card_data.status === 'loading') {
         info.resultEl.innerHTML = '<div class="d-flex align-items-center gap-2"><span class="spinner-border spinner-border-sm text-muted"></span><span class="text-muted small">Loading…</span></div>';
-      } else if (node.state.status === 'error' && node.state.error) {
-        info.resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.state.error)}</pre>`;
+      } else if (node.card_data.status === 'error' && node.card_data.error) {
+        info.resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.card_data.error)}</pre>`;
       } else {
         _runCompute(node).then(function () { _renderElements(node, info.resultEl); });
       }
@@ -1269,6 +1271,7 @@ var LiveCard = (function () {
   function Board(engine, containerEl, opts) {
     opts = opts || {};
     const mode = { current: opts.mode || 'board' };
+    const devMode = { current: opts.devMode || false };
     const nodeList = [];
     const nodeMap = {};        // id → { node, colEl, bodyEl }
     const _positions = {};     // id → { x, y, w, h } for canvas mode
@@ -1363,7 +1366,127 @@ var LiveCard = (function () {
     }
 
     function _getRequires(node) {
-      return node.requires || [];
+      return node._requiresTokens || node.requires || [];
+    }
+
+    function _showCardInspector(node) {
+      const modal = document.createElement('div');
+      modal.className = 'modal d-block';
+      modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
+
+      const dialog = document.createElement('div');
+      dialog.className = 'modal-dialog';
+      dialog.style.cssText = 'width: 92%; max-width: 980px; max-height: 88vh; overflow: auto;';
+
+      const content = document.createElement('div');
+      content.className = 'modal-content';
+
+      const header = document.createElement('div');
+      header.className = 'modal-header';
+      header.innerHTML = `<h5 class="modal-title">Card Inspector: ${_esc((node.meta && node.meta.title) || node.id)}</h5><button type="button" class="btn-close" aria-label="Close"></button>`;
+
+      const closeModal = function () { modal.remove(); };
+      header.querySelector('.btn-close').addEventListener('click', closeModal);
+
+      const body = document.createElement('div');
+      body.className = 'modal-body';
+      body.style.cssText = 'max-height: 64vh; overflow-y: auto;';
+
+      const cardSection = document.createElement('div');
+      cardSection.className = 'mb-4';
+      cardSection.innerHTML = '<h6 class="fw-semibold mb-2">Card Object (Editable)</h6>';
+
+      const editableCardObject = JSON.parse(JSON.stringify(node || {}));
+      delete editableCardObject.computed_values;
+      delete editableCardObject._sourcesData;
+      delete editableCardObject.runtime_state;
+
+      const editor = document.createElement('textarea');
+      editor.className = 'form-control form-control-sm font-monospace';
+      editor.rows = 16;
+      editor.style.whiteSpace = 'pre';
+      editor.value = JSON.stringify(editableCardObject, null, 2);
+
+      const editorHint = document.createElement('div');
+      editorHint.className = 'small text-muted mt-2';
+      editorHint.textContent = 'Edit JSON and click Submit to apply updates to this card.';
+
+      const editorError = document.createElement('div');
+      editorError.className = 'small text-danger mt-1 d-none';
+
+      const submitBtn = document.createElement('button');
+      submitBtn.type = 'button';
+      submitBtn.className = 'btn btn-primary btn-sm mb-2';
+      submitBtn.textContent = 'Submit';
+
+      cardSection.appendChild(submitBtn);
+      cardSection.appendChild(editor);
+      cardSection.appendChild(editorHint);
+      cardSection.appendChild(editorError);
+      body.appendChild(cardSection);
+
+      const computedSection = document.createElement('div');
+      computedSection.className = 'mb-4';
+      computedSection.innerHTML = '<h6 class="fw-semibold mb-2">Computed Values (Read-only)</h6>';
+      const computedValues = node.computed_values || {};
+      computedSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(computedValues, null, 2))}</pre>`;
+      body.appendChild(computedSection);
+
+      const stateSection = document.createElement('div');
+      stateSection.className = 'mb-2';
+      stateSection.innerHTML = '<h6 class="fw-semibold mb-2">Runtime Status (Read-only)</h6>';
+      const runtimeState = { status: node.card_data && node.card_data.status, lastRun: node.card_data && node.card_data.lastRun, error: node.card_data && node.card_data.error };
+      stateSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(runtimeState, null, 2))}</pre>`;
+      body.appendChild(stateSection);
+
+      const footer = document.createElement('div');
+      footer.className = 'modal-footer';
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'btn btn-secondary';
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', closeModal);
+
+      submitBtn.addEventListener('click', function () {
+        editorError.classList.add('d-none');
+        editorError.textContent = '';
+        try {
+          const parsed = JSON.parse(editor.value);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Card Object must be a JSON object.');
+          }
+          if (parsed.id && parsed.id !== node.id) {
+            throw new Error('Changing card id is not supported in the inspector.');
+          }
+
+          const fixedId = node.id;
+          const preservedComputedValues = node.computed_values;
+          const preservedSourcesData = node._sourcesData;
+          Object.keys(node).forEach(function (k) { delete node[k]; });
+          Object.assign(node, parsed);
+          node.id = fixedId;
+          if (preservedComputedValues !== undefined) node.computed_values = preservedComputedValues;
+          if (preservedSourcesData !== undefined) node._sourcesData = preservedSourcesData;
+
+          engine.notify(node.id, { inspector: 'card-object-updated' });
+          _render();
+
+          submitBtn.textContent = '✓ Saved';
+          setTimeout(function () { submitBtn.textContent = 'Submit'; }, 1200);
+          closeModal();
+        } catch (err) {
+          editorError.textContent = 'Invalid JSON: ' + String((err && err.message) || err);
+          editorError.classList.remove('d-none');
+        }
+      });
+
+      footer.appendChild(closeBtn);
+      content.appendChild(header);
+      content.appendChild(body);
+      content.appendChild(footer);
+      dialog.appendChild(content);
+      modal.appendChild(dialog);
+      document.body.appendChild(modal);
     }
 
     function _buildCardWrapper(node) {
@@ -1381,6 +1504,21 @@ var LiveCard = (function () {
         badgeHtml = tags.map(t => '<span class="badge bg-secondary ms-1">' + _esc(t) + '</span>').join('');
       }
       header.innerHTML = '<strong class="small">' + _esc(title) + '</strong>' + badgeHtml;
+      
+      // Add dev mode code icon button if devMode is enabled
+      if (devMode.current) {
+        const codeBtn = document.createElement('button');
+        codeBtn.className = 'btn btn-sm btn-outline-secondary';
+        codeBtn.style.cssText = 'padding: 2px 6px; margin-left: auto;';
+        codeBtn.innerHTML = '&lt;/&gt;';
+        codeBtn.title = 'Inspect card data';
+        codeBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          _showCardInspector(node);
+        });
+        header.appendChild(codeBtn);
+      }
+      
       const body = document.createElement('div');
       body.className = 'card-body p-2';
       wrap.appendChild(header);
@@ -1391,7 +1529,7 @@ var LiveCard = (function () {
     function _buildSourcePill(node) {
       const el = document.createElement('div');
       el.className = 'lc-source-node';
-      const status = (node.state && node.state.status) || 'fresh';
+      const status = (node.card_data && node.card_data.status) || 'fresh';
       const title = (node.meta && node.meta.title) || node.id;
       const kind = (node.sources && node.sources[0] && node.sources[0].kind) || 'source';
       el.innerHTML = `<div class="lc-source-pill shadow-sm">
@@ -1660,6 +1798,11 @@ var LiveCard = (function () {
       _render();
     }
 
+    function setDevMode(flag) {
+      devMode.current = !!flag;
+      _render();
+    }
+
     function destroy() {
       ac.abort();
       engine.destroyAll();
@@ -1682,9 +1825,11 @@ var LiveCard = (function () {
       refresh,
       clear,
       setMode,
+      setDevMode,
       autoLayout,
       destroy,
       get mode() { return mode.current; },
+      get devMode() { return devMode.current; },
       get nodes() { return nodeList.slice(); },
       get engine() { return engine; },
     };

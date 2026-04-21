@@ -8,6 +8,12 @@
     ],
     "desc": "Form to update user preferences — demonstrates bidirectional data flow and card state mutations"
   },
+  "provides": [
+    {
+      "bindTo": "card-ex-form",
+      "src": "card_data"
+    }
+  ],
   "view": {
     "elements": [
       {
