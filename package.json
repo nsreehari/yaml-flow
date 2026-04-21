@@ -90,6 +90,9 @@
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:example-board": "vitest run tests/examples/example-board.test.ts",
+    "check:example-board": "npm run test:example-board && npm run validate:cards -- \"examples/example-board/cards/*.json\"",
+    "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"

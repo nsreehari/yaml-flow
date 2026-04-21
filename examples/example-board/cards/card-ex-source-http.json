@@ -1,0 +1,28 @@
+{
+  "id": "card-ex-source-http",
+  "meta": {
+    "title": "Product Prices",
+    "tags": ["data", "linked"],
+    "desc": "Fetches pricing for products derived from upstream order data"
+  },
+  "requires": ["orders"],
+  "provides": [{ "bindTo": "prices", "src": "sources.raw" }],
+  "sources": [{
+    "bindTo": "raw",
+    "outputFile": "card-ex-source-http-raw.json",
+    "script": "node scripts/fetch-prices.js --products {{PRODUCT_LIST}} --out card-ex-source-http-raw.json"
+  }],
+  "compute": [
+    {
+      "bindTo": "PRODUCT_LIST",
+      "expr": "$join($distinct(requires.orders.product), ',')"
+    }
+  ],
+  "view": {
+    "elements": [
+      { "kind": "table", "data": { "bind": "sources.raw", "columns": ["product", "price", "currency"], "sortable": true } }
+    ],
+    "layout": { "board": { "col": 6, "order": 2 }, "canvas": { "x": 450, "y": 50, "w": 350, "h": 220 } }
+  },
+  "state": {}
+}

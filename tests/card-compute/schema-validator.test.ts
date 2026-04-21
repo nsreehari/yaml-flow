@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { validateLiveCardSchema } from '../../src/card-compute/schema-validator.js';
+import {
+  validateLiveCardSchema,
+  validateLiveCardRuntimeExpressions,
+  validateLiveCardDefinition,
+} from '../../src/card-compute/schema-validator.js';
 
 // ============================================================================
 // validateLiveCardSchema — full JSON Schema validation via AJV
@@ -230,5 +234,50 @@ describe('validateLiveCardSchema', () => {
       expect(r.ok).toBe(false);
       expect(r.errors.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('validateLiveCardRuntimeExpressions', () => {
+  it('accepts parser-compatible expressions', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'ok',
+      state: {},
+      compute: [{ bindTo: 'x', expr: 'requires.orders^(>amount)#$i[$i<=5]' }],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('rejects parser-incompatible expressions', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad',
+      state: {},
+      compute: [{ bindTo: 'x', expr: '$sort(requires.orders, function($a, $b){ $b.amount - $a.amount })[0..4]' }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/compute/0/expr'))).toBe(true);
+  });
+});
+
+describe('validateLiveCardDefinition', () => {
+  it('passes when schema and expressions are valid', () => {
+    const r = validateLiveCardDefinition({
+      id: 'ok-full',
+      state: {},
+      compute: [{ bindTo: 'x', expr: 'requires.orders^(>amount)' }],
+      view: { elements: [{ kind: 'list', data: { bind: 'computed_values.x' } }] },
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('fails when schema passes but expression compile fails', () => {
+    const r = validateLiveCardDefinition({
+      id: 'bad-full',
+      state: {},
+      compute: [{ bindTo: 'x', expr: '$sort(requires.orders, function($a, $b){ $b.amount - $a.amount })[0..4]' }],
+      view: { elements: [{ kind: 'list', data: { bind: 'computed_values.x' } }] },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/compute/0/expr'))).toBe(true);
   });
 });

@@ -9,7 +9,7 @@
     "bind_ref": {
       "description": "A state path reference, e.g. 'state.raw_quotes' or 'requires.upstream'",
       "type": "string",
-      "pattern": "^(state|requires|computed_values)\\."
+      "pattern": "^(state|requires|sources|computed_values)(\\.|$)"
     },
 
     "bind_or_literal": {

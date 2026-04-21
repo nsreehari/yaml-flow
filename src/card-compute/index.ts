@@ -301,7 +301,11 @@ export const CardCompute = {
   validate: validateNode,
 };
 
-export { validateLiveCardSchema } from './schema-validator.js';
+export {
+  validateLiveCardSchema,
+  validateLiveCardRuntimeExpressions,
+  validateLiveCardDefinition,
+} from './schema-validator.js';
 
 export default CardCompute;
 
