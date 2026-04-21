@@ -43,11 +43,11 @@ describe('card-compute parity', () => {
 
     const baseNode: ComputeNode = {
       id: 'parity-card',
-      state: { prices: [{ p: 100 }, { p: 50 }], qty: 3 },
+      card_data: { prices: [{ p: 100 }, { p: 50 }], qty: 3 },
       requires: { fee: 2 },
       compute: [
-        { bindTo: 'subtotal', expr: '$sum(state.prices.p)' },
-        { bindTo: 'total', expr: 'computed_values.subtotal * state.qty + requires.fee + $sum(sources.adjustments)' },
+        { bindTo: 'subtotal', expr: '$sum(card_data.prices.p)' },
+        { bindTo: 'total', expr: 'computed_values.subtotal * card_data.qty + requires.fee + $sum(sources.adjustments)' },
       ],
     };
     const options = { sourcesData: { adjustments: [1, 4] } };
@@ -73,7 +73,7 @@ describe('card-compute parity', () => {
 
     const invalidNode = {
       id: '',
-      state: { status: 'invalid-status' },
+      card_data: { status: 'invalid-status' },
       compute: [{ bindTo: '', expr: '' }],
       view: { elements: [{ kind: 'not-a-real-kind' }] },
       unknown_field: true,

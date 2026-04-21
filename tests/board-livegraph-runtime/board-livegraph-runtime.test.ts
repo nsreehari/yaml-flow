@@ -11,13 +11,13 @@ describe('createBoardLiveGraphRuntime', () => {
     const cards: LiveCard[] = [
       {
         id: 'prices',
-        state: {},
+        card_data: {},
         sources: [{ kind: 'api', bindTo: 'raw' }],
         provides: [{ bindTo: 'prices', src: 'sources.raw' }],
       },
       {
         id: 'stats',
-        state: {},
+        card_data: {},
         requires: ['prices'],
         compute: [{ bindTo: 'sum', expr: '$sum(requires.prices)' }] as any,
         provides: [{ bindTo: 'sum', src: 'computed_values.sum' }],
@@ -46,7 +46,7 @@ describe('createBoardLiveGraphRuntime', () => {
 
   it('supports dynamic add/upsert/remove card mutations', async () => {
     const runtime = createBoardLiveGraphRuntime([
-      { id: 'seed', state: { value: 7 } },
+      { id: 'seed', card_data: { value: 7 } },
     ]);
 
     runtime.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
@@ -54,7 +54,7 @@ describe('createBoardLiveGraphRuntime', () => {
 
     runtime.addCard({
       id: 'plus-one',
-      state: {},
+      card_data: {},
       requires: ['seed'],
       compute: [{ bindTo: 'value', expr: '$number(requires.seed.value) + 1' }] as any,
       provides: [{ bindTo: 'value', src: 'computed_values.value' }],
@@ -66,7 +66,7 @@ describe('createBoardLiveGraphRuntime', () => {
 
     runtime.upsertCard({
       id: 'plus-one',
-      state: {},
+      card_data: {},
       requires: ['seed'],
       compute: [{ bindTo: 'value', expr: '$number(requires.seed.value) + 2' }] as any,
       provides: [{ bindTo: 'value', src: 'computed_values.value' }],
@@ -85,8 +85,8 @@ describe('createBoardLiveGraphRuntime', () => {
     const runtime = createBoardLiveGraphRuntime([
       {
         id: 'counter',
-        state: { n: 1 },
-        compute: [{ bindTo: 'value', expr: '$number(state.n)' }] as any,
+        card_data: { n: 1 },
+        compute: [{ bindTo: 'value', expr: '$number(card_data.n)' }] as any,
         provides: [{ bindTo: 'value', src: 'computed_values.value' }],
       },
     ]);

@@ -60,7 +60,7 @@ function makePortfolioCards(): LiveCard[] {
     {
       id: 'holdings',
       meta: { title: 'Portfolio Holdings' },
-      state: {
+      card_data: {
         holdings: [
           { symbol: 'AAPL', shares: 50, sector: 'tech' },
           { symbol: 'MSFT', shares: 30, sector: 'tech' },
@@ -73,14 +73,14 @@ function makePortfolioCards(): LiveCard[] {
     {
       id: 'price-feed',
       meta: { title: 'Live Price Feed' },
-      state: {
+      card_data: {
         prices: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 },
       },
     },
     {
       id: 'news-feed',
       meta: { title: 'Market News Feed' },
-      state: {
+      card_data: {
         headlines: [
           { symbol: 'AAPL', headline: 'Apple beats Q4 estimates', sentiment: 0.8 },
           { symbol: 'JPM', headline: 'JPMorgan raises dividend', sentiment: 0.6 },
@@ -91,7 +91,7 @@ function makePortfolioCards(): LiveCard[] {
     {
       id: 'benchmark',
       meta: { title: 'S&P 500 Benchmark' },
-      state: {
+      card_data: {
         index: 'SPY',
         value: 5280.50,
         dailyReturn: 0.45,
@@ -103,25 +103,25 @@ function makePortfolioCards(): LiveCard[] {
       id: 'valuator',
       meta: { title: 'Position Valuator' },
       requires: ['holdings', 'price-feed'],
-      state: {},
+      card_data: {},
     },
     {
       id: 'portfolio-value',
       meta: { title: 'Total Portfolio Value' },
       requires: ['valuator'],
-      state: {},
+      card_data: {},
     },
     {
       id: 'sector-breakdown',
       meta: { title: 'Sector Breakdown' },
       requires: ['valuator'],
-      state: {},
+      card_data: {},
     },
     {
       id: 'sentiment',
       meta: { title: 'News Sentiment Score' },
       requires: ['news-feed'],
-      state: {},
+      card_data: {},
     },
   ];
 }
@@ -164,7 +164,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
       // Sync to disk
       try {
         const diskCard = readCard(tmpDir, id);
-        diskCard.state = { ...diskCard.state, ...result };
+        diskCard.card_data = { ...diskCard.card_data, ...result };
         writeCard(tmpDir, diskCard);
       } catch { /* card may not exist yet */ }
       graphRef.rg!.resolveCallback(input.callbackToken, result);
@@ -238,7 +238,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
             if (taskState.data && Object.keys(taskState.data).length > 0) {
               try {
                 const diskCard = readCard(tmpDir, taskName);
-                diskCard.state = { ...diskCard.state, ...taskState.data };
+                diskCard.card_data = { ...diskCard.card_data, ...taskState.data };
                 writeCard(tmpDir, diskCard);
               } catch { /* card not on disk yet */ }
             }
@@ -293,26 +293,26 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Valuator: 5 positions
     const valDisk = readCard(tmpDir, 'valuator');
-    expect(valDisk.state!.positions).toHaveLength(5);
+    expect(valDisk.card_data!.positions).toHaveLength(5);
 
     // Portfolio value
     const pvDisk = readCard(tmpDir, 'portfolio-value');
     const expectedTotal = 50*195.50 + 30*420.10 + 20*176.30 + 40*198.20 + 25*155.80;
-    expect(pvDisk.state!.totalValue).toBe(expectedTotal);
-    expect(pvDisk.state!.positionCount).toBe(5);
+    expect(pvDisk.card_data!.totalValue).toBe(expectedTotal);
+    expect(pvDisk.card_data!.positionCount).toBe(5);
 
     // Sector breakdown — 3 sectors
     const sbDisk = readCard(tmpDir, 'sector-breakdown');
-    expect(sbDisk.state!.sectorCount).toBe(3);
-    const sectors = sbDisk.state!.sectors as any[];
+    expect(sbDisk.card_data!.sectorCount).toBe(3);
+    const sectors = sbDisk.card_data!.sectors as any[];
     expect(sectors.find((s: any) => s.sector === 'tech')).toBeDefined();
     expect(sectors.find((s: any) => s.sector === 'finance')).toBeDefined();
     expect(sectors.find((s: any) => s.sector === 'healthcare')).toBeDefined();
 
     // Sentiment
     const sentDisk = readCard(tmpDir, 'sentiment');
-    expect(sentDisk.state!.headlineCount).toBe(3);
-    expect(sentDisk.state!.bullish).toBe(true); // avg (0.8+0.6-0.4)/3 = 0.33
+    expect(sentDisk.card_data!.headlineCount).toBe(3);
+    expect(sentDisk.card_data!.bullish).toBe(true); // avg (0.8+0.6-0.4)/3 = 0.33
   });
 
   // ==========================================================================
@@ -330,7 +330,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'allocation-chart',
       meta: { title: 'Allocation Chart' },
-      requires: ['valuator', 'portfolio-value'], state: {},
+      requires: ['valuator', 'portfolio-value'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const totalValue = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
@@ -344,7 +344,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'risk-score',
       meta: { title: 'Risk Score' },
-      requires: ['valuator'], state: {},
+      requires: ['valuator'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const values = positions.map((p: any) => p.value);
@@ -357,7 +357,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'daily-pnl',
       meta: { title: 'Daily P&L' },
-      requires: ['portfolio-value', 'benchmark'], state: {},
+      requires: ['portfolio-value', 'benchmark'], card_data: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       const benchReturn = (engine.state.tasks.benchmark?.data as any)?.dailyReturn ?? 0;
@@ -371,7 +371,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'value-alert',
       meta: { title: 'Value Alert' },
-      requires: ['portfolio-value'], state: {},
+      requires: ['portfolio-value'], card_data: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       return { triggered: tv > 25000, threshold: 25000, currentValue: tv };
@@ -381,7 +381,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'summary',
       meta: { title: 'Portfolio Summary' },
-      requires: ['portfolio-value', 'sentiment'], state: {},
+      requires: ['portfolio-value', 'sentiment'], card_data: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       const bullish = (engine.state.tasks.sentiment?.data as any)?.bullish ?? false;
@@ -392,7 +392,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'correlation',
       meta: { title: 'Benchmark Correlation' },
-      requires: ['valuator', 'benchmark'], state: {},
+      requires: ['valuator', 'benchmark'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const benchValue = (engine.state.tasks.benchmark?.data as any)?.value ?? 0;
@@ -406,7 +406,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'combined-view',
       meta: { title: 'Combined Dashboard View' },
-      requires: ['summary', 'sector-breakdown', 'risk-score'], state: {},
+      requires: ['summary', 'sector-breakdown', 'risk-score'], card_data: {},
     }, (engine) => {
       const summaryData = engine.state.tasks.summary?.data as any ?? {};
       const sectorData = engine.state.tasks['sector-breakdown']?.data as any ?? {};
@@ -431,17 +431,17 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Spot-check dynamic cards on disk
     const allocDisk = readCard(tmpDir, 'allocation-chart');
-    expect(allocDisk.state!.allocations).toHaveLength(5);
+    expect(allocDisk.card_data!.allocations).toHaveLength(5);
 
     const riskDisk = readCard(tmpDir, 'risk-score');
-    expect(['high', 'medium', 'low']).toContain(riskDisk.state!.riskLevel);
+    expect(['high', 'medium', 'low']).toContain(riskDisk.card_data!.riskLevel);
 
     const pnlDisk = readCard(tmpDir, 'daily-pnl');
-    expect(pnlDisk.state!.alpha).toBeDefined();
+    expect(pnlDisk.card_data!.alpha).toBeDefined();
 
     const combDisk = readCard(tmpDir, 'combined-view');
-    expect(combDisk.state!.dashboardReady).toBe(true);
-    expect(combDisk.state!.sectorCount).toBe(3);
+    expect(combDisk.card_data!.dashboardReady).toBe(true);
+    expect(combDisk.card_data!.sectorCount).toBe(3);
   });
 
   // ==========================================================================
@@ -458,7 +458,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     // Add risk-score (initially only requires valuator)
     // Handler checks its own config to decide whether to use sentiment
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', requires: ['valuator'], state: {},
+      id: 'risk-score', requires: ['valuator'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const values = positions.map((p: any) => p.value);
@@ -484,8 +484,8 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Before addRequires: handler does not use sentiment
     const riskBefore = readCard(tmpDir, 'risk-score');
-    expect(riskBefore.state!.usesSentiment).toBe(false);
-    expect(riskBefore.state!.adjustedRisk).toBe(riskBefore.state!.rawConcentration);
+    expect(riskBefore.card_data!.usesSentiment).toBe(false);
+    expect(riskBefore.card_data!.adjustedRisk).toBe(riskBefore.card_data!.rawConcentration);
 
     // Wire sentiment into risk-score
     rg.addRequires('risk-score', ['sentiment']);
@@ -501,8 +501,8 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // After: handler now uses sentiment
     const riskAfter = readCard(tmpDir, 'risk-score');
-    expect(riskAfter.state!.usesSentiment).toBe(true);
-    expect(riskAfter.state!.adjustedRisk).not.toBe(riskAfter.state!.rawConcentration);
+    expect(riskAfter.card_data!.usesSentiment).toBe(true);
+    expect(riskAfter.card_data!.adjustedRisk).not.toBe(riskAfter.card_data!.rawConcentration);
   });
 
   // ==========================================================================
@@ -520,7 +520,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     expect(rg.getState().config.tasks.valuator.requires).toContain('price-feed');
 
     const valBefore = readCard(tmpDir, 'valuator');
-    const posBefore = valBefore.state!.positions as any[];
+    const posBefore = valBefore.card_data!.positions as any[];
     expect(posBefore[0].price).toBeGreaterThan(0);
 
     // Remove price-feed requirement
@@ -565,7 +565,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     // Now add a card that requires 'sector-data'
     addDynamicCard(rg, graphRef, {
       id: 'sector-report',
-      requires: ['sector-data'], state: {},
+      requires: ['sector-data'], card_data: {},
     }, (engine) => {
       const sectorData = engine.state.tasks['sector-breakdown']?.data as any ?? {};
       return { report: `${sectorData.sectorCount ?? 0} sectors analyzed`, generated: true };
@@ -575,8 +575,8 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     expect(rg.getState().state.tasks['sector-report'].status).toBe('completed');
     const reportDisk = readCard(tmpDir, 'sector-report');
-    expect(reportDisk.state!.generated).toBe(true);
-    expect(reportDisk.state!.report).toContain('3 sectors');
+    expect(reportDisk.card_data!.generated).toBe(true);
+    expect(reportDisk.card_data!.report).toContain('3 sectors');
   });
 
   // ==========================================================================
@@ -597,7 +597,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     // A card requiring 'sector-signal' should run (token produced by completed task)
     addDynamicCard(rg, graphRef, {
       id: 'signal-consumer',
-      requires: ['sector-signal'], state: {},
+      requires: ['sector-signal'], card_data: {},
     }, () => ({ consumed: true }), { requires: ['sector-signal'] });
     await ticks(100);
     expect(rg.getState().state.tasks['signal-consumer'].status).toBe('completed');
@@ -637,7 +637,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     await ticks(150);
 
     const pvBefore = readCard(tmpDir, 'portfolio-value');
-    const totalBefore = pvBefore.state!.totalValue as number;
+    const totalBefore = pvBefore.card_data!.totalValue as number;
 
     // Push new data for both price-feed and holdings
     rg.pushAll([
@@ -663,14 +663,14 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     await ticks(150);
 
     const pvAfter = readCard(tmpDir, 'portfolio-value');
-    const totalAfter = pvAfter.state!.totalValue as number;
+    const totalAfter = pvAfter.card_data!.totalValue as number;
     const expectedTotal = 60*201.00 + 30*418.75 + 20*180.50 + 40*202.10 + 25*153.40;
     expect(totalAfter).toBe(expectedTotal);
     expect(totalAfter).not.toBe(totalBefore);
 
     // Sector breakdown updated
     const sbDisk = readCard(tmpDir, 'sector-breakdown');
-    const techSector = (sbDisk.state!.sectors as any[]).find((s: any) => s.sector === 'tech');
+    const techSector = (sbDisk.card_data!.sectors as any[]).find((s: any) => s.sector === 'tech');
     expect(techSector.value).toBe(60*201.00 + 30*418.75 + 20*180.50);
   });
 
@@ -687,7 +687,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add allocation-chart → depends on valuator + portfolio-value
     addDynamicCard(rg, graphRef, {
-      id: 'allocation-chart', requires: ['valuator', 'portfolio-value'], state: {},
+      id: 'allocation-chart', requires: ['valuator', 'portfolio-value'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const total = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
@@ -696,7 +696,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add daily-pnl → depends on portfolio-value + benchmark
     addDynamicCard(rg, graphRef, {
-      id: 'daily-pnl', requires: ['portfolio-value', 'benchmark'], state: {},
+      id: 'daily-pnl', requires: ['portfolio-value', 'benchmark'], card_data: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       const benchReturn = (engine.state.tasks.benchmark?.data as any)?.dailyReturn ?? 0;
@@ -705,7 +705,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add summary + newsletter
     addDynamicCard(rg, graphRef, {
-      id: 'summary', requires: ['portfolio-value', 'sentiment'], state: {},
+      id: 'summary', requires: ['portfolio-value', 'sentiment'], card_data: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       const mood = (engine.state.tasks.sentiment?.data as any)?.bullish ? 'bullish' : 'bearish';
@@ -713,7 +713,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     }, { requires: ['portfolio-value', 'sentiment'] });
 
     addDynamicCard(rg, graphRef, {
-      id: 'newsletter', requires: ['summary', 'allocation-chart', 'daily-pnl'], state: {},
+      id: 'newsletter', requires: ['summary', 'allocation-chart', 'daily-pnl'], card_data: {},
     }, (engine) => {
       const summary = engine.state.tasks.summary?.data as any ?? {};
       const alloc = engine.state.tasks['allocation-chart']?.data as any ?? {};
@@ -728,8 +728,8 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     expect(rg.getState().state.tasks.newsletter.status).toBe('completed');
 
     const nlDisk = readCard(tmpDir, 'newsletter');
-    expect(nlDisk.state!.assembled).toBe(true);
-    expect(nlDisk.state!.allocationCount).toBe(5);
+    expect(nlDisk.card_data!.assembled).toBe(true);
+    expect(nlDisk.card_data!.allocationCount).toBe(5);
 
     // --- Add cross-link: wire sentiment into newsletter via addRequires ---
     rg.addRequires('newsletter', ['sentiment']);
@@ -772,7 +772,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Add risk-score downstream of valuator
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', requires: ['valuator'], state: {},
+      id: 'risk-score', requires: ['valuator'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       const values = positions.map((p: any) => p.value);
@@ -795,7 +795,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     // Disk files preserved
     expect(cardExists(tmpDir, 'valuator')).toBe(true);
     const valDisk = readCard(tmpDir, 'valuator');
-    expect(valDisk.state!.positions).toHaveLength(5);
+    expect(valDisk.card_data!.positions).toHaveLength(5);
 
     // Re-add valuator
     rg.registerHandler('valuator', makeHandler('valuator', (engine) => {
@@ -831,14 +831,14 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     await ticks(150);
 
     addDynamicCard(rg, graphRef, {
-      id: 'risk-score', requires: ['valuator'], state: {},
+      id: 'risk-score', requires: ['valuator'], card_data: {},
     }, (engine) => {
       const positions = (engine.state.tasks.valuator?.data as any)?.positions ?? [];
       return { positionCount: positions.length, topHolding: positions.length > 0 ? positions.sort((a: any, b: any) => b.value - a.value)[0].symbol : null };
     }, { requires: ['valuator'] });
 
     addDynamicCard(rg, graphRef, {
-      id: 'daily-pnl', requires: ['portfolio-value'], state: {},
+      id: 'daily-pnl', requires: ['portfolio-value'], card_data: {},
     }, (engine) => {
       const tv = (engine.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
       return { estimatedPnl: Math.round(tv * 0.012 * 100) / 100 };
@@ -847,7 +847,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     await ticks(100);
 
     let riskDisk = readCard(tmpDir, 'risk-score');
-    expect(riskDisk.state!.positionCount).toBe(5);
+    expect(riskDisk.card_data!.positionCount).toBe(5);
 
     // Round 2: price change
     rg.push({
@@ -859,7 +859,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     const pvR2 = readCard(tmpDir, 'portfolio-value');
     const expectedR2 = 50*201.00 + 30*418.75 + 20*180.50 + 40*202.10 + 25*153.40;
-    expect(pvR2.state!.totalValue).toBe(expectedR2);
+    expect(pvR2.card_data!.totalValue).toBe(expectedR2);
 
     // Round 3: add TSLA + new prices
     rg.pushAll([
@@ -886,20 +886,20 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     await ticks(150);
 
     riskDisk = readCard(tmpDir, 'risk-score');
-    expect(riskDisk.state!.positionCount).toBe(6);
+    expect(riskDisk.card_data!.positionCount).toBe(6);
 
     const pvR3 = readCard(tmpDir, 'portfolio-value');
     const expectedR3 = 50*205.25 + 30*422.00 + 20*182.10 + 40*199.80 + 25*157.10 + 10*168.75;
-    expect(pvR3.state!.totalValue).toBe(expectedR3);
-    expect(pvR3.state!.positionCount).toBe(6);
+    expect(pvR3.card_data!.totalValue).toBe(expectedR3);
+    expect(pvR3.card_data!.positionCount).toBe(6);
 
     const sbDisk = readCard(tmpDir, 'sector-breakdown');
-    const techSector = (sbDisk.state!.sectors as any[]).find((s: any) => s.sector === 'tech');
+    const techSector = (sbDisk.card_data!.sectors as any[]).find((s: any) => s.sector === 'tech');
     const expectedTechValue = 50*205.25 + 30*422.00 + 20*182.10 + 10*168.75;
     expect(techSector.value).toBe(expectedTechValue);
 
     const pnlDisk = readCard(tmpDir, 'daily-pnl');
-    expect(pnlDisk.state!.estimatedPnl).toBe(Math.round(expectedR3 * 0.012 * 100) / 100);
+    expect(pnlDisk.card_data!.estimatedPnl).toBe(Math.round(expectedR3 * 0.012 * 100) / 100);
   });
 
   // ==========================================================================
@@ -960,7 +960,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     for (const d of dynamicDefs) {
       addDynamicCard(rg, graphRef, {
-        id: d.id, requires: d.requires, state: {},
+        id: d.id, requires: d.requires, card_data: {},
       }, d.compute, { requires: d.requires });
     }
     await ticks(250);
@@ -976,7 +976,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     // Phase 3: Add card 16 depending on the new token
     addDynamicCard(rg, graphRef, {
-      id: 'market-context', requires: ['market-data'], state: {},
+      id: 'market-context', requires: ['market-data'], card_data: {},
     }, (e) => {
       const bench = e.state.tasks.benchmark?.data as any ?? {};
       return { indexValue: bench.value ?? 0, context: 'provided via market-data token' };
@@ -985,7 +985,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     expect(rg.getState().state.tasks['market-context'].status).toBe('completed');
     const mctxDisk = readCard(tmpDir, 'market-context');
-    expect(mctxDisk.state!.context).toBe('provided via market-data token');
+    expect(mctxDisk.card_data!.context).toBe('provided via market-data token');
     expect(Object.keys(rg.getState().state.tasks)).toHaveLength(16);
 
     // Phase 4: addRequires — wire news-feed into combined-view
@@ -1026,7 +1026,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
     addDynamicCard(rg, graphRef, {
       id: 'allocation-chart',
       requires: ['valuator'],
-      state: {},
+      card_data: {},
     }, (e) => {
       const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
       const total = pos.reduce((s: number, p: any) => s + p.value, 0);
@@ -1036,7 +1036,7 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
 
     expect(rg.getState().state.tasks['allocation-chart'].status).toBe('completed');
     const allocDisk = readCard(tmpDir, 'allocation-chart');
-    expect(allocDisk.state!.allocations).toHaveLength(5);
+    expect(allocDisk.card_data!.allocations).toHaveLength(5);
 
     // Phase 9: removeRequires — detach news-feed from combined-view
     rg.removeRequires('combined-view', ['news-feed']);

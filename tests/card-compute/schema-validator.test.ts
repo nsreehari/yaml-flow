@@ -23,7 +23,7 @@ describe('validateLiveCardSchema', () => {
     it('card with view', () => {
       const r = validateLiveCardSchema({
         id: 'card1',
-        state: { status: 'fresh' },
+        card_data: { status: 'fresh' },
         view: { elements: [{ kind: 'metric' }] },
       });
       expect(r.ok).toBe(true);
@@ -32,7 +32,7 @@ describe('validateLiveCardSchema', () => {
     it('card with sources', () => {
       const r = validateLiveCardSchema({
         id: 'src1',
-        state: { status: 'fresh' },
+        card_data: { status: 'fresh' },
         sources: [{ bindTo: 'raw', kind: 'api' }],
       });
       expect(r.ok).toBe(true);
@@ -43,18 +43,18 @@ describe('validateLiveCardSchema', () => {
         id: 'full-card',
         meta: { title: 'Dashboard', tags: ['finance'] },
         requires: ['src1'],
-        provides: [{ bindTo: 'total', src: 'state.total' }],
-        state: { status: 'fresh' },
+        provides: [{ bindTo: 'total', src: 'card_data.total' }],
+        card_data: { status: 'fresh' },
         view: {
           elements: [
-            { kind: 'metric', data: { bind: 'state.total' } },
-            { kind: 'table', data: { bind: 'state.rows', columns: ['a', 'b'] } },
+            { kind: 'metric', data: { bind: 'card_data.total' } },
+            { kind: 'table', data: { bind: 'card_data.rows', columns: ['a', 'b'] } },
           ],
           layout: { board: { col: 6, order: 1 } },
           features: { chat: true, refresh: true },
         },
         compute: [
-          { bindTo: 'total', expr: '$sum(state.data.revenue)' },
+          { bindTo: 'total', expr: '$sum(card_data.data.revenue)' },
         ],
         sources: [{ bindTo: 'data', kind: 'api' }, { bindTo: 'news', optionalForCompletionGating: true }],
       });
@@ -64,7 +64,7 @@ describe('validateLiveCardSchema', () => {
     it('source with full source_def fields', () => {
       const r = validateLiveCardSchema({
         id: 'src-full',
-        state: {},
+        card_data: {},
         sources: [{
           kind: 'api',
           bindTo: 'quotes',
@@ -88,7 +88,7 @@ describe('validateLiveCardSchema', () => {
       ];
       for (const kind of kinds) {
         const r = validateLiveCardSchema({
-          id: `k-${kind}`, state: {},
+          id: `k-${kind}`, card_data: {},
           view: { elements: [{ kind }] },
         });
         expect(r.ok, `kind "${kind}" should be valid`).toBe(true);
@@ -98,7 +98,7 @@ describe('validateLiveCardSchema', () => {
     it('all source kinds accepted in sources array', () => {
       for (const kind of ['api', 'websocket', 'static', 'llm']) {
         const r = validateLiveCardSchema({
-          id: `s-${kind}`, state: {},
+          id: `s-${kind}`, card_data: {},
           sources: [{ kind, bindTo: 'x' }],
         });
         expect(r.ok, `source kind "${kind}" should be valid`).toBe(true);
@@ -108,7 +108,7 @@ describe('validateLiveCardSchema', () => {
     it('all status values accepted', () => {
       for (const status of ['fresh', 'stale', 'loading', 'error']) {
         const r = validateLiveCardSchema({
-          id: 'x', state: { status },
+          id: 'x', card_data: { status },
         });
         expect(r.ok, `status "${status}" should be valid`).toBe(true);
       }
@@ -130,14 +130,14 @@ describe('validateLiveCardSchema', () => {
     });
 
     it('missing id', () => {
-      const r = validateLiveCardSchema({ state: {} });
+      const r = validateLiveCardSchema({ card_data: {} });
       expect(r.ok).toBe(false);
       expect(r.errors.some(e => e.includes('id'))).toBe(true);
     });
 
     it('card with unknown top-level key', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         extra: true,
       });
       expect(r.ok).toBe(false);
@@ -146,7 +146,7 @@ describe('validateLiveCardSchema', () => {
 
     it('view.elements empty', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         view: { elements: [] },
       });
       expect(r.ok).toBe(false);
@@ -154,22 +154,22 @@ describe('validateLiveCardSchema', () => {
 
     it('invalid element kind', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         view: { elements: [{ kind: 'sparkline' }] },
       });
       expect(r.ok).toBe(false);
     });
 
-    it('invalid state.status', () => {
+    it('allows arbitrary card_data.status values at schema level', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: { status: 'bogus' },
+        id: 'x', card_data: { status: 'bogus' },
       });
-      expect(r.ok).toBe(false);
+      expect(r.ok).toBe(true);
     });
 
     it('compute step missing expr', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         compute: [{ bindTo: 'total' }],
       });
       expect(r.ok).toBe(false);
@@ -177,15 +177,15 @@ describe('validateLiveCardSchema', () => {
 
     it('compute step missing bindTo', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
-        compute: [{ expr: '$sum(state.data)' }],
+        id: 'x', card_data: {},
+        compute: [{ expr: '$sum(card_data.data)' }],
       });
       expect(r.ok).toBe(false);
     });
 
     it('compute as object instead of array', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         compute: { total: { fn: 'sum' } },
       });
       expect(r.ok).toBe(false);
@@ -193,7 +193,7 @@ describe('validateLiveCardSchema', () => {
 
     it('sources entry missing bindTo', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         sources: [{ kind: 'api' }],
       });
       expect(r.ok).toBe(false);
@@ -201,7 +201,7 @@ describe('validateLiveCardSchema', () => {
 
     it('meta.title wrong type', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         meta: { title: 123 },
       });
       expect(r.ok).toBe(false);
@@ -209,7 +209,7 @@ describe('validateLiveCardSchema', () => {
 
     it('meta.tags wrong type', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: {},
+        id: 'x', card_data: {},
         meta: { tags: 'not-array' },
       });
       expect(r.ok).toBe(false);
@@ -221,10 +221,11 @@ describe('validateLiveCardSchema', () => {
   describe('error messages', () => {
     it('includes instance path in errors', () => {
       const r = validateLiveCardSchema({
-        id: 'x', state: { status: 'bogus' },
+        id: 'x', card_data: {},
+        compute: [{ bindTo: 'x' }],
       });
       expect(r.ok).toBe(false);
-      expect(r.errors.some(e => e.includes('status') || e.includes('state'))).toBe(true);
+      expect(r.errors.some(e => e.includes('/compute/0') || e.includes('compute'))).toBe(true);
     });
 
     it('reports multiple errors with allErrors', () => {
@@ -241,7 +242,7 @@ describe('validateLiveCardRuntimeExpressions', () => {
   it('accepts parser-compatible expressions', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'ok',
-      state: {},
+      card_data: {},
       compute: [{ bindTo: 'x', expr: 'requires.orders^(>amount)#$i[$i<=5]' }],
     });
     expect(r.ok).toBe(true);
@@ -251,7 +252,7 @@ describe('validateLiveCardRuntimeExpressions', () => {
   it('rejects parser-incompatible expressions', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad',
-      state: {},
+      card_data: {},
       compute: [{ bindTo: 'x', expr: '$sort(requires.orders, function($a, $b){ $b.amount - $a.amount })[0..4]' }],
     });
     expect(r.ok).toBe(false);
@@ -263,7 +264,7 @@ describe('validateLiveCardDefinition', () => {
   it('passes when schema and expressions are valid', () => {
     const r = validateLiveCardDefinition({
       id: 'ok-full',
-      state: {},
+      card_data: {},
       compute: [{ bindTo: 'x', expr: 'requires.orders^(>amount)' }],
       view: { elements: [{ kind: 'list', data: { bind: 'computed_values.x' } }] },
     });
@@ -273,7 +274,7 @@ describe('validateLiveCardDefinition', () => {
   it('fails when schema passes but expression compile fails', () => {
     const r = validateLiveCardDefinition({
       id: 'bad-full',
-      state: {},
+      card_data: {},
       compute: [{ bindTo: 'x', expr: '$sort(requires.orders, function($a, $b){ $b.amount - $a.amount })[0..4]' }],
       view: { elements: [{ kind: 'list', data: { bind: 'computed_values.x' } }] },
     });

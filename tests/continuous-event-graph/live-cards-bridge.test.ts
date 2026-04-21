@@ -14,7 +14,7 @@ function sleep(ms: number): Promise<void> {
 function makeSource(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
   return {
     id,
-    state: {},
+    card_data: {},
     sources: [{ kind: 'static', bindTo: 'raw' }],
     ...overrides,
   };
@@ -23,7 +23,7 @@ function makeSource(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
 function makeCard(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
   return {
     id,
-    state: {},
+    card_data: {},
     view: { elements: [{ kind: 'text' }] },
     ...overrides,
   };
@@ -33,7 +33,7 @@ function makeCard(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
 function makeHandlerInput(nodeId: string): TaskHandlerInput {
   return {
     nodeId,
-    state: {},
+    card_data: {},
     taskState: { status: 'running' as any, executionCount: 0, retryCount: 0, lastEpoch: 0 },
     config: { provides: [nodeId] },
     callbackToken: `test-token-${nodeId}`,
@@ -119,7 +119,7 @@ describe('liveCardsToReactiveGraph', () => {
 
     it('source default handler completes via reactive graph', async () => {
       const cards = [
-        makeSource('prices', { state: { raw: [1, 2, 3] } }),
+        makeSource('prices', { card_data: { raw: [1, 2, 3] } }),
       ];
       const { graph } = liveCardsToReactiveGraph(cards, {
       });
@@ -160,10 +160,10 @@ describe('liveCardsToReactiveGraph', () => {
     it('card handler runs CardCompute.run() via reactive graph', async () => {
       const cards: LiveCard[] = [
         makeCard('calc', {
-          state: { data: [{ v: 10 }, { v: 20 }, { v: 30 }] },
+          card_data: { data: [{ v: 10 }, { v: 20 }, { v: 30 }] },
           compute: [
-            { bindTo: 'total', expr: '$sum(state.data.v)' },
-            { bindTo: 'avg', expr: '$average(state.data.v)' },
+            { bindTo: 'total', expr: '$sum(card_data.data.v)' },
+            { bindTo: 'avg', expr: '$average(card_data.data.v)' },
           ],
           provides: [
             { bindTo: 'total', src: 'computed_values.total' },
@@ -209,7 +209,7 @@ describe('liveCardsToReactiveGraph', () => {
   describe('cross-card data flow', () => {
     it('upstream state is injected into downstream card via reactive graph', async () => {
       const cards: LiveCard[] = [
-        makeSource('prices', { state: { raw: [10, 20, 30] } }),
+        makeSource('prices', { card_data: { raw: [10, 20, 30] } }),
         makeCard('stats', {
           requires: ['prices'],
           compute: [
@@ -236,7 +236,7 @@ describe('liveCardsToReactiveGraph', () => {
     it('provides mapping injects named values via reactive graph', async () => {
       const cards: LiveCard[] = [
         makeSource('prices', {
-          state: { quotes: [100, 200] },
+          card_data: { quotes: [100, 200] },
           provides: [{ bindTo: 'quotes', src: 'state.quotes' }],
         }),
         makeCard('dash', {
@@ -269,7 +269,7 @@ describe('liveCardsToReactiveGraph', () => {
   describe('full reactive execution', () => {
     it('drives a simple source → card pipeline to completion', async () => {
       const cards: LiveCard[] = [
-        makeSource('src', { state: { values: [5, 10, 15] } }),
+        makeSource('src', { card_data: { values: [5, 10, 15] } }),
         makeCard('agg', {
           requires: ['src'],
           compute: [
@@ -299,7 +299,7 @@ describe('liveCardsToReactiveGraph', () => {
     it('drives a 3-level source → transform → dashboard pipeline', async () => {
       const cards: LiveCard[] = [
         makeSource('raw_data', {
-          state: { items: [{ price: 100 }, { price: 200 }, { price: 300 }] },
+          card_data: { items: [{ price: 100 }, { price: 200 }, { price: 300 }] },
         }),
         makeCard('transform', {
           requires: ['raw_data'],
@@ -405,7 +405,7 @@ describe('liveCardsToReactiveGraph', () => {
         title: 'Stock Dashboard',
         mode: 'board',
         nodes: [
-          makeSource('feed', { state: { prices: [10, 20, 30] } }),
+          makeSource('feed', { card_data: { prices: [10, 20, 30] } }),
           makeCard('totals', {
             requires: ['feed'],
             compute: [

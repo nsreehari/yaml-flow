@@ -29,6 +29,7 @@ const TOKEN_FIXTURES: Record<string, unknown> = {
   orders: ORDER_SEED,
   prices: PRICE_SEED,
   selections: {},
+  'card-ex-form': { preferences: { favoriteProduct: 'Widget A', preferredRegion: 'North' } },
 };
 
 function listCardFiles(): string[] {
@@ -95,8 +96,8 @@ describe('example-board', () => {
   it('produces stable compute outputs for representative cards', async () => {
     const filterCard = await computeCard('card-ex-filter.json', { orders: ORDER_SEED });
     expect(filterCard.computed_values).toEqual({
-      regions: ['East', 'North', 'South', 'West'],
-      products: ['Widget A', 'Widget B', 'Widget C'],
+      region: ['East', 'North', 'South', 'West'],
+      product: ['Widget A', 'Widget B', 'Widget C'],
     });
 
     const metricCard = await computeCard('card-ex-metric.json', { orders: ORDER_SEED });
