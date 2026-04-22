@@ -911,24 +911,31 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
 // CLI
 // ============================================================================
 
+/**
+ * Helper function to add a single card from file.
+ * Throws errors instead of calling process.exit() so it can be used in tests.
+ */
 function addSingleCardFromFile(dir: string, cardFile: string): void {
   const absCardPath = path.resolve(cardFile);
   if (!fs.existsSync(absCardPath)) {
-    console.error(`Card file not found: ${absCardPath}`);
-    process.exit(1);
+    throw new Error(`Card file not found: ${absCardPath}`);
   }
 
-  const card: BoardLiveCard = JSON.parse(fs.readFileSync(absCardPath, 'utf-8'));
+  let card: BoardLiveCard;
+  try {
+    card = JSON.parse(fs.readFileSync(absCardPath, 'utf-8'));
+  } catch (err) {
+    throw new Error(`Failed to parse card file: ${absCardPath} - ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   if (!card.id) {
-    console.error('Card JSON must have an "id" field');
-    process.exit(1);
+    throw new Error('Card JSON must have an "id" field');
   }
 
   // Check for duplicate
   const existing = readCardInventory(dir);
   if (existing.some(e => e.cardId === card.id)) {
-    console.error(`Card "${card.id}" already exists in inventory`);
-    process.exit(1);
+    throw new Error(`Card "${card.id}" already exists in inventory`);
   }
 
   // Append to inventory first — handlers need it to look up card paths
@@ -979,9 +986,9 @@ function cmdAddCards(args: string[]): void {
   const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
   const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+  
   if (!dir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
-    console.error('Usage: board-live-cards add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)');
-    process.exit(1);
+    throw new Error('Usage: board-live-cards add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)');
   }
 
   if (cardFile) {
@@ -989,8 +996,7 @@ function cmdAddCards(args: string[]): void {
   } else {
     const matches = resolveCardGlobMatches(cardGlob!);
     if (matches.length === 0) {
-      console.error(`No card files matched glob: ${cardGlob}`);
-      process.exit(1);
+      throw new Error(`No card files matched glob: ${cardGlob}`);
     }
     for (const match of matches) {
       addSingleCardFromFile(dir, match);
@@ -1004,15 +1010,16 @@ function cmdAddCards(args: string[]): void {
 
 function cmdInit(args: string[]): void {
   const dir = args[0];
-  if (!dir) { console.error('Usage: board-live-cards init <dir> [--task-executor <script>] [--runtime-out <dir>]'); process.exit(1); }
+  if (!dir) { 
+    throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--runtime-out <dir>]');
+  }
 
   const teIdx = args.indexOf('--task-executor');
   const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
   const roIdx = args.indexOf('--runtime-out');
   const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
   if (roIdx !== -1 && !runtimeOut) {
-    console.error('Usage: board-live-cards init <dir> [--task-executor <script>] [--runtime-out <dir>]');
-    process.exit(1);
+    throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--runtime-out <dir>]');
   }
 
   const result = initBoard(dir);
@@ -1672,21 +1679,18 @@ function cmdUpdateCard(args: string[]): void {
   const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   const cardId = idIdx !== -1 ? args[idIdx + 1] : undefined;
   if (!dir || !cardId) {
-    console.error('Usage: board-live-cards update-card --rg <dir> --card-id <card-id> [--restart]');
-    process.exit(1);
+    throw new Error('Usage: board-live-cards update-card --rg <dir> --card-id <card-id> [--restart]');
   }
 
   // 1. Look up card in inventory
   const cardPath = lookupCardPath(dir, cardId);
   if (!cardPath) {
-    console.error(`Card "${cardId}" not found in inventory`);
-    process.exit(1);
+    throw new Error(`Card "${cardId}" not found in inventory`);
   }
 
   // 2. Validate card file exists on disk
   if (!fs.existsSync(cardPath)) {
-    console.error(`Card file not found: ${cardPath}`);
-    process.exit(1);
+    throw new Error(`Card file not found: ${cardPath}`);
   }
 
   // 3. Read updated card, transform to TaskConfig, upsert
@@ -1927,9 +1931,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
     case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
-      console.error(`Unknown command: ${cmd ?? '(none)'}`);
-      console.error('Run: board-live-cards help');
-      process.exit(1);
+      throw new Error(`Unknown command: ${cmd ?? '(none)'}`);
   }
 }
 

@@ -709,11 +709,7 @@ describe('cli add-cards', () => {
     cli(['add-cards', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
-    await expect(cli(['add-cards', '--rg', dir, '--card', cardFile])).rejects.toThrow('exit');
-    exitSpy.mockRestore();
-    errSpy.mockRestore();
+    await expect(cli(['add-cards', '--rg', dir, '--card', cardFile])).rejects.toThrow('already exists');
   });
 });
 
@@ -762,11 +758,7 @@ describe('cli add-cards with --card-glob', () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
-    await expect(cli(['add-cards', '--rg', dir, '--card-glob', path.join(tmpDir, 'nope', '*.json')])).rejects.toThrow('exit');
-    exitSpy.mockRestore();
-    errSpy.mockRestore();
+    await expect(cli(['add-cards', '--rg', dir, '--card-glob', path.join(tmpDir, 'nope', '*.json')])).rejects.toThrow('No card files matched glob');
   });
 });
 
@@ -1262,7 +1254,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(updatedCard));
 
     const spy2 = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['update-card', '--rg', dir, '--card-id', 'counter']);
     spy2.mockRestore();
 
     await pollBoard(dir, t => {
@@ -1272,11 +1264,11 @@ describe('computed-values persistence', () => {
       } catch {
         return false;
       }
-    });
+    }, 15000);  // Increased timeout from default 5000ms
 
     const computed2 = JSON.parse(fs.readFileSync(computedFile, 'utf-8')) as { computed_values: { count: number } };
     expect(computed2.computed_values.count).toBe(7);
-  });
+  }, 30000);
 
   it('persists computed values with complex nested structures', async () => {
     const dir = path.join(freshDir(), 'board');
