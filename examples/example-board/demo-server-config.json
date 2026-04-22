@@ -1,0 +1,6 @@
+{
+  "port": 7799,
+  "boardLiveCardsCliJs": "../../dist/cli/board-live-cards-cli.js",
+  "stepMachineCliPath": "../../step-machine-cli.js",
+  "demoTaskExecutorPath": "./demo-task-executor.js"
+}

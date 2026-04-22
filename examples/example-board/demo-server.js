@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,7 +14,36 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.DEMO_SERVER_PORT || 7799);
+function loadServerConfig() {
+  const configPath = path.join(__dirname, 'demo-server-config.json');
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveFromConfig(configValue) {
+  if (typeof configValue !== 'string' || !configValue.trim()) return null;
+  return path.resolve(__dirname, configValue);
+}
+
+const serverConfig = loadServerConfig();
+const configuredCliJs = resolveFromConfig(serverConfig.boardLiveCardsCliJs);
+const configuredTaskExecutorPath = resolveFromConfig(serverConfig.demoTaskExecutorPath);
+const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath);
+
+if (!process.env.BOARD_LIVE_CARDS_CLI_JS && configuredCliJs) {
+  process.env.BOARD_LIVE_CARDS_CLI_JS = configuredCliJs;
+}
+if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath) {
+  process.env.DEMO_STEP_MACHINE_CLI_PATH = configuredStepMachineCliPath;
+}
+
+const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'content-type,x-file-name',
@@ -22,7 +52,9 @@ const CORS_HEADERS = {
 
 const runtime = createMultiBoardServerRuntime({
   apiBasePath: '/api/boards',
-  defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || path.join(__dirname, 'demo-task-executor.js'),
+  defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || path.join(__dirname, 'demo-task-executor.js'),
+  defaultStepMachineCliPath: process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath,
+  boardLiveCardsCliJs: process.env.BOARD_LIVE_CARDS_CLI_JS || configuredCliJs,
 });
 
 const dispatch = createRuntimeRequestDispatcher(runtime);

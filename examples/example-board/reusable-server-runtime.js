@@ -138,6 +138,9 @@ export function createMultiBoardServerRuntime(options = {}) {
     const defaultTaskExecutorPath = typeof entry.taskExecutorPath === 'string'
       ? entry.taskExecutorPath
       : options.defaultTaskExecutorPath;
+    const defaultStepMachineCliPath = typeof entry.stepMachineCliPath === 'string'
+      ? entry.stepMachineCliPath
+      : options.defaultStepMachineCliPath;
 
     const service = createExampleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
@@ -148,6 +151,8 @@ export function createMultiBoardServerRuntime(options = {}) {
       tmpSurfaceDir: path.join(boardRoot, 'surface'),
       runtimeOutDir: path.join(boardRoot, 'runtime-out'),
       defaultTaskExecutorPath,
+      defaultStepMachineCliPath,
+      boardLiveCardsCliJs: options.boardLiveCardsCliJs,
     });
 
     boardServiceCache.set(boardId, service);
@@ -197,6 +202,7 @@ export function createMultiBoardServerRuntime(options = {}) {
       const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim() : id;
       const entry = { id, label };
       if (typeof body.cardsDir === 'string') entry.cardsDir = body.cardsDir;
+      if (typeof body.stepMachineCliPath === 'string') entry.stepMachineCliPath = body.stepMachineCliPath;
       config.boards.push(entry);
       writeBoardsConfig(config);
 
@@ -310,6 +316,18 @@ export function createExampleBoardServerRuntime(options = {}) {
       ? options.defaultTaskExecutorPath
       : path.resolve(process.cwd(), options.defaultTaskExecutorPath))
     : null;
+  const configuredStepMachineCliPath = typeof options.defaultStepMachineCliPath === 'string'
+    && options.defaultStepMachineCliPath.trim()
+    ? (path.isAbsolute(options.defaultStepMachineCliPath)
+      ? options.defaultStepMachineCliPath
+      : path.resolve(process.cwd(), options.defaultStepMachineCliPath))
+    : null;
+  const configuredBoardLiveCardsCliJs = typeof options.boardLiveCardsCliJs === 'string'
+    && options.boardLiveCardsCliJs.trim()
+    ? (path.isAbsolute(options.boardLiveCardsCliJs)
+      ? options.boardLiveCardsCliJs
+      : path.resolve(process.cwd(), options.boardLiveCardsCliJs))
+    : null;
 
   const statusSnapshotFile = path.join(runtimeOutDir, 'board-livegraph-status.json');
   const boardFile = path.join(boardDir, 'board-graph.json');
@@ -318,6 +336,8 @@ export function createExampleBoardServerRuntime(options = {}) {
   let didDemoSetup = false;
 
   function resolveCliJsPath() {
+    if (configuredBoardLiveCardsCliJs && fs.existsSync(configuredBoardLiveCardsCliJs)) return configuredBoardLiveCardsCliJs;
+
     const envOverride = process.env.BOARD_LIVE_CARDS_CLI_JS;
     if (envOverride && fs.existsSync(envOverride)) return envOverride;
 
@@ -340,6 +360,10 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   const cliJs = resolveCliJsPath();
+
+  if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath && fs.existsSync(configuredStepMachineCliPath)) {
+    process.env.DEMO_STEP_MACHINE_CLI_PATH = configuredStepMachineCliPath;
+  }
 
   function ensureCardStorageDirs(cardId) {
     const safeCardId = String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
@@ -417,7 +441,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   function ensureBuilt() {
     if (!cliJs || !fs.existsSync(cliJs)) {
       throw new Error(
-        'Unable to locate board-live-cards CLI. Set BOARD_LIVE_CARDS_CLI_JS or install yaml-flow in this project.'
+        'Unable to locate board-live-cards CLI. Set boardLiveCardsCliJs option, BOARD_LIVE_CARDS_CLI_JS, or install yaml-flow in this project.'
       );
     }
   }
