@@ -3,7 +3,7 @@
   "meta": { "title": "Holdings Table" },
   "requires": ["holdings", "prices"],
   "provides": [{ "bindTo": "table", "src": "computed_values.table" }],
-  "state": {},
+  "card_data": {},
   "compute": [
     {
       "bindTo": "table",

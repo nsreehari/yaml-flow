@@ -37,7 +37,7 @@ const cards: LiveCard[] = [
     type: 'source',
     meta: { title: 'Live Market Prices' },
     card_data: { prices: [142.5, 305.8, 89.2, 211.0, 178.3] },
-    source: { kind: 'static', bindTo: 'state.prices' },
+    source: { kind: 'static', bindTo: 'card_data.prices' },
   },
   {
     id: 'stats',
@@ -46,9 +46,9 @@ const cards: LiveCard[] = [
     card_data: {},
     data: { requires: ['market-feed'] },
     compute: {
-      total: { fn: 'sum', input: 'state.market-feed.prices' },
-      avg: { fn: 'avg', input: 'state.market-feed.prices' },
-      count: { fn: 'count', input: 'state.market-feed.prices' },
+      total: { fn: 'sum', input: 'sources.market-feed.prices' },
+      avg: { fn: 'avg', input: 'sources.market-feed.prices' },
+      count: { fn: 'count', input: 'sources.market-feed.prices' },
     },
   },
   {
@@ -60,7 +60,7 @@ const cards: LiveCard[] = [
     compute: {
       label: {
         fn: 'template',
-        input: 'state.stats',
+        input: 'computed_values.stats',
         format: '{{count}} stocks — total ${{total}}, avg ${{avg}}',
       },
     },
@@ -116,14 +116,14 @@ const board: LiveBoard = {
       type: 'source',
       meta: { title: 'Equity Prices' },
       card_data: {},
-      source: { kind: 'api', bindTo: 'state.raw', url_template: 'https://api.example.com/equity' },
+      source: { kind: 'api', bindTo: 'card_data.raw', url_template: 'https://api.example.com/equity' },
     },
     {
       id: 'bond-feed',
       type: 'source',
       meta: { title: 'Bond Yields' },
       card_data: { yields: [3.2, 4.1, 2.8, 5.0] },
-      source: { kind: 'static', bindTo: 'state.yields' },
+      source: { kind: 'static', bindTo: 'card_data.yields' },
     },
     {
       id: 'portfolio-mix',
@@ -132,8 +132,8 @@ const board: LiveBoard = {
       card_data: {},
       data: { requires: ['equity-feed', 'bond-feed'] },
       compute: {
-        equity_total: { fn: 'sum', input: 'state.equity-feed.prices' },
-        bond_total: { fn: 'sum', input: 'state.bond-feed.yields' },
+        equity_total: { fn: 'sum', input: 'sources.equity-feed.prices' },
+        bond_total: { fn: 'sum', input: 'sources.bond-feed.yields' },
       },
     },
     {
@@ -145,7 +145,7 @@ const board: LiveBoard = {
       compute: {
         label: {
           fn: 'template',
-          input: 'state.portfolio-mix',
+          input: 'computed_values.portfolio-mix',
           format: 'Equities: ${{equity_total}} | Bonds: {{bond_total}}%',
         },
       },

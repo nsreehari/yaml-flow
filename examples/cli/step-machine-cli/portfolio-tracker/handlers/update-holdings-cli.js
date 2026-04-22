@@ -18,8 +18,8 @@ try {
   const cardPath = path.join(cardsDir, 'portfolio-form.json');
   const raw = fs.readFileSync(cardPath, 'utf-8');
   const card = JSON.parse(raw);
-  card.state = card.state ?? {};
-  card.state.holdings = holdings;
+  card.card_data = card.card_data ?? {};
+  card.card_data.holdings = holdings;
   fs.writeFileSync(cardPath, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
 
   runBoardCli(['update-card', '--rg', boardDir, '--card-id', 'portfolio-form', '--restart']);

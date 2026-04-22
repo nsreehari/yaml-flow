@@ -1,8 +1,8 @@
 {
   "id": "portfolio-form",
   "meta": { "title": "Portfolio Holdings Form" },
-  "provides": [{ "bindTo": "holdings", "src": "state.holdings" }],
-  "state": {
+  "provides": [{ "bindTo": "holdings", "src": "card_data.holdings" }],
+  "card_data": {
     "holdings": [
       { "symbol": "AAPL", "qty": 50 },
       { "symbol": "MSFT", "qty": 30 }
@@ -10,7 +10,7 @@
   },
   "view": {
     "elements": [
-      { "kind": "table", "label": "Holdings", "data": { "bind": "state.holdings", "columns": ["symbol", "qty"] } }
+      { "kind": "table", "label": "Holdings", "data": { "bind": "card_data.holdings", "columns": ["symbol", "qty"] } }
     ]
   }
 }

@@ -350,7 +350,7 @@ describe('liveCardToTaskConfig', () => {
     const tc = liveCardToTaskConfig(card);
     expect(tc.taskHandlers).toEqual(['card-handler']);
     expect(tc.requires).toEqual(['prices']);
-    expect(tc.provides).toEqual(['total']);
+    expect(tc.provides).toEqual([]);
   });
 
   it('card with non-gating source → still just [card-handler]', () => {
@@ -397,13 +397,13 @@ describe('liveCardToTaskConfig', () => {
     expect(tc.provides).toEqual(['alpha', 'beta']);
   });
 
-  it('falls back to [card.id] when no provides', () => {
+  it('keeps provides empty when no provides are declared', () => {
     const card: BoardLiveCard = {
       id: 'standalone',
       card_data: {},
     };
     const tc = liveCardToTaskConfig(card);
-    expect(tc.provides).toEqual(['standalone']);
+    expect(tc.provides).toEqual([]);
   });
 
   it('maps meta.title to description', () => {

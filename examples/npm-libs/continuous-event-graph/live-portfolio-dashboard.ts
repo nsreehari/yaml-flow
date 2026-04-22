@@ -69,7 +69,7 @@ const cards: LiveCard[] = [
   {
     id: 'holdings', type: 'source',
     meta: { title: 'Portfolio Holdings' },
-    data: { provides: { holdings: 'state.holdings' } },
+    data: { provides: { holdings: 'card_data.holdings' } },
     card_data: {
       holdings: [
         { symbol: 'AAPL', shares: 50, sector: 'tech' },
@@ -83,7 +83,7 @@ const cards: LiveCard[] = [
   {
     id: 'price-feed', type: 'source',
     meta: { title: 'Live Price Feed' },
-    data: { provides: { prices: 'state.prices' } },
+    data: { provides: { prices: 'card_data.prices' } },
     card_data: { prices: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 } },
   },
   {

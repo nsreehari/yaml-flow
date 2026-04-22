@@ -88,7 +88,7 @@
           "src":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, computed_values.*)" }
         }
       },
-      "description": "Explicit bindings exposing computed/state values downstream as named tokens"
+      "description": "Explicit bindings exposing computed or card_data values downstream as named tokens"
     },
 
     "compute_step": {
@@ -127,7 +127,7 @@
         },
         "label":     { "type": "string", "description": "Heading above this element" },
         "className": { "type": "string", "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'" },
-        "visible":   { "type": "string", "description": "state path — element shown only if truthy" },
+        "visible":   { "type": "string", "description": "card_data/requires/sources/computed_values path — element shown only if truthy" },
         "data": {
           "type": "object",
           "properties": {
@@ -228,7 +228,7 @@
     "meta":     { "$ref": "#/definitions/meta" },
     "view":     { "$ref": "#/definitions/view" },
     "card_data":    { "type": "object", "additionalProperties": true,
-      "description": "Authored card data - initial state supplied in card definition"
+      "description": "Authored card data supplied in the card definition"
     },
     "sources": {
       "type": "array",

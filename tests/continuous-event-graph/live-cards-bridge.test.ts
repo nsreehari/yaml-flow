@@ -237,7 +237,7 @@ describe('liveCardsToReactiveGraph', () => {
       const cards: LiveCard[] = [
         makeSource('prices', {
           card_data: { quotes: [100, 200] },
-          provides: [{ bindTo: 'quotes', src: 'state.quotes' }],
+          provides: [{ bindTo: 'quotes', src: 'card_data.quotes' }],
         }),
         makeCard('dash', {
           requires: ['quotes'],

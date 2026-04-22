@@ -6,10 +6,10 @@
   "provides": [
     {
       "bindTo": "holdings",
-      "src": "state.holdings"
+      "src": "card_data.holdings"
     }
   ],
-  "state": {
+  "card_data": {
     "holdings": [
       {
         "symbol": "AAPL",
@@ -31,7 +31,7 @@
         "kind": "table",
         "label": "Holdings",
         "data": {
-          "bind": "state.holdings",
+          "bind": "card_data.holdings",
           "columns": [
             "symbol",
             "qty"
