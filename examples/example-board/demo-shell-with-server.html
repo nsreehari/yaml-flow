@@ -58,14 +58,57 @@
       let board = null;
       let currentMode = 'board';
       let sse = null;
-
-      const SERVER_ORIGIN = window.DEMO_SERVER_ORIGIN || 'http://127.0.0.1:7799';
-      const SERVER_API = {
-        demoSetup: `${SERVER_ORIGIN}/api/example-board/server/demo-setup`,
-        bootstrap: `${SERVER_ORIGIN}/api/example-board/server/bootstrap`,
-        stream: `${SERVER_ORIGIN}/api/example-board/server/sse`,
-        patchCard: function (id) { return `${SERVER_ORIGIN}/api/example-board/server/cards/${encodeURIComponent(id)}`; },
+      const SERVER_PATHS = {
+        demoSetup: '/api/example-board/server/demo-setup',
+        bootstrap: '/api/example-board/server/bootstrap',
+        stream: '/api/example-board/server/sse',
+        patchCard: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}`; },
       };
+
+      function localServerOrigins() {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = params.get('demoServerOrigin');
+        const fromWindow = window.DEMO_SERVER_ORIGIN;
+        const hostPref = window.location.hostname === 'localhost' ? 'localhost' : '127.0.0.1';
+        const hostAlt = hostPref === 'localhost' ? '127.0.0.1' : 'localhost';
+        const defaults = [
+          `http://${hostPref}:7799`,
+          `http://${hostAlt}:7799`,
+        ];
+
+        const unique = [];
+        const push = (v) => {
+          if (!v || typeof v !== 'string') return;
+          if (unique.includes(v)) return;
+          unique.push(v);
+        };
+
+        push(fromWindow);
+        push(fromQuery);
+        defaults.forEach(push);
+        return unique;
+      }
+
+      let activeServerOrigin = null;
+
+      async function fetchServer(path, init) {
+        const origins = activeServerOrigin ? [activeServerOrigin] : localServerOrigins();
+        const failures = [];
+
+        for (const origin of origins) {
+          const url = `${origin}${path}`;
+          try {
+            const res = await fetch(url, init);
+            activeServerOrigin = origin;
+            return res;
+          } catch (err) {
+            failures.push(`${url} -> ${String(err && err.message || err)}`);
+          }
+        }
+
+        const tip = 'Start the API bridge from the yaml-flow folder: node examples/example-board/demo-server.js';
+        throw new Error(`Unable to reach example-board demo server. Tried: ${failures.join(' | ')}. ${tip}`);
+      }
 
       function replaceNodeInPlace(target, source) {
         Object.keys(target).forEach(k => delete target[k]);
@@ -117,10 +160,10 @@
         document.getElementById('boardTitle').textContent = (nameMatch ? nameMatch[1].trim() : 'Example Board') + ' (Server Runtime)';
         document.getElementById('boardDesc').textContent = descMatch ? descMatch[1].trim() : '';
 
-        const setup = await fetch(SERVER_API.demoSetup);
+        const setup = await fetchServer(SERVER_PATHS.demoSetup);
         if (!setup.ok) throw new Error(`Server demo-setup failed (${setup.status}).`);
 
-        const boot = await fetch(SERVER_API.bootstrap);
+        const boot = await fetchServer(SERVER_PATHS.bootstrap);
         if (!boot.ok) throw new Error(`Server bootstrap failed (${boot.status}). Start demo-server.js first.`);
         const payload = await boot.json();
         const cards = buildRenderableCardsFromArtifacts(payload);
@@ -131,14 +174,14 @@
         const engine = LiveCard.init({
           resolve: (id) => nodesById[id],
           onPatchState: async (id, patch) => {
-            await fetch(SERVER_API.patchCard(id), {
+            await fetchServer(SERVER_PATHS.patchCard(id), {
               method: 'PATCH',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(patch || {}),
             });
           },
           onRefresh: async (id) => {
-            await fetch(SERVER_API.patchCard(id), {
+            await fetchServer(SERVER_PATHS.patchCard(id), {
               method: 'PATCH',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({}),
@@ -155,7 +198,7 @@
           canvas: { height: '72vh', overflow: 'auto' },
         });
 
-        sse = new EventSource(SERVER_API.stream);
+        sse = new EventSource(`${activeServerOrigin}${SERVER_PATHS.stream}`);
         sse.onmessage = function (evt) {
           try {
             const update = JSON.parse(evt.data || '{}');

@@ -236,6 +236,20 @@ function bootstrapBoard() {
     initBoard();
   }
 
+  // Recover from stale inventory mappings when tmp surface location changes
+  // (for example from .demo-surface to OS temp dir).
+  const expectedCardsRoot = path.resolve(TMP_CARDS_DIR);
+  const hasStaleMapping = readInventory().some((entry) => {
+    if (!entry || !entry.cardFilePath) return false;
+    const mapped = path.resolve(entry.cardFilePath);
+    return !mapped.startsWith(expectedCardsRoot + path.sep) && mapped !== expectedCardsRoot;
+  });
+
+  if (hasStaleMapping) {
+    clearDirContents(BOARD_DIR);
+    initBoard();
+  }
+
   runCli(['upsert-card', '--rg', BOARD_DIR, '--card-glob', path.join(TMP_CARDS_DIR, '*.json')]);
 }
 
