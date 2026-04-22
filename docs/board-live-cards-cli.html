@@ -97,7 +97,7 @@
           <tr><th>Command</th><th>Purpose</th><th>Example</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>init &lt;dir&gt; [--task-executor &lt;script&gt;]</code></td><td>Create or reinitialize a board runtime directory.</td><td><code>board-live-cards-cli init ./my-board</code></td></tr>
+          <tr><td><code>init &lt;dir&gt; [--task-executor &lt;script&gt;] [--chat-handler &lt;script&gt;]</code></td><td>Create or reinitialize a board runtime directory.</td><td><code>board-live-cards-cli init ./my-board</code></td></tr>
           <tr><td><code>status --rg &lt;dir&gt; [--json]</code></td><td>Print human status or machine-readable status object.</td><td><code>board-live-cards-cli status --rg ./my-board --json</code></td></tr>
           <tr><td><code>add-cards --rg &lt;dir&gt; (--card &lt;file&gt; | --card-glob &lt;glob&gt;)</code></td><td>Add one or many card JSON files to the board.</td><td><code>board-live-cards-cli add-cards --rg ./my-board --card-glob "cards/*.json"</code></td></tr>
           <tr><td><code>update-card --rg &lt;dir&gt; --card-id &lt;id&gt; [--restart]</code></td><td>Reload card JSON from disk and update task config.</td><td><code>board-live-cards-cli update-card --rg ./my-board --card-id portfolio-form --restart</code></td></tr>
@@ -271,6 +271,29 @@
       <pre><code>board-live-cards-cli init ./my-board --task-executor "node ./my-executor.js"
 echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
       <p><strong>Example Implementation:</strong> See <code>examples/browser/boards/portfolio-tracker/portfolio-tracker-task-executor.cjs</code> for a complete working executor that runs CLI commands synchronously and captures output.</p>
+    </section>
+
+    <section class="card">
+      <h2>Chat-Handler Protocol</h2>
+      <p>When <code>.chat-handler</code> is registered in the board runtime directory, the server fires it as a fire-and-forget subprocess after every successful <code>chat-send</code> action. The handler has no response contract — failures are logged and ignored so the HTTP response to the client is never blocked.</p>
+      <p><strong>Arguments passed to the handler:</strong></p>
+      <table>
+        <thead><tr><th>Argument</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>--boardId &lt;id&gt;</code></td><td>The board identifier (string). Matches the <code>boardId</code> used in the multi-board server setup.</td></tr>
+          <tr><td><code>--cardId &lt;id&gt;</code></td><td>The card identifier that received the <code>chat-send</code> action.</td></tr>
+          <tr><td><code>--extraEncJson &lt;base64&gt;</code></td><td>Base64-encoded JSON string. Decode to obtain <code>{ chatDir, boardDir, lastChatFile }</code> — the chats directory path, board runtime directory path, and the filename of the just-written user chat record.</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Decoding <code>--extraEncJson</code>:</strong></p>
+      <pre><code>const extraStr = process.argv[process.argv.indexOf('--extraEncJson') + 1] || '';
+const extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8'));
+// extra = { chatDir, boardDir, lastChatFile }</code></pre>
+      <p><strong>Chat record format:</strong> Each message is stored as a plain-text file in <code>chatDir</code> named <code>&lt;NNN&gt;-(user|assistant|system).txt</code>. The <code>lastChatFile</code> value is the filename of the user message that triggered the handler (e.g. <code>003-user.txt</code>). An assistant reply should use the next serial number (e.g. <code>004-assistant.txt</code>).</p>
+      <p><strong>Handler Registration:</strong> Place the handler command (as a single-line string) in a <code>.chat-handler</code> file at the board runtime directory root, or pass <code>--chat-handler &lt;command&gt;</code> during <code>init</code>:</p>
+      <pre><code>board-live-cards-cli init ./my-board --chat-handler "node ./my-chat-handler.js"
+echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
+      <p><strong>Example Implementation:</strong> See <code>examples/example-board/demo-chat-handler.js</code> for a working echo handler that reads the user message and writes an assistant reply file.</p>
     </section>
 
     <section class="card">

@@ -207,6 +207,11 @@
         try {
           const update = JSON.parse(evt.data || '{}');
           syncBoardNodes(buildLiveCardModelsFromArtifacts(update));
+          if (board && board.engine && typeof board.engine.onServerSseEvent === 'function') {
+            board.engine.onServerSseEvent();
+          } else if (board && board.engine && typeof board.engine.refreshOpenChatModal === 'function') {
+            board.engine.refreshOpenChatModal();
+          }
         } catch (err) {
           console.warn('Bad SSE payload', err);
         }

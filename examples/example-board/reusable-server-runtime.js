@@ -523,6 +523,29 @@ export function createExampleBoardServerRuntime(options = {}) {
     return out;
   }
 
+  function readChatSignal(cardId) {
+    const chatsDir = path.join(tmpCardsDir, cardId, 'chats');
+    if (!fs.existsSync(chatsDir)) {
+      return { count: 0, latest_mtime_ms: 0 };
+    }
+
+    let count = 0;
+    let latestMtimeMs = 0;
+    for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      count += 1;
+      try {
+        const st = fs.statSync(path.join(chatsDir, entry.name));
+        const mtimeMs = Number(st.mtimeMs || 0);
+        if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
+      } catch {
+        // Ignore transient file stat/read errors.
+      }
+    }
+
+    return { count, latest_mtime_ms: latestMtimeMs };
+  }
+
   function buildPublishedRuntimePayload() {
     const cardDefinitions = readCardDefinitions();
     const rawArtifacts = readCardRuntimeArtifacts();
@@ -533,6 +556,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       if (!cardDefinition || !cardDefinition.id) continue;
       const rawArtifact = rawArtifacts[cardDefinition.id] || {};
       const sourcesFromFiles = readSourcePayloads(cardDefinition);
+      const chatSignal = readChatSignal(cardDefinition.id);
       cardRuntimeById[cardDefinition.id] = {
         schema_version: rawArtifact.schema_version || 'v1',
         card_id: rawArtifact.card_id || cardDefinition.id,
@@ -552,6 +576,11 @@ export function createExampleBoardServerRuntime(options = {}) {
             ? rawArtifact.requires
             : {},
       };
+
+      if (!cardRuntimeById[cardDefinition.id].card_data || typeof cardRuntimeById[cardDefinition.id].card_data !== 'object') {
+        cardRuntimeById[cardDefinition.id].card_data = {};
+      }
+      cardRuntimeById[cardDefinition.id].card_data.__chat_signal = chatSignal;
     }
 
     return {

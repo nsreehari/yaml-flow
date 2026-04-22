@@ -68,6 +68,8 @@ var LiveCard = (function () {
       .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; }
       .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); }
       .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; }
+      .lc-chat-bubble-pending { opacity:.85; }
+      .lc-chat-bubble-pending .spinner-border { width:.75rem; height:.75rem; margin-left:.4rem; border-width:.12em; vertical-align:middle; }
       .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
       .lc-chat-modal-input-row { display:flex; align-items:center; gap:.375rem; }
       .lc-chat-modal-input-row .form-control { min-width:0; }
@@ -331,7 +333,8 @@ var LiveCard = (function () {
         _chatModal.sendBtn.disabled = true;
         _chatModal.attachBtn.disabled = true;
 
-        _appendModalChatMessage('user', text, files);
+        _appendPendingModalChatMessage(text);
+
         _chatModal.input.value = '';
         _chatModal.stagedFiles = [];
         resizeChatInput();
@@ -339,8 +342,8 @@ var LiveCard = (function () {
 
         try {
           await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text, files }));
-          await _refreshModalChatHistory(nodeId);
         } catch (err) {
+          _clearPendingModalChatMessages();
           _appendModalChatMessage('system', 'Failed to send message: ' + String((err && err.message) || err), []);
         } finally {
           _chatModal.loading = false;
@@ -417,6 +420,32 @@ var LiveCard = (function () {
 
       _chatModal.body.appendChild(bubble);
       _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
+    }
+
+    function _appendPendingModalChatMessage(text) {
+      _ensureChatModal();
+      if (!_chatModal.body) return;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'lc-chat-bubble lc-chat-bubble-user lc-chat-bubble-pending';
+      bubble.setAttribute('data-lc-chat-pending', '1');
+      bubble.textContent = text || '';
+
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner-border spinner-border-sm';
+      spinner.setAttribute('role', 'status');
+      spinner.setAttribute('aria-label', 'Sending');
+      bubble.appendChild(spinner);
+
+      _chatModal.body.appendChild(bubble);
+      _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
+    }
+
+    function _clearPendingModalChatMessages() {
+      if (!_chatModal.body) return;
+      _chatModal.body.querySelectorAll('[data-lc-chat-pending="1"]').forEach(function (el) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+      });
     }
 
     async function _refreshModalChatHistory(nodeId) {
@@ -1767,6 +1796,19 @@ var LiveCard = (function () {
       _appendModalChatMessage(role, text, []);
     }
 
+    function refreshOpenChatModal() {
+      const nodeId = _chatModal.currentNodeId;
+      if (!nodeId || !_chatModal.backdrop || !_chatModal.backdrop.classList.contains('lc-open')) return;
+      _refreshModalChatHistory(nodeId).catch(function () {});
+    }
+
+    function onServerSseEvent() {
+      const nodeId = _chatModal.currentNodeId;
+      if (!nodeId || !_chatModal.backdrop || !_chatModal.backdrop.classList.contains('lc-open')) return;
+      _clearPendingModalChatMessages();
+      _refreshModalChatHistory(nodeId).catch(function () {});
+    }
+
     // ===========================================================================
     // Element access
     // ===========================================================================
@@ -1788,6 +1830,8 @@ var LiveCard = (function () {
       notify,
       subscribe,
       appendChatMessage,
+      refreshOpenChatModal,
+      onServerSseEvent,
       openChatModal,
       openFilesModal,
       getElement,
