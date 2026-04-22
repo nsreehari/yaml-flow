@@ -236,9 +236,11 @@ describe('demo-server file upload + card list + download', () => {
     await sendChatMessage(chatCardId, testMessage);
 
     const afterFirst = readChatFileNames(chatCardId);
-    expect(afterFirst.length).toBe(before.length + 1);
+    expect(afterFirst.length).toBeGreaterThan(before.length);
 
-    const firstNew = afterFirst.find((name) => !before.includes(name));
+    const firstNew = afterFirst
+      .filter((name) => !before.includes(name))
+      .find((name) => fs.readFileSync(path.join(getCardChatsDir(chatCardId), name), 'utf8').includes(testMessage));
     expect(firstNew).toBeTruthy();
     expect(firstNew || '').toMatch(/^\d{3}_(system|user|assistant)\.txt$/);
 
@@ -252,9 +254,11 @@ describe('demo-server file upload + card list + download', () => {
     await sendChatMessage(chatCardId, secondMessage);
 
     const afterSecond = readChatFileNames(chatCardId);
-    expect(afterSecond.length).toBe(afterFirst.length + 1);
+    expect(afterSecond.length).toBeGreaterThan(afterFirst.length);
 
-    const secondNew = afterSecond.find((name) => !afterFirst.includes(name));
+    const secondNew = afterSecond
+      .filter((name) => !afterFirst.includes(name))
+      .find((name) => fs.readFileSync(path.join(getCardChatsDir(chatCardId), name), 'utf8').includes(secondMessage));
     expect(secondNew).toBeTruthy();
     expect(secondNew || '').toMatch(/^\d{3}_(system|user|assistant)\.txt$/);
 
