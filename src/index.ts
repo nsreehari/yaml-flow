@@ -123,6 +123,8 @@ export type {
   BoardLiveGraphRuntime,
   BoardLiveGraphRuntimeOptions,
   BoardLiveGraphRuntimeUpdate,
+  BoardTaskExecutor,
+  BoardTaskExecutorContext,
   BrowserSourceAdapter,
   BrowserSourceAdapterContext,
 } from './board-livegraph-runtime/index.js';
@@ -150,6 +152,15 @@ export {
   validateLiveCardDefinition,
 } from './card-compute/index.js';
 export type { ComputeNode, ComputeStep, ValidationResult } from './card-compute/index.js';
+
+// ============================================================================
+// Runtime Artifacts
+// ============================================================================
+export {
+  validateBoardStatusSchema,
+  validateCardRuntimeSchema,
+} from './runtime-artifacts/index.js';
+export type { SchemaValidationResult as RuntimeArtifactValidationResult } from './runtime-artifacts/index.js';
 
 // ============================================================================
 // Backward compat aliases (deprecated — use new names)

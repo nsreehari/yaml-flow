@@ -77,6 +77,11 @@
       "types": "./dist/card-compute/index.d.ts",
       "import": "./dist/card-compute/index.js",
       "require": "./dist/card-compute/index.cjs"
+    },
+    "./runtime-artifacts": {
+      "types": "./dist/runtime-artifacts/index.d.ts",
+      "import": "./dist/runtime-artifacts/index.js",
+      "require": "./dist/runtime-artifacts/index.cjs"
     }
   },
   "browser": {
@@ -92,6 +97,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "build:browser": "tsup --config tsup.browser.config.ts",
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",

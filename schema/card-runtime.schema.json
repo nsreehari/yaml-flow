@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yaml-flow.dev/schema/card-runtime.schema.json",
+  "title": "Card Runtime Computed Artifact",
+  "description": "Published per-card runtime artifact written to runtime-out/cards/<card-id>.computed.json. Contains only values produced by the compute step.",
+  "type": "object",
+  "required": ["schema_version", "card_id", "computed_values"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1",
+      "description": "Artifact schema version."
+    },
+    "card_id": {
+      "type": "string",
+      "description": "The ID of the card this artifact belongs to."
+    },
+    "computed_values": {
+      "type": "object",
+      "description": "Key/value map of outputs produced by the card's JSONata compute steps.",
+      "additionalProperties": true
+    }
+  }
+}
