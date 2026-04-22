@@ -607,14 +607,14 @@ describe('cards-inventory', () => {
     const entries = readCardInventory(dir);
     expect(entries).toHaveLength(2);
     expect(entries[0].cardId).toBe('a');
-    expect(entries[0].cardFilePath).toBe('/abs/a.json');
+    expect(entries[0].cardFilePath).toBe(path.resolve('/abs/a.json'));
     expect(entries[1].cardId).toBe('b');
   });
 
   it('lookupCardPath returns path for known card', () => {
     const dir = freshDir();
     appendCardInventory(dir, { cardId: 'x', cardFilePath: '/some/x.json', addedAt: '2026-01-01T00:00:00Z' });
-    expect(lookupCardPath(dir, 'x')).toBe('/some/x.json');
+    expect(lookupCardPath(dir, 'x')).toBe(path.resolve('/some/x.json'));
   });
 
   it('lookupCardPath returns null for unknown card', () => {
@@ -887,11 +887,7 @@ describe('cli update-card', () => {
     const dir = path.join(freshDir(), 'board');
     initBoard(dir);
 
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as any);
-    await expect(cli(['update-card', '--rg', dir, '--card-id', 'nope'])).rejects.toThrow('exit');
-    exitSpy.mockRestore();
-    errSpy.mockRestore();
+    await expect(cli(['update-card', '--rg', dir, '--card-id', 'nope'])).rejects.toThrow('not found');
   });
 });
 
@@ -1254,7 +1250,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(updatedCard));
 
     const spy2 = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['update-card', '--rg', dir, '--card-id', 'counter']);
+    cli(['update-card', '--rg', dir, '--card-id', 'counter', '--restart']);
     spy2.mockRestore();
 
     await pollBoard(dir, t => {
@@ -1310,7 +1306,7 @@ describe('computed-values persistence', () => {
     expect(computed.computed_values.groupedByRegion.length).toBe(2);
   });
 
-  it('includes all runtime fields in persisted computed artifact', async () => {
+  it('includes minimal runtime fields in persisted computed artifact', async () => {
     const dir = path.join(freshDir(), 'board');
     const runtimeOutDir = path.join(tmpDir, 'runtime-publish');
     cli(['init', dir, '--runtime-out', runtimeOutDir]);
@@ -1336,9 +1332,9 @@ describe('computed-values persistence', () => {
     // Should match CardRuntimeSchema
     expect(computed).toHaveProperty('schema_version', 'v1');
     expect(computed).toHaveProperty('card_id', 'full-artifact');
-    expect(computed).toHaveProperty('card_data');
     expect(computed).toHaveProperty('computed_values');
-    expect(computed).toHaveProperty('sources_data');
+    expect(computed).not.toHaveProperty('sources_data');
+    expect(computed).not.toHaveProperty('card_data');
     expect(validateCardRuntimeArtifact(computed), schemaErrors(validateCardRuntimeArtifact)).toBe(true);
   });
 });

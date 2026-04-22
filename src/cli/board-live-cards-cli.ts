@@ -835,7 +835,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           schema_version: 'v1',
           card_id: cardId,
           computed_values: computeNode.computed_values ?? {},
-          sources_data: computeNode._sourcesData ?? {},
         });
 
         // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----

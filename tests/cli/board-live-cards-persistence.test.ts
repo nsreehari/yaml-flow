@@ -113,7 +113,6 @@ describe('board-live-cards CLI persistence', () => {
         total: 50,
         count: 3,
       },
-      sources_data: {},
     });
   });
 });
