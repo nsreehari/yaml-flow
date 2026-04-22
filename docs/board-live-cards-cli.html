@@ -190,7 +190,7 @@
         <li><code>requires</code>: array of token names that must be available before this card runs.</li>
         <li><code>provides</code>: expressions that bind card outputs to tokens for downstream cards; uses JSONata <code>src</code>.</li>
         <li><code>card_data</code>: initial authored data object available during compute as <code>card_data.*</code>.</li>
-        <li><code>sources</code>: task executor-owned data-fetch descriptors; opaque to this CLI tool — interpreted and dispatched by the consuming system's task executor. Results are made available as <code>sources.*</code>. See <em>Source Execution Notes</em> below.</li>
+        <li><code>sources</code>: task executor-owned data-fetch descriptors; opaque to this CLI tool — interpreted and dispatched by the consuming system's task executor. Results are made available as <code>fetched_sources.*</code>. See <em>Source Execution Notes</em> below.</li>
         <li><code>compute</code>: JSONata expressions that derive new values from card_data, requires, sources, and earlier compute results.</li>
       </ul>
     </section>
@@ -223,7 +223,7 @@
       <pre><code>1. Card becomes eligible — all requires tokens satisfied by upstream task-completed events
     2. Read card.card_data from disk
     3. Inject requires data (read-only, from upstream task-completed.data — immutable during this run)
-    4. Run compute array top-to-bottom → export a per-run runtime snapshot with computed_values, card_data, and sources_data for file-based consumers
+    4. Run compute array top-to-bottom → export a per-run runtime snapshot with computed_values, card_data, and fetched_sources for file-based consumers
         5. Check: all sources[].bindTo keys present in card_data?
        YES → Build provides data (pluck paths from card_data, requires, computed_values per provides[].src)
          Persist each provided token to runtime-out/data-objects/&lt;tokenName&gt;
@@ -280,7 +280,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
         <thead><tr><th>Surface</th><th>Path</th><th>What is stored</th><th>How it is used</th></tr></thead>
         <tbody>
           <tr><td><strong>Data objects</strong></td><td><code>runtime-out/data-objects/&lt;tokenName&gt;</code></td><td>One JSON payload per provided token. Token names are sanitized for filenames by replacing path separators with <code>__</code>.</td><td>Server/SSE layers publish this as <code>dataObjectsByToken</code>. Downstream cards resolve <code>requires</code> from this token map.</td></tr>
-          <tr><td><strong>Computed snapshots</strong></td><td><code>runtime-out/cards/&lt;cardId&gt;.computed.json</code></td><td>A per-card runtime artifact containing <code>schema_version</code>, <code>card_id</code>, <code>computed_values</code>, and <code>sources_data</code>. It is rewritten on each card run.</td><td>Used by board status views, server adapters, and browser shells that need a file-based view of the latest per-card render state.</td></tr>
+          <tr><td><strong>Computed snapshots</strong></td><td><code>runtime-out/cards/&lt;cardId&gt;.computed.json</code></td><td>A per-card runtime artifact containing <code>schema_version</code>, <code>card_id</code>, <code>computed_values</code>, and <code>fetched_sources</code>. It is rewritten on each card run.</td><td>Used by board status views, server adapters, and browser shells that need a file-based view of the latest per-card render state.</td></tr>
         </tbody>
       </table>
       <pre><code>runtime-out/
@@ -353,7 +353,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
 ]</code></pre>
       <p><strong>Source Output Binding:</strong> CLI sources write JSON or text to <code>outputFile</code>. Use <code>provides</code> to expose the result as a token:</p>
       <pre><code>"sources": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
-"provides": [{ "bindTo": "prices", "src": "sources.prices" }]</code></pre>
+"provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }]</code></pre>
     </section>
 
     <section class="card">
@@ -394,7 +394,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
   "id": "price-fetch",
   "requires": ["holdings"],
   "sources": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
-  "provides": [{ "bindTo": "prices", "src": "sources.prices" }]
+  "provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }]
 }
 
 // cards/portfolio-value.json

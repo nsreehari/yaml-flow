@@ -173,7 +173,7 @@ const board = LiveCard.Board(engine, document.getElementById('board'), {
 
     <section class="card">
       <h2>Built-in View Element Kinds</h2>
-      <p>Each card's <code>view.elements[]</code> array defines what renders on that card. Each element has a required <code>kind</code> field and an optional <code>label</code>. Data-display elements take a <code>data.bind</code> path pointing into the card's data namespaces — <code>card_data.*</code>, <code>requires.*</code>, <code>computed_values.*</code>, or <code>sources.*</code>. Interactive elements like <code>chat</code>, <code>file-upload</code>, and <code>actions</code> do not require a data binding. The 16 built-in kinds are:</p>
+      <p>Each card's <code>view.elements[]</code> array defines what renders on that card. Each element has a required <code>kind</code> field and an optional <code>label</code>. Data-display elements take a <code>data.bind</code> path pointing into the card's data namespaces — <code>card_data.*</code>, <code>requires.*</code>, <code>computed_values.*</code>, or <code>fetched_sources.*</code>. Interactive elements like <code>chat</code>, <code>file-upload</code>, and <code>actions</code> do not require a data binding. The 16 built-in kinds are:</p>
 
       <h3>Data Display</h3>
       <ul>

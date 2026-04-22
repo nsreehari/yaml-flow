@@ -72,21 +72,21 @@ var LiveCard = (function () {
       .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.25rem .5rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; }
       .lc-chat-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:12000; display:none; align-items:center; justify-content:center; padding:1rem; }
       .lc-chat-modal-backdrop.lc-open { display:flex; }
-      .lc-chat-modal { width:min(760px,96vw); max-height:88vh; background:#fff; border-radius:.5rem; box-shadow:0 18px 50px rgba(0,0,0,.28); display:flex; flex-direction:column; overflow:hidden; }
-      .lc-chat-modal-header { display:flex; align-items:center; gap:.5rem; justify-content:space-between; padding:.625rem .875rem; border-bottom:1px solid var(--bs-border-color,#dee2e6); }
-      .lc-chat-modal-title { margin:0; font-size:.95rem; font-weight:600; }
-      .lc-chat-modal-body { padding:.625rem .875rem; overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); }
-      .lc-chat-modal-footer { padding:.625rem .875rem; border-top:1px solid var(--bs-border-color,#dee2e6); background:#fff; }
+      .lc-chat-modal-dialog { width:min(760px,96vw); margin:0; }
+      .lc-chat-modal-dialog .modal-content { max-height:88vh; display:flex; flex-direction:column; background:var(--bs-body-bg,#fff); border:1px solid var(--bs-border-color,#dee2e6); }
+      .lc-chat-modal-dialog .modal-header,
+      .lc-chat-modal-dialog .modal-footer { background:var(--bs-body-bg,#fff); }
+      .lc-chat-modal-body { overflow:auto; min-height:180px; max-height:52vh; background:var(--bs-light,#f8f9fa); padding:.75rem; }
       .lc-chat-inline-meta { margin-top:.25rem; font-size:.75rem; color:var(--bs-secondary,#6c757d); }
       .lc-files-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:11950; display:none; align-items:center; justify-content:center; padding:1rem; }
       .lc-files-modal-backdrop.lc-open { display:flex; }
-      .lc-files-modal { width:min(820px,96vw); max-height:88vh; background:#fff; border-radius:.5rem; box-shadow:0 18px 50px rgba(0,0,0,.28); display:flex; flex-direction:column; overflow:hidden; }
-      .lc-files-modal-header { display:flex; align-items:center; gap:.5rem; justify-content:space-between; padding:.625rem .875rem; border-bottom:1px solid var(--bs-border-color,#dee2e6); }
-      .lc-files-modal-title { margin:0; font-size:.95rem; font-weight:600; }
-      .lc-files-modal-body { padding:.625rem .875rem; overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); }
-      .lc-files-modal-footer { padding:.625rem .875rem; border-top:1px solid var(--bs-border-color,#dee2e6); background:#fff; }
+      .lc-files-modal-dialog { width:min(820px,96vw); margin:0; }
+      .lc-files-modal-dialog .modal-content { max-height:88vh; display:flex; flex-direction:column; background:var(--bs-body-bg,#fff); border:1px solid var(--bs-border-color,#dee2e6); }
+      .lc-files-modal-dialog .modal-header,
+      .lc-files-modal-dialog .modal-footer { background:var(--bs-body-bg,#fff); }
+      .lc-files-modal-body { overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); padding:.75rem; }
       .lc-files-list { display:flex; flex-direction:column; gap:.375rem; }
-      .lc-file-row { display:flex; align-items:center; justify-content:space-between; gap:.5rem; background:#fff; border:1px solid var(--bs-border-color,#dee2e6); border-radius:.375rem; padding:.4rem .55rem; }
+      .lc-file-row { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
       .lc-file-meta { color:var(--bs-secondary,#6c757d); font-size:.75rem; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
@@ -94,6 +94,8 @@ var LiveCard = (function () {
         .lc-chat-msg { max-width:95%; }
         .lc-chat-body { max-height:200px; }
         .lc-chat-bubble { max-width:95%; }
+        .lc-chat-modal-dialog,
+        .lc-files-modal-dialog { width:100%; }
       }
     `;
     document.head.appendChild(s);
@@ -258,20 +260,22 @@ var LiveCard = (function () {
       const backdrop = document.createElement('div');
       backdrop.className = 'lc-chat-modal-backdrop';
       backdrop.innerHTML = '' +
-        '<div class="lc-chat-modal" role="dialog" aria-modal="true" aria-label="Card chat">' +
-        '  <div class="lc-chat-modal-header">' +
-        '    <h5 class="lc-chat-modal-title">Chat</h5>' +
+        '<div class="modal-dialog modal-dialog-centered lc-chat-modal-dialog" role="dialog" aria-modal="true" aria-label="Card chat">' +
+        '  <div class="modal-content">' +
+        '  <div class="modal-header">' +
+        '    <h5 class="modal-title lc-chat-modal-title">Chat</h5>' +
         '    <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-close>Close</button>' +
         '  </div>' +
-        '  <div class="lc-chat-modal-body" data-lc-chat-body></div>' +
-        '  <div class="lc-chat-modal-footer">' +
+        '  <div class="modal-body lc-chat-modal-body" data-lc-chat-body></div>' +
+        '  <div class="modal-footer flex-column align-items-stretch">' +
         '    <div data-lc-chat-staged class="small mb-2"></div>' +
-        '    <div class="d-flex gap-1 align-items-center">' +
         '      <input type="file" class="d-none" data-lc-chat-file multiple>' +
-        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-attach title="Attach files">Attach</button>' +
-        '      <input type="text" class="form-control form-control-sm" data-lc-chat-input placeholder="Type a message...">' +
-        '      <button type="button" class="btn btn-sm btn-primary" data-lc-chat-send>Send</button>' +
+        '    <div class="input-group input-group-sm w-100">' +
+        '      <button type="button" class="btn btn-outline-secondary" data-lc-chat-attach title="Attach files">Attach</button>' +
+        '      <input type="text" class="form-control" data-lc-chat-input placeholder="Type a message...">' +
+        '      <button type="button" class="btn btn-primary" data-lc-chat-send>Send</button>' +
         '    </div>' +
+        '  </div>' +
         '  </div>' +
         '</div>';
 
@@ -451,22 +455,24 @@ var LiveCard = (function () {
       const backdrop = document.createElement('div');
       backdrop.className = 'lc-files-modal-backdrop';
       backdrop.innerHTML = '' +
-        '<div class="lc-files-modal" role="dialog" aria-modal="true" aria-label="Card files">' +
-        '  <div class="lc-files-modal-header">' +
-        '    <h5 class="lc-files-modal-title">Files</h5>' +
+        '<div class="modal-dialog modal-dialog-centered lc-files-modal-dialog" role="dialog" aria-modal="true" aria-label="Card files">' +
+        '  <div class="modal-content">' +
+        '  <div class="modal-header">' +
+        '    <h5 class="modal-title lc-files-modal-title">Files</h5>' +
         '    <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-close>Close</button>' +
         '  </div>' +
-        '  <div class="lc-files-modal-body" data-lc-files-body></div>' +
-        '  <div class="lc-files-modal-footer">' +
+        '  <div class="modal-body lc-files-modal-body" data-lc-files-body></div>' +
+        '  <div class="modal-footer flex-column align-items-stretch">' +
         '    <div class="lc-dropzone mb-2" data-lc-files-dz>' +
         '      <div class="small text-muted">Drop files here or click to browse</div>' +
         '      <input type="file" class="d-none" data-lc-files-input multiple>' +
         '    </div>' +
         '    <div data-lc-files-staged class="small mb-2"></div>' +
-        '    <div class="d-flex justify-content-end gap-2">' +
-        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-attach>Select files</button>' +
-        '      <button type="button" class="btn btn-sm btn-primary" data-lc-files-upload>Upload</button>' +
+        '    <div class="d-flex justify-content-end gap-2 w-100">' +
+        '      <button type="button" class="btn btn-outline-secondary" data-lc-files-attach>Select files</button>' +
+        '      <button type="button" class="btn btn-primary" data-lc-files-upload>Upload</button>' +
         '    </div>' +
+        '  </div>' +
         '  </div>' +
         '</div>';
 
@@ -586,11 +592,11 @@ var LiveCard = (function () {
       if (_filesModal.currentNodeId !== nodeId) return;
       const files = _currentNodeFiles(nodeId);
       if (!files.length) {
-        _filesModal.body.innerHTML = '<div class="text-muted small">No files uploaded yet.</div>';
+        _filesModal.body.innerHTML = '<div class="alert alert-light border small mb-0">No files uploaded yet.</div>';
         return;
       }
 
-      let h = '<div class="lc-files-list">';
+      let h = '<div class="list-group list-group-flush">';
       files.forEach(function (f, idx) {
         const fileName = f && (f.name || f.stored_name) ? (f.name || f.stored_name) : 'file';
         const sizeText = f && typeof f.size === 'number' ? ('size: ' + f.size + ' bytes') : '';
@@ -598,12 +604,14 @@ var LiveCard = (function () {
         const dl = stored
           ? '/api/example-board/server/cards/' + encodeURIComponent(nodeId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
           : null;
+        h += '<div class="list-group-item">';
         h += '<div class="lc-file-row">';
         h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
         h += '<div class="lc-file-meta">' + _esc(sizeText) + '</div></div>';
         if (dl) {
           h += '<a class="btn btn-sm btn-outline-secondary" href="' + dl + '">Download</a>';
         }
+        h += '</div>';
         h += '</div>';
       });
       h += '</div>';

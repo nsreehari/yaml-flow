@@ -47,7 +47,7 @@
       <div class="card-body">
         <h2 class="h6 mb-2">Assumptions and Tradeoffs (Authoritative Notes)</h2>
         <ul class="small text-muted mb-0">
-          <li>Runtime artifact contract is intentionally minimal: <code>schema_version</code>, <code>card_id</code>, and <code>computed_values</code>. Rich context like <code>sources_data</code> is transport/runtime detail, not persistence contract.</li>
+          <li>Runtime artifact contract is intentionally minimal: <code>schema_version</code>, <code>card_id</code>, and <code>computed_values</code>. Rich context like <code>fetched_sources</code> is transport/runtime detail, not persistence contract.</li>
           <li>Card definitions are treated as source-of-truth for authored state (<code>card_data</code>). Runtime artifacts capture evaluated outputs, not authored configuration.</li>
           <li>Source definitions are intentionally opaque to the framework. Executor-specific fields are owned by domain teams and passed through without interpretation.</li>
           <li>Token-level interoperability is the stable boundary: producers emit via <code>provides.bindTo</code>, consumers depend via <code>requires</code>. Domain logic should evolve behind this boundary.</li>

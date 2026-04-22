@@ -13,7 +13,7 @@ describe('createBoardLiveGraphRuntime', () => {
         id: 'prices',
         card_data: {},
         sources: [{ kind: 'api', bindTo: 'raw' }],
-        provides: [{ bindTo: 'prices', src: 'sources.raw' }],
+        provides: [{ bindTo: 'prices', src: 'fetched_sources.raw' }],
       },
       {
         id: 'stats',
@@ -108,6 +108,52 @@ describe('createBoardLiveGraphRuntime', () => {
     expect(seen.length).toBeGreaterThan(0);
 
     unsubscribe();
+    runtime.dispose();
+  });
+
+  it('keeps fetched_sources, computed_values, card_data, and requires in runtime nodes', async () => {
+    const cards: LiveCard[] = [
+      {
+        id: 'orders-source',
+        card_data: { note: 'seed' },
+        sources: [{ bindTo: 'raw', kind: 'api' } as any],
+        compute: [{ bindTo: 'orderCount', expr: '$count(fetched_sources.raw)' }] as any,
+        provides: [{ bindTo: 'orders_count', src: 'computed_values.orderCount' }],
+      },
+      {
+        id: 'orders-summary',
+        card_data: { title: 'summary' },
+        requires: ['orders_count'],
+        compute: [{ bindTo: 'totalQty', expr: '$number(requires.orders_count) + 3' }] as any,
+        provides: [{ bindTo: 'totalQty', src: 'computed_values.totalQty' }],
+      },
+    ];
+
+    const runtime = createBoardLiveGraphRuntime(cards, {
+      sourceAdapters: {
+        'orders-source': () => ({
+          raw: [
+            { id: 'ORD-1', quantity: 2 },
+            { id: 'ORD-2', quantity: 3 },
+          ],
+        }),
+      },
+    });
+
+    runtime.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
+    await sleep(250);
+
+    const sourceNode = runtime.getNodes().find((n) => n.id === 'orders-source');
+    const summaryNode = runtime.getNodes().find((n) => n.id === 'orders-summary');
+
+    expect(Array.isArray(sourceNode?.fetched_sources?.raw)).toBe(true);
+    expect(sourceNode?.computed_values?.orderCount).toBe(2);
+    expect(sourceNode?.card_data?.note).toBe('seed');
+
+    expect(summaryNode?.requires?.orders_count).toBe(2);
+    expect(summaryNode?.computed_values?.totalQty).toBe(5);
+    expect(summaryNode?.card_data?.title).toBe('summary');
+
     runtime.dispose();
   });
 });

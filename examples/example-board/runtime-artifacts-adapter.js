@@ -41,8 +41,8 @@ function normalizeCardRuntimeArtifact(cardId, artifact) {
     ? clone(safeArtifact.fetched_sources)
     : {};
 
-  const requiresData = safeArtifact.requires_data && typeof safeArtifact.requires_data === 'object' && !Array.isArray(safeArtifact.requires_data)
-    ? clone(safeArtifact.requires_data)
+  const requiresData = safeArtifact.requires && typeof safeArtifact.requires === 'object' && !Array.isArray(safeArtifact.requires)
+    ? clone(safeArtifact.requires)
     : {};
 
   return {
@@ -51,7 +51,7 @@ function normalizeCardRuntimeArtifact(cardId, artifact) {
     card_data: cardData,
     computed_values: computedValues,
     fetched_sources: fetchedSources,
-    requires_data: requiresData,
+    requires: requiresData,
   };
 }
 
@@ -121,7 +121,7 @@ function buildLiveCardModelsFromArtifacts(payload) {
       card,
       card_data: cardData,
       fetched_sources: runtimeArtifact.fetched_sources || {},
-      requires_data: resolveRequiresData(card, dataObjectsByToken),
+      requires: resolveRequiresData(card, dataObjectsByToken),
       computed_values: runtimeArtifact.computed_values || {},
       runtime_state: runtimeState,
       data_objects: clone(dataObjectsByToken),
@@ -144,7 +144,7 @@ function buildBrowserArtifactsFromRuntime({ boardPath, cardDefinitions, runtimeM
       card_data: clone(model.card_data || {}),
       computed_values: clone(model.computed_values || {}),
       fetched_sources: clone(model.fetched_sources || {}),
-      requires_data: clone(model.requires_data || {}),
+      requires: clone(model.requires || {}),
     };
   }
 

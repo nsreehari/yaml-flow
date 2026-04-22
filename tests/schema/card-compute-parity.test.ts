@@ -47,7 +47,7 @@ describe('card-compute parity', () => {
       requires: { fee: 2 },
       compute: [
         { bindTo: 'subtotal', expr: '$sum(card_data.prices.p)' },
-        { bindTo: 'total', expr: 'computed_values.subtotal * card_data.qty + requires.fee + $sum(sources.adjustments)' },
+        { bindTo: 'total', expr: 'computed_values.subtotal * card_data.qty + requires.fee + $sum(fetched_sources.adjustments)' },
       ],
     };
     const options = { sourcesData: { adjustments: [1, 4] } };
@@ -62,8 +62,8 @@ describe('card-compute parity', () => {
     expect(BrowserCardCompute.resolve(browserNode, 'computed_values.total')).toEqual(
       ServerCardCompute.resolve(serverNode, 'computed_values.total'),
     );
-    expect(BrowserCardCompute.resolve(browserNode, 'sources.adjustments')).toEqual(
-      ServerCardCompute.resolve(serverNode, 'sources.adjustments'),
+    expect(BrowserCardCompute.resolve(browserNode, 'fetched_sources.adjustments')).toEqual(
+      ServerCardCompute.resolve(serverNode, 'fetched_sources.adjustments'),
     );
 
     const expr = 'computed_values.total - requires.fee';

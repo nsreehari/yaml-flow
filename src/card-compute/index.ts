@@ -21,7 +21,7 @@
  * // node.computed_values.avg   === 150
  * ```
  *
- * Expressions are evaluated against { card_data, requires, computed_values }.
+ * Expressions are evaluated against { card_data, requires, fetched_sources, computed_values }.
  * computed_values is ephemeral — never persisted to disk.
  */
 
@@ -31,7 +31,7 @@ import jsonata from 'jsonata';
 // Types
 // ---------------------------------------------------------------------------
 
-/** A source definition: cli writes to outputFile; bindTo names the sources.* key in compute context. */
+/** A source definition: cli writes to outputFile; bindTo names the fetched_sources.* key in compute context. */
 export interface ComputeSource {
   bindTo: string;
   outputFile?: string;
@@ -44,7 +44,7 @@ export interface ComputeSource {
 
 /** Options for CardCompute.run() */
 export interface RunOptions {
-  /** Pre-loaded sources data map (keyed by bindTo). Use in browser or when caller loads files. */
+  /** Pre-loaded source results map (keyed by bindTo). Use in browser or when caller loads files. */
   sourcesData?: Record<string, unknown>;
 }
 
@@ -98,11 +98,11 @@ function deepSet(obj: Record<string, unknown>, path: string, value: unknown): vo
 
 /**
  * Run all compute steps on a node.
- * Each step's expr is evaluated against { card_data, requires, sources, computed_values }.
+ * Each step's expr is evaluated against { card_data, requires, fetched_sources, computed_values }.
  * Results are written to node.computed_values[bindTo].
  * computed_values and _sourcesData are reset on each call — ephemeral, never persisted.
  *
- * @param options.sourcesData  Pre-loaded map of { [bindTo]: data } for sources namespace.
+ * @param options.sourcesData  Pre-loaded map of { [bindTo]: data } for fetched_sources namespace.
  *   In Node/CLI: loaded from outputFiles by the caller (card-handler).
  *   In browser:  passed in by the caller (e.g. from fetch results).
  */
@@ -116,7 +116,7 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
   const ctx: Record<string, unknown> = {
     card_data: node.card_data,
     requires: node.requires ?? {},
-    sources: node._sourcesData,
+    fetched_sources: node._sourcesData,
     computed_values: node.computed_values,
   };
 
@@ -135,13 +135,13 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
 
 /**
  * Evaluate a single JSONata expression against a node's context.
- * Context is { card_data, requires, sources, computed_values }.
+ * Context is { card_data, requires, fetched_sources, computed_values }.
  */
 async function evalExpr(expr: string, node: ComputeNode): Promise<unknown> {
-  const ctx = {
+  const ctx: Record<string, unknown> = {
     card_data: node.card_data ?? {},
     requires: node.requires ?? {},
-    sources: node._sourcesData ?? {},
+    fetched_sources: node._sourcesData ?? {},
     computed_values: node.computed_values ?? {},
   };
   return jsonata(expr).evaluate(ctx);
@@ -152,10 +152,10 @@ async function evalExpr(expr: string, node: ComputeNode): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 function resolve(node: ComputeNode, path: string): unknown {
-  // sources.* resolves from the ephemeral _sourcesData map
-  if (path.startsWith('sources.')) {
-    return deepGet(node._sourcesData ?? {}, path.slice('sources.'.length));
+  if (path.startsWith('fetched_sources.')) {
+    return deepGet(node._sourcesData ?? {}, path.slice('fetched_sources.'.length));
   }
+
   return deepGet(node, path);
 }
 
@@ -323,6 +323,7 @@ export const CardCompute = {
 };
 
 export {
+  validateLiveCard,
   validateLiveCardSchema,
   validateLiveCardRuntimeExpressions,
   validateLiveCardDefinition,

@@ -6,15 +6,15 @@
 // API (all async where noted):
 //   CardCompute.run(node, options)         → Promise<node>  — eval all compute steps → computed_values
 //   CardCompute.eval(expr, node)           → Promise<value> — eval single JSONata expression
-//   CardCompute.resolve(node, path)        → value          — sync deep-get "card_data.foo" or "sources.foo"
+//   CardCompute.resolve(node, path)        → value          — sync deep-get "card_data.foo" or "fetched_sources.foo"
 //   CardCompute.validate(node)             → { ok, errors } — sync structural validator
 //
 // Compute steps shape: { bindTo: string, expr: string }
-//   expr is a JSONata expression evaluated against { card_data, requires, sources, computed_values }
+//   expr is a JSONata expression evaluated against { card_data, requires, fetched_sources, computed_values }
 //   computed_values and _sourcesData are ephemeral — reset on each run(), never persisted.
 //
 // Sequential steps: later steps see earlier results via computed_values.*
-// options.sourcesData: pre-loaded { [bindTo]: data } map for the sources.* namespace
+// options.sourcesData: pre-loaded { [bindTo]: data } map for the fetched_sources.* namespace
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -71,12 +71,11 @@
     var ctx = {
       card_data: node.card_data,
       requires: node.requires || {},
-      sources: node._sourcesData,
+      fetched_sources: node._sourcesData,
       computed_values: node.computed_values,
     };
 
     var chain = Promise.resolve();
-
     node.compute.forEach(function (step) {
       chain = chain.then(function () {
         if (!step || typeof step.expr !== 'string') return;
@@ -104,7 +103,7 @@
     var ctx = {
       card_data: (node && node.card_data) || {},
       requires: (node && node.requires) || {},
-      sources: (node && node._sourcesData) || {},
+      fetched_sources: (node && node._sourcesData) || {},
       computed_values: (node && node.computed_values) || {},
     };
     return jsonata(expr).evaluate(ctx);
@@ -115,8 +114,8 @@
   // ===========================================================================
 
   function resolve(node, path) {
-    if (path && path.indexOf('sources.') === 0) {
-      return _deepGet((node && node._sourcesData) || {}, path.slice('sources.'.length));
+    if (path && path.indexOf('fetched_sources.') === 0) {
+      return _deepGet((node && node._sourcesData) || {}, path.slice('fetched_sources.'.length));
     }
     return _deepGet(node, path);
   }

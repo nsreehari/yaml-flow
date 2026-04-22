@@ -149,6 +149,7 @@ export type {
 // ============================================================================
 export {
   CardCompute,
+  validateLiveCard,
   validateLiveCardSchema,
   validateLiveCardRuntimeExpressions,
   validateLiveCardDefinition,

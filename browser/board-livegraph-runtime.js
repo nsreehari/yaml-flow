@@ -37,7 +37,7 @@ var BoardLiveGraph = (function (exports) {
     const ctx = {
       card_data: node.card_data,
       requires: node.requires ?? {},
-      sources: node._sourcesData,
+      fetched_sources: node._sourcesData,
       computed_values: node.computed_values
     };
     for (const step of node.compute) {
@@ -55,14 +55,14 @@ var BoardLiveGraph = (function (exports) {
     const ctx = {
       card_data: node.card_data ?? {},
       requires: node.requires ?? {},
-      sources: node._sourcesData ?? {},
+      fetched_sources: node._sourcesData ?? {},
       computed_values: node.computed_values ?? {}
     };
     return jsonata_shim_default(expr).evaluate(ctx);
   }
   function resolve(node, path) {
-    if (path.startsWith("sources.")) {
-      return deepGet(node._sourcesData ?? {}, path.slice("sources.".length));
+    if (path.startsWith("fetched_sources.")) {
+      return deepGet(node._sourcesData ?? {}, path.slice("fetched_sources.".length));
     }
     return deepGet(node, path);
   }

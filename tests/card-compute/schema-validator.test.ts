@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  validateLiveCard,
   validateLiveCardSchema,
   validateLiveCardRuntimeExpressions,
   validateLiveCardDefinition,
@@ -84,7 +85,7 @@ describe('validateLiveCardSchema', () => {
       const kinds = [
         'metric', 'table', 'chart', 'form', 'filter', 'list',
         'notes', 'todo', 'alert', 'narrative', 'badge', 'text',
-        'markdown', 'custom', 'file-upload', 'chat', 'actions',
+        'markdown', 'custom', 'actions',
       ];
       for (const kind of kinds) {
         const r = validateLiveCardSchema({
@@ -258,6 +259,45 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.ok).toBe(false);
     expect(r.errors.some(e => e.includes('/compute/0/expr'))).toBe(true);
   });
+
+  it('rejects compute expressions that use legacy sources namespace', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-compute-ns',
+      card_data: {},
+      compute: [{ bindTo: 'x', expr: '$count(sources.raw)' }],
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/compute/0/expr') && e.includes('disallowed namespace "sources"'))).toBe(true);
+  });
+
+  it('accepts view references to fetched_sources/requires/card_data/computed_values', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'ok-view-refs',
+      card_data: {},
+      view: {
+        elements: [
+          { kind: 'metric', visible: 'requires.orders', data: { bind: 'computed_values.total', writeTo: 'card_data.note' } },
+          { kind: 'table', data: { bind: 'fetched_sources.raw' } },
+        ],
+      },
+    });
+
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects view references using legacy sources namespace', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-view-refs',
+      card_data: {},
+      view: {
+        elements: [{ kind: 'table', data: { bind: 'sources.raw' } }],
+      },
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/view/elements/0/data/bind') && e.includes('disallowed namespace "sources"'))).toBe(true);
+  });
 });
 
 describe('validateLiveCardDefinition', () => {
@@ -278,6 +318,18 @@ describe('validateLiveCardDefinition', () => {
       compute: [{ bindTo: 'x', expr: '$sort(requires.orders, function($a, $b){ $b.amount - $a.amount })[0..4]' }],
       view: { elements: [{ kind: 'list', data: { bind: 'computed_values.x' } }] },
     });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/compute/0/expr'))).toBe(true);
+  });
+
+  it('runs schema + runtime namespace checks through validateLiveCard alias', () => {
+    const r = validateLiveCard({
+      id: 'bad-alias',
+      card_data: {},
+      compute: [{ bindTo: 'x', expr: '$count(sources.raw)' }],
+      view: { elements: [{ kind: 'metric', data: { bind: 'computed_values.total' } }] },
+    });
+
     expect(r.ok).toBe(false);
     expect(r.errors.some(e => e.includes('/compute/0/expr'))).toBe(true);
   });

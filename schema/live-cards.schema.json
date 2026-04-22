@@ -1,8 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
-  "title": "LiveCards Node Schema",
-  "description": "Schema for Card and ExternalSource nodes in the LiveCards Board/Canvas engine",
 
   "definitions": {
 

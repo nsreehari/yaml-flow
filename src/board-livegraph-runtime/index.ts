@@ -51,7 +51,7 @@ export interface LiveCardRuntimeModel {
   card: LiveCard;
   card_data: Record<string, unknown>;
   fetched_sources: Record<string, unknown>;
-  requires_data: Record<string, unknown>;
+  requires: Record<string, unknown>;
   computed_values: Record<string, unknown>;
   runtime_state: Record<string, unknown>;
 }
@@ -333,7 +333,7 @@ export function createBoardLiveGraphRuntime(
         card_data: computeNode.card_data ?? {},
         computed_values: computeNode.computed_values ?? {},
         fetched_sources: sourcesData,
-        requires_data: requiresData,
+        requires: requiresData,
       };
 
       graphRef?.resolveCallback(inputArgs.callbackToken, resultData);
@@ -401,7 +401,7 @@ export function createBoardLiveGraphRuntime(
         card: deepClone(baseCard),
         card_data: cardDataForView,
         fetched_sources: data && typeof data.fetched_sources === 'object' ? deepClone(data.fetched_sources as Record<string, unknown>) : {},
-        requires_data: data && typeof data.requires_data === 'object' ? deepClone(data.requires_data as Record<string, unknown>) : {},
+        requires: data && typeof data.requires === 'object' ? deepClone(data.requires as Record<string, unknown>) : {},
         computed_values: data && typeof data.computed_values === 'object' ? deepClone(data.computed_values as Record<string, unknown>) : {},
         runtime_state: runtimeState ? deepClone(runtimeState as unknown as Record<string, unknown>) : {},
       });
