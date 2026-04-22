@@ -10,10 +10,10 @@
  *
  * const node = {
  *   id: 'sales',
- *   state: { data: [{ revenue: 100 }, { revenue: 200 }] },
+ *   card_data: { data: [{ revenue: 100 }, { revenue: 200 }] },
  *   compute: [
- *     { bindTo: 'total', expr: '$sum(state.data.revenue)' },
- *     { bindTo: 'avg',   expr: '$average(state.data.revenue)' },
+ *     { bindTo: 'total', expr: '$sum(card_data.data.revenue)' },
+ *     { bindTo: 'avg',   expr: '$average(card_data.data.revenue)' },
  *   ],
  * };
  * await CardCompute.run(node);
@@ -21,7 +21,7 @@
  * // node.computed_values.avg   === 150
  * ```
  *
- * Expressions are evaluated against { state, requires, computed_values }.
+ * Expressions are evaluated against { card_data, requires, computed_values }.
  * computed_values is ephemeral — never persisted to disk.
  */
 
@@ -57,7 +57,7 @@ export interface ComputeStep {
 /** Minimal node shape expected by CardCompute. */
 export interface ComputeNode {
   id?: string;
-  state?: Record<string, unknown>;
+  card_data?: Record<string, unknown>;
   requires?: Record<string, unknown>;
   sources?: ComputeSource[];
   compute?: ComputeStep[];
@@ -98,7 +98,7 @@ function deepSet(obj: Record<string, unknown>, path: string, value: unknown): vo
 
 /**
  * Run all compute steps on a node.
- * Each step's expr is evaluated against { state, requires, sources, computed_values }.
+ * Each step's expr is evaluated against { card_data, requires, sources, computed_values }.
  * Results are written to node.computed_values[bindTo].
  * computed_values and _sourcesData are reset on each call — ephemeral, never persisted.
  *
@@ -108,13 +108,13 @@ function deepSet(obj: Record<string, unknown>, path: string, value: unknown): vo
  */
 async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode> {
   if (!node?.compute?.length) return node;
-  if (!node.state) node.state = {};
+  if (!node.card_data) node.card_data = {};
   node.computed_values = {};
   node._sourcesData = options?.sourcesData ?? {};
 
   // Context passed to JSONata
   const ctx: Record<string, unknown> = {
-    state: node.state,
+    card_data: node.card_data,
     requires: node.requires ?? {},
     sources: node._sourcesData,
     computed_values: node.computed_values,
@@ -135,11 +135,11 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
 
 /**
  * Evaluate a single JSONata expression against a node's context.
- * Context is { state, requires, sources, computed_values }.
+ * Context is { card_data, requires, sources, computed_values }.
  */
 async function evalExpr(expr: string, node: ComputeNode): Promise<unknown> {
   const ctx = {
-    state: node.state ?? {},
+    card_data: node.card_data ?? {},
     requires: node.requires ?? {},
     sources: node._sourcesData ?? {},
     computed_values: node.computed_values ?? {},
@@ -175,8 +175,7 @@ const VALID_ELEMENT_KINDS = new Set([
   'markdown', 'custom',
 ]);
 
-const VALID_STATUSES = new Set(['fresh', 'stale', 'loading', 'error']);
-const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'state', 'compute', 'sources']);
+const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'card_data', 'compute', 'sources']);
 
 function validateNode(node: unknown): ValidationResult {
   const errors: string[] = [];
@@ -193,13 +192,8 @@ function validateNode(node: unknown): ValidationResult {
     if (!ALLOWED_KEYS.has(key)) errors.push(`Unknown top-level key: "${key}"`);
   }
 
-  if (n.state == null || typeof n.state !== 'object' || Array.isArray(n.state)) {
-    errors.push('state: required, must be an object');
-  } else {
-    const state = n.state as Record<string, unknown>;
-    if (state.status != null && !VALID_STATUSES.has(state.status as string)) {
-      errors.push(`state.status: must be one of: ${[...VALID_STATUSES].join(', ')}`);
-    }
+  if (n.card_data == null || typeof n.card_data !== 'object' || Array.isArray(n.card_data)) {
+    errors.push('card_data: required, must be an object');
   }
 
   if (n.meta != null) {

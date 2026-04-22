@@ -36,14 +36,14 @@ const cards: LiveCard[] = [
     id: 'market-feed',
     type: 'source',
     meta: { title: 'Live Market Prices' },
-    state: { prices: [142.5, 305.8, 89.2, 211.0, 178.3] },
+    card_data: { prices: [142.5, 305.8, 89.2, 211.0, 178.3] },
     source: { kind: 'static', bindTo: 'state.prices' },
   },
   {
     id: 'stats',
     type: 'card',
     meta: { title: 'Price Statistics' },
-    state: {},
+    card_data: {},
     data: { requires: ['market-feed'] },
     compute: {
       total: { fn: 'sum', input: 'state.market-feed.prices' },
@@ -55,7 +55,7 @@ const cards: LiveCard[] = [
     id: 'summary',
     type: 'card',
     meta: { title: 'Summary Label' },
-    state: {},
+    card_data: {},
     data: { requires: ['stats'] },
     compute: {
       label: {
@@ -115,21 +115,21 @@ const board: LiveBoard = {
       id: 'equity-feed',
       type: 'source',
       meta: { title: 'Equity Prices' },
-      state: {},
+      card_data: {},
       source: { kind: 'api', bindTo: 'state.raw', url_template: 'https://api.example.com/equity' },
     },
     {
       id: 'bond-feed',
       type: 'source',
       meta: { title: 'Bond Yields' },
-      state: { yields: [3.2, 4.1, 2.8, 5.0] },
+      card_data: { yields: [3.2, 4.1, 2.8, 5.0] },
       source: { kind: 'static', bindTo: 'state.yields' },
     },
     {
       id: 'portfolio-mix',
       type: 'card',
       meta: { title: 'Portfolio Mix Calculator' },
-      state: {},
+      card_data: {},
       data: { requires: ['equity-feed', 'bond-feed'] },
       compute: {
         equity_total: { fn: 'sum', input: 'state.equity-feed.prices' },
@@ -140,7 +140,7 @@ const board: LiveBoard = {
       id: 'risk-summary',
       type: 'card',
       meta: { title: 'Risk Summary' },
-      state: {},
+      card_data: {},
       data: { requires: ['portfolio-mix'] },
       compute: {
         label: {

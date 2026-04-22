@@ -70,7 +70,7 @@ const cards: LiveCard[] = [
     id: 'holdings', type: 'source',
     meta: { title: 'Portfolio Holdings' },
     data: { provides: { holdings: 'state.holdings' } },
-    state: {
+    card_data: {
       holdings: [
         { symbol: 'AAPL', shares: 50, sector: 'tech' },
         { symbol: 'MSFT', shares: 30, sector: 'tech' },
@@ -84,12 +84,12 @@ const cards: LiveCard[] = [
     id: 'price-feed', type: 'source',
     meta: { title: 'Live Price Feed' },
     data: { provides: { prices: 'state.prices' } },
-    state: { prices: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 } },
+    card_data: { prices: { AAPL: 195.50, MSFT: 420.10, GOOG: 176.30, JPM: 198.20, JNJ: 155.80 } },
   },
   {
     id: 'news-feed', type: 'source',
     meta: { title: 'Market News Feed' },
-    state: {
+    card_data: {
       headlines: [
         { symbol: 'AAPL', headline: 'Apple beats Q4 estimates', sentiment: 0.8 },
         { symbol: 'JPM', headline: 'JPMorgan raises dividend', sentiment: 0.6 },
@@ -100,32 +100,32 @@ const cards: LiveCard[] = [
   {
     id: 'benchmark', type: 'source',
     meta: { title: 'S&P 500 Benchmark' },
-    state: { index: 'SPY', value: 5280.50, dailyReturn: 0.45 },
+    card_data: { index: 'SPY', value: 5280.50, dailyReturn: 0.45 },
   },
   // Compute cards
   {
     id: 'valuator', type: 'card',
     meta: { title: 'Position Valuator' },
     data: { requires: ['holdings', 'price-feed'] },
-    state: {},
+    card_data: {},
   },
   {
     id: 'portfolio-value', type: 'card',
     meta: { title: 'Total Portfolio Value' },
     data: { requires: ['valuator'] },
-    state: {},
+    card_data: {},
   },
   {
     id: 'sector-breakdown', type: 'card',
     meta: { title: 'Sector Breakdown' },
     data: { requires: ['valuator'] },
-    state: {},
+    card_data: {},
   },
   {
     id: 'sentiment', type: 'card',
     meta: { title: 'News Sentiment Score' },
     data: { requires: ['news-feed'] },
-    state: {},
+    card_data: {},
   },
 ];
 
@@ -144,7 +144,7 @@ function makeHandler(
     const result = computeFn(graphRef!.getState());
     try {
       const diskCard = readCard(dir, id);
-      diskCard.state = { ...diskCard.state, ...result };
+      diskCard.card_data = { ...diskCard.card_data, ...result };
       writeCard(dir, diskCard);
     } catch { /* card may not exist yet */ }
     graphRef!.resolveCallback(input.callbackToken, result);
@@ -225,7 +225,7 @@ async function main() {
           if (taskState.data && Object.keys(taskState.data).length > 0) {
             try {
               const diskCard = readCard(tmpDir, taskName);
-              diskCard.state = { ...diskCard.state, ...taskState.data };
+              diskCard.card_data = { ...diskCard.card_data, ...taskState.data };
               writeCard(tmpDir, diskCard);
             } catch { /* not on disk yet */ }
           }
@@ -251,7 +251,7 @@ async function main() {
   log('PHASE 2', 'Adding 7 dynamic cards → 15 total');
 
   addDynamicCard(rg, tmpDir, {
-    id: 'allocation-chart', type: 'card', data: { requires: ['valuator', 'portfolio-value'] }, state: {},
+    id: 'allocation-chart', type: 'card', data: { requires: ['valuator', 'portfolio-value'] }, card_data: {},
   }, (e) => {
     const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
     const tot = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
@@ -259,7 +259,7 @@ async function main() {
   }, { requires: ['valuator', 'portfolio-value'] });
 
   addDynamicCard(rg, tmpDir, {
-    id: 'risk-score', type: 'card', data: { requires: ['valuator'] }, state: {},
+    id: 'risk-score', type: 'card', data: { requires: ['valuator'] }, card_data: {},
   }, (e) => {
     const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
     const vals = pos.map((p: any) => p.value);
@@ -269,7 +269,7 @@ async function main() {
   }, { requires: ['valuator'] });
 
   addDynamicCard(rg, tmpDir, {
-    id: 'daily-pnl', type: 'card', data: { requires: ['portfolio-value', 'benchmark'] }, state: {},
+    id: 'daily-pnl', type: 'card', data: { requires: ['portfolio-value', 'benchmark'] }, card_data: {},
   }, (e) => {
     const tv = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
     const benchReturn = (e.state.tasks.benchmark?.data as any)?.dailyReturn ?? 0;
@@ -278,14 +278,14 @@ async function main() {
   }, { requires: ['portfolio-value', 'benchmark'] });
 
   addDynamicCard(rg, tmpDir, {
-    id: 'value-alert', type: 'card', data: { requires: ['portfolio-value'] }, state: {},
+    id: 'value-alert', type: 'card', data: { requires: ['portfolio-value'] }, card_data: {},
   }, (e) => {
     const tv = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
     return { triggered: tv > 25000, threshold: 25000, currentValue: tv };
   }, { requires: ['portfolio-value'] });
 
   addDynamicCard(rg, tmpDir, {
-    id: 'summary', type: 'card', data: { requires: ['portfolio-value', 'sentiment'] }, state: {},
+    id: 'summary', type: 'card', data: { requires: ['portfolio-value', 'sentiment'] }, card_data: {},
   }, (e) => {
     const tv = (e.state.tasks['portfolio-value']?.data as any)?.totalValue ?? 0;
     const mood = (e.state.tasks.sentiment?.data as any)?.bullish ? 'bullish' : 'bearish';
@@ -293,7 +293,7 @@ async function main() {
   }, { requires: ['portfolio-value', 'sentiment'] });
 
   addDynamicCard(rg, tmpDir, {
-    id: 'correlation', type: 'card', data: { requires: ['valuator', 'benchmark'] }, state: {},
+    id: 'correlation', type: 'card', data: { requires: ['valuator', 'benchmark'] }, card_data: {},
   }, (e) => {
     const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
     const techVal = pos.filter((p: any) => p.sector === 'tech').reduce((s: number, p: any) => s + p.value, 0);
@@ -302,7 +302,7 @@ async function main() {
   }, { requires: ['valuator', 'benchmark'] });
 
   addDynamicCard(rg, tmpDir, {
-    id: 'combined-view', type: 'card', data: { requires: ['summary', 'sector-breakdown', 'risk-score'] }, state: {},
+    id: 'combined-view', type: 'card', data: { requires: ['summary', 'sector-breakdown', 'risk-score'] }, card_data: {},
   }, (e) => ({
     summaryMood: (e.state.tasks.summary?.data as any)?.mood ?? '?',
     sectors: (e.state.tasks['sector-breakdown']?.data as any)?.sectorCount ?? 0,
@@ -326,7 +326,7 @@ async function main() {
   console.log('  benchmark provides:', rg.getState().config.tasks.benchmark.provides);
 
   addDynamicCard(rg, tmpDir, {
-    id: 'market-context', type: 'card', data: { requires: ['market-data'] }, state: {},
+    id: 'market-context', type: 'card', data: { requires: ['market-data'] }, card_data: {},
   }, (e) => {
     const bench = e.state.tasks.benchmark?.data as any ?? {};
     return { indexValue: bench.value ?? 0, context: 'provided via market-data token' };
@@ -409,7 +409,7 @@ async function main() {
   console.log('  combined-view requires:', rg.getState().config.tasks['combined-view'].requires);
 
   addDynamicCard(rg, tmpDir, {
-    id: 'allocation-chart', type: 'card', data: { requires: ['valuator'] }, state: {},
+    id: 'allocation-chart', type: 'card', data: { requires: ['valuator'] }, card_data: {},
   }, (e) => {
     const pos = (e.state.tasks.valuator?.data as any)?.positions ?? [];
     const total = pos.reduce((s: number, p: any) => s + p.value, 0);
@@ -436,7 +436,7 @@ async function main() {
     id: 'watchlist', type: 'source',
     meta: { title: 'Watchlist (User Input)' },
     data: { provides: { watchlist: 'state.symbols' } },
-    state: { symbols: ['NVDA', 'AMD', 'AMZN'] },
+    card_data: { symbols: ['NVDA', 'AMD', 'AMZN'] },
   };
   writeCard(tmpDir, watchlistCard);
   rg.registerHandler('watchlist', makeHandler('watchlist', (engine) => {
@@ -463,7 +463,7 @@ async function main() {
   addDynamicCard(rg, tmpDir, {
     id: 'watchlist-prices', type: 'card',
     meta: { title: 'Watchlist Latest Prices' },
-    data: { requires: ['watchlist', 'price-feed'] }, state: {},
+    data: { requires: ['watchlist', 'price-feed'] }, card_data: {},
   }, (engine) => {
     const symbols: string[] = (engine.state.tasks.watchlist?.data as any)?.symbols ?? [];
     const allPrices: Record<string, number> = (engine.state.tasks['price-feed']?.data as any)?.prices ?? {};

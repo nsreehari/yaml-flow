@@ -6,11 +6,11 @@
 // API (all async where noted):
 //   CardCompute.run(node, options)         → Promise<node>  — eval all compute steps → computed_values
 //   CardCompute.eval(expr, node)           → Promise<value> — eval single JSONata expression
-//   CardCompute.resolve(node, path)        → value          — sync deep-get "state.foo" or "sources.foo"
+//   CardCompute.resolve(node, path)        → value          — sync deep-get "card_data.foo" or "sources.foo"
 //   CardCompute.validate(node)             → { ok, errors } — sync structural validator
 //
 // Compute steps shape: { bindTo: string, expr: string }
-//   expr is a JSONata expression evaluated against { state, requires, sources, computed_values }
+//   expr is a JSONata expression evaluated against { card_data, requires, sources, computed_values }
 //   computed_values and _sourcesData are ephemeral — reset on each run(), never persisted.
 //
 // Sequential steps: later steps see earlier results via computed_values.*
@@ -59,7 +59,7 @@
   function run(node, options) {
     if (!node || !node.compute || !node.compute.length) return Promise.resolve(node);
 
-    if (!node.state) node.state = {};
+    if (!node.card_data) node.card_data = {};
     node.computed_values = {};
     node._sourcesData = (options && options.sourcesData) || {};
 
@@ -69,7 +69,7 @@
     }
 
     var ctx = {
-      state: node.state,
+      card_data: node.card_data,
       requires: node.requires || {},
       sources: node._sourcesData,
       computed_values: node.computed_values,
@@ -102,7 +102,7 @@
       return Promise.resolve(undefined);
     }
     var ctx = {
-      state: (node && node.state) || {},
+      card_data: (node && node.card_data) || {},
       requires: (node && node.requires) || {},
       sources: (node && node._sourcesData) || {},
       computed_values: (node && node.computed_values) || {},
@@ -127,7 +127,7 @@
 
   var VALID_ELEMENT_KINDS = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
   var VALID_STATUSES = ['fresh','stale','loading','error'];
-  var ALLOWED_KEYS = ['id','meta','requires','provides','view','state','compute','sources'];
+  var ALLOWED_KEYS = ['id','meta','requires','provides','view','card_data','compute','sources'];
 
   function validateNode(node) {
     var errors = [];
@@ -142,11 +142,9 @@
       if (ALLOWED_KEYS.indexOf(k) === -1) errors.push('Unknown top-level key: "' + k + '"');
     });
 
-    // state
-    if (node.state == null || typeof node.state !== 'object' || Array.isArray(node.state)) {
-      errors.push('state: required, must be an object');
-    } else if (node.state.status != null && VALID_STATUSES.indexOf(node.state.status) === -1) {
-      errors.push('state.status: must be one of: ' + VALID_STATUSES.join(', '));
+    // card_data
+    if (node.card_data == null || typeof node.card_data !== 'object' || Array.isArray(node.card_data)) {
+      errors.push('card_data: required, must be an object');
     }
 
     // meta

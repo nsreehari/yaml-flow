@@ -60,20 +60,16 @@ export interface LiveCard {
   requires?: string[];
   provides?: ProvidesBinding[];
   meta?: { title?: string; tags?: string[] };
-  state?: Record<string, unknown>;
+  card_data?: Record<string, unknown>;
   compute?: { bindTo: string; fn: string; [key: string]: unknown }[];
   sources?: {
     cli?: string;
-    // Deprecated alias retained for compatibility with older cards.
-    script?: string;
     bindTo: string;
     kind?: 'api' | 'websocket' | 'static' | 'llm';
     [key: string]: unknown;
   }[];
   optionalSources?: {
     cli?: string;
-    // Deprecated alias retained for compatibility with older cards.
-    script?: string;
     bindTo: string;
     kind?: 'api' | 'websocket' | 'static' | 'llm';
     [key: string]: unknown;
@@ -214,7 +210,7 @@ export function liveCardsToReactiveGraph(
   const allTokens = new Set<string>();
   const tokenToCardId = new Map<string, string>();
   for (const card of cards) {
-    for (const binding of (card.provides ?? [{ bindTo: card.id, src: `state.${card.id}` }])) {
+    for (const binding of (card.provides ?? [{ bindTo: card.id, src: 'card_data' }])) {
       allTokens.add(binding.bindTo);
       tokenToCardId.set(binding.bindTo, card.id);
     }
@@ -232,7 +228,7 @@ export function liveCardsToReactiveGraph(
 
     tasks[card.id] = {
       requires: requires.length > 0 ? requires : undefined,
-      provides: (card.provides ?? [{ bindTo: card.id, src: `state.${card.id}` }]).map(p => p.bindTo),
+      provides: (card.provides ?? [{ bindTo: card.id, src: 'card_data' }]).map(p => p.bindTo),
       taskHandlers: [card.id],
       description: card.meta?.title ?? card.id,
     };
@@ -309,11 +305,11 @@ function buildSourceHandler(
     };
   }
 
-  // Default: return current card state (for static sources or pre-populated state)
+  // Default: return current card data (for static sources or pre-populated data)
   return async (input: TaskHandlerInput): Promise<TaskHandlerReturn> => {
-    const state = { ...card.state };
-    sharedState.set(card.id, state);
-    getResolve()(input.callbackToken, state);
+    const data = { ...card.card_data };
+    sharedState.set(card.id, data);
+    getResolve()(input.callbackToken, data);
     return 'task-initiated';
   };
 }
@@ -334,9 +330,9 @@ function buildCardHandler(
     };
   }
 
-  // Default: inject upstream state → run CardCompute → return computed state
+  // Default: inject upstream data → run CardCompute → return computed values
   return async (input: TaskHandlerInput): Promise<TaskHandlerReturn> => {
-    // Clone the card's state to avoid mutating the original
+    // Clone the card's data to avoid mutating the original
     const requiresData: Record<string, unknown> = {};
     const requires = card.requires ?? [];
     for (const token of requires) {
@@ -350,7 +346,7 @@ function buildCardHandler(
 
     const computeNode: ComputeNode = {
       id: card.id,
-      state: { ...card.state },
+      card_data: { ...card.card_data },
       requires: requiresData,
       compute: card.compute as ComputeNode['compute'],
     };
@@ -359,7 +355,7 @@ function buildCardHandler(
     await CardCompute.run(computeNode);
 
     // Build result: if card has explicit provides bindings, resolve each src path.
-    // Otherwise spread full state + computed_values as data.
+    // Otherwise spread full card_data + computed_values as data.
     let resultData: Record<string, unknown>;
     if (card.provides && card.provides.length > 0) {
       resultData = {};
@@ -367,11 +363,11 @@ function buildCardHandler(
         resultData[bindTo] = CardCompute.resolve(computeNode, src);
       }
     } else {
-      resultData = { ...computeNode.state, ...computeNode.computed_values };
+      resultData = { ...computeNode.card_data, ...computeNode.computed_values };
     }
 
     // Also update sharedState for downstream cards that read via requiresData
-    const resultState = { ...computeNode.state, ...computeNode.computed_values };
+    const resultState = { ...computeNode.card_data, ...computeNode.computed_values };
     sharedState.set(card.id, resultState);
 
     getResolve()(input.callbackToken, resultData);

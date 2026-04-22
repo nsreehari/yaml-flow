@@ -7,9 +7,9 @@
   "definitions": {
 
     "bind_ref": {
-      "description": "A state path reference, e.g. 'state.raw_quotes' or 'requires.upstream'",
+      "description": "A card data path reference, e.g. 'card_data.raw_quotes' or 'requires.upstream'",
       "type": "string",
-      "pattern": "^(state|requires|sources|computed_values)(\\.|$)"
+      "pattern": "^(card_data|requires|sources|computed_values)(\\.|$)"
     },
 
     "bind_or_literal": {
@@ -46,7 +46,7 @@
           ]
         },
         "input": {
-          "description": "state.path, literal, array of inputs, or nested compute_expr",
+          "description": "card_data.path, literal, array of inputs, or nested compute_expr",
           "oneOf": [
             { "type": "string" },
             { "type": "number" },
@@ -85,19 +85,19 @@
         "required": ["bindTo", "src"],
         "properties": {
           "bindTo": { "type": "string", "description": "Token name published downstream" },
-          "src":    { "type": "string", "description": "Path to read value from (state.*, requires.*, computed_values.*)" }
+          "src":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, computed_values.*)" }
         }
       },
       "description": "Explicit bindings exposing computed/state values downstream as named tokens"
     },
 
     "compute_step": {
-      "description": "A single ordered compute step: reads state.*/requires.*/computed_values.*, writes to computed_values[bindTo]",
+      "description": "A single ordered compute step: reads card_data.*/requires.*/computed_values.*, writes to computed_values[bindTo]",
       "type": "object",
       "required": ["bindTo", "expr"],
       "properties": {
         "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "expr":   { "type": "string", "description": "JSONata expression evaluated against { state, requires, sources, computed_values }" }
+        "expr":   { "type": "string", "description": "JSONata expression evaluated against { card_data, requires, sources, computed_values }" }
       }
     },
 
@@ -131,8 +131,8 @@
         "data": {
           "type": "object",
           "properties": {
-            "bind":        { "$ref": "#/definitions/bind_ref", "description": "state path to read data from" },
-            "writeTo":     { "$ref": "#/definitions/bind_ref", "description": "state path for user input (form, filter, todo, notes)" },
+            "bind":        { "$ref": "#/definitions/bind_ref", "description": "card_data/requires/sources/computed_values path to read data from" },
+            "writeTo":     { "$ref": "#/definitions/bind_ref", "description": "card_data path for user input (form, filter, todo, notes)" },
             "columns":     { "type": "array", "items": { "type": "string" }, "description": "table: visible columns" },
             "maxRows":     { "type": "integer", "description": "table/list: max rows to display" },
             "sortable":    { "type": "boolean", "default": true, "description": "table: enable click-to-sort" },
@@ -165,7 +165,7 @@
                   "label":    { "type": "string" },
                   "style":    { "type": "string", "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'" },
                   "size":     { "type": "string", "default": "sm" },
-                  "disabled": { "oneOf": [{ "type": "boolean" }, { "type": "string", "description": "state path — truthy = disabled" }] }
+                  "disabled": { "oneOf": [{ "type": "boolean" }, { "type": "string", "description": "card_data/requires/sources/computed_values path — truthy = disabled" }] }
                 }
               }
             }
@@ -227,12 +227,8 @@
     "provides": { "$ref": "#/definitions/provides" },
     "meta":     { "$ref": "#/definitions/meta" },
     "view":     { "$ref": "#/definitions/view" },
-    "state":    { "type": "object", "additionalProperties": true,
-      "properties": {
-        "status":  { "enum": ["fresh", "stale", "loading", "error"] },
-        "lastRun": { "type": "string", "format": "date-time" },
-        "error":   { "type": "string" }
-      }
+    "card_data":    { "type": "object", "additionalProperties": true,
+      "description": "Authored card data - initial state supplied in card definition"
     },
     "sources": {
       "type": "array",
@@ -241,7 +237,7 @@
     },
     "compute": {
       "type": "array",
-      "description": "Ordered array of compute steps. Each reads state.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
+      "description": "Ordered array of compute steps. Each reads card_data.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
       "items": { "$ref": "#/definitions/compute_step" }
     }
   }
