@@ -25,11 +25,23 @@ const PRICE_SEED = [
   { product: 'Widget C', price: 3266.67, currency: 'USD' },
 ];
 
+// Derived from ORDER_SEED: sum amounts by region
+const REGION_TOTALS_SEED = [
+  { region: 'North', total: 21500 },
+  { region: 'South', total: 18500 },
+  { region: 'East',  total: 15200 },
+  { region: 'West',  total:  6300 },
+];
+// Derived from REGION_TOTALS_SEED: highest-revenue region
+const TOP_REGION_SEED = { region: 'North', total: 21500 };
+
 const TOKEN_FIXTURES: Record<string, unknown> = {
   orders: ORDER_SEED,
   prices: PRICE_SEED,
   selections: {},
   'card-ex-form': { preferences: { favoriteProduct: 'Widget A', preferredRegion: 'North' } },
+  regionTotals: REGION_TOTALS_SEED,
+  topRegion: TOP_REGION_SEED,
 };
 
 function listCardFiles(): string[] {

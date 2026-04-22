@@ -1367,7 +1367,7 @@ var BoardLiveGraph = (function (exports) {
         if (data && typeof data.__sourcesData === "object") {
           const renderNode = node;
           renderNode._sourcesData = data.__sourcesData;
-          renderNode.sources = data.__sourcesData;
+          // Keep sources definition from card; don't overwrite with runtime data
         }
         if (data && typeof data.__requiresData === "object") {
           const renderNode = node;

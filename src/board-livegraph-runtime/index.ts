@@ -46,17 +46,36 @@ export interface BoardLiveGraphRuntimeOptions {
   executionId?: string;
 }
 
+export interface LiveCardRuntimeModel {
+  id: string;
+  card: LiveCard;
+  card_data: Record<string, unknown>;
+  fetched_sources: Record<string, unknown>;
+  requires_data: Record<string, unknown>;
+  computed_values: Record<string, unknown>;
+  runtime_state: Record<string, unknown>;
+}
+
+export interface BoardRuntimeView {
+  id?: string;
+  title?: string;
+  mode?: 'board' | 'canvas';
+  positions?: Record<string, { x?: number; y?: number; w?: number; h?: number }>;
+  settings?: Partial<GraphConfig['settings']>;
+  nodes: LiveCardRuntimeModel[];
+}
+
 export interface BoardLiveGraphRuntimeUpdate {
   events: GraphEvent[];
   graph: LiveGraph;
-  nodes: LiveCard[];
+  nodes: LiveCardRuntimeModel[];
 }
 
 export interface BoardLiveGraphRuntime {
   getGraph(): ReactiveGraph;
   getState(): LiveGraph;
-  getNodes(): LiveCard[];
-  getBoard(): LiveBoard;
+  getNodes(): LiveCardRuntimeModel[];
+  getBoard(): BoardRuntimeView;
   getSchedule(): ReturnType<typeof schedule>;
   subscribe(listener: (update: BoardLiveGraphRuntimeUpdate) => void): () => void;
   addCard(card: LiveCard): void;
@@ -259,10 +278,11 @@ export function createBoardLiveGraphRuntime(
       const requiresData: Record<string, unknown> = {};
       for (const token of card.requires ?? []) {
         const upstream = inputArgs.state[token] as Record<string, unknown> | undefined;
-        if (!upstream) continue;
-        requiresData[token] = Object.prototype.hasOwnProperty.call(upstream, token)
-          ? upstream[token]
-          : upstream;
+        if (!upstream || typeof upstream !== 'object') continue;
+        const providesData = upstream.provides_data as Record<string, unknown> | undefined;
+        if (!providesData || typeof providesData !== 'object') continue;
+        if (!Object.prototype.hasOwnProperty.call(providesData, token)) continue;
+        requiresData[token] = providesData[token];
       }
 
       const sourcesData: Record<string, unknown> = {};
@@ -295,24 +315,26 @@ export function createBoardLiveGraphRuntime(
         await CardCompute.run(computeNode, { sourcesData });
       }
 
-      let resultData: Record<string, unknown>;
+      const providesData: Record<string, unknown> = {};
       if (card.provides && card.provides.length > 0) {
-        resultData = {};
         for (const { bindTo, src } of card.provides) {
-          resultData[bindTo] = CardCompute.resolve(computeNode, src);
+          providesData[bindTo] = CardCompute.resolve(computeNode, src);
         }
       } else {
-        resultData = {
+        providesData[card.id] = {
           ...(computeNode.card_data ?? {}),
           ...(computeNode.computed_values ?? {}),
           ...(computeNode._sourcesData ?? {}),
         };
       }
 
-      resultData.__cardData = computeNode.card_data ?? {};
-      if (computeNode.computed_values) resultData.__computed_values = computeNode.computed_values;
-      if (Object.keys(sourcesData).length > 0) resultData.__sourcesData = sourcesData;
-      if (Object.keys(requiresData).length > 0) resultData.__requiresData = requiresData;
+      const resultData: Record<string, unknown> = {
+        provides_data: providesData,
+        card_data: computeNode.card_data ?? {},
+        computed_values: computeNode.computed_values ?? {},
+        fetched_sources: sourcesData,
+        requires_data: requiresData,
+      };
 
       graphRef?.resolveCallback(inputArgs.callbackToken, resultData);
       return 'task-initiated';
@@ -353,49 +375,36 @@ export function createBoardLiveGraphRuntime(
   );
   graphRef = graph;
 
-  function getRenderableNodes(): LiveCard[] {
+  function getRenderableNodes(): LiveCardRuntimeModel[] {
     const live = graph.getState();
-    const out: LiveCard[] = [];
+    const out: LiveCardRuntimeModel[] = [];
 
     for (const [cardId, baseCard] of cards.entries()) {
-      const node = deepClone(baseCard);
       const data = live.state.tasks[cardId]?.data as Record<string, unknown> | undefined;
+      const runtimeState = live.state.tasks[cardId];
 
       const mergedCardData = {
-        ...(node.card_data ?? {}),
-        ...(data && typeof data.__cardData === 'object' ? data.__cardData as Record<string, unknown> : {}),
+        ...(baseCard.card_data ?? {}),
+        ...(data && typeof data.card_data === 'object' ? data.card_data as Record<string, unknown> : {}),
       };
-      node.card_data = mergedCardData;
-      const runtimeState = live.state.tasks[cardId];
-      if (runtimeState?.status != null || runtimeState?.lastUpdated != null || runtimeState?.error != null) {
-        node.card_data = {
-          ...node.card_data,
-          status: runtimeState.status === 'running' ? 'loading' : runtimeState.status,
-          lastRun: runtimeState.lastUpdated ?? node.card_data.lastRun,
-          ...(runtimeState.status === 'failed' && runtimeState.error ? { error: runtimeState.error } : {}),
-        };
-      }
 
-      if (data && typeof data.__computed_values === 'object') {
-        (node as LiveCard & { computed_values?: Record<string, unknown> }).computed_values =
-          data.__computed_values as Record<string, unknown>;
-      }
+      const cardStatus = runtimeState?.status === 'running' ? 'loading' : runtimeState?.status;
+      const cardDataForView = {
+        ...mergedCardData,
+        ...(cardStatus ? { status: cardStatus } : {}),
+        ...(runtimeState?.lastUpdated ? { lastRun: runtimeState.lastUpdated } : {}),
+        ...(runtimeState?.status === 'failed' && runtimeState.error ? { error: runtimeState.error } : {}),
+      };
 
-      // Populate runtime namespaces expected by the browser renderer/compute pass.
-      if (data && typeof data.__sourcesData === 'object') {
-        const renderNode = node as unknown as Record<string, unknown>;
-        renderNode._sourcesData = data.__sourcesData as Record<string, unknown>;
-        // live-cards.js _resolveBind uses plain deepGet, so sources.raw must live on node.sources.raw.
-        renderNode.sources = data.__sourcesData as Record<string, unknown>;
-      }
-
-      // Provide resolved requires data map for expressions like requires.orders.amount.
-      if (data && typeof data.__requiresData === 'object') {
-        const renderNode = node as unknown as Record<string, unknown>;
-        renderNode.requires = data.__requiresData as Record<string, unknown>;
-      }
-
-      out.push(node);
+      out.push({
+        id: cardId,
+        card: deepClone(baseCard),
+        card_data: cardDataForView,
+        fetched_sources: data && typeof data.fetched_sources === 'object' ? deepClone(data.fetched_sources as Record<string, unknown>) : {},
+        requires_data: data && typeof data.requires_data === 'object' ? deepClone(data.requires_data as Record<string, unknown>) : {},
+        computed_values: data && typeof data.computed_values === 'object' ? deepClone(data.computed_values as Record<string, unknown>) : {},
+        runtime_state: runtimeState ? deepClone(runtimeState as unknown as Record<string, unknown>) : {},
+      });
     }
 
     return out;

@@ -58,6 +58,8 @@
       let board = null;
       let currentMode = 'board';
       let sse = null;
+      let bootstrapInProgress = false;
+      let bootstrapCompleted = false;
       const SERVER_PATHS = {
         demoSetup: '/api/example-board/server/demo-setup',
         bootstrap: '/api/example-board/server/bootstrap',

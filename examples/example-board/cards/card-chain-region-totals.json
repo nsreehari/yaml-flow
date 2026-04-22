@@ -1,0 +1,26 @@
+{
+  "id": "card-chain-region-totals",
+  "meta": {
+    "title": "Revenue by Region",
+    "tags": ["chain", "level-2"],
+    "desc": "Chain level 2 of 4 — groups order amounts by region. Auto-recomputes whenever the upstream orders data changes."
+  },
+  "requires": ["orders"],
+  "provides": [{ "bindTo": "regionTotals", "src": "computed_values.byRegion" }],
+  "compute": [
+    {
+      "bindTo": "byRegion",
+      "expr": "$each($reduce(requires.orders, function($acc, $v){ $merge([$acc, { $v.region: ($lookup($acc, $v.region) ? $lookup($acc, $v.region) + $v.amount : $v.amount) }]) }, {}), function($v, $k){ { 'region': $k, 'total': $v } })"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "table",
+        "data": { "bind": "computed_values.byRegion", "columns": ["region", "total"], "sortable": true }
+      }
+    ],
+    "layout": { "board": { "col": 3, "order": 20 }, "canvas": { "x": 50, "y": 1100, "w": 250, "h": 200 } }
+  },
+  "card_data": {}
+}

@@ -92,7 +92,7 @@ function normalizeExt(rawExt) {
 }
 
 function parseLeadingSerial(fileName) {
-  const m = String(fileName || '').match(/^(\d+)-/);
+  const m = String(fileName || '').match(/^(\d+)[-_]/);
   return m ? parseInt(m[1], 10) : 0;
 }
 
@@ -163,7 +163,7 @@ function nextChatStoredName(cardId, role) {
     : [];
   const serial = nextSerialFromNames(names);
   const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
-  return `${String(serial).padStart(3, '0')}-${safeRole}.txt`;
+  return `${String(serial).padStart(3, '0')}_${safeRole}.txt`;
 }
 
 function writeChatRecord(cardId, role, text, files) {
@@ -312,24 +312,13 @@ function readSourcePayloads(cardDefinition) {
   for (const sourceDef of cardDefinition.sources) {
     if (!sourceDef || !sourceDef.bindTo || !sourceDef.outputFile) continue;
     const filePath = path.join(BOARD_DIR, sourceDef.outputFile);
-    if (!fs.existsSync(filePath)) {
-      if (cardDefinition.id === 'card-ex-narrative') {
-        console.log(`[DEBUG] narrative source file not found: ${filePath}`);
-      }
-      continue;
-    }
+    if (!fs.existsSync(filePath)) continue;
 
     const raw = fs.readFileSync(filePath, 'utf-8').trim();
     try {
       out[sourceDef.bindTo] = JSON.parse(raw);
-      if (cardDefinition.id === 'card-ex-narrative') {
-        console.log(`[DEBUG] narrative source parsed successfully, bindTo=${sourceDef.bindTo}, type=${typeof out[sourceDef.bindTo]}, length=${String(out[sourceDef.bindTo]).length}`);
-      }
-    } catch (e) {
+    } catch {
       out[sourceDef.bindTo] = raw;
-      if (cardDefinition.id === 'card-ex-narrative') {
-        console.log(`[DEBUG] narrative source parse failed, using raw, error=${e.message}`);
-      }
     }
   }
 
@@ -370,7 +359,7 @@ function buildPublishedRuntimePayload() {
       card_id: rawArtifact.card_id || cardDefinition.id,
       card_data: rawArtifact.card_data && typeof rawArtifact.card_data === 'object' ? rawArtifact.card_data : (cardDefinition.card_data && typeof cardDefinition.card_data === 'object' ? cardDefinition.card_data : {}),
       computed_values: rawArtifact.computed_values && typeof rawArtifact.computed_values === 'object' ? rawArtifact.computed_values : {},
-      sources_data: sourcesFromFiles,
+      fetched_sources: sourcesFromFiles,
       requires_data: rawArtifact.requires_data && typeof rawArtifact.requires_data === 'object' ? rawArtifact.requires_data : {},
     };
   }
@@ -725,8 +714,18 @@ async function handleApi(req, res) {
 
   try {
     if (method === 'GET' && p === '/api/example-board/server/demo-setup') {
-      demo_prep_setup();
-      json(res, 200, { ok: true, tmpCardsDir: TMP_CARDS_DIR });
+      const reset = String(url.searchParams.get('reset') || '').toLowerCase() === 'true';
+      let setupPerformed = false;
+
+      if (reset) {
+        demo_prep_setup();
+        setupPerformed = true;
+      } else if (!didDemoSetup || !fs.existsSync(TMP_CARDS_DIR)) {
+        ensureDemoSetup();
+        setupPerformed = true;
+      }
+
+      json(res, 200, { ok: true, setupPerformed, reset, tmpCardsDir: TMP_CARDS_DIR });
       return;
     }
 

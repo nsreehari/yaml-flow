@@ -9,7 +9,7 @@
     "bind_ref": {
       "description": "A card data path reference, e.g. 'card_data.raw_quotes' or 'requires.upstream'",
       "type": "string",
-      "pattern": "^(card_data|requires|sources|computed_values)(\\.|$)"
+      "pattern": "^(card_data|requires|fetched_sources|computed_values)(\\.|$)"
     },
 
     "bind_or_literal": {
@@ -85,7 +85,7 @@
         "required": ["bindTo", "src"],
         "properties": {
           "bindTo": { "type": "string", "description": "Token name published downstream" },
-          "src":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, computed_values.*)" }
+          "src":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, fetched_sources.*, computed_values.*)" }
         }
       },
       "description": "Explicit bindings exposing computed or card_data values downstream as named tokens"
@@ -97,7 +97,7 @@
       "required": ["bindTo", "expr"],
       "properties": {
         "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "expr":   { "type": "string", "description": "JSONata expression evaluated against { card_data, requires, sources, computed_values }" }
+        "expr":   { "type": "string", "description": "JSONata expression evaluated against { card_data, requires, fetched_sources, computed_values }" }
       }
     },
 
@@ -131,7 +131,7 @@
         "data": {
           "type": "object",
           "properties": {
-            "bind":        { "$ref": "#/definitions/bind_ref", "description": "card_data/requires/sources/computed_values path to read data from" },
+            "bind":        { "$ref": "#/definitions/bind_ref", "description": "card_data/requires/fetched_sources/computed_values path to read data from" },
             "writeTo":     { "$ref": "#/definitions/bind_ref", "description": "card_data path for user input (form, filter, todo, notes)" },
             "columns":     { "type": "array", "items": { "type": "string" }, "description": "table: visible columns" },
             "maxRows":     { "type": "integer", "description": "table/list: max rows to display" },

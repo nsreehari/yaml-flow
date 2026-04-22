@@ -36,10 +36,10 @@ describe('createBoardLiveGraphRuntime', () => {
     const state = runtime.getState();
     expect(state.state.tasks.prices.status).toBe('completed');
     expect(state.state.tasks.stats.status).toBe('completed');
-    expect(state.state.tasks.stats.data?.sum).toBe(10);
+    expect((state.state.tasks.stats.data as any)?.computed_values?.sum).toBe(10);
 
-    const stats = runtime.getNodes().find(n => n.id === 'stats') as LiveCard & { computed_values?: Record<string, unknown> };
-    expect(stats.computed_values?.sum).toBe(10);
+    const stats = runtime.getNodes().find(n => n.id === 'stats');
+    expect(stats?.computed_values?.sum).toBe(10);
 
     runtime.dispose();
   });
@@ -62,7 +62,7 @@ describe('createBoardLiveGraphRuntime', () => {
 
     runtime.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
     await sleep(200);
-    expect(runtime.getState().state.tasks['plus-one']?.data?.value).toBe(8);
+    expect((runtime.getState().state.tasks['plus-one']?.data as any)?.computed_values?.value).toBe(8);
 
     runtime.upsertCard({
       id: 'plus-one',
@@ -73,7 +73,7 @@ describe('createBoardLiveGraphRuntime', () => {
     });
     runtime.retrigger('plus-one');
     await sleep(200);
-    expect(runtime.getState().state.tasks['plus-one']?.data?.value).toBe(9);
+    expect((runtime.getState().state.tasks['plus-one']?.data as any)?.computed_values?.value).toBe(9);
 
     runtime.removeCard('plus-one');
     expect(runtime.getState().config.tasks['plus-one']).toBeUndefined();
@@ -100,11 +100,11 @@ describe('createBoardLiveGraphRuntime', () => {
 
     runtime.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
     await sleep(200);
-    expect(runtime.getState().state.tasks.counter.data?.value).toBe(1);
+    expect((runtime.getState().state.tasks.counter.data as any)?.computed_values?.value).toBe(1);
 
     runtime.patchCardState('counter', { n: 4 });
     await sleep(200);
-    expect(runtime.getState().state.tasks.counter.data?.value).toBe(4);
+    expect((runtime.getState().state.tasks.counter.data as any)?.computed_values?.value).toBe(4);
     expect(seen.length).toBeGreaterThan(0);
 
     unsubscribe();

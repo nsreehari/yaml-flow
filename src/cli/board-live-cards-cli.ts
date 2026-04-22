@@ -24,6 +24,7 @@ import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/in
 
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
+const TASK_EXECUTOR_LOG_FILE = 'task-executor.jsonl';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
@@ -718,6 +719,18 @@ function invokeRunSources(boardDir: string, cardPath: string, callbackToken: str
   }
 }
 
+function appendTaskExecutorLog(boardDir: string, hydratedSource: unknown): void {
+  try {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      hydratedSource,
+    };
+    fs.appendFileSync(path.join(boardDir, TASK_EXECUTOR_LOG_FILE), JSON.stringify(entry) + '\n', 'utf-8');
+  } catch (logErr) {
+    console.error(`[task-executor-log] append failed: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
+  }
+}
+
 function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
   const { cmd, args } = getCliInvocation('source-data-fetched', ['--tmp', tmpFile, '--token', sourceToken]);
   execCommandAsync(cmd, args, (err, stdout, stderr) => {
@@ -862,8 +875,37 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           }
           if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
 
-          invokeRunSources(boardDir, cardPath, input.callbackToken, (err) => {
-            if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
+          // ---- Enrich sources with execution context before calling executor ----
+          // Use CardCompute.enrichSources to attach requires, sourcesData, and computed_values
+          // to each source so that copilot prompts and other templates can be interpolated with full context.
+          const enrichedCard = { ...card };
+          const enrichedSources = CardCompute.enrichSources(
+            (Array.isArray(card.sources) ? card.sources : undefined),
+            {
+              requires,
+              sourcesData,
+              computed_values: computeNode.computed_values,
+            }
+          );
+          // Preserve execution context for relative source.cli commands.
+          const sourceCwd = path.dirname(cardPath);
+          enrichedCard.sources = Array.isArray(enrichedSources)
+            ? enrichedSources.map((src) => ({
+                ...src,
+                cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
+                boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
+              }))
+            : enrichedSources;
+
+          // Write enriched card to temp location for this invocation
+          const enrichedCardPath = path.join(os.tmpdir(), `card-enriched-${cardId}-${Date.now()}.json`);
+          fs.writeFileSync(enrichedCardPath, JSON.stringify(enrichedCard, null, 2), 'utf-8');
+
+          invokeRunSources(boardDir, enrichedCardPath, input.callbackToken, (err) => {
+            if (err) {
+              console.error(`[card-handler] ${input.nodeId}:`, err.message);
+              try { fs.unlinkSync(enrichedCardPath); } catch {}
+            }
           });
           return 'task-initiated';
         }
@@ -1444,6 +1486,9 @@ function cmdRunSources(args: string[]): void {
   }
 
   const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
+  if (path.basename(cardFilePath).startsWith('card-enriched-')) {
+    try { fs.unlinkSync(cardFilePath); } catch { /* best-effort */ }
+  }
   console.log(`[run-sources-internal] Processing card "${card.id as string}"`);
 
   // Load registered task-executor (if any)
@@ -1491,7 +1536,12 @@ function cmdRunSources(args: string[]): void {
       const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
       const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
       const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
-      const sourceForExecutor = { ...src, cwd: path.dirname(cardFilePath || ''), boardDir };
+      const sourceForExecutor = {
+        ...src,
+        cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : path.dirname(cardFilePath || ''),
+        boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
+      };
+      appendTaskExecutorLog(boardDir!, sourceForExecutor);
       fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
       console.log(`[run-sources-internal] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
       try {

@@ -1,0 +1,24 @@
+{
+  "id": "card-chain-top-region",
+  "meta": {
+    "title": "Top Region",
+    "tags": ["chain", "level-3"],
+    "desc": "Chain level 3 of 4 — picks the highest-revenue region from the aggregated totals. Recomputes whenever region totals update."
+  },
+  "requires": ["regionTotals"],
+  "provides": [{ "bindTo": "topRegion", "src": "computed_values.leader" }],
+  "compute": [
+    {
+      "bindTo": "leader",
+      "expr": "requires.regionTotals^(>total)[0]"
+    }
+  ],
+  "view": {
+    "elements": [
+      { "kind": "metric", "label": "Top Region", "data": { "bind": "computed_values.leader.region" } },
+      { "kind": "metric", "label": "Revenue",    "data": { "bind": "computed_values.leader.total" } }
+    ],
+    "layout": { "board": { "col": 3, "order": 21 }, "canvas": { "x": 330, "y": 1100, "w": 200, "h": 200 } }
+  },
+  "card_data": {}
+}

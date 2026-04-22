@@ -6,7 +6,7 @@
     "desc": "Fetches pricing for products derived from upstream order data"
   },
   "requires": ["orders"],
-  "provides": [{ "bindTo": "prices", "src": "sources.raw" }],
+  "provides": [{ "bindTo": "prices", "src": "fetched_sources.raw" }],
   "sources": [{
     "bindTo": "raw",
     "outputFile": "card-ex-source-http-raw.json",
@@ -20,7 +20,7 @@
   ],
   "view": {
     "elements": [
-      { "kind": "table", "data": { "bind": "sources.raw", "columns": ["product", "price", "currency"], "sortable": true } }
+      { "kind": "table", "data": { "bind": "fetched_sources.raw", "columns": ["product", "price", "currency"], "sortable": true } }
     ],
     "layout": { "board": { "col": 6, "order": 2 }, "canvas": { "x": 450, "y": 50, "w": 350, "h": 220 } }
   },

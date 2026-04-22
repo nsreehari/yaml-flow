@@ -234,7 +234,7 @@
           .filter(Boolean);
         const serial = nextSerialFromNames(names);
         const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
-        return `${cardId}/chats/${String(serial).padStart(3, '0')}-${safeRole}.txt`;
+        return `${cardId}/chats/${String(serial).padStart(3, '0')}_${safeRole}.txt`;
       }
 
       function readPersistedFileMetadata(cardId) {

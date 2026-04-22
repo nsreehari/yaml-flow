@@ -140,6 +140,33 @@ function getCardFiles(card: Record<string, unknown>) {
   return Array.isArray(cardData?.files) ? cardData.files as Array<Record<string, unknown>> : [];
 }
 
+function getCardChats(card: Record<string, unknown>) {
+  const cardData = card.card_data as Record<string, unknown> | undefined;
+  return Array.isArray(cardData?.chats) ? cardData.chats as Array<Record<string, unknown>> : [];
+}
+
+async function sendChatMessage(cardId: string, userMessage: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/actions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ actionType: 'chat-send', payload: { user: 'test-user', text: userMessage } }),
+  });
+  expect(res.ok).toBe(true);
+}
+
+function getCardChatsDir(cardId: string): string {
+  return path.join(TMP_CARDS_DIR, cardId, 'chats');
+}
+
+function readChatFileNames(cardId: string): string[] {
+  const chatsDir = getCardChatsDir(cardId);
+  if (!fs.existsSync(chatsDir)) return [];
+  return fs.readdirSync(chatsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .sort();
+}
+
 describe('demo-server file upload + card list + download', () => {
   const cardId = 'card-ex-file-upload';
 
@@ -175,5 +202,40 @@ describe('demo-server file upload + card list + download', () => {
 
     const stale = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/files/${idx}?sn=999-wrong.txt`);
     expect(stale.status).toBe(409);
+  }, 30000);
+
+  it('sends chat message and persists it to card chat files (not card_data)', async () => {
+    const chatCardId = 'card-ex-chat';
+    const testMessage = 'Hello from test user';
+
+    const before = readChatFileNames(chatCardId);
+
+    await sendChatMessage(chatCardId, testMessage);
+
+    const afterFirst = readChatFileNames(chatCardId);
+    expect(afterFirst.length).toBe(before.length + 1);
+
+    const firstNew = afterFirst.find((name) => !before.includes(name));
+    expect(firstNew).toBeTruthy();
+    expect(firstNew || '').toMatch(/^\d{3}_(system|user|assistant)\.txt$/);
+
+    const firstPath = path.join(getCardChatsDir(chatCardId), firstNew as string);
+    expect(fs.readFileSync(firstPath, 'utf8')).toContain(testMessage);
+
+    const card = await getCardFromBootstrap(chatCardId);
+    expect(getCardChats(card).length).toBe(0);
+
+    const secondMessage = 'Follow-up message';
+    await sendChatMessage(chatCardId, secondMessage);
+
+    const afterSecond = readChatFileNames(chatCardId);
+    expect(afterSecond.length).toBe(afterFirst.length + 1);
+
+    const secondNew = afterSecond.find((name) => !afterFirst.includes(name));
+    expect(secondNew).toBeTruthy();
+    expect(secondNew || '').toMatch(/^\d{3}_(system|user|assistant)\.txt$/);
+
+    const secondPath = path.join(getCardChatsDir(chatCardId), secondNew as string);
+    expect(fs.readFileSync(secondPath, 'utf8')).toContain(secondMessage);
   }, 30000);
 });

@@ -214,8 +214,8 @@ var LiveCard = (function () {
       const ns = {
         card: node && node.card ? node.card : {},
         card_data: node && node.card_data ? node.card_data : {},
-        sources_data: node && node.sources_data ? node.sources_data : {},
-        requires_data: node && node.requires_data ? node.requires_data : {},
+        fetched_sources: node && node.fetched_sources ? node.fetched_sources : {},
+        requires: node && node.requires ? node.requires : {},
         computed_values: node && node.computed_values ? node.computed_values : {},
         runtime_state: node && node.runtime_state ? node.runtime_state : {},
         data_objects: node && node.data_objects ? node.data_objects : {},
@@ -1500,6 +1500,20 @@ var LiveCard = (function () {
       const computedValues = node.computed_values || {};
       computedSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(computedValues, null, 2))}</pre>`;
       body.appendChild(computedSection);
+
+      const sourcesSection = document.createElement('div');
+      sourcesSection.className = 'mb-4';
+      sourcesSection.innerHTML = '<h6 class="fw-semibold mb-2">Sources Data (Read-only)</h6>';
+      const sourcesData = node.sources_data || {};
+      sourcesSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(sourcesData, null, 2))}</pre>`;
+      body.appendChild(sourcesSection);
+
+      const requiresSection = document.createElement('div');
+      requiresSection.className = 'mb-4';
+      requiresSection.innerHTML = '<h6 class="fw-semibold mb-2">Requires Data (Read-only)</h6>';
+      const requiresData = node.requires_data || {};
+      requiresSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(requiresData, null, 2))}</pre>`;
+      body.appendChild(requiresSection);
 
       const stateSection = document.createElement('div');
       stateSection.className = 'mb-2';

@@ -123,6 +123,8 @@ export type {
   BoardLiveGraphRuntime,
   BoardLiveGraphRuntimeOptions,
   BoardLiveGraphRuntimeUpdate,
+  BoardRuntimeView,
+  LiveCardRuntimeModel,
   BoardTaskExecutor,
   BoardTaskExecutorContext,
   BrowserSourceAdapter,

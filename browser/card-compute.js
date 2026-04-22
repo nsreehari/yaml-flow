@@ -231,6 +231,27 @@
     return { ok: errors.length === 0, errors: errors };
   }
 
+  /**
+   * Enrich sources with execution context for template interpolation and prompt rendering.
+   * Pure function: no side effects, returns new enriched sources array.
+   * 
+   * @param {Array} sources - Array of source definitions
+   * @param {Object} context - Execution context containing requires, sourcesData, computed_values
+   * @returns {Array} New array of sources with _requires, _sourcesData, _computed_values attached
+   */
+  function enrichSources(sources, context) {
+    if (!sources || sources.length === 0) return [];
+    context = context || {};
+    
+    return sources.map(function (src) {
+      return Object.assign({}, src, {
+        _requires: context.requires || {},
+        _sourcesData: context.sourcesData || {},
+        _computed_values: context.computed_values || {},
+      });
+    });
+  }
+
   // ===========================================================================
   // Export
   // ===========================================================================
@@ -240,6 +261,7 @@
     eval: evalExpr,
     resolve: resolve,
     validate: validateNode,
+    enrichSources: enrichSources,
   };
 
 }));

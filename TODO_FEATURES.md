@@ -47,9 +47,9 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Notes: define when inference runs, how outputs bind, and failure semantics
 
 - [ ] 8. richer rendering for files/chats/etc. in live-cards
-  - Status: DISCUSS
+  - Status: DECIDED
   - Goal: improve browser rendering and define server payload shape for these card types
-  - Notes: include example boards showing supported card varieties
+  - Notes: align on ingest-board model: board-level handlers for side effects (send/confirm/discard), card-level declarative element intent (chat/file-upload/actions); remove legacy ingest UI path and provide example boards for supported card varieties
 
 - [x] 9. generalize portfolio-tracker into reusable demo simulation framework
   - Status: DONE

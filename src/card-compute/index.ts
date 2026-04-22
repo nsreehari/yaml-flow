@@ -288,11 +288,38 @@ function validateNode(node: unknown): ValidationResult {
   return { ok: errors.length === 0, errors };
 }
 
+/**
+ * Enrich sources with execution context for template interpolation and prompt rendering.
+ * Pure function: no side effects, returns new enriched sources array.
+ * 
+ * @param sources - Array of source definitions
+ * @param context - Execution context containing requires, sourcesData, computed_values
+ * @returns New array of sources with _requires, _sourcesData, _computed_values attached
+ */
+function enrichSources(
+  sources: any[] | undefined,
+  context: {
+    requires?: Record<string, any>;
+    sourcesData?: Record<string, any>;
+    computed_values?: Record<string, any>;
+  }
+): any[] {
+  if (!sources || sources.length === 0) return [];
+  
+  return sources.map((src: any) => ({
+    ...src,
+    _requires: context.requires ?? {},
+    _sourcesData: context.sourcesData ?? {},
+    _computed_values: context.computed_values ?? {},
+  }));
+}
+
 export const CardCompute = {
   run,
   eval: evalExpr,
   resolve,
   validate: validateNode,
+  enrichSources,
 };
 
 export {
