@@ -2,5 +2,6 @@
   "port": 7799,
   "boardLiveCardsCliJs": "../../dist/cli/board-live-cards-cli.js",
   "stepMachineCliPath": "../../step-machine-cli.js",
-  "demoTaskExecutorPath": "./demo-task-executor.js"
+  "taskExecutorPath": "./demo-task-executor.js",
+  "chatHandlerPath": "./demo-chat-handler.js"
 }

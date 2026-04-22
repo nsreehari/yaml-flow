@@ -141,6 +141,9 @@ export function createMultiBoardServerRuntime(options = {}) {
     const defaultStepMachineCliPath = typeof entry.stepMachineCliPath === 'string'
       ? entry.stepMachineCliPath
       : options.defaultStepMachineCliPath;
+    const defaultChatHandlerPath = typeof entry.chatHandlerPath === 'string'
+      ? entry.chatHandlerPath
+      : options.defaultChatHandlerPath;
 
     const service = createExampleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
@@ -152,6 +155,7 @@ export function createMultiBoardServerRuntime(options = {}) {
       runtimeOutDir: path.join(boardRoot, 'runtime-out'),
       defaultTaskExecutorPath,
       defaultStepMachineCliPath,
+      defaultChatHandlerPath,
       boardLiveCardsCliJs: options.boardLiveCardsCliJs,
     });
 
@@ -327,6 +331,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     ? (path.isAbsolute(options.boardLiveCardsCliJs)
       ? options.boardLiveCardsCliJs
       : path.resolve(process.cwd(), options.boardLiveCardsCliJs))
+    : null;
+  const configuredChatHandlerPath = typeof options.defaultChatHandlerPath === 'string'
+    && options.defaultChatHandlerPath.trim()
+    ? (path.isAbsolute(options.defaultChatHandlerPath)
+      ? options.defaultChatHandlerPath
+      : path.resolve(process.cwd(), options.defaultChatHandlerPath))
     : null;
 
   const statusSnapshotFile = path.join(runtimeOutDir, 'board-livegraph-status.json');
@@ -655,29 +665,51 @@ export function createExampleBoardServerRuntime(options = {}) {
     return resolved;
   }
 
-  function initBoard(taskExecutorPathParam) {
+  function resolveChatHandlerPath(chatHandlerPathParam) {
+    const raw = typeof chatHandlerPathParam === 'string' ? chatHandlerPathParam.trim() : '';
+    const resolved = raw
+      ? (path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw))
+      : configuredChatHandlerPath;
+    if (!resolved) return null;
+    if (!fs.existsSync(resolved)) {
+      const err = new Error(`Chat handler script not found: ${resolved}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return resolved;
+  }
+
+  function initBoard(taskExecutorPathParam, chatHandlerPathParam) {
     fs.mkdirSync(boardDir, { recursive: true });
 
     const taskExecutorPath = resolveTaskExecutorPath(taskExecutorPathParam);
+    const chatHandlerPath = resolveChatHandlerPath(chatHandlerPathParam);
     const taskExecutorCmd = `${shellQuote(process.execPath)} ${shellQuote(taskExecutorPath)}`;
+    const chatHandlerCmd = chatHandlerPath
+      ? `${shellQuote(process.execPath)} ${shellQuote(chatHandlerPath)}`
+      : null;
+
+    const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd];
+    if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
+    initArgs.push('--runtime-out', runtimeOutDir);
 
     try {
-      runCli(['init', boardDir, '--task-executor', taskExecutorCmd, '--runtime-out', runtimeOutDir]);
+      runCli(initArgs);
     } catch (err) {
       const msg = String((err && err.message) || err);
       if (!msg.includes('no valid board-graph.json')) throw err;
 
       clearDirContents(boardDir);
       fs.mkdirSync(boardDir, { recursive: true });
-      runCli(['init', boardDir, '--task-executor', taskExecutorCmd, '--runtime-out', runtimeOutDir]);
+      runCli(initArgs);
     }
   }
 
-  function initBoardAndSetup(taskExecutorPathParam) {
+  function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam) {
     ensureDemoSetup();
 
     if (!fs.existsSync(boardFile)) {
-      initBoard(taskExecutorPathParam);
+      initBoard(taskExecutorPathParam, chatHandlerPathParam);
     }
 
     const expectedCardsRoot = path.resolve(tmpCardsDir);
@@ -689,7 +721,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
     if (hasStaleMapping) {
       clearDirContents(boardDir);
-      initBoard(taskExecutorPathParam);
+      initBoard(taskExecutorPathParam, chatHandlerPathParam);
     }
   }
 
@@ -1119,7 +1151,8 @@ export function createExampleBoardServerRuntime(options = {}) {
     try {
       if (method === 'GET' && p === `${apiBasePath}/init-board`) {
         const taskExecutorPathParam = url.searchParams.get('taskExecutorPath') || '';
-        initBoardAndSetup(taskExecutorPathParam);
+        const chatHandlerPathParam = url.searchParams.get('chatHandlerPath') || '';
+        initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam);
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }
