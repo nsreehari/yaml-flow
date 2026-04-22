@@ -21,8 +21,25 @@ export interface BrowserSourceAdapterContext {
 export type BrowserSourceAdapter =
   (ctx: BrowserSourceAdapterContext) => Promise<Record<string, unknown>> | Record<string, unknown>;
 
+export interface BoardTaskExecutorContext {
+  card: LiveCard;
+  input: TaskHandlerInput;
+}
+
+/**
+ * Opaque task executor hook.
+ * Runtime does not interpret source descriptors — executor owns that contract.
+ * For source cards, return a map keyed by source.bindTo.
+ */
+export type BoardTaskExecutor =
+  (ctx: BoardTaskExecutorContext) => Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
+
 export interface BoardLiveGraphRuntimeOptions {
+  /** Preferred opaque source/task executor. */
+  taskExecutor?: BoardTaskExecutor;
+  /** Per-card source adapters keyed by card ID. */
   sourceAdapters?: Record<string, BrowserSourceAdapter>;
+  /** Default source adapter applied when no per-card adapter matches. */
   defaultSourceAdapter?: BrowserSourceAdapter;
   reactiveOptions?: Partial<Omit<ReactiveGraphOptions, 'handlers'>>;
   graphSettings?: Partial<GraphConfig['settings']>;
@@ -75,7 +92,7 @@ function buildTokenProviders(cards: Map<string, LiveCard>): Map<string, string> 
   for (const [cardId, card] of cards.entries()) {
     const bindings = card.provides && card.provides.length > 0
       ? card.provides
-      : [{ bindTo: cardId, src: `state.${cardId}` }];
+      : [{ bindTo: cardId, src: 'card_data' }];
     for (const binding of bindings) tokenToCardId.set(binding.bindTo, cardId);
   }
   return tokenToCardId;
@@ -92,6 +109,110 @@ function validateRequires(cards: Map<string, LiveCard>, changedCardId: string): 
     }
   }
 }
+
+/**
+ * LocalStorageService — browser-side persistence layer for card artifacts
+ * Mirrors CLI's file-based persistence (cards, computed artifacts, status)
+ * 
+ * Keys:
+ * - 'yf:cards:<id>' → card definitions (mirrors tmp/cards/<id>.json)
+ * - 'yf:runtime-out:cards:<id>' → computed artifacts (mirrors runtime-out/cards/<id>.computed.json)
+ * - 'yf:runtime-out:status' → board status snapshot (mirrors runtime-out/board-livegraph-status.json)
+ */
+export const LocalStorageService = {
+  // Keys
+  CARD_PREFIX: 'yf:cards:',
+  RUNTIME_OUT_PREFIX: 'yf:runtime-out:cards:',
+  STATUS_KEY: 'yf:runtime-out:status',
+
+  // Read/write cards (mirrors tmp/cards/<id>.json)
+  writeCard(cardId: string, cardObject: Record<string, unknown>): void {
+    try {
+      localStorage.setItem(this.CARD_PREFIX + cardId, JSON.stringify(cardObject));
+    } catch (e) {
+      console.warn(`Failed to write card ${cardId} to localStorage:`, e);
+    }
+  },
+  readCard(cardId: string): Record<string, unknown> | null {
+    try {
+      const raw = localStorage.getItem(this.CARD_PREFIX + cardId);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn(`Failed to read card ${cardId} from localStorage:`, e);
+      return null;
+    }
+  },
+  readAllCards(cardIds: string[]): Record<string, Record<string, unknown>> {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const id of cardIds) {
+      const card = this.readCard(id);
+      if (card) result[id] = card;
+    }
+    return result;
+  },
+
+  // Read/write computed artifacts (mirrors runtime-out/cards/<id>.computed.json)
+  writeComputedArtifact(artifact: Record<string, unknown>): void {
+    if (!artifact || !artifact.card_id) return;
+    try {
+      localStorage.setItem(
+        this.RUNTIME_OUT_PREFIX + String(artifact.card_id),
+        JSON.stringify(artifact)
+      );
+    } catch (e) {
+      console.warn(`Failed to write computed artifact ${artifact.card_id}:`, e);
+    }
+  },
+  readComputedArtifact(cardId: string): Record<string, unknown> | null {
+    try {
+      const raw = localStorage.getItem(this.RUNTIME_OUT_PREFIX + cardId);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn(`Failed to read computed artifact ${cardId}:`, e);
+      return null;
+    }
+  },
+  readAllComputedArtifacts(cardIds: string[]): Record<string, Record<string, unknown>> {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const id of cardIds) {
+      const artifact = this.readComputedArtifact(id);
+      if (artifact) result[id] = artifact;
+    }
+    return result;
+  },
+
+  // Read/write board status snapshot (mirrors runtime-out/board-livegraph-status.json)
+  writeStatusSnapshot(snapshot: Record<string, unknown>): void {
+    try {
+      localStorage.setItem(this.STATUS_KEY, JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn('Failed to write status snapshot to localStorage:', e);
+    }
+  },
+  readStatusSnapshot(): Record<string, unknown> | null {
+    try {
+      const raw = localStorage.getItem(this.STATUS_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn('Failed to read status snapshot from localStorage:', e);
+      return null;
+    }
+  },
+
+  // Clear all (useful for reset/demo)
+  clear(): void {
+    const keysToDelete: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith(this.CARD_PREFIX) || key.startsWith(this.RUNTIME_OUT_PREFIX) || key === this.STATUS_KEY)) {
+        keysToDelete.push(key);
+      }
+    }
+    for (const key of keysToDelete) {
+      localStorage.removeItem(key);
+    }
+  }
+};
 
 export function createBoardLiveGraphRuntime(
   input: LiveCard[] | LiveBoard,
@@ -115,6 +236,7 @@ export function createBoardLiveGraphRuntime(
   }
 
   const listeners = new Set<(update: BoardLiveGraphRuntimeUpdate) => void>();
+  const taskExecutor = options.taskExecutor;
   const sourceAdapters = options.sourceAdapters ?? {};
   const defaultSourceAdapter = options.defaultSourceAdapter;
 
@@ -146,15 +268,15 @@ export function createBoardLiveGraphRuntime(
       const sourcesData: Record<string, unknown> = {};
       if (card.sources && card.sources.length > 0) {
         const adapter = sourceAdapters[cardId] ?? defaultSourceAdapter;
-        if (adapter) {
-          const fetched = await adapter({ card, input: inputArgs });
-          if (fetched && typeof fetched === 'object') {
-            for (const src of card.sources) {
-              if (Object.prototype.hasOwnProperty.call(fetched, src.bindTo)) {
-                sourcesData[src.bindTo] = fetched[src.bindTo];
-              } else if (card.sources.length === 1) {
-                sourcesData[src.bindTo] = fetched;
-              }
+        const fetched = taskExecutor
+          ? await taskExecutor({ card, input: inputArgs })
+          : (adapter ? await adapter({ card, input: inputArgs }) : undefined);
+        if (fetched && typeof fetched === 'object') {
+          for (const src of card.sources) {
+            if (Object.prototype.hasOwnProperty.call(fetched, src.bindTo)) {
+              sourcesData[src.bindTo] = fetched[src.bindTo];
+            } else if (card.sources.length === 1) {
+              sourcesData[src.bindTo] = fetched;
             }
           }
         }
@@ -162,7 +284,7 @@ export function createBoardLiveGraphRuntime(
 
       const computeNode: ComputeNode = {
         id: card.id,
-        state: deepClone(card.state ?? {}),
+        card_data: deepClone(card.card_data ?? {}),
         requires: requiresData,
         sources: card.sources,
         compute: card.compute as ComputeNode['compute'] | undefined,
@@ -181,15 +303,16 @@ export function createBoardLiveGraphRuntime(
         }
       } else {
         resultData = {
-          ...(computeNode.state ?? {}),
+          ...(computeNode.card_data ?? {}),
           ...(computeNode.computed_values ?? {}),
           ...(computeNode._sourcesData ?? {}),
         };
       }
 
-      resultData.__cardState = computeNode.state ?? {};
+      resultData.__cardData = computeNode.card_data ?? {};
       if (computeNode.computed_values) resultData.__computed_values = computeNode.computed_values;
       if (Object.keys(sourcesData).length > 0) resultData.__sourcesData = sourcesData;
+      if (Object.keys(requiresData).length > 0) resultData.__requiresData = requiresData;
 
       graphRef?.resolveCallback(inputArgs.callbackToken, resultData);
       return 'task-initiated';
@@ -238,27 +361,38 @@ export function createBoardLiveGraphRuntime(
       const node = deepClone(baseCard);
       const data = live.state.tasks[cardId]?.data as Record<string, unknown> | undefined;
 
-      const mergedState = {
-        ...(node.state ?? {}),
-        ...(data && typeof data.__cardState === 'object' ? data.__cardState as Record<string, unknown> : {}),
+      const mergedCardData = {
+        ...(node.card_data ?? {}),
+        ...(data && typeof data.__cardData === 'object' ? data.__cardData as Record<string, unknown> : {}),
       };
+      node.card_data = mergedCardData;
       const runtimeState = live.state.tasks[cardId];
-      mergedState.status = runtimeState?.status === 'running' ? 'loading' : (runtimeState?.status ?? mergedState.status ?? 'fresh');
-      mergedState.lastRun = runtimeState?.lastUpdated ?? (mergedState.lastRun as string | undefined);
-      if (runtimeState?.status === 'failed' && runtimeState.error) {
-        mergedState.error = runtimeState.error;
+      if (runtimeState?.status != null || runtimeState?.lastUpdated != null || runtimeState?.error != null) {
+        node.card_data = {
+          ...node.card_data,
+          status: runtimeState.status === 'running' ? 'loading' : runtimeState.status,
+          lastRun: runtimeState.lastUpdated ?? node.card_data.lastRun,
+          ...(runtimeState.status === 'failed' && runtimeState.error ? { error: runtimeState.error } : {}),
+        };
       }
-
-      node.state = mergedState;
 
       if (data && typeof data.__computed_values === 'object') {
         (node as LiveCard & { computed_values?: Record<string, unknown> }).computed_values =
           data.__computed_values as Record<string, unknown>;
       }
 
+      // Populate runtime namespaces expected by the browser renderer/compute pass.
       if (data && typeof data.__sourcesData === 'object') {
-        (node as LiveCard & { source_values?: Record<string, unknown> }).source_values =
-          data.__sourcesData as Record<string, unknown>;
+        const renderNode = node as unknown as Record<string, unknown>;
+        renderNode._sourcesData = data.__sourcesData as Record<string, unknown>;
+        // live-cards.js _resolveBind uses plain deepGet, so sources.raw must live on node.sources.raw.
+        renderNode.sources = data.__sourcesData as Record<string, unknown>;
+      }
+
+      // Provide resolved requires data map for expressions like requires.orders.amount.
+      if (data && typeof data.__requiresData === 'object') {
+        const renderNode = node as unknown as Record<string, unknown>;
+        renderNode.requires = data.__requiresData as Record<string, unknown>;
       }
 
       out.push(node);
@@ -302,7 +436,7 @@ export function createBoardLiveGraphRuntime(
     patchCardState(cardId: string, patch: Record<string, unknown>): void {
       const card = cards.get(cardId);
       if (!card) throw new Error(`Card "${cardId}" not found`);
-      card.state = { ...(card.state ?? {}), ...patch };
+      card.card_data = { ...(card.card_data ?? {}), ...patch };
       graph.retrigger(cardId);
     },
     retrigger(cardId: string): void {
