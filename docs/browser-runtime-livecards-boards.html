@@ -106,11 +106,7 @@
           Requires <strong>JSONata</strong> to be loaded first (<code>&lt;script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"&gt;</code>).
           API: <code>CardCompute.run(node)</code>, <code>CardCompute.eval(expr, node)</code>, <code>CardCompute.resolve(node, path)</code>, <code>CardCompute.validate(node)</code>.
         </li>
-        <li>
-          <code>browser/ingest-board.js</code> — a specialized zero-I/O board component for <strong>batch ingest UIs</strong> (chat + file-upload + confirm/discard workflow).
-          All side-effects (fetch, SSE, POST) are delegated to the host via required callbacks (<code>onSend</code>, <code>onConfirm</code>, <code>onDiscard</code>).
-          Wraps a <code>LiveCard</code> engine internally; an existing engine can be passed via <code>opts.engine</code>.
-        </li>
+
         <li>
           <code>browser/live-cards.schema.json</code> — the live-cards JSON Schema contract, mirrored here so browser consumers can validate card definitions without a server-side dependency.
         </li>
@@ -206,8 +202,8 @@ const board = LiveCard.Board(engine, document.getElementById('board'), {
 
       <h3>Special Elements</h3>
       <ul>
-        <li><strong><code>chat</code></strong> — built-in chat interface (messages + input); commonly used in IngestBoard batch cards</li>
-        <li><strong><code>file-upload</code></strong> — drag-drop or click-to-upload zone; typically paired with chat</li>
+        <li><strong><code>chat</code></strong> — built-in chat interface (messages + input); supports disabled state via <code>card_data.features.chat.disabled</code></li>
+        <li><strong><code>file-upload</code></strong> — drag-drop or click-to-upload zone; typically paired with chat; supports disabled state via <code>card_data.features.files.disabled</code></li>
         <li><strong><code>actions</code></strong> — buttons or action controls (e.g., confirm, discard, retry); host-wired callbacks</li>
       </ul>
 
@@ -230,115 +226,53 @@ engine.registerRenderer('timeline', (data, el, elemDef, node) => {
     </section>
 
     <section class="card">
-      <h2>IngestBoard: Specialized Board for Interactive Batch File Upload</h2>
-      <p><code>IngestBoard</code> is a specialized <strong>Board</strong> component built for interactive batch document ingestion workflows. It displays multiple batches as a board grid; each batch is a <strong>LiveCard node</strong> with an integrated chat element for user interaction. All I/O is zero — the component is pure; all side-effects delegate to host callbacks.</p>
-
-      <h3>Architecture</h3>
-      <ul>
-        <li><strong>IngestBoard</strong> = a Board instance configured for batch workflows</li>
-        <li><strong>Each batch</strong> = one LiveCard node with <code>id</code>, <code>card_data</code>, <code>view</code>, and a built-in chat element</li>
-        <li><strong>Chat interaction</strong> = built into the card; user messages + host responses appear in the card itself</li>
-        <li><strong>Actions</strong> = confirm (trigger backend processing) and discard (remove the batch)</li>
-      </ul>
-      <p>Because each batch is a full LiveCard, it can also have <code>requires</code>, <code>provides</code>, <code>compute</code>, and <code>sources</code> — making batch cards as rich as any other card on a board.</p>
-
-      <h3>What Is a Batch?</h3>
-      <p>A <strong>batch</strong> is a logical grouping of items (documents, records, transactions, etc.) that arrive together and need interactive review or feedback before processing. Each batch is one LiveCard on the board. Examples:</p>
-      <ul>
-        <li>A batch of uploaded documents needing OCR validation, data extraction, or enrichment</li>
-        <li>A batch of user records needing quality review or entity resolution</li>
-        <li>A batch of transactions flagged for fraud review or compliance checks</li>
-        <li>A batch of form submissions needing clarification, correction, or approval</li>
-      </ul>
-      <p>Users interact with each batch card via chat (ask questions, provide feedback), upload additional files, confirm it's ready (triggering backend processing), or discard it. The board displays all batches in a grid; users work through them one by one or in parallel.</p>
-
-      <h3>API</h3>
-      <pre><code>const ib = IngestBoard.create(containerEl, {
-  onSend:    (batchId, { text, files }) => { /* host: upload + message */ },
-  onConfirm: (batchId) => { /* host: POST confirm → SSE → ib.setBatches() */ },
-  onDiscard: (batchId) => { /* host: POST discard → ib.setBatches() */ },
-  onViewChat: (batchId) => { /* optional: fetch chat history */ },
-  onRefresh: () => { /* optional: re-fetch batches */ },
-  engine: existingLiveCardEngine,  // optional; one created if omitted
-  markdown: markedFn,              // optional
-  sanitize: DOMPurifyFn,           // optional
-});
-
-// Render batches — each becomes a LiveCard on the board
-ib.setBatches(batchArray);
-
-// Get element APIs for a batch card
-ib.getChat(batchId);               // chat element API
-ib.getFileUpload(batchId);         // file-upload element API
-ib.getActions(batchId);            // actions element API
-ib.showChatModal(batchId, msgs);   // open Bootstrap modal with chat history
-
-// Cleanup
-ib.destroy();</code></pre>
-
-      <h3>Callback Flow</h3>
-      <ul>
-        <li><code>onSend</code> — required. User types message + attaches files in the batch card's chat. Host collects them, uploads to server, awaits response, then calls <code>ib.getChat(batchId).appendMessage('assistant', response)</code> to display the result in the card.</li>
-        <li><code>onConfirm</code> — required. User clicks "Confirm" on batch card. Host POSTs confirmation to server, subscribes to SSE updates, and as new state arrives calls <code>ib.setBatches(updatedArray)</code> to re-render the board with live updates.</li>
-        <li><code>onDiscard</code> — required. User clicks "Discard" on batch card. Host POSTs discard request, then calls <code>ib.setBatches(newArray)</code> to refresh the board (removing or updating the discarded batch).</li>
-      </ul>
-
-      <h3>Example: Document Ingest with Chat</h3>
-      <pre><code>// Batch schema — each is a LiveCard node
-const batches = [
-  {
-    id: 'batch-001',
-    meta: { title: 'Invoice Batch - 2025-04-15' },
-    card_data: { status: 'pending_review', document_count: 5 },
-    view: {
-      elements: [
-        { kind: 'text', label: 'Status', data: { bind: 'card_data.status' } },
-        { kind: 'text', label: 'Documents', data: { bind: 'card_data.document_count' } },
-        { kind: 'chat', label: 'Questions?' },  // Built-in chat element
-      ],
-    },
+      <h2>Disabling Chat and Files on a Card</h2>
+      <p>
+        Set <code>card_data.features.chat.disabled</code> or <code>card_data.features.files.disabled</code> to <code>true</code> to make a card read-only without hiding its history.
+        The engine reads these flags each time the modal is opened, so the host can toggle them at runtime by patching <code>card_data</code>.
+      </p>
+      <table class="table table-sm" style="font-size:.9rem">
+        <thead><tr><th>Field</th><th>Effect when <code>true</code></th><th>Still visible</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>card_data.features.chat.disabled</code></td>
+            <td>Chat input, attach button, and send button are disabled; placeholder text changes to &ldquo;Chat is disabled for this card.&rdquo;</td>
+            <td>Full message history, close button</td>
+          </tr>
+          <tr>
+            <td><code>card_data.features.files.disabled</code></td>
+            <td>Select&nbsp;files button, Upload button, and file input are disabled; dropzone gets <code>lc-disabled</code> styling (dimmed, no pointer)</td>
+            <td>Previously uploaded file list and all download links</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Minimal example &mdash; an inactive ingest card:</p>
+      <pre><code>{
+  "id": "ingest-batch-001",
+  "card": {
+    "meta": { "title": "Invoice Batch 2025-04-15" },
+    "view": {
+      "elements": [
+        { "kind": "text",        "label": "Status",    "data": { "bind": "card_data.status" } },
+        { "kind": "chat",        "label": "Chat" },
+        { "kind": "file-upload", "label": "Files" },
+        { "kind": "actions",     "label": "Actions",
+          "data": { "actions": [ { "label": "Confirm", "actionType": "confirm" } ] } }
+      ]
+    }
   },
-  // ... more batches
-];
-
-// Mount IngestBoard
-const ib = IngestBoard.create(document.getElementById('ingest-board'), {
-  onSend: async (batchId, { text, files }) => {
-    const chat = ib.getChat(batchId);
-    // 1. Upload files
-    const fileData = await uploadFiles(files);
-    // 2. POST message + files
-    const response = await fetch('/batch/' + batchId + '/message', {
-      method: 'POST',
-      body: JSON.stringify({ text, fileData }),
-    });
-    // 3. Append assistant response to the batch card's chat
-    chat.appendMessage('assistant', await response.text());
-  },
-  onConfirm: (batchId) => {
-    // 1. POST confirmation to server
-    // 2. Open EventSource to /batch/:id/confirm
-    // 3. Stream updates back to client
-    // 4. As updates arrive, call ib.setBatches() to refresh board
-    const eventSource = new EventSource('/batch/' + batchId + '/confirm');
-    eventSource.onmessage = (e) => {
-      const updated = JSON.parse(e.data);
-      ib.setBatches(updated);
-    };
-  },
-  onDiscard: async (batchId) => {
-    // POST and remove batch from board
-    await fetch('/batch/' + batchId, { method: 'DELETE' });
-    ib.setBatches([]);  // or fetch fresh list
-  },
-});
-
-// Render the batches
-ib.setBatches(batches);</code></pre>
+  "card_data": {
+    "status": "processed",
+    "features": {
+      "chat":  { "disabled": true },
+      "files": { "disabled": true }
+    }
+  }
+}</code></pre>
+      <p class="muted">The host activates or deactivates a card by patching <code>card_data.features.*</code> via <code>onPatchState</code>. No schema changes to <code>view</code> are needed &mdash; the same card definition covers both active and inactive states.</p>
     </section>
 
     <section class="card">
-      <h2>Related Docs</h2>
       <ul>
         <li><a href="index.html">Docs index</a></li>
         <li><a href="board-live-cards-cli.html">board-live-cards-cli reference</a></li>

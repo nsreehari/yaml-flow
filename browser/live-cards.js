@@ -71,6 +71,7 @@ var LiveCard = (function () {
       .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
       .lc-chat-modal-input-row { display:flex; align-items:center; gap:.375rem; }
       .lc-chat-modal-input-row .form-control { min-width:0; }
+      .lc-chat-modal-input-row textarea.form-control { resize:none; overflow-y:hidden; min-height:38px; max-height:120px; }
       .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.25rem .5rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; }
       .lc-chat-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:12000; display:none; align-items:center; justify-content:center; padding:1rem; }
       .lc-chat-modal-backdrop.lc-open { display:flex; }
@@ -266,7 +267,7 @@ var LiveCard = (function () {
         '        <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-attach title="Attach files" aria-label="Attach files">' +
         '          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>' +
         '        </button>' +
-        '        <input type="text" class="form-control" data-lc-chat-input placeholder="Type a message...">' +
+        '        <textarea class="form-control" data-lc-chat-input rows="1" placeholder="Type a message..."></textarea>' +
         '        <button type="button" class="btn btn-sm btn-primary" data-lc-chat-send aria-label="Send">' +
         '          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>' +
         '        </button>' +
@@ -286,11 +287,18 @@ var LiveCard = (function () {
       _chatModal.attachBtn = backdrop.querySelector('[data-lc-chat-attach]');
       _chatModal.closeBtn = backdrop.querySelector('[data-lc-chat-close]');
 
+      function resizeChatInput() {
+        if (!_chatModal.input) return;
+        _chatModal.input.style.height = 'auto';
+        _chatModal.input.style.height = Math.min(_chatModal.input.scrollHeight, 120) + 'px';
+      }
+
       const close = function () {
         _chatModal.currentNodeId = null;
         _chatModal.stagedFiles = [];
         _chatModal.staged.innerHTML = '';
         _chatModal.input.value = '';
+        resizeChatInput();
         _chatModal.backdrop.classList.remove('lc-open');
       };
 
@@ -326,6 +334,7 @@ var LiveCard = (function () {
         _appendModalChatMessage('user', text, files);
         _chatModal.input.value = '';
         _chatModal.stagedFiles = [];
+        resizeChatInput();
         renderStagedFiles();
 
         try {
@@ -358,12 +367,14 @@ var LiveCard = (function () {
         renderStagedFiles();
       });
       _chatModal.sendBtn.addEventListener('click', sendMessage);
+      _chatModal.input.addEventListener('input', resizeChatInput);
       _chatModal.input.addEventListener('keydown', function (evt) {
         if (evt.key === 'Enter' && !evt.shiftKey) {
           evt.preventDefault();
           sendMessage();
         }
       });
+      resizeChatInput();
       document.addEventListener('keydown', function (evt) {
         if (evt.key === 'Escape' && _chatModal.backdrop && _chatModal.backdrop.classList.contains('lc-open')) close();
       });
@@ -441,7 +452,15 @@ var LiveCard = (function () {
       _chatModal.title.textContent = 'Chat: ' + title;
       _chatModal.body.innerHTML = '<div class="text-muted small">Loading...</div>';
       _chatModal.backdrop.classList.add('lc-open');
-      _chatModal.input.focus();
+
+      // Disable input controls when card_data.features.chat.disabled is true
+      const chatDisabled = !!(node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
+      _chatModal.input.disabled = chatDisabled;
+      _chatModal.attachBtn.disabled = chatDisabled;
+      _chatModal.sendBtn.disabled = chatDisabled;
+      _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
+
+      if (!chatDisabled) _chatModal.input.focus();
       await _refreshModalChatHistory(nodeId);
     }
 
@@ -621,6 +640,14 @@ var LiveCard = (function () {
       _filesModal.currentNodeId = nodeId;
       _filesModal.title.textContent = 'Files: ' + title;
       _filesModal.backdrop.classList.add('lc-open');
+
+      // Disable upload controls when card_data.features.files.disabled is true
+      const filesDisabled = !!(node.card_data && node.card_data.features && node.card_data.features.files && node.card_data.features.files.disabled);
+      _filesModal.dropzone.classList.toggle('lc-disabled', filesDisabled);
+      _filesModal.attachBtn.disabled = filesDisabled;
+      _filesModal.uploadBtn.disabled = filesDisabled;
+      _filesModal.fileInput.disabled = filesDisabled;
+
       _refreshFilesModalList(nodeId);
 
       if (_filesModal.pollingTimer) clearInterval(_filesModal.pollingTimer);

@@ -46,10 +46,10 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Goal: map inference adapters into live-card workflows with clear boundaries
   - Notes: define when inference runs, how outputs bind, and failure semantics
 
-- [ ] 8. richer rendering for files/chats/etc. in live-cards
-  - Status: DECIDED
+- [x] 8. richer rendering for files/chats/etc. in live-cards
+  - Status: DONE
   - Goal: improve browser rendering and define server payload shape for these card types
-  - Notes: align on ingest-board model: board-level handlers for side effects (send/confirm/discard), card-level declarative element intent (chat/file-upload/actions); remove legacy ingest UI path and provide example boards for supported card varieties
+  - Notes: SVG icons, auto-grow textarea, enter-to-send, chat/files modal disabled state via card_data.features.chat.disabled / card_data.features.files.disabled; ingest-board.js retired (deprecated header added, removed from docs)
 
 - [x] 9. generalize portfolio-tracker into reusable demo simulation framework
   - Status: DONE
