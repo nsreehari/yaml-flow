@@ -301,4 +301,42 @@ describe('demo-server file upload + card list + download', () => {
     expect(dependentCard).toBeTruthy();
     expect(typeof dependentCard?.requires).toBe('object');
   }, 30000);
+
+  it('invokes .chat-handler after chat-send and demo handler writes an echo assistant reply', async () => {
+    const chatCardId = 'card-ex-actions';
+    const demoHandlerPath = path.join(repoRoot, 'examples', 'example-board', 'demo-chat-handler.js');
+
+    // Write .chat-handler to the board runtime directory so the server picks it up.
+    fs.mkdirSync(BOARD_DIR, { recursive: true });
+    const handlerCmd = `"${process.execPath}" "${demoHandlerPath}"`;
+    fs.writeFileSync(path.join(BOARD_DIR, '.chat-handler'), handlerCmd, 'utf-8');
+
+    // Ensure board is bootstrapped so the card chats dir exists.
+    await fetch(`${API_BASE}/bootstrap`);
+
+    const beforeNames = readChatFileNames(chatCardId);
+    const testMsg = 'hello from chat-handler test';
+
+    await sendChatMessage(chatCardId, testMsg);
+
+    // Poll for the assistant reply (handler is fire-and-forget, may take a moment).
+    const deadline = Date.now() + 8000;
+    let assistantFile: string | null = null;
+    while (Date.now() < deadline) {
+      const names = readChatFileNames(chatCardId);
+      const newNames = names.filter((n) => !beforeNames.includes(n));
+      assistantFile = newNames.find((n) => /-assistant\.txt$/.test(n)) ?? null;
+      if (assistantFile) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    expect(assistantFile).toBeTruthy();
+    const assistantPath = path.join(getCardChatsDir(chatCardId), assistantFile as string);
+    const reply = fs.readFileSync(assistantPath, 'utf-8');
+    expect(reply).toContain('Echoing');
+    expect(reply).toContain(testMsg);
+
+    // Cleanup: remove .chat-handler so it does not affect other tests.
+    try { fs.unlinkSync(path.join(BOARD_DIR, '.chat-handler')); } catch { /* best-effort */ }
+  }, 30000);
 });

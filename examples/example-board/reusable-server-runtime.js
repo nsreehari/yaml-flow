@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -142,6 +142,7 @@ export function createMultiBoardServerRuntime(options = {}) {
     const service = createExampleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
       corsHeaders,
+      boardId,
       boardDir: path.join(boardRoot, 'runtime'),
       cardsDir,
       tmpSurfaceDir: path.join(boardRoot, 'surface'),
@@ -290,6 +291,7 @@ export function createNodeHttpRuntimeHandler(runtime) {
 export function createExampleBoardServerRuntime(options = {}) {
   const apiBasePath = String(options.apiBasePath || '/api/example-board/server').replace(/\/$/, '');
   const corsHeaders = { ...DEFAULT_CORS_HEADERS, ...(options.corsHeaders || {}) };
+  const boardId = typeof options.boardId === 'string' && options.boardId ? options.boardId : '';
 
   const boardDir = path.resolve(
     options.boardDir || process.env.DEMO_BOARD_RUNTIME_DIR || path.join(os.tmpdir(), 'board-live-cards-demo-board')
@@ -864,8 +866,32 @@ export function createExampleBoardServerRuntime(options = {}) {
     };
   }
 
+  // Fire-and-forget invocation of .chat-handler after a user chat message is persisted.
+  // boardDir/.chat-handler must contain the handler command as a single-line string.
+  // Called with: --boardId <id> --cardId <id> --extra <json>
+  // extra: { chatDir: <abs path>, boardDir: <abs path>, lastChatFile: <filename> }
+  // Handler failures are logged and silently ignored — chat-send response is never affected.
+  function invokeChatHandler(cardId, chatsDir, lastChatFile) {
+    const handlerFile = path.join(boardDir, '.chat-handler');
+    if (!fs.existsSync(handlerFile)) return;
+    const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
+    if (!handlerCmd) return;
+    const extra = Buffer.from(JSON.stringify({ chatDir: chatsDir, boardDir, lastChatFile })).toString('base64');
+    try {
+      const proc = spawn(handlerCmd, ['--boardId', boardId, '--cardId', String(cardId), '--extraEncJson', extra], {
+        shell: true,
+        stdio: 'ignore',
+      });
+      proc.unref();
+      console.log(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
+    } catch (err) {
+      console.warn(`[chat-handler] spawn failed for card "${cardId}":`, (err && err.message) || String(err));
+    }
+  }
+
   function applyCardAction(cardId, actionType, payload) {
     const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
+    let chatHandlerArgs = null;
     persistCard(cardId, (card) => {
       const now = new Date().toISOString();
       const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data : {};
@@ -894,7 +920,9 @@ export function createExampleBoardServerRuntime(options = {}) {
           : [];
 
         if (text || files.length > 0) {
-          writeChatRecord(cardId, 'user', text, files);
+          const { chatsDir } = ensureCardStorageDirs(cardId);
+          const userRecord = writeChatRecord(cardId, 'user', text, files);
+          chatHandlerArgs = { chatsDir, lastChatFile: path.basename(userRecord.path) };
           for (const file of files) {
             if (!file || typeof file !== 'object') continue;
             const display = typeof file.name === 'string' ? file.name : 'file';
@@ -949,6 +977,10 @@ export function createExampleBoardServerRuntime(options = {}) {
 
       return card;
     });
+
+    if (chatHandlerArgs) {
+      invokeChatHandler(cardId, chatHandlerArgs.chatsDir, chatHandlerArgs.lastChatFile);
+    }
   }
 
   function json(res, status, payload) {
