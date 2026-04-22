@@ -67,6 +67,7 @@
         patchCard: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}`; },
         cardAction: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}/actions`; },
         cardFile: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}/files`; },
+        cardChats: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}/chats`; },
       };
 
       function localServerOrigins() {
@@ -244,6 +245,17 @@
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ actionType, payload: actionPayload || {} }),
             });
+          },
+          getChatMessages: async (id) => {
+            const res = await fetchServer(SERVER_PATHS.cardChats(id));
+            if (!res.ok) return [];
+            const payload = await res.json();
+            const items = Array.isArray(payload && payload.messages) ? payload.messages : [];
+            return items.map((m) => ({
+              role: m && typeof m.role === 'string' ? m.role : 'system',
+              text: m && typeof m.text === 'string' ? m.text : '',
+              files: [],
+            }));
           },
         });
 

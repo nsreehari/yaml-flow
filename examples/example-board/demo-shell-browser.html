@@ -405,12 +405,12 @@
           const artifact = cardRuntimeById[card.id];
           if (!artifact || typeof artifact !== 'object') return false;
           if (card.sources && card.sources.length > 0) {
-            if (!(artifact.sources_data && typeof artifact.sources_data === 'object' && !Array.isArray(artifact.sources_data))) {
+            if (!(artifact.fetched_sources && typeof artifact.fetched_sources === 'object' && !Array.isArray(artifact.fetched_sources))) {
               return false;
             }
           }
           if (card.requires && card.requires.length > 0) {
-            if (!(artifact.requires_data && typeof artifact.requires_data === 'object' && !Array.isArray(artifact.requires_data))) {
+            if (!(artifact.requires && typeof artifact.requires === 'object' && !Array.isArray(artifact.requires))) {
               return false;
             }
           }
@@ -701,6 +701,14 @@
           onRefresh: (id) => runtime.retrigger(id),
           onAction: (id, actionType, payload) => {
             void handleActionInBrowserRuntime(id, actionType, payload || {});
+          },
+          getChatMessages: (id) => {
+            const items = readPersistedChatMessages(id);
+            return items.map((m) => ({
+              role: m && typeof m.role === 'string' ? m.role : 'system',
+              text: m && typeof m.text === 'string' ? m.text : '',
+              files: Array.isArray(m && m.files) ? m.files : [],
+            }));
           },
         });
 

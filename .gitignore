@@ -30,3 +30,4 @@ npm-debug.log*
 .env.local
 .demo-surface/
 runtime-out/
+examples/cli/step-machine-cli/portfolio-tracker/runtime/

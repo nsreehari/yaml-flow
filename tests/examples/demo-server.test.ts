@@ -149,6 +149,12 @@ async function getCardFromBootstrap(cardId: string): Promise<Record<string, unkn
   return card as Record<string, unknown>;
 }
 
+async function getBootstrapPayload(): Promise<Record<string, unknown>> {
+  const boot = await fetch(`${API_BASE}/bootstrap`);
+  expect(boot.ok).toBe(true);
+  return await boot.json() as Record<string, unknown>;
+}
+
 function getCardFiles(card: Record<string, unknown>) {
   const cardData = card.card_data as Record<string, unknown> | undefined;
   return Array.isArray(cardData?.files) ? cardData.files as Array<Record<string, unknown>> : [];
@@ -281,5 +287,21 @@ describe('demo-server file upload + card list + download', () => {
     const newestPath = path.join(getCardChatsDir(chatCardId), newestSystem as string);
     const chatText = fs.readFileSync(newestPath, 'utf8');
     expect(chatText).toContain(`file uploaded: ${originalName} as ${uploaded.stored_name}`);
+  }, 30000);
+
+  it('publishes runtime payload with fetched_sources, computed_values, card_data, and requires', async () => {
+    const payload = await getBootstrapPayload();
+    const cardRuntimeById = payload.cardRuntimeById as Record<string, Record<string, unknown>> | undefined;
+    expect(cardRuntimeById && typeof cardRuntimeById === 'object').toBe(true);
+
+    const sourceCard = cardRuntimeById?.['card-ex-source'];
+    expect(sourceCard).toBeTruthy();
+    expect(typeof sourceCard?.card_data).toBe('object');
+    expect(typeof sourceCard?.computed_values).toBe('object');
+    expect(typeof sourceCard?.fetched_sources).toBe('object');
+
+    const dependentCard = cardRuntimeById?.['card-ex-table'];
+    expect(dependentCard).toBeTruthy();
+    expect(typeof dependentCard?.requires).toBe('object');
   }, 30000);
 });

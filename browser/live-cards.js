@@ -14,7 +14,7 @@
 // Uses CardCompute (card-compute.js) for declarative compute expressions.
 //
 // API:
-//   const engine = LiveCard.init({ resolve, onPatch, onPatchState, onRefresh, onChat, markdown, sanitize, chartLib });
+//   const engine = LiveCard.init({ resolve, onPatch, onPatchState, onRefresh, onAction, getChatMessages, markdown, sanitize, chartLib });
 //   engine.render(node, el, opts?)     — render a card node into a DOM element
 //   engine.update(nodeId, patch)       — in-place update (status, re-render)
 //   engine.destroy(nodeId)             — tear down one node
@@ -70,6 +70,14 @@ var LiveCard = (function () {
       .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; }
       .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
       .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.25rem .5rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; }
+      .lc-chat-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:12000; display:none; align-items:center; justify-content:center; padding:1rem; }
+      .lc-chat-modal-backdrop.lc-open { display:flex; }
+      .lc-chat-modal { width:min(760px,96vw); max-height:88vh; background:#fff; border-radius:.5rem; box-shadow:0 18px 50px rgba(0,0,0,.28); display:flex; flex-direction:column; overflow:hidden; }
+      .lc-chat-modal-header { display:flex; align-items:center; gap:.5rem; justify-content:space-between; padding:.625rem .875rem; border-bottom:1px solid var(--bs-border-color,#dee2e6); }
+      .lc-chat-modal-title { margin:0; font-size:.95rem; font-weight:600; }
+      .lc-chat-modal-body { padding:.625rem .875rem; overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); }
+      .lc-chat-modal-footer { padding:.625rem .875rem; border-top:1px solid var(--bs-border-color,#dee2e6); background:#fff; }
+      .lc-chat-inline-meta { margin-top:.25rem; font-size:.75rem; color:var(--bs-secondary,#6c757d); }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -179,12 +187,27 @@ var LiveCard = (function () {
       sanitize:     config.sanitize     || null,
       chartLib:     config.chartLib     || null,
       onAction:     config.onAction     || function () {},
+      getChatMessages: config.getChatMessages || null,
     };
 
     const _cleanup = {};   // nodeId → { ac, timers, charts, unsubs }
     const _subs = {};      // nodeId → Set<callback>
     const _renderers = {}; // kind → fn
     const _nodeEls = {};   // nodeId → { container, resultEl, uid }
+    const _chatModal = {
+      backdrop: null,
+      title: null,
+      body: null,
+      input: null,
+      fileInput: null,
+      staged: null,
+      sendBtn: null,
+      attachBtn: null,
+      closeBtn: null,
+      currentNodeId: null,
+      stagedFiles: [],
+      loading: false,
+    };
 
     // ---- Helpers ----
 
@@ -202,6 +225,199 @@ var LiveCard = (function () {
     function _runCompute() {
       // Runtime payload is authoritative; UI never recomputes derived values.
       return Promise.resolve();
+    }
+
+    function _ensureChatModal() {
+      if (_chatModal.backdrop) return;
+
+      const backdrop = document.createElement('div');
+      backdrop.className = 'lc-chat-modal-backdrop';
+      backdrop.innerHTML = '' +
+        '<div class="lc-chat-modal" role="dialog" aria-modal="true" aria-label="Card chat">' +
+        '  <div class="lc-chat-modal-header">' +
+        '    <h5 class="lc-chat-modal-title">Chat</h5>' +
+        '    <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-close>Close</button>' +
+        '  </div>' +
+        '  <div class="lc-chat-modal-body" data-lc-chat-body></div>' +
+        '  <div class="lc-chat-modal-footer">' +
+        '    <div data-lc-chat-staged class="small mb-2"></div>' +
+        '    <div class="d-flex gap-1 align-items-center">' +
+        '      <input type="file" class="d-none" data-lc-chat-file multiple>' +
+        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-attach title="Attach files">Attach</button>' +
+        '      <input type="text" class="form-control form-control-sm" data-lc-chat-input placeholder="Type a message...">' +
+        '      <button type="button" class="btn btn-sm btn-primary" data-lc-chat-send>Send</button>' +
+        '    </div>' +
+        '  </div>' +
+        '</div>';
+
+      document.body.appendChild(backdrop);
+      _chatModal.backdrop = backdrop;
+      _chatModal.title = backdrop.querySelector('.lc-chat-modal-title');
+      _chatModal.body = backdrop.querySelector('[data-lc-chat-body]');
+      _chatModal.input = backdrop.querySelector('[data-lc-chat-input]');
+      _chatModal.fileInput = backdrop.querySelector('[data-lc-chat-file]');
+      _chatModal.staged = backdrop.querySelector('[data-lc-chat-staged]');
+      _chatModal.sendBtn = backdrop.querySelector('[data-lc-chat-send]');
+      _chatModal.attachBtn = backdrop.querySelector('[data-lc-chat-attach]');
+      _chatModal.closeBtn = backdrop.querySelector('[data-lc-chat-close]');
+
+      const close = function () {
+        _chatModal.currentNodeId = null;
+        _chatModal.stagedFiles = [];
+        _chatModal.staged.innerHTML = '';
+        _chatModal.input.value = '';
+        _chatModal.backdrop.classList.remove('lc-open');
+      };
+
+      function renderStagedFiles() {
+        if (!_chatModal.stagedFiles.length) {
+          _chatModal.staged.innerHTML = '';
+          return;
+        }
+        _chatModal.staged.innerHTML = _chatModal.stagedFiles.map(function (f, i) {
+          return '<span class="badge text-bg-light border me-1 mb-1">' + _esc(f.name || 'file') +
+            ' <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1" data-lc-rm-file="' + i + '">&times;</button></span>';
+        }).join('');
+        _chatModal.staged.querySelectorAll('[data-lc-rm-file]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            const idx = parseInt(btn.getAttribute('data-lc-rm-file') || '-1', 10);
+            if (idx >= 0) _chatModal.stagedFiles.splice(idx, 1);
+            renderStagedFiles();
+          });
+        });
+      }
+
+      async function sendMessage() {
+        if (_chatModal.loading || !_chatModal.currentNodeId) return;
+        const nodeId = _chatModal.currentNodeId;
+        const text = (_chatModal.input.value || '').trim();
+        const files = _chatModal.stagedFiles.slice();
+        if (!text && !files.length) return;
+
+        _chatModal.loading = true;
+        _chatModal.sendBtn.disabled = true;
+        _chatModal.attachBtn.disabled = true;
+
+        _appendModalChatMessage('user', text, files);
+        _chatModal.input.value = '';
+        _chatModal.stagedFiles = [];
+        renderStagedFiles();
+
+        try {
+          await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text, files }));
+          await _refreshModalChatHistory(nodeId);
+        } catch (err) {
+          _appendModalChatMessage('system', 'Failed to send message: ' + String((err && err.message) || err), []);
+        } finally {
+          _chatModal.loading = false;
+          _chatModal.sendBtn.disabled = false;
+          _chatModal.attachBtn.disabled = false;
+        }
+      }
+
+      _chatModal.closeBtn.addEventListener('click', close);
+      backdrop.addEventListener('click', function (evt) {
+        if (evt.target === backdrop) close();
+      });
+      _chatModal.attachBtn.addEventListener('click', function () {
+        _chatModal.fileInput.click();
+      });
+      _chatModal.fileInput.addEventListener('change', function (evt) {
+        const files = evt.target && evt.target.files ? Array.from(evt.target.files) : [];
+        for (const f of files) {
+          if (!_chatModal.stagedFiles.find(function (x) { return x.name === f.name && x.size === f.size && x.lastModified === f.lastModified; })) {
+            _chatModal.stagedFiles.push(f);
+          }
+        }
+        evt.target.value = '';
+        renderStagedFiles();
+      });
+      _chatModal.sendBtn.addEventListener('click', sendMessage);
+      _chatModal.input.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Enter' && !evt.shiftKey) {
+          evt.preventDefault();
+          sendMessage();
+        }
+      });
+      document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && _chatModal.backdrop && _chatModal.backdrop.classList.contains('lc-open')) close();
+      });
+    }
+
+    function _normalizeChatMessages(rawMessages) {
+      const list = Array.isArray(rawMessages) ? rawMessages : [];
+      return list.map(function (msg) {
+        if (!msg || typeof msg !== 'object') return null;
+        const role = typeof msg.role === 'string' ? msg.role : 'system';
+        const text = typeof msg.text === 'string'
+          ? msg.text
+          : (typeof msg.message === 'string' ? msg.message : '');
+        const files = Array.isArray(msg.files) ? msg.files : [];
+        return { role: role.toLowerCase(), text, files };
+      }).filter(Boolean);
+    }
+
+    function _appendModalChatMessage(role, text, files) {
+      _ensureChatModal();
+      if (!_chatModal.body) return;
+
+      const bubble = document.createElement('div');
+      const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
+      const roleClass = normalizedRole === 'user'
+        ? 'lc-chat-bubble-user'
+        : (normalizedRole === 'assistant' ? 'lc-chat-bubble-assistant' : 'lc-chat-bubble-system');
+      bubble.className = 'lc-chat-bubble ' + roleClass;
+      bubble.textContent = text || '';
+
+      if (Array.isArray(files) && files.length) {
+        const meta = document.createElement('div');
+        meta.className = 'lc-chat-inline-meta';
+        meta.textContent = files.map(function (f) {
+          if (!f) return 'file';
+          return typeof f === 'string' ? f : (f.name || 'file');
+        }).join(', ');
+        bubble.appendChild(meta);
+      }
+
+      _chatModal.body.appendChild(bubble);
+      _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
+    }
+
+    async function _refreshModalChatHistory(nodeId) {
+      if (_chatModal.currentNodeId !== nodeId) return;
+
+      const node = cfg.resolve(nodeId);
+      let messages = [];
+      if (typeof cfg.getChatMessages === 'function') {
+        try {
+          messages = await Promise.resolve(cfg.getChatMessages(nodeId));
+        } catch {
+          messages = [];
+        }
+      } else if (node && node.card_data && Array.isArray(node.card_data.messages)) {
+        messages = node.card_data.messages;
+      }
+
+      const normalized = _normalizeChatMessages(messages);
+      _chatModal.body.innerHTML = '';
+      if (!normalized.length) {
+        _chatModal.body.innerHTML = '<div class="text-muted small">No messages yet.</div>';
+        return;
+      }
+      normalized.forEach(function (m) { _appendModalChatMessage(m.role, m.text, m.files); });
+    }
+
+    async function openChatModal(nodeId) {
+      _ensureChatModal();
+      const node = cfg.resolve(nodeId);
+      if (!node) return;
+      const title = (node.card && node.card.meta && node.card.meta.title) || node.id;
+      _chatModal.currentNodeId = nodeId;
+      _chatModal.title.textContent = 'Chat: ' + title;
+      _chatModal.body.innerHTML = '<div class="text-muted small">Loading...</div>';
+      _chatModal.backdrop.classList.add('lc-open');
+      _chatModal.input.focus();
+      await _refreshModalChatHistory(nodeId);
     }
 
     function _resolveBind(node, bind) {
@@ -1142,8 +1358,9 @@ var LiveCard = (function () {
       if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
         h += `<span class="badge bg-danger small" title="${_esc(node.card_data.error)}">Error</span>`;
       }
+      h += `<button class="btn btn-sm btn-outline-primary ms-auto" id="${uid}-chat-open" title="Open chat">Chat</button>`;
       if (showRefresh) {
-        h += `<button class="btn btn-sm btn-outline-secondary ms-auto" id="${uid}-refresh" title="Refresh">`;
+        h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-refresh" title="Refresh">`;
         h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>';
         h += '</button>';
       }
@@ -1156,17 +1373,6 @@ var LiveCard = (function () {
       if (features.notes && opts.showNotes !== false) {
         h += `<details class="mt-2"><summary class="small fw-medium">Notes</summary>`;
         h += `<textarea class="form-control form-control-sm mt-1" id="${uid}-notes" rows="3" placeholder="Add notes...">${_esc((node.card_data && node.card_data._notes) || '')}</textarea></details>`;
-      }
-
-      // Chat section (feature toggle)
-      if (features.chat && cfg.onChat && opts.showChat !== false) {
-        h += `<details class="mt-2"><summary class="small fw-medium">Chat</summary>`;
-        h += `<div class="lc-chat-messages" id="${uid}-chat"></div>`;
-        h += `<div class="input-group input-group-sm mt-1">`;
-        h += `<input type="text" class="form-control" id="${uid}-chatInput" placeholder="Ask about this card...">`;
-        h += `<button class="btn btn-outline-primary" id="${uid}-chatSend">`;
-        h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
-        h += '</button></div></details>';
       }
 
       h += '</div>';
@@ -1194,6 +1400,14 @@ var LiveCard = (function () {
         }, { signal });
       }
 
+      const chatBtn = document.getElementById(uid + '-chat-open');
+      if (chatBtn) {
+        chatBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openChatModal(node.id);
+        }, { signal });
+      }
+
       // ---- Wire notes ----
       const notesEl = document.getElementById(uid + '-notes');
       if (notesEl) {
@@ -1206,23 +1420,6 @@ var LiveCard = (function () {
             cfg.onPatch(node.id, { _notes: notesEl.value });
           }, 800);
           cleanup.timers.push(nTimer);
-        }, { signal });
-      }
-
-      // ---- Wire chat ----
-      const chatInput = document.getElementById(uid + '-chatInput');
-      const chatSend = document.getElementById(uid + '-chatSend');
-      if (chatInput && chatSend && cfg.onChat) {
-        const send = () => {
-          const msg = chatInput.value.trim();
-          if (!msg) return;
-          chatInput.value = '';
-          appendChatMessage(node.id, 'user', msg);
-          cfg.onChat(node.id, msg);
-        };
-        chatSend.addEventListener('click', send, { signal });
-        chatInput.addEventListener('keydown', e => {
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
         }, { signal });
       }
 
@@ -1297,15 +1494,8 @@ var LiveCard = (function () {
     // ===========================================================================
 
     function appendChatMessage(nodeId, role, text) {
-      const info = _nodeEls[nodeId];
-      if (!info) return;
-      const chatEl = info.container.querySelector('.lc-chat-messages');
-      if (!chatEl) return;
-      const msg = document.createElement('div');
-      msg.className = `lc-chat-msg small ${role === 'user' ? 'lc-chat-user' : 'lc-chat-assistant'}`;
-      msg.innerHTML = role === 'assistant' ? _renderMd(text) : _esc(text);
-      chatEl.appendChild(msg);
-      chatEl.scrollTop = chatEl.scrollHeight;
+      if (_chatModal.currentNodeId !== nodeId) return;
+      _appendModalChatMessage(role, text, []);
     }
 
     // ===========================================================================
@@ -1329,6 +1519,7 @@ var LiveCard = (function () {
       notify,
       subscribe,
       appendChatMessage,
+      openChatModal,
       getElement,
       registerRenderer(name, fn) { _renderers[name] = fn; },
       renderers: _renderers,
@@ -1503,15 +1694,15 @@ var LiveCard = (function () {
 
       const sourcesSection = document.createElement('div');
       sourcesSection.className = 'mb-4';
-      sourcesSection.innerHTML = '<h6 class="fw-semibold mb-2">Sources Data (Read-only)</h6>';
-      const sourcesData = node.sources_data || {};
+      sourcesSection.innerHTML = '<h6 class="fw-semibold mb-2">Fetched Sources (Read-only)</h6>';
+      const sourcesData = node.fetched_sources || {};
       sourcesSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(sourcesData, null, 2))}</pre>`;
       body.appendChild(sourcesSection);
 
       const requiresSection = document.createElement('div');
       requiresSection.className = 'mb-4';
-      requiresSection.innerHTML = '<h6 class="fw-semibold mb-2">Requires Data (Read-only)</h6>';
-      const requiresData = node.requires_data || {};
+      requiresSection.innerHTML = '<h6 class="fw-semibold mb-2">Requires (Read-only)</h6>';
+      const requiresData = node.requires || {};
       requiresSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(requiresData, null, 2))}</pre>`;
       body.appendChild(requiresSection);
 
@@ -1545,8 +1736,8 @@ var LiveCard = (function () {
           const fixedId = node.id;
           const preservedRuntime = {
             card_data: node.card_data,
-            sources_data: node.sources_data,
-            requires_data: node.requires_data,
+            fetched_sources: node.fetched_sources,
+            requires: node.requires,
             computed_values: node.computed_values,
             runtime_state: node.runtime_state,
             data_objects: node.data_objects,

@@ -203,6 +203,34 @@ function clearChatRecords(cardId) {
   clearDirContents(chatsDir);
 }
 
+function readChatRecords(cardId) {
+  const { chatsDir } = ensureCardStorageDirs(cardId);
+  if (!fs.existsSync(chatsDir)) return [];
+
+  const out = [];
+  for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const name = entry.name;
+    const parsed = String(name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
+    const serial = parsed ? parseInt(parsed[1], 10) : 0;
+    const role = parsed ? parsed[2].toLowerCase() : 'system';
+    const filePath = path.join(chatsDir, name);
+    const text = fs.readFileSync(filePath, 'utf-8');
+    const stat = fs.statSync(filePath);
+    out.push({
+      serial,
+      role,
+      text,
+      path: `${cardId}/chats/${name}`,
+      stored_name: name,
+      updated_at: new Date(stat.mtimeMs).toISOString(),
+    });
+  }
+
+  out.sort((a, b) => a.serial - b.serial || a.stored_name.localeCompare(b.stored_name));
+  return out;
+}
+
 function persistUploadedFile(cardId, requestedName, contentType, buffer) {
   const { filesDir } = ensureCardStorageDirs(cardId);
   const displayName = normalizeDisplayFileName(requestedName);
@@ -360,7 +388,7 @@ function buildPublishedRuntimePayload() {
       card_data: rawArtifact.card_data && typeof rawArtifact.card_data === 'object' ? rawArtifact.card_data : (cardDefinition.card_data && typeof cardDefinition.card_data === 'object' ? cardDefinition.card_data : {}),
       computed_values: rawArtifact.computed_values && typeof rawArtifact.computed_values === 'object' ? rawArtifact.computed_values : {},
       fetched_sources: sourcesFromFiles,
-      requires_data: rawArtifact.requires_data && typeof rawArtifact.requires_data === 'object' ? rawArtifact.requires_data : {},
+      requires: rawArtifact.requires && typeof rawArtifact.requires === 'object' ? rawArtifact.requires : {},
     };
   }
 
@@ -768,6 +796,14 @@ async function handleApi(req, res) {
       const body = await readJsonBody(req);
       applyCardAction(cardId, body && body.actionType, body && body.payload);
       json(res, 200, { ok: true });
+      return;
+    }
+
+    const cardChatsMatch = p.match(/^\/api\/example-board\/server\/cards\/([^/]+)\/chats$/);
+    if (method === 'GET' && cardChatsMatch) {
+      bootstrapBoard();
+      const cardId = decodeURIComponent(cardChatsMatch[1]);
+      json(res, 200, { ok: true, messages: readChatRecords(cardId) });
       return;
     }
 

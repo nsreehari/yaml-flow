@@ -8,18 +8,21 @@
   "view": {
     "elements": [
       {
-        "id": "chat",
-        "kind": "chat",
-        "label": "Discuss This Board",
+        "id": "chat-note",
+        "kind": "markdown",
+        "label": "Card Chat",
         "data": {
-          "bind": "card_data.messages",
-          "fileAttach": true,
-          "fileAccept": [".txt", ".md", ".json", ".png", ".jpg"],
-          "placeholder": "Type a message or attach files..."
+          "bind": "computed_values.note"
         }
       }
     ],
     "layout": { "board": { "col": 6, "order": 12 }, "canvas": { "x": 980, "y": 530, "w": 360, "h": 240 } }
   },
+  "compute": [
+    {
+      "bindTo": "note",
+      "expr": "'Use the Chat button on any card header to open the chat window for that card.'"
+    }
+  ],
   "card_data": {}
 }
