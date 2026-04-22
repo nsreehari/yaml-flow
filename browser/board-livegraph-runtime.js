@@ -183,11 +183,21 @@ var BoardLiveGraph = (function (exports) {
     }
     return { ok: errors.length === 0, errors };
   }
+  function enrichSources(sources, context) {
+    if (!sources || sources.length === 0) return [];
+    return sources.map((src) => ({
+      ...src,
+      _requires: context.requires ?? {},
+      _sourcesData: context.sourcesData ?? {},
+      _computed_values: context.computed_values ?? {}
+    }));
+  }
   var CardCompute = {
     run,
     eval: evalExpr,
     resolve,
-    validate: validateNode
+    validate: validateNode,
+    enrichSources
   };
 
   // src/event-graph/constants.ts
@@ -1261,8 +1271,11 @@ var BoardLiveGraph = (function (exports) {
         const requiresData = {};
         for (const token of card.requires ?? []) {
           const upstream = inputArgs.state[token];
-          if (!upstream) continue;
-          requiresData[token] = Object.prototype.hasOwnProperty.call(upstream, token) ? upstream[token] : upstream;
+          if (!upstream || typeof upstream !== "object") continue;
+          const providesData2 = upstream.provides_data;
+          if (!providesData2 || typeof providesData2 !== "object") continue;
+          if (!Object.prototype.hasOwnProperty.call(providesData2, token)) continue;
+          requiresData[token] = providesData2[token];
         }
         const sourcesData = {};
         if (card.sources && card.sources.length > 0) {
@@ -1289,23 +1302,25 @@ var BoardLiveGraph = (function (exports) {
         if (computeNode.compute && computeNode.compute.length > 0) {
           await CardCompute.run(computeNode, { sourcesData });
         }
-        let resultData;
+        const providesData = {};
         if (card.provides && card.provides.length > 0) {
-          resultData = {};
           for (const { bindTo, src } of card.provides) {
-            resultData[bindTo] = CardCompute.resolve(computeNode, src);
+            providesData[bindTo] = CardCompute.resolve(computeNode, src);
           }
         } else {
-          resultData = {
+          providesData[card.id] = {
             ...computeNode.card_data ?? {},
             ...computeNode.computed_values ?? {},
             ...computeNode._sourcesData ?? {}
           };
         }
-        resultData.__cardData = computeNode.card_data ?? {};
-        if (computeNode.computed_values) resultData.__computed_values = computeNode.computed_values;
-        if (Object.keys(sourcesData).length > 0) resultData.__sourcesData = sourcesData;
-        if (Object.keys(requiresData).length > 0) resultData.__requiresData = requiresData;
+        const resultData = {
+          provides_data: providesData,
+          card_data: computeNode.card_data ?? {},
+          computed_values: computeNode.computed_values ?? {},
+          fetched_sources: sourcesData,
+          requires: requiresData
+        };
         graphRef?.resolveCallback(inputArgs.callbackToken, resultData);
         return "task-initiated";
       };
@@ -1345,35 +1360,28 @@ var BoardLiveGraph = (function (exports) {
       const live = graph.getState();
       const out = [];
       for (const [cardId, baseCard] of cards.entries()) {
-        const node = deepClone(baseCard);
         const data = live.state.tasks[cardId]?.data;
-        const mergedCardData = {
-          ...node.card_data ?? {},
-          ...data && typeof data.__cardData === "object" ? data.__cardData : {}
-        };
-        node.card_data = mergedCardData;
         const runtimeState = live.state.tasks[cardId];
-        if (runtimeState?.status != null || runtimeState?.lastUpdated != null || runtimeState?.error != null) {
-          node.card_data = {
-            ...node.card_data,
-            status: runtimeState.status === "running" ? "loading" : runtimeState.status,
-            lastRun: runtimeState.lastUpdated ?? node.card_data.lastRun,
-            ...runtimeState.status === "failed" && runtimeState.error ? { error: runtimeState.error } : {}
-          };
-        }
-        if (data && typeof data.__computed_values === "object") {
-          node.computed_values = data.__computed_values;
-        }
-        if (data && typeof data.__sourcesData === "object") {
-          const renderNode = node;
-          renderNode._sourcesData = data.__sourcesData;
-          // Keep sources definition from card; don't overwrite with runtime data
-        }
-        if (data && typeof data.__requiresData === "object") {
-          const renderNode = node;
-          renderNode.requires = data.__requiresData;
-        }
-        out.push(node);
+        const mergedCardData = {
+          ...baseCard.card_data ?? {},
+          ...data && typeof data.card_data === "object" ? data.card_data : {}
+        };
+        const cardStatus = runtimeState?.status === "running" ? "loading" : runtimeState?.status;
+        const cardDataForView = {
+          ...mergedCardData,
+          ...cardStatus ? { status: cardStatus } : {},
+          ...runtimeState?.lastUpdated ? { lastRun: runtimeState.lastUpdated } : {},
+          ...runtimeState?.status === "failed" && runtimeState.error ? { error: runtimeState.error } : {}
+        };
+        out.push({
+          id: cardId,
+          card: deepClone(baseCard),
+          card_data: cardDataForView,
+          fetched_sources: data && typeof data.fetched_sources === "object" ? deepClone(data.fetched_sources) : {},
+          requires: data && typeof data.requires === "object" ? deepClone(data.requires) : {},
+          computed_values: data && typeof data.computed_values === "object" ? deepClone(data.computed_values) : {},
+          runtime_state: runtimeState ? deepClone(runtimeState) : {}
+        });
       }
       return out;
     }

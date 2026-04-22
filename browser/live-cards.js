@@ -64,38 +64,30 @@ var LiveCard = (function () {
       .lc-staged-file { display:flex; align-items:center; gap:.5rem; padding:.125rem 0; }
       .lc-chat-el { display:flex; flex-direction:column; }
       .lc-chat-body { flex:1; overflow-y:auto; max-height:300px; padding:.25rem; }
-      .lc-chat-bubble { padding:.375rem .625rem; margin:.25rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; }
+      .lc-chat-bubble { padding:.5rem .75rem; margin:.375rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; line-height:1.4; }
       .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; }
       .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); }
       .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; }
       .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
+      .lc-chat-modal-input-row { display:flex; align-items:center; gap:.375rem; }
+      .lc-chat-modal-input-row .form-control { min-width:0; }
       .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.25rem .5rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; }
       .lc-chat-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:12000; display:none; align-items:center; justify-content:center; padding:1rem; }
       .lc-chat-modal-backdrop.lc-open { display:flex; }
-      .lc-chat-modal-dialog { width:min(760px,96vw); margin:0; }
-      .lc-chat-modal-dialog .modal-content { max-height:88vh; display:flex; flex-direction:column; background:var(--bs-body-bg,#fff); border:1px solid var(--bs-border-color,#dee2e6); }
-      .lc-chat-modal-dialog .modal-header,
-      .lc-chat-modal-dialog .modal-footer { background:var(--bs-body-bg,#fff); }
-      .lc-chat-modal-body { overflow:auto; min-height:180px; max-height:52vh; background:var(--bs-light,#f8f9fa); padding:.75rem; }
-      .lc-chat-inline-meta { margin-top:.25rem; font-size:.75rem; color:var(--bs-secondary,#6c757d); }
+      .lc-chat-modal-backdrop .modal-dialog { max-height:90vh; }
+      .lc-chat-modal-backdrop .modal-content { display:flex; flex-direction:column; max-height:90vh; }
+      .lc-chat-modal-backdrop .modal-body { overflow-y:auto; flex:1; min-height:200px; padding:1rem; }
       .lc-files-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:11950; display:none; align-items:center; justify-content:center; padding:1rem; }
       .lc-files-modal-backdrop.lc-open { display:flex; }
-      .lc-files-modal-dialog { width:min(820px,96vw); margin:0; }
-      .lc-files-modal-dialog .modal-content { max-height:88vh; display:flex; flex-direction:column; background:var(--bs-body-bg,#fff); border:1px solid var(--bs-border-color,#dee2e6); }
-      .lc-files-modal-dialog .modal-header,
-      .lc-files-modal-dialog .modal-footer { background:var(--bs-body-bg,#fff); }
-      .lc-files-modal-body { overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); padding:.75rem; }
-      .lc-files-list { display:flex; flex-direction:column; gap:.375rem; }
-      .lc-file-row { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
-      .lc-file-meta { color:var(--bs-secondary,#6c757d); font-size:.75rem; }
+      .lc-files-modal-backdrop .modal-dialog { max-height:90vh; }
+      .lc-files-modal-backdrop .modal-content { display:flex; flex-direction:column; max-height:90vh; }
+      .lc-files-modal-backdrop .modal-body { overflow-y:auto; flex:1; min-height:200px; padding:1rem; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
         .lc-chat-msg { max-width:95%; }
         .lc-chat-body { max-height:200px; }
         .lc-chat-bubble { max-width:95%; }
-        .lc-chat-modal-dialog,
-        .lc-files-modal-dialog { width:100%; }
       }
     `;
     document.head.appendChild(s);
@@ -260,22 +252,26 @@ var LiveCard = (function () {
       const backdrop = document.createElement('div');
       backdrop.className = 'lc-chat-modal-backdrop';
       backdrop.innerHTML = '' +
-        '<div class="modal-dialog modal-dialog-centered lc-chat-modal-dialog" role="dialog" aria-modal="true" aria-label="Card chat">' +
-        '  <div class="modal-content">' +
-        '  <div class="modal-header">' +
-        '    <h5 class="modal-title lc-chat-modal-title">Chat</h5>' +
-        '    <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-close>Close</button>' +
-        '  </div>' +
-        '  <div class="modal-body lc-chat-modal-body" data-lc-chat-body></div>' +
-        '  <div class="modal-footer flex-column align-items-stretch">' +
-        '    <div data-lc-chat-staged class="small mb-2"></div>' +
-        '      <input type="file" class="d-none" data-lc-chat-file multiple>' +
-        '    <div class="input-group input-group-sm w-100">' +
-        '      <button type="button" class="btn btn-outline-secondary" data-lc-chat-attach title="Attach files">Attach</button>' +
-        '      <input type="text" class="form-control" data-lc-chat-input placeholder="Type a message...">' +
-        '      <button type="button" class="btn btn-primary" data-lc-chat-send>Send</button>' +
+        '<div class="modal-dialog modal-lg modal-dialog-centered" role="dialog" aria-modal="true" aria-label="Card chat">' +
+        '  <div class="modal-content bg-white">' +
+        '    <div class="modal-header border-bottom p-3 d-flex align-items-center justify-content-between">' +
+        '      <h5 class="modal-title lc-chat-modal-title">Chat</h5>' +
+        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-close aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
         '    </div>' +
-        '  </div>' +
+        '    <div class="modal-body bg-light" data-lc-chat-body></div>' +
+        '    <div class="modal-footer flex-column align-items-stretch border-top p-3 gap-3">' +
+        '      <div data-lc-chat-staged class="small w-100"></div>' +
+        '      <input type="file" class="d-none" data-lc-chat-file multiple>' +
+        '      <div class="lc-chat-modal-input-row mt-2">' +
+        '        <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-attach title="Attach files" aria-label="Attach files">' +
+        '          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>' +
+        '        </button>' +
+        '        <input type="text" class="form-control" data-lc-chat-input placeholder="Type a message...">' +
+        '        <button type="button" class="btn btn-sm btn-primary" data-lc-chat-send aria-label="Send">' +
+        '          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>' +
+        '        </button>' +
+        '      </div>' +
+        '    </div>' +
         '  </div>' +
         '</div>';
 
@@ -455,24 +451,24 @@ var LiveCard = (function () {
       const backdrop = document.createElement('div');
       backdrop.className = 'lc-files-modal-backdrop';
       backdrop.innerHTML = '' +
-        '<div class="modal-dialog modal-dialog-centered lc-files-modal-dialog" role="dialog" aria-modal="true" aria-label="Card files">' +
-        '  <div class="modal-content">' +
-        '  <div class="modal-header">' +
-        '    <h5 class="modal-title lc-files-modal-title">Files</h5>' +
-        '    <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-close>Close</button>' +
-        '  </div>' +
-        '  <div class="modal-body lc-files-modal-body" data-lc-files-body></div>' +
-        '  <div class="modal-footer flex-column align-items-stretch">' +
-        '    <div class="lc-dropzone mb-2" data-lc-files-dz>' +
-        '      <div class="small text-muted">Drop files here or click to browse</div>' +
-        '      <input type="file" class="d-none" data-lc-files-input multiple>' +
+        '<div class="modal-dialog modal-lg modal-dialog-centered" role="dialog" aria-modal="true" aria-label="Card files">' +
+        '  <div class="modal-content bg-white">' +
+        '    <div class="modal-header border-bottom p-3 d-flex align-items-center justify-content-between">' +
+        '      <h5 class="modal-title lc-files-modal-title">Files</h5>' +
+        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-close aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
         '    </div>' +
-        '    <div data-lc-files-staged class="small mb-2"></div>' +
-        '    <div class="d-flex justify-content-end gap-2 w-100">' +
-        '      <button type="button" class="btn btn-outline-secondary" data-lc-files-attach>Select files</button>' +
-        '      <button type="button" class="btn btn-primary" data-lc-files-upload>Upload</button>' +
+        '    <div class="modal-body bg-light" data-lc-files-body></div>' +
+        '    <div class="modal-footer flex-column align-items-stretch border-top p-3 gap-3">' +
+        '      <div class="lc-dropzone border-2 border-dashed p-4 text-center cursor-pointer rounded" data-lc-files-dz>' +
+        '        <div class="small text-muted mb-2">Drop files here or click to browse</div>' +
+        '        <input type="file" class="d-none" data-lc-files-input multiple>' +
+        '      </div>' +
+        '      <div data-lc-files-staged class="small w-100 d-flex flex-wrap gap-2"></div>' +
+        '      <div class="d-flex justify-content-end gap-2 w-100">' +
+        '        <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-attach>Select files</button>' +
+        '        <button type="button" class="btn btn-sm btn-primary" data-lc-files-upload>Upload</button>' +
+        '      </div>' +
         '    </div>' +
-        '  </div>' +
         '  </div>' +
         '</div>';
 
@@ -604,14 +600,12 @@ var LiveCard = (function () {
         const dl = stored
           ? '/api/example-board/server/cards/' + encodeURIComponent(nodeId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
           : null;
-        h += '<div class="list-group-item">';
-        h += '<div class="lc-file-row">';
+        h += '<div class="list-group-item d-flex align-items-center justify-content-between gap-2">';
         h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
-        h += '<div class="lc-file-meta">' + _esc(sizeText) + '</div></div>';
+        h += '<div class="small text-muted">' + _esc(sizeText) + '</div></div>';
         if (dl) {
-          h += '<a class="btn btn-sm btn-outline-secondary" href="' + dl + '">Download</a>';
+          h += '<a class="btn btn-sm btn-outline-secondary flex-shrink-0" href="' + dl + '">Download</a>';
         }
-        h += '</div>';
         h += '</div>';
       });
       h += '</div>';
@@ -1567,19 +1561,28 @@ var LiveCard = (function () {
 
       // Header bar: status dot + time-ago + refresh button
       const showRefresh = features.refresh !== false && cfg.onRefresh;
-      h += `<div class="d-flex align-items-center gap-2 mb-2">`;
+      h += `<div class="d-flex align-items-center gap-1 mb-2">`;
       h += _statusDot(node.card_data && node.card_data.status);
       h += `<span class="text-muted small">${_timeAgo(node.card_data && node.card_data.lastRun)}</span>`;
       if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
         h += `<span class="badge bg-danger small" title="${_esc(node.card_data.error)}">Error</span>`;
       }
-      h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-files-open" title="Open files">Files</button>`;
-      h += `<button class="btn btn-sm btn-outline-primary ms-auto" id="${uid}-chat-open" title="Open chat">Chat</button>`;
+      h += '<div class="d-flex align-items-center gap-1 ms-auto">';
+      // Files icon button (paperclip)
+      h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-files-open" title="Files">`;
+      h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>';
+      h += '</button>';
+      // Chat icon button (speech bubble)
+      h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-chat-open" title="Chat">`;
+      h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>';
+      h += '</button>';
+      // Refresh icon button
       if (showRefresh) {
         h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-refresh" title="Refresh">`;
         h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>';
         h += '</button>';
       }
+      h += '</div>';
       h += '</div>';
 
       // Elements area
