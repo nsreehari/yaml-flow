@@ -86,9 +86,23 @@ afterAll(async () => {
 });
 
 async function uploadFile(cardId: string, fileName: string, content: string, contentType = 'text/plain') {
+  return uploadFileWithOptions(cardId, fileName, content, contentType, {});
+}
+
+async function uploadFileWithOptions(
+  cardId: string,
+  fileName: string,
+  content: string,
+  contentType = 'text/plain',
+  opts?: { inChat?: boolean },
+) {
+  const inChat = opts && opts.inChat === true;
+  const uploadUrl = inChat
+    ? `${API_BASE}/cards/${encodeURIComponent(cardId)}/files?inChat=true`
+    : `${API_BASE}/cards/${encodeURIComponent(cardId)}/files`;
   let upload: Response;
   try {
-    upload = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/files`, {
+    upload = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
         'content-type': contentType,
@@ -167,6 +181,12 @@ function readChatFileNames(cardId: string): string[] {
     .sort();
 }
 
+function findNewestSystemChatFile(cardId: string): string | null {
+  const names = readChatFileNames(cardId).filter((name) => /^\d{3}_system\.txt$/.test(name));
+  if (!names.length) return null;
+  return names[names.length - 1];
+}
+
 describe('demo-server file upload + card list + download', () => {
   const cardId = 'card-ex-file-upload';
 
@@ -237,5 +257,29 @@ describe('demo-server file upload + card list + download', () => {
 
     const secondPath = path.join(getCardChatsDir(chatCardId), secondNew as string);
     expect(fs.readFileSync(secondPath, 'utf8')).toContain(secondMessage);
+  }, 30000);
+
+  it('uploads with inChat=true, stores file metadata on card, and appends system chat record', async () => {
+    const chatCardId = 'card-ex-chat';
+    const originalName = 'meeting_notes.md';
+    const content = '# notes\n- item 1';
+
+    const beforeChatNames = readChatFileNames(chatCardId);
+    const uploaded = await uploadFileWithOptions(chatCardId, originalName, content, 'text/markdown', { inChat: true });
+
+    const card = await getCardFromBootstrap(chatCardId);
+    const files = getCardFiles(card);
+    const byStored = files.find((f) => f && f.stored_name === uploaded.stored_name);
+    expect(byStored).toBeTruthy();
+    expect(byStored?.name).toBe(originalName);
+
+    const afterChatNames = readChatFileNames(chatCardId);
+    expect(afterChatNames.length).toBeGreaterThan(beforeChatNames.length);
+
+    const newestSystem = findNewestSystemChatFile(chatCardId);
+    expect(newestSystem).toBeTruthy();
+    const newestPath = path.join(getCardChatsDir(chatCardId), newestSystem as string);
+    const chatText = fs.readFileSync(newestPath, 'utf8');
+    expect(chatText).toContain(`file uploaded: ${originalName} as ${uploaded.stored_name}`);
   }, 30000);
 });

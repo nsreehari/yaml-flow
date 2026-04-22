@@ -775,6 +775,7 @@ async function handleApi(req, res) {
     if (method === 'POST' && cardFileMatch) {
       bootstrapBoard();
       const cardId = decodeURIComponent(cardFileMatch[1]);
+      const inChat = String(url.searchParams.get('inChat') || '').toLowerCase() === 'true';
       const encodedName = req.headers['x-file-name'];
       const contentType = String(req.headers['content-type'] || 'application/octet-stream');
       const rawName = Array.isArray(encodedName) ? encodedName[0] : encodedName;
@@ -786,6 +787,10 @@ async function handleApi(req, res) {
       }
 
       const file = persistUploadedFile(cardId, requestedName, contentType, body);
+      if (inChat) {
+        applyCardAction(cardId, 'file-upload', { files: [file] });
+        writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
+      }
       json(res, 200, { ok: true, file });
       return;
     }

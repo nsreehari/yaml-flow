@@ -178,7 +178,7 @@
       }
 
       function parseLeadingSerial(fileName) {
-        const m = String(fileName || '').match(/^(\d+)-/);
+        const m = String(fileName || '').match(/^(\d+)[-_]/);
         return m ? parseInt(m[1], 10) : 0;
       }
 

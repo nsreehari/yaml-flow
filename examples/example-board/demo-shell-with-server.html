@@ -114,11 +114,16 @@
         throw new Error(`Unable to reach example-board demo server. Tried: ${failures.join(' | ')}. ${tip}`);
       }
 
-      async function uploadCardFile(cardId, file) {
+      async function uploadCardFile(cardId, file, opts) {
         if (!file) return null;
+        const options = opts && typeof opts === 'object' ? opts : {};
+        const inChat = options.inChat === true;
         const fileName = typeof file.name === 'string' ? file.name : 'upload.bin';
         const contentType = file.type || 'application/octet-stream';
-        const upload = await fetchServer(SERVER_PATHS.cardFile(cardId), {
+        const uploadPath = inChat
+          ? `${SERVER_PATHS.cardFile(cardId)}?inChat=true`
+          : SERVER_PATHS.cardFile(cardId);
+        const upload = await fetchServer(uploadPath, {
           method: 'POST',
           headers: {
             'content-type': contentType,
@@ -146,10 +151,12 @@
 
         const uploaded = [];
         for (const file of rawFiles) {
-          const fileMeta = await uploadCardFile(cardId, file);
+          const fileMeta = await uploadCardFile(cardId, file, { inChat: actionType === 'chat-send' });
           if (fileMeta) uploaded.push(fileMeta);
         }
-        nextPayload.files = uploaded;
+        // For chat uploads, server-side file API already records file metadata and emits system chat logs.
+        // Keep chat-send payload focused on user message text to avoid duplicate system log entries.
+        nextPayload.files = actionType === 'chat-send' ? [] : uploaded;
         return nextPayload;
       }
 
