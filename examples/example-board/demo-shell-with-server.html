@@ -6,8 +6,8 @@
   <title>Example Board Demo (Server Runtime)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
-  <script src="../../browser/card-compute.js"></script>
-  <script src="../../browser/live-cards.js"></script>
+  <script src="../../browser/card-compute.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/card-compute.js';"></script>
+  <script src="../../browser/live-cards.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/live-cards.js';"></script>
   <script src="./runtime-artifacts-adapter.js"></script>
 </head>
 <body class="bg-light">
@@ -63,6 +63,8 @@
         bootstrap: '/api/example-board/server/bootstrap',
         stream: '/api/example-board/server/sse',
         patchCard: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}`; },
+        cardAction: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}/actions`; },
+        cardFile: function (id) { return `/api/example-board/server/cards/${encodeURIComponent(id)}/files`; },
       };
 
       function localServerOrigins() {
@@ -108,6 +110,45 @@
 
         const tip = 'Start the API bridge from the yaml-flow folder: node examples/example-board/demo-server.js';
         throw new Error(`Unable to reach example-board demo server. Tried: ${failures.join(' | ')}. ${tip}`);
+      }
+
+      async function uploadCardFile(cardId, file) {
+        if (!file) return null;
+        const fileName = typeof file.name === 'string' ? file.name : 'upload.bin';
+        const contentType = file.type || 'application/octet-stream';
+        const upload = await fetchServer(SERVER_PATHS.cardFile(cardId), {
+          method: 'POST',
+          headers: {
+            'content-type': contentType,
+            'x-file-name': encodeURIComponent(fileName),
+          },
+          body: file,
+        });
+        if (!upload.ok) {
+          const errText = await upload.text();
+          throw new Error(`Upload failed (${upload.status}): ${errText || 'unknown error'}`);
+        }
+
+        const payload = await upload.json();
+        return payload && payload.file ? payload.file : null;
+      }
+
+      async function uploadActionFiles(cardId, actionType, payload) {
+        if (actionType !== 'chat-send' && actionType !== 'file-upload') return payload || {};
+        const nextPayload = { ...(payload || {}) };
+        const rawFiles = Array.isArray(nextPayload.files) ? nextPayload.files : [];
+        if (!rawFiles.length) {
+          nextPayload.files = [];
+          return nextPayload;
+        }
+
+        const uploaded = [];
+        for (const file of rawFiles) {
+          const fileMeta = await uploadCardFile(cardId, file);
+          if (fileMeta) uploaded.push(fileMeta);
+        }
+        nextPayload.files = uploaded;
+        return nextPayload;
       }
 
       function replaceNodeInPlace(target, source) {
@@ -166,7 +207,7 @@
         const boot = await fetchServer(SERVER_PATHS.bootstrap);
         if (!boot.ok) throw new Error(`Server bootstrap failed (${boot.status}). Start demo-server.js first.`);
         const payload = await boot.json();
-        const cards = buildRenderableCardsFromArtifacts(payload);
+        const cards = buildLiveCardModelsFromArtifacts(payload);
         if (!Array.isArray(cards)) throw new Error('Server payload missing published runtime artifacts');
 
         for (const n of cards) nodesById[n.id] = clone(n);
@@ -187,6 +228,14 @@
               body: JSON.stringify({}),
             });
           },
+          onAction: async (id, actionType, payload) => {
+            const actionPayload = await uploadActionFiles(id, actionType, payload);
+            await fetchServer(SERVER_PATHS.cardAction(id), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ actionType, payload: actionPayload || {} }),
+            });
+          },
         });
 
         // Remove initial loading placeholder before mounting the board UI.
@@ -202,7 +251,7 @@
         sse.onmessage = function (evt) {
           try {
             const update = JSON.parse(evt.data || '{}');
-            syncBoardNodes(buildRenderableCardsFromArtifacts(update));
+            syncBoardNodes(buildLiveCardModelsFromArtifacts(update));
           } catch (err) {
             console.warn('Bad SSE payload', err);
           }

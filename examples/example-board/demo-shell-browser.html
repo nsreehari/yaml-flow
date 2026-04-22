@@ -6,9 +6,9 @@
   <title>Example Board Demo (Browser Runtime)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
-  <script src="../../browser/card-compute.js"></script>
-  <script src="../../browser/live-cards.js"></script>
-  <script src="../../browser/board-livegraph-runtime.js"></script>
+  <script src="../../browser/card-compute.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/card-compute.js';"></script>
+  <script src="../../browser/live-cards.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/live-cards.js';"></script>
+  <script src="../../browser/board-livegraph-runtime.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/board-livegraph-runtime.js';"></script>
   <script src="./runtime-artifacts-adapter.js"></script>
 </head>
 <body class="bg-light">
@@ -87,6 +87,12 @@
         'card-ex-todo.json',
         'card-ex-form.json',
         'card-ex-filtered-by-preference.json',
+        'card-ex-chat.json',
+        'card-ex-file-upload.json',
+        'card-ex-actions.json',
+        'card-chain-region-totals.json',
+        'card-chain-top-region.json',
+        'card-chain-region-alert.json',
       ];
 
       const ORDER_SEED = [
@@ -106,6 +112,238 @@
 
       const clone = (x) => JSON.parse(JSON.stringify(x));
       const nowIso = () => new Date().toISOString();
+      const MOCK_FS_PREFIX = 'yf:demo-surface:cards:';
+
+      function safeJsonParse(raw, fallback) {
+        if (!raw) return fallback;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return fallback;
+        }
+      }
+
+      function mockFsKey(cardId, dirName) {
+        return `${MOCK_FS_PREFIX}${String(cardId)}:${String(dirName)}`;
+      }
+
+      function readMockDir(cardId, dirName) {
+        const key = mockFsKey(cardId, dirName);
+        const parsed = safeJsonParse(localStorage.getItem(key), []);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+
+      function writeMockDir(cardId, dirName, items) {
+        localStorage.setItem(mockFsKey(cardId, dirName), JSON.stringify(Array.isArray(items) ? items : []));
+      }
+
+      function clearMockDir(cardId, dirName) {
+        localStorage.removeItem(mockFsKey(cardId, dirName));
+      }
+
+      function toFileMetadataOnly(entry) {
+        if (!entry || typeof entry !== 'object') return null;
+        return {
+          name: entry.name || null,
+          stored_name: entry.stored_name || null,
+          size: typeof entry.size === 'number' ? entry.size : null,
+          mime_type: entry.mime_type || null,
+          path: entry.path || null,
+          uploaded_at: entry.uploaded_at || null,
+        };
+      }
+
+      function normalizeDisplayFileName(name) {
+        const input = String(name || '').trim();
+        if (!input) return 'upload.bin';
+        const parts = input.split(/[/\\]/);
+        const base = parts[parts.length - 1] || 'upload.bin';
+        return base;
+      }
+
+      function normalizeStem(rawStem) {
+        const normalized = String(rawStem || '')
+          .toLowerCase()
+          .replace(/\s+/g, '_')
+          .replace(/[^a-z0-9_-]/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_+|_+$/g, '');
+        return normalized || 'file';
+      }
+
+      function normalizeExt(rawExt) {
+        if (!rawExt || rawExt === '.') return '';
+        const extBody = String(rawExt).replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        return extBody ? `.${extBody}` : '';
+      }
+
+      function parseLeadingSerial(fileName) {
+        const m = String(fileName || '').match(/^(\d+)-/);
+        return m ? parseInt(m[1], 10) : 0;
+      }
+
+      function nextSerialFromNames(names) {
+        let maxSeen = 0;
+        for (const name of names) {
+          const serial = parseLeadingSerial(name);
+          if (Number.isFinite(serial) && serial > maxSeen) maxSeen = serial;
+        }
+        return maxSeen + 1;
+      }
+
+      function buildStoredFileName(cardId, fileName) {
+        const maxLen = 32;
+        const displayName = normalizeDisplayFileName(fileName);
+        const extRaw = displayName.includes('.') ? displayName.slice(displayName.lastIndexOf('.')) : '';
+        const ext = normalizeExt(extRaw);
+        const stemRaw = extRaw ? displayName.slice(0, -extRaw.length) : displayName;
+        const stemNorm = normalizeStem(stemRaw);
+
+        const existing = readPersistedFileMetadata(cardId);
+        const names = existing.map((f) => f && typeof f.stored_name === 'string' ? f.stored_name : '').filter(Boolean);
+        let serial = nextSerialFromNames(names);
+
+        while (true) {
+          const prefix = `${String(serial).padStart(3, '0')}-`;
+          let keepExt = ext;
+          let stemBudget = maxLen - prefix.length - keepExt.length;
+          if (stemBudget < 1) {
+            keepExt = '';
+            stemBudget = maxLen - prefix.length;
+          }
+
+          const stem = stemNorm.slice(0, Math.max(1, stemBudget));
+          let candidate = `${prefix}${stem}${keepExt}`;
+          if (candidate.length > maxLen) {
+            candidate = candidate.slice(0, maxLen).replace(/\.$/, '');
+          }
+
+          if (!names.includes(candidate)) return candidate;
+          serial += 1;
+        }
+      }
+
+      function nextChatPath(cardId, role) {
+        const chats = readMockDir(cardId, 'chats');
+        const names = chats
+          .map((entry) => {
+            if (!entry || typeof entry.path !== 'string') return '';
+            const parts = entry.path.split('/');
+            return parts[parts.length - 1] || '';
+          })
+          .filter(Boolean);
+        const serial = nextSerialFromNames(names);
+        const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
+        return `${cardId}/chats/${String(serial).padStart(3, '0')}-${safeRole}.txt`;
+      }
+
+      function readPersistedFileMetadata(cardId) {
+        return readMockDir(cardId, 'files')
+          .map(toFileMetadataOnly)
+          .filter(Boolean);
+      }
+
+      function readPersistedChatMessages(cardId) {
+        return readMockDir(cardId, 'chats')
+          .map((entry) => {
+            if (!entry || typeof entry !== 'object') return null;
+            return {
+              role: typeof entry.role === 'string' ? entry.role : 'system',
+              text: typeof entry.text === 'string' ? entry.text : '',
+              files: Array.isArray(entry.files) ? entry.files.map(toFileMetadataOnly).filter(Boolean) : [],
+              at: typeof entry.at === 'string' ? entry.at : null,
+            };
+          })
+          .filter(Boolean);
+      }
+
+      async function fileToBase64(file) {
+        if (!file || typeof file.arrayBuffer !== 'function') return null;
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const chunk = bytes.subarray(i, i + chunkSize);
+          binary += String.fromCharCode.apply(null, chunk);
+        }
+        return btoa(binary);
+      }
+
+      async function persistFileForCard(cardId, fileLike, now) {
+        if (!fileLike) return null;
+
+        if (typeof fileLike === 'object' && typeof fileLike.name === 'string' && typeof fileLike.arrayBuffer === 'function') {
+          const name = normalizeDisplayFileName(fileLike.name);
+          const storedName = buildStoredFileName(cardId, name);
+          const metadata = {
+            name,
+            stored_name: storedName,
+            size: typeof fileLike.size === 'number' ? fileLike.size : null,
+            mime_type: fileLike.type || 'application/octet-stream',
+            path: `${cardId}/files/${storedName}`,
+            uploaded_at: now,
+          };
+
+          const filesDir = readMockDir(cardId, 'files');
+          filesDir.push({
+            ...metadata,
+            content_base64: await fileToBase64(fileLike),
+          });
+          writeMockDir(cardId, 'files', filesDir);
+          return metadata;
+        }
+
+        if (typeof fileLike === 'object' && typeof fileLike.name === 'string') {
+          const displayName = normalizeDisplayFileName(fileLike.name);
+          const storedName = fileLike.stored_name || buildStoredFileName(cardId, displayName);
+          const metadata = {
+            name: displayName,
+            stored_name: storedName,
+            size: typeof fileLike.size === 'number' ? fileLike.size : null,
+            mime_type: fileLike.mime_type || 'application/octet-stream',
+            path: fileLike.path || `${cardId}/files/${storedName}`,
+            uploaded_at: fileLike.uploaded_at || now,
+          };
+
+          const filesDir = readMockDir(cardId, 'files');
+          const knownPaths = new Set(filesDir.map((entry) => entry && entry.path).filter(Boolean));
+          if (!knownPaths.has(metadata.path)) {
+            filesDir.push(metadata);
+            writeMockDir(cardId, 'files', filesDir);
+          }
+          return metadata;
+        }
+
+        if (typeof fileLike === 'string') {
+          const displayName = normalizeDisplayFileName(fileLike);
+          const storedName = buildStoredFileName(cardId, displayName);
+          const metadata = {
+            name: displayName,
+            stored_name: storedName,
+            size: null,
+            mime_type: 'application/octet-stream',
+            path: `${cardId}/files/${storedName}`,
+            uploaded_at: now,
+          };
+          const filesDir = readMockDir(cardId, 'files');
+          filesDir.push(metadata);
+          writeMockDir(cardId, 'files', filesDir);
+          return metadata;
+        }
+
+        return null;
+      }
+
+      function appendChatRecord(cardId, record) {
+        const chatsDir = readMockDir(cardId, 'chats');
+        const next = { ...(record || {}) };
+        if (!next.path) {
+          next.path = nextChatPath(cardId, next.role || 'system');
+        }
+        chatsDir.push(next);
+        writeMockDir(cardId, 'chats', chatsDir);
+      }
 
       function renderDebugPanel(runtimeState, artifacts) {
         const el = document.getElementById('debugPanelBody');
@@ -198,6 +436,12 @@
         const boardMeta = parseBoardMeta(boardYaml);
         for (const c of cards) {
           c.card_data = c.card_data || {};
+          const persistedFiles = readPersistedFileMetadata(c.id);
+          if (persistedFiles.length > 0) c.card_data.files = persistedFiles;
+
+          const persistedChats = readPersistedChatMessages(c.id);
+          if (persistedChats.length > 0) c.card_data.messages = persistedChats;
+
           // Persist card definition to localStorage (mirrors server's tmp/cards/<id>.json)
           LocalStorageService.writeCard(c.id, c);
         }
@@ -245,6 +489,81 @@
         } else {
           details.open = false;
           details.classList.add('d-none');
+        }
+      }
+
+      function toIsoTimeTag(iso) {
+        const d = new Date(iso);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return `${hh}:${mm}:${ss}`;
+      }
+
+      function compactFiles(files) {
+        if (!Array.isArray(files)) return [];
+        return files
+          .map((f) => {
+            if (!f) return null;
+            if (typeof f === 'string') return { name: f };
+            if (typeof f === 'object' && typeof f.name === 'string') return { name: f.name, size: f.size || null };
+            return null;
+          })
+          .filter(Boolean);
+      }
+
+      async function handleActionInBrowserRuntime(id, actionType, payload) {
+        const node = nodesById[id];
+        if (!node) return;
+
+        const now = nowIso();
+        const cardData = node.card_data || {};
+
+        if (actionType === 'chat-send') {
+          const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
+          const rawFiles = Array.isArray(payload && payload.files) ? payload.files : [];
+          if (!text && rawFiles.length === 0) return;
+
+          const fileMetas = [];
+          for (const fileLike of rawFiles) {
+            const persisted = await persistFileForCard(id, fileLike, now);
+            if (persisted) fileMetas.push(persisted);
+          }
+
+          appendChatRecord(id, {
+            at: now,
+            role: 'user',
+            text,
+            files: fileMetas,
+          });
+
+          fileMetas.forEach((fileMeta) => {
+            if (!fileMeta || !fileMeta.stored_name) return;
+            const display = fileMeta.name || 'file';
+            appendChatRecord(id, {
+              at: now,
+              role: 'system',
+              text: `File ${display} uploaded as ${fileMeta.stored_name}.`,
+              files: [],
+            });
+          });
+
+          // Keep chat render state in sync with local-storage-backed chat entries.
+          runtime.patchCardState(id, {
+            messages: readPersistedChatMessages(id),
+            lastInteractionAt: now,
+          });
+          return;
+        }
+
+        if (actionType === 'action') {
+          const buttonId = payload && typeof payload.buttonId === 'string' ? payload.buttonId : '';
+          if (!buttonId) return;
+
+          runtime.patchCardState(id, {
+            lastAction: { buttonId, at: now },
+            lastActionText: `${buttonId} @ ${toIsoTimeTag(now)}`,
+          });
         }
       }
 
@@ -317,11 +636,11 @@
           : buildBrowserArtifactsFromRuntime({
               boardPath: 'browser',
               cardDefinitions,
-              runtimeNodes: runtime.getNodes(),
+              runtimeModels: runtime.getNodes(),
               graphState: runtime.getState(),
             });
 
-        const initialNodes = buildRenderableCardsFromArtifacts(initialArtifacts);
+        const initialNodes = buildLiveCardModelsFromArtifacts(initialArtifacts);
         for (const n of initialNodes) nodesById[n.id] = clone(n);
 
         const engine = LiveCard.init({
@@ -360,9 +679,29 @@
               return;
             }
 
+            // Auto-commit: file-upload element reports staged files via _stagedFiles.
+            // Persist metadata immediately and update the rendered list — no commit button needed.
+            if (patch && Array.isArray(patch._stagedFiles) && patch._stagedFiles.length > 0) {
+              const now = nowIso();
+              const existing = readPersistedFileMetadata(id);
+              const seen = new Set(existing.map((f) => f && f.name ? f.name : String(f)));
+              for (const item of patch._stagedFiles) {
+                if (!item || typeof item.name !== 'string') continue;
+                if (seen.has(item.name)) continue;
+                existing.push(persistStagedFileMetadata(id, item));
+                seen.add(item.name);
+              }
+              writeStoredFiles(id, existing);
+              runtime.patchCardState(id, { files: existing, _stagedFiles: [] });
+              return;
+            }
+
             runtime.patchCardState(id, patch || {});
           },
           onRefresh: (id) => runtime.retrigger(id),
+          onAction: (id, actionType, payload) => {
+            void handleActionInBrowserRuntime(id, actionType, payload || {});
+          },
         });
 
         board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
@@ -377,7 +716,7 @@
           const artifacts = buildBrowserArtifactsFromRuntime({
             boardPath: 'browser',
             cardDefinitions,
-            runtimeNodes: runtime.getNodes(),
+            runtimeModels: runtime.getNodes(),
             graphState: runtimeState,
           });
 
@@ -388,7 +727,7 @@
           LocalStorageService.writeStatusSnapshot(artifacts.statusSnapshot);
 
           // Rebuild renderable nodes from persisted artifacts (same pattern as server shell)
-          syncBoardNodes(buildRenderableCardsFromArtifacts(artifacts));
+          syncBoardNodes(buildLiveCardModelsFromArtifacts(artifacts));
 
           // Keep a compact runtime snapshot visible for debugging token flow issues.
           renderDebugPanel(runtimeState, artifacts);
@@ -407,6 +746,9 @@
           },
           clearLocalStorage: function () {
             LocalStorageService.clear();
+            Object.keys(localStorage).forEach((key) => {
+              if (String(key).startsWith(MOCK_FS_PREFIX)) localStorage.removeItem(key);
+            });
             window.location.reload();
           },
         };

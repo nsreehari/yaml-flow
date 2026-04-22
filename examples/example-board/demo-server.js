@@ -5,11 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
+const require = createRequire(import.meta.url);
 
 const PORT = Number(process.env.DEMO_SERVER_PORT || 7799);
 const BOARD_DIR = path.resolve(process.env.DEMO_BOARD_RUNTIME_DIR || path.join(os.tmpdir(), 'board-live-cards-demo-board'));
@@ -20,30 +21,227 @@ const RUNTIME_OUT_DIR = path.resolve(process.env.DEMO_RUNTIME_OUT_DIR || path.jo
 const STATUS_SNAPSHOT_FILE = path.join(RUNTIME_OUT_DIR, 'board-livegraph-status.json');
 const BOARD_FILE = path.join(BOARD_DIR, 'board-graph.json');
 const INVENTORY_FILE = path.join(BOARD_DIR, 'cards-inventory.jsonl');
-const CLI_JS = path.join(repoRoot, 'dist', 'cli', 'board-live-cards-cli.js');
+
+function resolveCliJsPath() {
+  const envOverride = process.env.BOARD_LIVE_CARDS_CLI_JS;
+  if (envOverride && fs.existsSync(envOverride)) return envOverride;
+
+  // Repo-dev fallback (current project layout).
+  const repoDevPath = path.join(path.resolve(__dirname, '../..'), 'dist', 'cli', 'board-live-cards-cli.js');
+  if (fs.existsSync(repoDevPath)) return repoDevPath;
+
+  // Installed package fallback (standalone example-board usage).
+  try {
+    const pkgJsonPath = require.resolve('yaml-flow/package.json', { paths: [process.cwd(), __dirname] });
+    const pkgRoot = path.dirname(pkgJsonPath);
+    const pkgCli = path.join(pkgRoot, 'board-live-cards-cli.js');
+    if (fs.existsSync(pkgCli)) return pkgCli;
+
+    const pkgDistCli = path.join(pkgRoot, 'dist', 'cli', 'board-live-cards-cli.js');
+    if (fs.existsSync(pkgDistCli)) return pkgDistCli;
+  } catch {
+    // Fall through to final error.
+  }
+
+  return null;
+}
+
+const CLI_JS = resolveCliJsPath();
 
 let didDemoSetup = false;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'content-type',
+  'Access-Control-Allow-Headers': 'content-type,x-file-name',
   'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
 };
 
+const MAX_STORED_FILE_NAME_LEN = 32;
+
+function ensureCardStorageDirs(cardId) {
+  const safeCardId = String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
+  const cardDir = path.join(TMP_CARDS_DIR, safeCardId);
+  const filesDir = path.join(cardDir, 'files');
+  const chatsDir = path.join(cardDir, 'chats');
+  fs.mkdirSync(filesDir, { recursive: true });
+  fs.mkdirSync(chatsDir, { recursive: true });
+  return { filesDir, chatsDir };
+}
+
+function normalizeDisplayFileName(name) {
+  const input = String(name || '').trim();
+  if (!input) return 'upload.bin';
+  const base = path.basename(input);
+  return base || 'upload.bin';
+}
+
+function normalizeStem(rawStem) {
+  const normalized = String(rawStem || '')
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || 'file';
+}
+
+function normalizeExt(rawExt) {
+  if (!rawExt || rawExt === '.') return '';
+  const extBody = String(rawExt).replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return extBody ? `.${extBody}` : '';
+}
+
+function parseLeadingSerial(fileName) {
+  const m = String(fileName || '').match(/^(\d+)-/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function nextSerialFromNames(names) {
+  let maxSeen = 0;
+  for (const name of names) {
+    const n = parseLeadingSerial(name);
+    if (Number.isFinite(n) && n > maxSeen) maxSeen = n;
+  }
+  return maxSeen + 1;
+}
+
+function buildStoredFileName(displayName, serial) {
+  const base = normalizeDisplayFileName(displayName);
+  const ext = normalizeExt(path.extname(base));
+  const stemRaw = ext ? base.slice(0, -path.extname(base).length) : base;
+  const stemNorm = normalizeStem(stemRaw);
+  const prefix = `${String(serial).padStart(3, '0')}-`;
+
+  let keepExt = ext;
+  let stemBudget = MAX_STORED_FILE_NAME_LEN - prefix.length - keepExt.length;
+  if (stemBudget < 1) {
+    keepExt = '';
+    stemBudget = MAX_STORED_FILE_NAME_LEN - prefix.length;
+  }
+
+  const stem = stemNorm.slice(0, Math.max(1, stemBudget));
+  let out = `${prefix}${stem}${keepExt}`;
+  if (out.length > MAX_STORED_FILE_NAME_LEN) {
+    out = out.slice(0, MAX_STORED_FILE_NAME_LEN).replace(/\.$/, '');
+  }
+  return out;
+}
+
+function nextFileSerial(cardId) {
+  const names = [];
+
+  try {
+    const cardPath = findCardPath(cardId);
+    if (cardPath && fs.existsSync(cardPath)) {
+      const card = readJson(cardPath);
+      const files = card && card.card_data && Array.isArray(card.card_data.files)
+        ? card.card_data.files
+        : [];
+      for (const entry of files) {
+        if (entry && typeof entry.stored_name === 'string') names.push(entry.stored_name);
+      }
+    }
+  } catch {
+    // Ignore malformed card file and fall back to directory scan.
+  }
+
+  const { filesDir } = ensureCardStorageDirs(cardId);
+  if (fs.existsSync(filesDir)) {
+    for (const entry of fs.readdirSync(filesDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      names.push(entry.name);
+    }
+  }
+
+  return nextSerialFromNames(names);
+}
+
+function nextChatStoredName(cardId, role) {
+  const { chatsDir } = ensureCardStorageDirs(cardId);
+  const names = fs.existsSync(chatsDir)
+    ? fs.readdirSync(chatsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)
+    : [];
+  const serial = nextSerialFromNames(names);
+  const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
+  return `${String(serial).padStart(3, '0')}-${safeRole}.txt`;
+}
+
+function writeChatRecord(cardId, role, text, files) {
+  const now = new Date().toISOString();
+  const { chatsDir } = ensureCardStorageDirs(cardId);
+  const outName = nextChatStoredName(cardId, role || 'system');
+  const outPath = path.join(chatsDir, outName);
+
+  const lines = [];
+  const msg = typeof text === 'string' ? text.trim() : '';
+  if (msg) lines.push(msg);
+
+  const fileList = Array.isArray(files) ? files : [];
+  if (fileList.length) {
+    if (lines.length) lines.push('');
+    lines.push('files:');
+    for (const file of fileList) {
+      if (!file || typeof file !== 'object') continue;
+      const display = typeof file.name === 'string' ? file.name : 'file';
+      const stored = typeof file.stored_name === 'string' ? file.stored_name : '';
+      lines.push(stored ? `- ${display} -> ${stored}` : `- ${display}`);
+    }
+  }
+
+  fs.writeFileSync(outPath, `${lines.join('\n')}\n`, 'utf-8');
+  return {
+    at: now,
+    role: role || 'system',
+    text: msg,
+    files: fileList,
+    path: `${cardId}/chats/${outName}`,
+  };
+}
+
+function clearChatRecords(cardId) {
+  const { chatsDir } = ensureCardStorageDirs(cardId);
+  clearDirContents(chatsDir);
+}
+
+function persistUploadedFile(cardId, requestedName, contentType, buffer) {
+  const { filesDir } = ensureCardStorageDirs(cardId);
+  const displayName = normalizeDisplayFileName(requestedName);
+
+  let serial = nextFileSerial(cardId);
+  let storedName = buildStoredFileName(displayName, serial);
+  while (fs.existsSync(path.join(filesDir, storedName))) {
+    serial += 1;
+    storedName = buildStoredFileName(displayName, serial);
+  }
+
+  const targetPath = path.join(filesDir, storedName);
+  fs.writeFileSync(targetPath, buffer);
+
+  return {
+    name: displayName,
+    stored_name: storedName,
+    size: buffer.length,
+    mime_type: contentType || 'application/octet-stream',
+    path: `${cardId}/files/${storedName}`,
+    uploaded_at: new Date().toISOString(),
+  };
+}
 function shellQuote(s) {
   return '"' + String(s).replace(/"/g, '\\"') + '"';
 }
 
 function ensureBuilt() {
-  if (!fs.existsSync(CLI_JS)) {
-    throw new Error(`Missing CLI build at ${CLI_JS}. Run \"npm run build\" in yaml-flow first.`);
+  if (!CLI_JS || !fs.existsSync(CLI_JS)) {
+    throw new Error(
+      'Unable to locate board-live-cards CLI. Set BOARD_LIVE_CARDS_CLI_JS or install yaml-flow in this project.'
+    );
   }
 }
 
 function runCli(args) {
   ensureBuilt();
   return execFileSync(process.execPath, [CLI_JS, ...args], {
-    cwd: repoRoot,
+    cwd: process.cwd(),
     stdio: 'pipe',
     encoding: 'utf-8',
   });
@@ -114,13 +312,24 @@ function readSourcePayloads(cardDefinition) {
   for (const sourceDef of cardDefinition.sources) {
     if (!sourceDef || !sourceDef.bindTo || !sourceDef.outputFile) continue;
     const filePath = path.join(BOARD_DIR, sourceDef.outputFile);
-    if (!fs.existsSync(filePath)) continue;
+    if (!fs.existsSync(filePath)) {
+      if (cardDefinition.id === 'card-ex-narrative') {
+        console.log(`[DEBUG] narrative source file not found: ${filePath}`);
+      }
+      continue;
+    }
 
     const raw = fs.readFileSync(filePath, 'utf-8').trim();
     try {
       out[sourceDef.bindTo] = JSON.parse(raw);
-    } catch {
+      if (cardDefinition.id === 'card-ex-narrative') {
+        console.log(`[DEBUG] narrative source parsed successfully, bindTo=${sourceDef.bindTo}, type=${typeof out[sourceDef.bindTo]}, length=${String(out[sourceDef.bindTo]).length}`);
+      }
+    } catch (e) {
       out[sourceDef.bindTo] = raw;
+      if (cardDefinition.id === 'card-ex-narrative') {
+        console.log(`[DEBUG] narrative source parse failed, using raw, error=${e.message}`);
+      }
     }
   }
 
@@ -157,12 +366,12 @@ function buildPublishedRuntimePayload() {
     const rawArtifact = rawArtifacts[cardDefinition.id] || {};
     const sourcesFromFiles = readSourcePayloads(cardDefinition);
     cardRuntimeById[cardDefinition.id] = {
-      ...rawArtifact,
       schema_version: rawArtifact.schema_version || 'v1',
       card_id: rawArtifact.card_id || cardDefinition.id,
-      card_data: cardDefinition.card_data && typeof cardDefinition.card_data === 'object' ? cardDefinition.card_data : {},
+      card_data: rawArtifact.card_data && typeof rawArtifact.card_data === 'object' ? rawArtifact.card_data : (cardDefinition.card_data && typeof cardDefinition.card_data === 'object' ? cardDefinition.card_data : {}),
       computed_values: rawArtifact.computed_values && typeof rawArtifact.computed_values === 'object' ? rawArtifact.computed_values : {},
       sources_data: sourcesFromFiles,
+      requires_data: rawArtifact.requires_data && typeof rawArtifact.requires_data === 'object' ? rawArtifact.requires_data : {},
     };
   }
 
@@ -310,9 +519,15 @@ function patchCard(cardId, patch) {
       } else {
         card.card_data = { ...(card.card_data || {}), ...patch.fieldValues };
       }
+    } else if (Array.isArray(patch._stagedFiles) && patch._stagedFiles.length > 0) {
+      // Ignore transient staged file metadata for server mode; real files are
+      // persisted through POST /cards/:id/files and attached via action payloads.
+      // Never write zero-byte placeholders.
+      return card;
     } else {
       // General card patch: merge each top-level key into the card
       for (const [key, value] of Object.entries(patch)) {
+        if (key === '_stagedFiles') continue; // never persist staging state to card JSON
         if (value !== null && typeof value === 'object' && !Array.isArray(value) &&
             card[key] !== null && typeof card[key] === 'object' && !Array.isArray(card[key])) {
           card[key] = { ...card[key], ...value };
@@ -320,6 +535,91 @@ function patchCard(cardId, patch) {
           card[key] = value;
         }
       }
+    }
+
+    return card;
+  });
+}
+
+function applyCardAction(cardId, actionType, payload) {
+  update_card(cardId, (card) => {
+    const now = new Date().toISOString();
+    const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data : {};
+    card.card_data = cardData;
+
+    if (actionType === 'chat-send') {
+      const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
+      const files = Array.isArray(payload && payload.files)
+        ? payload.files
+            .map((f) => {
+              if (!f) return null;
+              if (typeof f === 'string') return { name: f };
+              if (typeof f === 'object' && typeof f.name === 'string') {
+                return {
+                  name: f.name,
+                  size: f.size || null,
+                  mime_type: f.mime_type || null,
+                  path: f.path || null,
+                  uploaded_at: f.uploaded_at || null,
+                };
+              }
+              return null;
+            })
+            .filter(Boolean)
+        : [];
+
+      if (text || files.length > 0) {
+        writeChatRecord(cardId, 'user', text, files);
+        for (const file of files) {
+          if (!file || typeof file !== 'object') continue;
+          const display = typeof file.name === 'string' ? file.name : 'file';
+          const stored = typeof file.stored_name === 'string' ? file.stored_name : null;
+          if (!stored) continue;
+          writeChatRecord(cardId, 'system', `File ${display} uploaded as ${stored}.`, []);
+        }
+      }
+
+      return card;
+    }
+
+    if (actionType === 'file-upload') {
+      const files = Array.isArray(payload && payload.files)
+        ? payload.files
+            .map((f) => {
+              if (!f || typeof f !== 'object') return null;
+              if (typeof f.stored_name !== 'string') return null;
+              return {
+                name: typeof f.name === 'string' ? f.name : f.stored_name,
+                stored_name: f.stored_name,
+                size: f.size || null,
+                mime_type: f.mime_type || null,
+                path: f.path || null,
+                uploaded_at: f.uploaded_at || now,
+              };
+            })
+            .filter(Boolean)
+        : [];
+
+      if (files.length > 0) {
+        const existing = Array.isArray(cardData.files) ? cardData.files.slice() : [];
+        const known = new Set(existing.map((f) => f && f.stored_name ? f.stored_name : ''));
+        for (const f of files) {
+          if (known.has(f.stored_name)) continue;
+          existing.push(f);
+          known.add(f.stored_name);
+        }
+        cardData.files = existing;
+      }
+
+      return card;
+    }
+
+    if (actionType === 'action') {
+      const buttonId = payload && typeof payload.buttonId === 'string' ? payload.buttonId : '';
+      if (!buttonId) return card;
+
+      cardData.lastAction = { buttonId, at: now };
+      cardData.lastActionText = `${buttonId} @ ${now}`;
     }
 
     return card;
@@ -351,6 +651,12 @@ async function readJsonBody(req) {
   const raw = Buffer.concat(chunks).toString('utf-8').trim();
   if (!raw) return {};
   return JSON.parse(raw);
+}
+
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return Buffer.concat(chunks);
 }
 
 function handleSse(req, res) {
@@ -456,6 +762,100 @@ async function handleApi(req, res) {
       return;
     }
 
+    const cardActionMatch = p.match(/^\/api\/example-board\/server\/cards\/([^/]+)\/actions$/);
+    if (method === 'POST' && cardActionMatch) {
+      bootstrapBoard();
+      const cardId = decodeURIComponent(cardActionMatch[1]);
+      const body = await readJsonBody(req);
+      applyCardAction(cardId, body && body.actionType, body && body.payload);
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    const cardFileMatch = p.match(/^\/api\/example-board\/server\/cards\/([^/]+)\/files$/);
+    if (method === 'POST' && cardFileMatch) {
+      bootstrapBoard();
+      const cardId = decodeURIComponent(cardFileMatch[1]);
+      const encodedName = req.headers['x-file-name'];
+      const contentType = String(req.headers['content-type'] || 'application/octet-stream');
+      const rawName = Array.isArray(encodedName) ? encodedName[0] : encodedName;
+      const requestedName = rawName ? decodeURIComponent(String(rawName)) : 'upload.bin';
+      const body = await readRawBody(req);
+      if (!body.length) {
+        json(res, 400, { error: 'Empty upload body' });
+        return;
+      }
+
+      const file = persistUploadedFile(cardId, requestedName, contentType, body);
+      json(res, 200, { ok: true, file });
+      return;
+    }
+
+    const cardFileDownloadMatch = p.match(/^\/api\/example-board\/server\/cards\/([^/]+)\/files\/(\d+)$/);
+    if (method === 'GET' && cardFileDownloadMatch) {
+      const cardId = decodeURIComponent(cardFileDownloadMatch[1]);
+      const idx = parseInt(cardFileDownloadMatch[2], 10);
+      const expectedStoredName = url.searchParams.get('sn');
+      
+      // Load card to get files array
+      const cardPath = path.join(TMP_CARDS_DIR, `${cardId}.json`);
+      if (!fs.existsSync(cardPath)) {
+        json(res, 404, { error: 'Card not found' });
+        return;
+      }
+      
+      let card;
+      try {
+        card = readJson(cardPath);
+      } catch {
+        json(res, 404, { error: 'Card not found' });
+        return;
+      }
+      
+      const files = (card.card_data && Array.isArray(card.card_data.files)) ? card.card_data.files : [];
+      if (idx < 0 || idx >= files.length) {
+        json(res, 404, { error: 'File not found' });
+        return;
+      }
+      
+      const fileRecord = files[idx];
+      if (!fileRecord || !fileRecord.stored_name) {
+        json(res, 404, { error: 'File not found' });
+        return;
+      }
+      if (expectedStoredName && expectedStoredName !== fileRecord.stored_name) {
+        json(res, 409, { error: 'File reference is stale. Refresh and try again.' });
+        return;
+      }
+      
+      const { filesDir } = ensureCardStorageDirs(cardId);
+      const filePath = path.join(filesDir, fileRecord.stored_name);
+      
+      // Security: prevent directory traversal
+      const realPath = path.resolve(filePath);
+      const realFilesDir = path.resolve(filesDir);
+      if (!realPath.startsWith(realFilesDir)) {
+        json(res, 403, { error: 'Forbidden' });
+        return;
+      }
+
+      if (!fs.existsSync(filePath)) {
+        json(res, 404, { error: 'File not found' });
+        return;
+      }
+
+      const buffer = fs.readFileSync(filePath);
+      const filename = fileRecord.name || path.basename(filePath);
+      const mimeType = fileRecord.mime_type || 'application/octet-stream';
+      res.writeHead(200, {
+        'Content-Type': mimeType,
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': buffer.length,
+      });
+      res.end(buffer);
+      return;
+    }
+
     json(res, 404, { error: 'Not found' });
   } catch (err) {
     const statusCode = err && err.statusCode ? err.statusCode : 500;
@@ -482,6 +882,9 @@ function main() {
     console.log('  GET   /api/example-board/server/bootstrap');
     console.log('  GET   /api/example-board/server/sse');
     console.log('  PATCH /api/example-board/server/cards/:id');
+    console.log('  POST  /api/example-board/server/cards/:id/actions');
+    console.log('  POST  /api/example-board/server/cards/:id/files');
+    console.log('  GET   /api/example-board/server/cards/:id/files/:idx');
   });
 }
 

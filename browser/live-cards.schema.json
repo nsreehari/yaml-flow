@@ -227,8 +227,39 @@
     "provides": { "$ref": "#/definitions/provides" },
     "meta":     { "$ref": "#/definitions/meta" },
     "view":     { "$ref": "#/definitions/view" },
-    "card_data":    { "type": "object", "additionalProperties": true,
-      "description": "Authored card data supplied in the card definition"
+    "card_data": {
+      "type": "object",
+      "description": "Authored card data supplied in the card definition",
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "Optional uploaded-file metadata maintained by host handlers. Stored name is normalized and serial-prefixed (for example 001-my_file.pdf).",
+          "items": {
+            "type": "object",
+            "required": ["name", "stored_name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "stored_name": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 32,
+                "pattern": "^[0-9]{3,}-[a-z0-9._-]+$"
+              },
+              "size": {
+                "oneOf": [
+                  { "type": "integer", "minimum": 0 },
+                  { "type": "null" }
+                ]
+              },
+              "mime_type": { "type": "string" },
+              "path": { "type": "string", "pattern": "^[^\\s]+/files/[0-9]{3,}-[a-z0-9._-]+$" },
+              "uploaded_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": true
     },
     "sources": {
       "type": "array",

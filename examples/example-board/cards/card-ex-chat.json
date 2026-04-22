@@ -1,0 +1,25 @@
+{
+  "id": "card-ex-chat",
+  "meta": {
+    "title": "Collaboration Chat",
+    "tags": ["chat", "interactive"],
+    "desc": "Board-level chat action routing with optional file attachments"
+  },
+  "view": {
+    "elements": [
+      {
+        "id": "chat",
+        "kind": "chat",
+        "label": "Discuss This Board",
+        "data": {
+          "bind": "card_data.messages",
+          "fileAttach": true,
+          "fileAccept": [".txt", ".md", ".json", ".png", ".jpg"],
+          "placeholder": "Type a message or attach files..."
+        }
+      }
+    ],
+    "layout": { "board": { "col": 6, "order": 12 }, "canvas": { "x": 980, "y": 530, "w": 360, "h": 240 } }
+  },
+  "card_data": {}
+}

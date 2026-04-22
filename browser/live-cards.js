@@ -199,17 +199,30 @@ var LiveCard = (function () {
       return _cleanup[id];
     }
 
-    function _runCompute(node) {
-      if (!node.compute || !node.compute.length) return Promise.resolve();
-      if (typeof CardCompute === 'undefined') return Promise.resolve();
-      return CardCompute.run(node).catch(function (e) {
-        console.error('LiveCard compute error', node.id, e);
-      });
+    function _runCompute() {
+      // Runtime payload is authoritative; UI never recomputes derived values.
+      return Promise.resolve();
     }
 
     function _resolveBind(node, bind) {
-      if (!bind) return undefined;
-      return _deepGet(node, bind);
+      if (!bind || typeof bind !== 'string') return undefined;
+      const parts = _pathParts(bind);
+      if (!parts.length) return undefined;
+
+      const root = parts[0];
+      const rest = parts.slice(1).join('.');
+      const ns = {
+        card: node && node.card ? node.card : {},
+        card_data: node && node.card_data ? node.card_data : {},
+        sources_data: node && node.sources_data ? node.sources_data : {},
+        requires_data: node && node.requires_data ? node.requires_data : {},
+        computed_values: node && node.computed_values ? node.computed_values : {},
+        runtime_state: node && node.runtime_state ? node.runtime_state : {},
+        data_objects: node && node.data_objects ? node.data_objects : {},
+      };
+
+      if (!Object.prototype.hasOwnProperty.call(ns, root)) return undefined;
+      return rest ? _deepGet(ns[root], rest) : ns[root];
     }
 
     // ---- Pub/sub ----
@@ -226,9 +239,7 @@ var LiveCard = (function () {
     }
 
     function _autoSubscribe(node) {
-      // When the server adapter resolves requires into an object for compute
-      // expressions, the original token array is preserved on _requiresTokens.
-      const requires = node._requiresTokens || node.requires || [];
+      const requires = (node && node.card && Array.isArray(node.card.requires)) ? node.card.requires : [];
       if (!requires.length) return;
       const cleanup = _getCleanup(node.id);
       cleanup.unsubs = requires.map(upId => subscribe(upId, () => {
@@ -236,10 +247,8 @@ var LiveCard = (function () {
         if (!info || !info.resultEl) return;
         const updated = cfg.resolve(node.id);
         if (!updated) return;
-        _runCompute(updated).then(function () {
-          _renderElements(updated, info.resultEl);
-          notify(node.id);
-        });
+        _renderElements(updated, info.resultEl);
+        notify(node.id);
       }));
     }
 
@@ -680,7 +689,30 @@ var LiveCard = (function () {
 
     function _renderText(data, el, elemDef) {
       const ed = elemDef.data || {};
+      const format = ed.format || 'default';
       const style = ed.style || 'default';
+
+      // Handle file-links format
+      if (format === 'file-links') {
+        if (!Array.isArray(data) || data.length === 0) {
+          el.innerHTML = '<div class="text-muted small">No files uploaded</div>';
+          return;
+        }
+        const htmlParts = [];
+        data.forEach((file, idx) => {
+          if (!file || !file.stored_name) return;
+          const name = file.name || file.stored_name;
+          const cardId = elemDef.data && elemDef.data.cardId ? elemDef.data.cardId : 'unknown';
+          const downloadUrl = `/api/example-board/server/cards/${encodeURIComponent(cardId)}/files/${idx}?sn=${encodeURIComponent(file.stored_name)}`;
+          const size = file.size ? ` (${Math.round(file.size / 1024)}KB)` : '';
+          htmlParts.push(`<div class="mb-2"><a href="${downloadUrl}" class="btn btn-sm btn-outline-secondary">${_esc(name)}${_esc(size)}</a></div>`);
+        });
+        const html = htmlParts.join('');
+        el.innerHTML = html;
+        return;
+      }
+
+      // Default text rendering
       const tag = style === 'heading' ? 'h4' : 'div';
       const cls = style === 'muted' ? 'text-muted small' : (style === 'heading' ? 'fw-bold' : 'small');
       el.innerHTML = `<${tag} class="${cls}">${_esc(data != null ? String(data) : '')}</${tag}>`;
@@ -710,6 +742,7 @@ var LiveCard = (function () {
       const signal = cleanup.ac.signal;
       const ed = elemDef.data || {};
       const uploaded = Array.isArray(data) ? data : [];
+      const showUploadedList = ed.showUploadedList === true;
       const showUpload = ed.upload !== false;
       const accept = ed.accept || ['.txt','.csv','.md','.json','.html','.xml','.pdf','.xlsx','.docx','.pptx','.png','.jpg','.jpeg'];
       const acceptSet = new Set(accept.map(e => e.toLowerCase()));
@@ -719,6 +752,12 @@ var LiveCard = (function () {
 
       let stagedFiles = el._stagedFiles || [];
       el._stagedFiles = stagedFiles;
+      let uploadStatus = el._uploadStatus || {};
+      el._uploadStatus = uploadStatus;
+
+      function keyForFile(f) {
+        return `${f.name}::${f.size}::${f.lastModified || 0}`;
+      }
 
       let h = '';
 
@@ -733,7 +772,7 @@ var LiveCard = (function () {
       }
 
       // Uploaded files list
-      if (uploaded.length) {
+      if (showUploadedList && uploaded.length) {
         h += '<div class="lc-uploaded-files">';
         uploaded.forEach(f => {
           const name = typeof f === 'string' ? f : (f.name || '');
@@ -758,36 +797,68 @@ var LiveCard = (function () {
         return;
       }
 
-      const dz = document.getElementById(uid + '-dz');
-      const fi = document.getElementById(uid + '-fi');
-      const stagedEl = document.getElementById(uid + '-staged');
+      const dz = el.querySelector('#' + uid + '-dz');
+      const fi = el.querySelector('#' + uid + '-fi');
+      const stagedEl = el.querySelector('#' + uid + '-staged');
       if (!dz) return;
 
       function addFiles(fileList) {
+        const newlyAdded = [];
         for (const f of fileList) {
           const ext = '.' + f.name.split('.').pop().toLowerCase();
           if (!acceptSet.has(ext)) continue;
-          if (!stagedFiles.find(s => s.name === f.name)) stagedFiles.push(f);
+          if (!stagedFiles.find(s => s.name === f.name)) {
+            stagedFiles.push(f);
+            newlyAdded.push(f);
+            uploadStatus[keyForFile(f)] = 'uploading';
+          }
         }
         renderStaged();
-        cfg.onPatchState(node.id, { _stagedFiles: stagedFiles.map(f => ({ name: f.name, size: f.size })) });
+
+        // Server demos can upload real file blobs immediately via onAction.
+        if (newlyAdded.length && typeof cfg.onAction === 'function') {
+          Promise.resolve(cfg.onAction(node.id, 'file-upload', { files: newlyAdded, elemId: elemDef.id }))
+            .then(() => {
+              const uploadedKeys = new Set(newlyAdded.map(keyForFile));
+              stagedFiles = stagedFiles.filter((f) => !uploadedKeys.has(keyForFile(f)));
+              el._stagedFiles = stagedFiles;
+              newlyAdded.forEach((f) => { delete uploadStatus[keyForFile(f)]; });
+              el._uploadStatus = uploadStatus;
+              renderStaged();
+            })
+            .catch(() => {
+              newlyAdded.forEach((f) => { uploadStatus[keyForFile(f)] = 'error'; });
+              el._uploadStatus = uploadStatus;
+              renderStaged();
+            });
+        }
       }
 
       function renderStaged() {
         if (!stagedFiles.length) { stagedEl.innerHTML = ''; return; }
         let sh = '';
         stagedFiles.forEach((f, i) => {
+          const status = uploadStatus[keyForFile(f)] || 'ready';
           sh += '<div class="lc-staged-file">';
           sh += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
           sh += `<span class="small flex-grow-1 text-truncate">${_esc(f.name)}</span>`;
+          if (status === 'uploading') {
+            sh += '<span class="spinner-border spinner-border-sm text-secondary me-1" role="status" aria-label="Uploading"></span>';
+          } else if (status === 'error') {
+            sh += '<span class="badge bg-danger-subtle text-danger border border-danger-subtle me-1">Failed</span>';
+          }
           sh += `<button class="btn btn-sm btn-link text-danger p-0 lc-rm-staged" data-idx="${i}">&times;</button>`;
           sh += '</div>';
         });
         stagedEl.innerHTML = sh;
         stagedEl.querySelectorAll('.lc-rm-staged').forEach(btn => {
           btn.addEventListener('click', () => {
-            stagedFiles.splice(parseInt(btn.dataset.idx), 1);
+            const idx = parseInt(btn.dataset.idx);
+            const f = stagedFiles[idx];
+            if (f) delete uploadStatus[keyForFile(f)];
+            stagedFiles.splice(idx, 1);
             el._stagedFiles = stagedFiles;
+            el._uploadStatus = uploadStatus;
             renderStaged();
           }, { signal });
         });
@@ -803,7 +874,7 @@ var LiveCard = (function () {
 
       el._fileUpload = {
         getFiles: () => stagedFiles,
-        clear: () => { stagedFiles = []; el._stagedFiles = []; renderStaged(); },
+        clear: () => { stagedFiles = []; uploadStatus = {}; el._stagedFiles = []; el._uploadStatus = {}; renderStaged(); },
         disable: () => { dz.classList.add('lc-disabled'); fi.disabled = true; },
         enable: () => { dz.classList.remove('lc-disabled'); fi.disabled = false; },
       };
@@ -839,12 +910,12 @@ var LiveCard = (function () {
 
       el.innerHTML = h;
 
-      const body = document.getElementById(uid + '-body');
-      const input = document.getElementById(uid + '-input');
-      const sendBtn = document.getElementById(uid + '-send');
-      const attachBtn = canAttach ? document.getElementById(uid + '-attach') : null;
-      const fileInput = canAttach ? document.getElementById(uid + '-fi') : null;
-      const stagedEl = canAttach ? document.getElementById(uid + '-staged') : null;
+      const body = el.querySelector('#' + uid + '-body');
+      const input = el.querySelector('#' + uid + '-input');
+      const sendBtn = el.querySelector('#' + uid + '-send');
+      const attachBtn = canAttach ? el.querySelector('#' + uid + '-attach') : null;
+      const fileInput = canAttach ? el.querySelector('#' + uid + '-fi') : null;
+      const stagedEl = canAttach ? el.querySelector('#' + uid + '-staged') : null;
 
       let stagedFiles = [];
 
@@ -998,7 +1069,7 @@ var LiveCard = (function () {
     // ===========================================================================
 
     function _renderElements(node, containerEl) {
-      const view = node.view;
+      const view = node && node.card ? node.card.view : null;
       if (!view || !Array.isArray(view.elements)) { containerEl.innerHTML = ''; return; }
 
       if (_nodeEls[node.id]) _nodeEls[node.id].elements = {};
@@ -1056,7 +1127,7 @@ var LiveCard = (function () {
       const cleanup = _getCleanup(node.id);
       const signal = cleanup.ac.signal;
       const uid = 'lc-' + (node.id || 'x');
-      const features = (node.view && node.view.features) || {};
+      const features = (node.card && node.card.view && node.card.view.features) || {};
 
       // Run compute async before populating elements
       // (compute is triggered in the else branch below after DOM is ready)
@@ -1345,7 +1416,8 @@ var LiveCard = (function () {
     // ---- Helpers ----
 
     function _colWidth(node) {
-      if (node.view && node.view.layout && node.view.layout.board && node.view.layout.board.col) return node.view.layout.board.col;
+      const view = node && node.card ? node.card.view : null;
+      if (view && view.layout && view.layout.board && view.layout.board.col) return view.layout.board.col;
       return defaultCol;
     }
 
@@ -1355,8 +1427,8 @@ var LiveCard = (function () {
         if (_positions[node.id]) return; // already set
         if (explicit[node.id]) {
           _positions[node.id] = Object.assign({}, explicit[node.id]);
-        } else if (node.view && node.view.layout && node.view.layout.canvas && node.view.layout.canvas.x != null) {
-          _positions[node.id] = Object.assign({}, node.view.layout.canvas);
+        } else if (node.card && node.card.view && node.card.view.layout && node.card.view.layout.canvas && node.card.view.layout.canvas.x != null) {
+          _positions[node.id] = Object.assign({}, node.card.view.layout.canvas);
         } else {
           const col = (i % 4);
           const row = Math.floor(i / 4);
@@ -1366,7 +1438,7 @@ var LiveCard = (function () {
     }
 
     function _getRequires(node) {
-      return node._requiresTokens || node.requires || [];
+      return (node && node.card && Array.isArray(node.card.requires)) ? node.card.requires : [];
     }
 
     function _showCardInspector(node) {
@@ -1383,7 +1455,7 @@ var LiveCard = (function () {
 
       const header = document.createElement('div');
       header.className = 'modal-header';
-      header.innerHTML = `<h5 class="modal-title">Card Inspector: ${_esc((node.meta && node.meta.title) || node.id)}</h5><button type="button" class="btn-close" aria-label="Close"></button>`;
+      header.innerHTML = `<h5 class="modal-title">Card Inspector: ${_esc((node.card && node.card.meta && node.card.meta.title) || node.id)}</h5><button type="button" class="btn-close" aria-label="Close"></button>`;
 
       const closeModal = function () { modal.remove(); };
       header.querySelector('.btn-close').addEventListener('click', closeModal);
@@ -1396,10 +1468,7 @@ var LiveCard = (function () {
       cardSection.className = 'mb-4';
       cardSection.innerHTML = '<h6 class="fw-semibold mb-2">Card Object (Editable)</h6>';
 
-      const editableCardObject = JSON.parse(JSON.stringify(node || {}));
-      delete editableCardObject.computed_values;
-      delete editableCardObject._sourcesData;
-      delete editableCardObject.runtime_state;
+      const editableCardObject = JSON.parse(JSON.stringify((node && node.card) ? node.card : {}));
 
       const editor = document.createElement('textarea');
       editor.className = 'form-control form-control-sm font-monospace';
@@ -1460,13 +1529,17 @@ var LiveCard = (function () {
           }
 
           const fixedId = node.id;
-          const preservedComputedValues = node.computed_values;
-          const preservedSourcesData = node._sourcesData;
-          Object.keys(node).forEach(function (k) { delete node[k]; });
-          Object.assign(node, parsed);
+          const preservedRuntime = {
+            card_data: node.card_data,
+            sources_data: node.sources_data,
+            requires_data: node.requires_data,
+            computed_values: node.computed_values,
+            runtime_state: node.runtime_state,
+            data_objects: node.data_objects,
+          };
+          node.card = parsed;
           node.id = fixedId;
-          if (preservedComputedValues !== undefined) node.computed_values = preservedComputedValues;
-          if (preservedSourcesData !== undefined) node._sourcesData = preservedSourcesData;
+          Object.assign(node, preservedRuntime);
 
           engine.notify(node.id, { inspector: 'card-object-updated' });
           _render();
@@ -1494,11 +1567,12 @@ var LiveCard = (function () {
       wrap.className = 'card shadow-sm h-100';
       const header = document.createElement('div');
       header.className = 'card-header d-flex align-items-center gap-2 py-2';
-      const title = (node.meta && node.meta.title) || node.id;
-      const tags = (node.meta && node.meta.tags) || [];
+      const card = node && node.card ? node.card : {};
+      const title = (card.meta && card.meta.title) || node.id;
+      const tags = (card.meta && card.meta.tags) || [];
       let badgeHtml = '';
-      if ((node.sources && node.sources.length) && !node.view) {
-        var src = node.sources[0] || {};
+      if ((card.sources && card.sources.length) && !card.view) {
+        var src = card.sources[0] || {};
         badgeHtml = '<span class="badge bg-info text-dark ms-auto">' + _esc(src.kind || 'source') + '</span>';
       } else if (tags.length) {
         badgeHtml = tags.map(t => '<span class="badge bg-secondary ms-1">' + _esc(t) + '</span>').join('');
@@ -1530,8 +1604,9 @@ var LiveCard = (function () {
       const el = document.createElement('div');
       el.className = 'lc-source-node';
       const status = (node.card_data && node.card_data.status) || 'fresh';
-      const title = (node.meta && node.meta.title) || node.id;
-      const kind = (node.sources && node.sources[0] && node.sources[0].kind) || 'source';
+      const card = node && node.card ? node.card : {};
+      const title = (card.meta && card.meta.title) || node.id;
+      const kind = (card.sources && card.sources[0] && card.sources[0].kind) || 'source';
       el.innerHTML = `<div class="lc-source-pill shadow-sm">
         ${_statusDot(status)}
         <span class="fw-medium">${_esc(title)}</span>
@@ -1548,10 +1623,10 @@ var LiveCard = (function () {
       gridEl.innerHTML = '';
 
       // Only card nodes in board mode, sorted by order
-      const cards = nodeList.filter(n => n.view).slice();
+      const cards = nodeList.filter(n => n.card && n.card.view).slice();
       cards.sort((a, b) => {
-        const ao = (a.view && a.view.layout && a.view.layout.board && a.view.layout.board.order) || 0;
-        const bo = (b.view && b.view.layout && b.view.layout.board && b.view.layout.board.order) || 0;
+        const ao = (a.card && a.card.view && a.card.view.layout && a.card.view.layout.board && a.card.view.layout.board.order) || 0;
+        const bo = (b.card && b.card.view && b.card.view.layout && b.card.view.layout.board && b.card.view.layout.board.order) || 0;
         return ao - bo;
       });
 
@@ -1629,11 +1704,11 @@ var LiveCard = (function () {
         el.style.left = x + 'px'; el.style.top = y + 'px';
         // Persist
         _positions[node.id] = Object.assign(_positions[node.id] || {}, { x, y });
-        if (node.view) {
-          if (!node.view.layout) node.view.layout = {};
-          if (!node.view.layout.canvas) node.view.layout.canvas = {};
-          node.view.layout.canvas.x = x;
-          node.view.layout.canvas.y = y;
+        if (node.card && node.card.view) {
+          if (!node.card.view.layout) node.card.view.layout = {};
+          if (!node.card.view.layout.canvas) node.card.view.layout.canvas = {};
+          node.card.view.layout.canvas.x = x;
+          node.card.view.layout.canvas.y = y;
         }
         engine.notify(node.id);
         _drawEdges();
@@ -1651,7 +1726,7 @@ var LiveCard = (function () {
       nodeList.forEach(node => {
         const pos = _positions[node.id] || { x: 0, y: 0 };
 
-        if (!node.view && (node.sources && node.sources.length)) {
+        if ((!node.card || !node.card.view) && (node.card && node.card.sources && node.card.sources.length)) {
           const el = _buildSourcePill(node);
           el.dataset.nodeId = node.id;
           el.style.left = pos.x + 'px';
