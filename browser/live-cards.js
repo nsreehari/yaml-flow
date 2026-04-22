@@ -1595,9 +1595,11 @@ var LiveCard = (function () {
         h += `<span class="badge bg-danger small" title="${_esc(node.card_data.error)}">Error</span>`;
       }
       h += '<div class="d-flex align-items-center gap-1 ms-auto">';
+      const filesCount = (node && node.card_data && Array.isArray(node.card_data.files)) ? node.card_data.files.length : 0;
       // Files icon button (paperclip)
-      h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-files-open" title="Files">`;
+      h += `<button class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center" id="${uid}-files-open" title="${filesCount > 0 ? 'Files (' + filesCount + ')' : 'Files'}">`;
       h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>';
+      if (filesCount > 0) h += `<span class="ms-1 small" aria-label="${filesCount} files">${filesCount}</span>`;
       h += '</button>';
       // Chat icon button (speech bubble)
       h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-chat-open" title="Chat">`;
@@ -1713,6 +1715,19 @@ var LiveCard = (function () {
       if (patch.status) node.card_data.status = patch.status;
       if (patch.lastRun) node.card_data.lastRun = patch.lastRun;
       if (patch.error !== undefined) node.card_data.error = patch.error;
+      if (patch.files !== undefined) node.card_data.files = Array.isArray(patch.files) ? patch.files : [];
+
+      // Keep files count inline inside the files button in the header.
+      const filesBtn = document.getElementById(info.uid + '-files-open');
+      const fileCount = Array.isArray(node.card_data.files) ? node.card_data.files.length : 0;
+      if (filesBtn) {
+        filesBtn.title = fileCount > 0 ? ('Files (' + fileCount + ')') : 'Files';
+        filesBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>' + (fileCount > 0 ? ('<span class="ms-1 small" aria-label="' + fileCount + ' files">' + fileCount + '</span>') : '');
+      }
+
+      // Remove legacy external count label if present from older renders.
+      const filesCountEl = document.getElementById(info.uid + '-files-count');
+      if (filesCountEl && filesCountEl.parentNode) filesCountEl.parentNode.removeChild(filesCountEl);
 
       if (node.card_data.status === 'loading') {
         info.resultEl.innerHTML = '<div class="d-flex align-items-center gap-2"><span class="spinner-border spinner-border-sm text-muted"></span><span class="text-muted small">Loading…</span></div>';
