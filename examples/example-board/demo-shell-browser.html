@@ -40,15 +40,34 @@
       Contract and decision notes live in <a href="./demo-shell.html#assumptions-and-tradeoffs">Assumptions and Tradeoffs</a>.
     </div>
 
+    <details id="debugPanelDetails" class="card border-warning mb-3 d-none">
+      <summary class="card-header py-2 d-flex justify-content-between align-items-center" style="cursor: pointer;">
+        <strong class="small">Live Debug Panel</strong>
+        <span class="badge text-bg-warning">browser-runtime</span>
+      </summary>
+      <div class="card-body py-2">
+        <pre id="debugPanelBody" class="small mb-0" style="white-space: pre-wrap; max-height: 220px; overflow: auto;">Initializing debug panel...</pre>
+      </div>
+    </details>
+
     <div id="boardRoot"></div>
   </div>
 
   <script>
     (function () {
+      function failInit(message) {
+        const root = document.getElementById('boardRoot');
+        if (root) {
+          root.innerHTML = `<div class="alert alert-danger">${message}</div>`;
+        }
+        console.error(message);
+      }
+
       // Get LocalStorageService from board-livegraph-runtime export
       const LocalStorageService = (window.BoardLiveGraph && window.BoardLiveGraph.LocalStorageService);
       if (!LocalStorageService) {
-        throw new Error('LocalStorageService not loaded. Run "npm run build:browser" first.');
+        failInit('LocalStorageService not loaded. Run "npm run build:browser" first.');
+        return;
       }
 
       // ========================================================================
@@ -88,6 +107,58 @@
       const clone = (x) => JSON.parse(JSON.stringify(x));
       const nowIso = () => new Date().toISOString();
 
+      function renderDebugPanel(runtimeState, artifacts) {
+        const el = document.getElementById('debugPanelBody');
+        if (!el) return;
+
+        const tasks = runtimeState && runtimeState.state && runtimeState.state.tasks
+          ? runtimeState.state.tasks
+          : {};
+        const availableOutputs = runtimeState && runtimeState.state && Array.isArray(runtimeState.state.availableOutputs)
+          ? runtimeState.state.availableOutputs
+          : [];
+
+        const byStatus = {};
+        for (const task of Object.values(tasks)) {
+          const status = task && task.status ? task.status : 'unknown';
+          byStatus[status] = (byStatus[status] || 0) + 1;
+        }
+
+        const cardRuntimeById = artifacts && artifacts.cardRuntimeById ? artifacts.cardRuntimeById : {};
+        const metric = cardRuntimeById['card-ex-metric'] && cardRuntimeById['card-ex-metric'].computed_values
+          ? cardRuntimeById['card-ex-metric'].computed_values.totalRevenue
+          : undefined;
+        const topProducts = cardRuntimeById['card-ex-list'] && cardRuntimeById['card-ex-list'].computed_values
+          ? cardRuntimeById['card-ex-list'].computed_values.topProducts
+          : undefined;
+        const regionCounts = cardRuntimeById['card-ex-chart'] && cardRuntimeById['card-ex-chart'].computed_values
+          ? cardRuntimeById['card-ex-chart'].computed_values.regionCounts
+          : undefined;
+        const filteredOrders = cardRuntimeById['card-ex-table'] && cardRuntimeById['card-ex-table'].computed_values
+          ? cardRuntimeById['card-ex-table'].computed_values.filtered
+          : undefined;
+
+        const watched = {
+          orders: availableOutputs.includes('orders'),
+          prices: availableOutputs.includes('prices'),
+          selections: availableOutputs.includes('selections'),
+          formToken: availableOutputs.includes('card-ex-form'),
+        };
+
+        const lines = [
+          `updatedAt: ${new Date().toISOString()}`,
+          `statusCounts: ${JSON.stringify(byStatus)}`,
+          `availableOutputs(${availableOutputs.length}): ${availableOutputs.slice().sort().join(', ')}`,
+          `watchedTokens: ${JSON.stringify(watched)}`,
+          `card-ex-metric.totalRevenue: ${JSON.stringify(metric)}`,
+          `card-ex-list.topProducts.length: ${Array.isArray(topProducts) ? topProducts.length : 'n/a'}`,
+          `card-ex-chart.regionCounts.length: ${Array.isArray(regionCounts) ? regionCounts.length : 'n/a'}`,
+          `card-ex-table.filtered.length: ${Array.isArray(filteredOrders) ? filteredOrders.length : 'n/a'}`,
+        ];
+
+        el.textContent = lines.join('\n');
+      }
+
       function hasCompatiblePersistedArtifacts(cardDefinitions, cardRuntimeById) {
         if (!cardRuntimeById || typeof cardRuntimeById !== 'object') return false;
         const cards = Array.isArray(cardDefinitions) ? cardDefinitions : [];
@@ -96,7 +167,14 @@
           const artifact = cardRuntimeById[card.id];
           if (!artifact || typeof artifact !== 'object') return false;
           if (card.sources && card.sources.length > 0) {
-            return artifact.sources_data && typeof artifact.sources_data === 'object' && !Array.isArray(artifact.sources_data);
+            if (!(artifact.sources_data && typeof artifact.sources_data === 'object' && !Array.isArray(artifact.sources_data))) {
+              return false;
+            }
+          }
+          if (card.requires && card.requires.length > 0) {
+            if (!(artifact.requires_data && typeof artifact.requires_data === 'object' && !Array.isArray(artifact.requires_data))) {
+              return false;
+            }
           }
           return true;
         });
@@ -133,7 +211,10 @@
 
         return {
           fetchSource: async function (card, sourceDef) {
+            const mockKey = sourceDef && typeof sourceDef.mock === 'string' ? sourceDef.mock : '';
             const script = String(sourceDef && sourceDef.script || sourceDef && sourceDef.cli || '').toLowerCase();
+            if (mockKey === 'orders') return clone(orderRows);
+            if (mockKey === 'prices') return clone(priceRows);
             if (card.id === 'card-ex-source' || script.includes('fetch-orders')) return clone(orderRows);
             if (card.id === 'card-ex-source-http' || script.includes('fetch-prices')) return clone(priceRows);
             return null;
@@ -155,6 +236,17 @@
       let runtimeUnsub = null;
       let currentMode = 'board';
       const nodesById = {};
+
+      function setDebugPanelVisibility(isDevModeOn) {
+        const details = document.getElementById('debugPanelDetails');
+        if (!details) return;
+        if (isDevModeOn) {
+          details.classList.remove('d-none');
+        } else {
+          details.open = false;
+          details.classList.add('d-none');
+        }
+      }
 
       function syncBoardNodes(nextNodes) {
         const existingIds = new Set(board ? board.nodes.map(n => n.id) : []);
@@ -280,12 +372,13 @@
         });
 
         runtimeUnsub = runtime.subscribe(function () {
+          const runtimeState = runtime.getState();
           // Build runtime artifacts (mirrors what CLI does after compute)
           const artifacts = buildBrowserArtifactsFromRuntime({
             boardPath: 'browser',
             cardDefinitions,
             runtimeNodes: runtime.getNodes(),
-            graphState: runtime.getState(),
+            graphState: runtimeState,
           });
 
           // Persist to localStorage (mirrors CLI writing to runtime-out/)
@@ -296,9 +389,14 @@
 
           // Rebuild renderable nodes from persisted artifacts (same pattern as server shell)
           syncBoardNodes(buildRenderableCardsFromArtifacts(artifacts));
+
+          // Keep a compact runtime snapshot visible for debugging token flow issues.
+          renderDebugPanel(runtimeState, artifacts);
         });
 
         runtime.push({ type: 'inject-tokens', tokens: [], timestamp: nowIso() });
+        // Force a full recompute pass to recover from stale/incomplete localStorage artifacts.
+        runtime.retriggerAll();
 
         window.demoLiveGraph = {
           mode: 'browser',
@@ -337,7 +435,11 @@
 
         document.getElementById('devModeToggle').addEventListener('change', function () {
           if (board) board.setDevMode(this.checked);
+          setDebugPanelVisibility(this.checked);
         });
+
+        // Keep debug UI out of the way unless Dev Mode is explicitly enabled.
+        setDebugPanelVisibility(document.getElementById('devModeToggle').checked);
       }
 
       bootstrap().catch(function (err) {

@@ -25,6 +25,7 @@ function normalizeCardRuntimeArtifact(cardId, artifact) {
       card_data: {},
       computed_values: {},
       sources_data: {},
+      requires_data: {},
     };
   }
 
@@ -40,12 +41,17 @@ function normalizeCardRuntimeArtifact(cardId, artifact) {
     ? clone(artifact.sources_data)
     : {};
 
+  const requiresData = artifact.requires_data && typeof artifact.requires_data === 'object' && !Array.isArray(artifact.requires_data)
+    ? clone(artifact.requires_data)
+    : {};
+
   return {
     schema_version: artifact.schema_version || 'v1',
     card_id: typeof artifact.card_id === 'string' ? artifact.card_id : cardId,
     card_data: cardData,
     computed_values: computedValues,
     sources_data: sourcesData,
+    requires_data: requiresData,
   };
 }
 
@@ -108,10 +114,17 @@ function buildRenderableCardsFromArtifacts({ cardDefinitions, statusSnapshot, ca
     // `requires` namespace that compute expressions reference (requires.orders.*).
     // Keep the original requires array intact on `_requiresTokens` so the
     // browser engine can still use it for pub/sub subscription wiring.
+    const artifactRequiresData =
+      runtimeArtifact && runtimeArtifact.requires_data && typeof runtimeArtifact.requires_data === 'object'
+        ? runtimeArtifact.requires_data
+        : {};
     const resolvedRequiresData = {};
     for (const token of Array.isArray(cardDefinition.requires) ? cardDefinition.requires : []) {
       if (Object.prototype.hasOwnProperty.call(safeDataObjectsByToken, token)) {
         resolvedRequiresData[token] = clone(safeDataObjectsByToken[token]);
+      } else if (Object.prototype.hasOwnProperty.call(artifactRequiresData, token)) {
+        // Browser runtime fallback: use per-card resolved requires captured in runtime artifacts.
+        resolvedRequiresData[token] = clone(artifactRequiresData[token]);
       }
     }
     node.data_objects = clone(safeDataObjectsByToken);
