@@ -10,11 +10,13 @@ const demoServerPath = path.join(repoRoot, 'examples', 'example-board', 'demo-se
 
 const TEST_PORT = 7800 + Math.floor(Math.random() * 100); // Use random port to avoid conflicts
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-demo-server-fileapi-'));
-const SURFACE_DIR = path.join(TEST_ROOT, 'surface');
-const BOARD_DIR = path.join(TEST_ROOT, 'board');
-const RUNTIME_OUT_DIR = path.join(TEST_ROOT, 'runtime-out');
+const SETUP_DIR = path.join(TEST_ROOT, 'setup');
+const BOARD_ROOT = path.join(SETUP_DIR, 'board-default');
+const SURFACE_DIR = path.join(BOARD_ROOT, 'surface');
+const BOARD_DIR = path.join(BOARD_ROOT, 'runtime');
+const RUNTIME_OUT_DIR = path.join(BOARD_ROOT, 'runtime-out');
 const TMP_CARDS_DIR = path.join(SURFACE_DIR, 'tmp-cards');
-const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/example-board/server`;
+const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/boards/default`;
 
 let serverProc: ChildProcess | null = null;
 let serverLogs = '';
@@ -22,11 +24,7 @@ let serverLogs = '';
 function createMinimalFixtureDirs() {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(TEST_ROOT, { recursive: true });
-
-  // Create minimal directory structure; demo-server will populate these
-  fs.mkdirSync(SURFACE_DIR, { recursive: true });
-  fs.mkdirSync(BOARD_DIR, { recursive: true });
-  fs.mkdirSync(RUNTIME_OUT_DIR, { recursive: true });
+  fs.mkdirSync(SETUP_DIR, { recursive: true });
 }
 
 async function waitForServerReady(): Promise<void> {
@@ -53,9 +51,8 @@ beforeAll(async () => {
     env: {
       ...process.env,
       DEMO_SERVER_PORT: String(TEST_PORT),
-      DEMO_SURFACE_DIR: SURFACE_DIR,
-      DEMO_BOARD_RUNTIME_DIR: BOARD_DIR,
-      DEMO_RUNTIME_OUT_DIR: RUNTIME_OUT_DIR,
+      DEMO_SETUP_DIR: SETUP_DIR,
+      DEMO_TASK_EXECUTOR_PATH: path.join(repoRoot, 'examples', 'example-board', 'demo-task-executor.js'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

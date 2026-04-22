@@ -46,7 +46,7 @@ describe('CLI vs Browser artifact symmetry', () => {
     });
 
     it('Browser-synthesized card runtime artifact matches schema', () => {
-      // This is what buildBrowserArtifactsFromRuntime() synthesizes (runtime-artifacts-adapter.js:89-94)
+      // This is what buildBrowserArtifactsFromRuntime() synthesizes (reusable-runtime-artifacts-adapter.js:89-94)
       const browserArtifact = {
         schema_version: 'v1',
         card_id: 'test-card',
@@ -141,7 +141,7 @@ describe('CLI vs Browser artifact symmetry', () => {
     });
 
     it('Browser-synthesized status snapshot matches schema', () => {
-      // What buildBrowserArtifactsFromRuntime() synthesizes (runtime-artifacts-adapter.js:141-158)
+      // What buildBrowserArtifactsFromRuntime() synthesizes (reusable-runtime-artifacts-adapter.js:141-158)
       const browserStatus = {
         schema_version: 'v1',
         meta: { board: { path: 'browser-runtime' } },
