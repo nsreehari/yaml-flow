@@ -106,7 +106,7 @@
     "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run build:browser"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
