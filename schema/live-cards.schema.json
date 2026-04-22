@@ -107,7 +107,7 @@
       "required": ["bindTo"],
       "additionalProperties": true,
       "properties": {
-        "bindTo":     { "type": "string",  "description": "Key under sources.* available in compute expressions" },
+        "bindTo":     { "type": "string",  "description": "Key under fetched_sources.* available in compute expressions" },
         "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
         "optionalForCompletionGating":   { "type": "boolean", "default": false, "description": "When true this source does not gate card completion. Default false when absent, so sources are completion-gating by default." },
         "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
@@ -123,11 +123,11 @@
         "kind":      {
           "enum": ["metric", "table", "chart", "form", "filter", "list",
                    "notes", "todo", "alert", "narrative", "badge", "text",
-                   "markdown", "custom", "file-upload", "actions"]
+                   "markdown", "custom", "actions"]
         },
         "label":     { "type": "string", "description": "Heading above this element" },
         "className": { "type": "string", "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'" },
-        "visible":   { "type": "string", "description": "card_data/requires/sources/computed_values path — element shown only if truthy" },
+        "visible":   { "type": "string", "description": "card_data/requires/fetched_sources/computed_values path — element shown only if truthy" },
         "data": {
           "type": "object",
           "properties": {
@@ -165,7 +165,7 @@
                   "label":    { "type": "string" },
                   "style":    { "type": "string", "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'" },
                   "size":     { "type": "string", "default": "sm" },
-                  "disabled": { "oneOf": [{ "type": "boolean" }, { "type": "string", "description": "card_data/requires/sources/computed_values path — truthy = disabled" }] }
+                  "disabled": { "oneOf": [{ "type": "boolean" }, { "type": "string", "description": "card_data/requires/fetched_sources/computed_values path — truthy = disabled" }] }
                 }
               }
             }
@@ -268,7 +268,7 @@
     },
     "compute": {
       "type": "array",
-      "description": "Ordered array of compute steps. Each reads card_data.*/requires.*/sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
+      "description": "Ordered array of compute steps. Each reads card_data.*/requires.*/fetched_sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
       "items": { "$ref": "#/definitions/compute_step" }
     }
   }

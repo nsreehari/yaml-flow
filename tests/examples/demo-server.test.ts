@@ -194,7 +194,7 @@ function findNewestSystemChatFile(cardId: string): string | null {
 }
 
 describe('demo-server file upload + card list + download', () => {
-  const cardId = 'card-ex-file-upload';
+  const cardId = 'card-ex-actions';
 
   it('uploads file, updates card file list, and downloads via card entry lookup', async () => {
     const originalText = 'hello-download-flow';
@@ -231,7 +231,7 @@ describe('demo-server file upload + card list + download', () => {
   }, 30000);
 
   it('sends chat message and persists it to card chat files (not card_data)', async () => {
-    const chatCardId = 'card-ex-chat';
+    const chatCardId = 'card-ex-actions';
     const testMessage = 'Hello from test user';
 
     const before = readChatFileNames(chatCardId);
@@ -266,7 +266,7 @@ describe('demo-server file upload + card list + download', () => {
   }, 30000);
 
   it('uploads with inChat=true, stores file metadata on card, and appends system chat record', async () => {
-    const chatCardId = 'card-ex-chat';
+    const chatCardId = 'card-ex-actions';
     const originalName = 'meeting_notes.md';
     const content = '# notes\n- item 1';
 

@@ -78,6 +78,16 @@ var LiveCard = (function () {
       .lc-chat-modal-body { padding:.625rem .875rem; overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); }
       .lc-chat-modal-footer { padding:.625rem .875rem; border-top:1px solid var(--bs-border-color,#dee2e6); background:#fff; }
       .lc-chat-inline-meta { margin-top:.25rem; font-size:.75rem; color:var(--bs-secondary,#6c757d); }
+      .lc-files-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:11950; display:none; align-items:center; justify-content:center; padding:1rem; }
+      .lc-files-modal-backdrop.lc-open { display:flex; }
+      .lc-files-modal { width:min(820px,96vw); max-height:88vh; background:#fff; border-radius:.5rem; box-shadow:0 18px 50px rgba(0,0,0,.28); display:flex; flex-direction:column; overflow:hidden; }
+      .lc-files-modal-header { display:flex; align-items:center; gap:.5rem; justify-content:space-between; padding:.625rem .875rem; border-bottom:1px solid var(--bs-border-color,#dee2e6); }
+      .lc-files-modal-title { margin:0; font-size:.95rem; font-weight:600; }
+      .lc-files-modal-body { padding:.625rem .875rem; overflow:auto; min-height:220px; max-height:52vh; background:var(--bs-light,#f8f9fa); }
+      .lc-files-modal-footer { padding:.625rem .875rem; border-top:1px solid var(--bs-border-color,#dee2e6); background:#fff; }
+      .lc-files-list { display:flex; flex-direction:column; gap:.375rem; }
+      .lc-file-row { display:flex; align-items:center; justify-content:space-between; gap:.5rem; background:#fff; border:1px solid var(--bs-border-color,#dee2e6); border-radius:.375rem; padding:.4rem .55rem; }
+      .lc-file-meta { color:var(--bs-secondary,#6c757d); font-size:.75rem; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -206,6 +216,21 @@ var LiveCard = (function () {
       closeBtn: null,
       currentNodeId: null,
       stagedFiles: [],
+      loading: false,
+    };
+    const _filesModal = {
+      backdrop: null,
+      title: null,
+      body: null,
+      staged: null,
+      fileInput: null,
+      dropzone: null,
+      uploadBtn: null,
+      attachBtn: null,
+      closeBtn: null,
+      currentNodeId: null,
+      stagedFiles: [],
+      pollingTimer: null,
       loading: false,
     };
 
@@ -418,6 +443,188 @@ var LiveCard = (function () {
       _chatModal.backdrop.classList.add('lc-open');
       _chatModal.input.focus();
       await _refreshModalChatHistory(nodeId);
+    }
+
+    function _ensureFilesModal() {
+      if (_filesModal.backdrop) return;
+
+      const backdrop = document.createElement('div');
+      backdrop.className = 'lc-files-modal-backdrop';
+      backdrop.innerHTML = '' +
+        '<div class="lc-files-modal" role="dialog" aria-modal="true" aria-label="Card files">' +
+        '  <div class="lc-files-modal-header">' +
+        '    <h5 class="lc-files-modal-title">Files</h5>' +
+        '    <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-close>Close</button>' +
+        '  </div>' +
+        '  <div class="lc-files-modal-body" data-lc-files-body></div>' +
+        '  <div class="lc-files-modal-footer">' +
+        '    <div class="lc-dropzone mb-2" data-lc-files-dz>' +
+        '      <div class="small text-muted">Drop files here or click to browse</div>' +
+        '      <input type="file" class="d-none" data-lc-files-input multiple>' +
+        '    </div>' +
+        '    <div data-lc-files-staged class="small mb-2"></div>' +
+        '    <div class="d-flex justify-content-end gap-2">' +
+        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-attach>Select files</button>' +
+        '      <button type="button" class="btn btn-sm btn-primary" data-lc-files-upload>Upload</button>' +
+        '    </div>' +
+        '  </div>' +
+        '</div>';
+
+      document.body.appendChild(backdrop);
+      _filesModal.backdrop = backdrop;
+      _filesModal.title = backdrop.querySelector('.lc-files-modal-title');
+      _filesModal.body = backdrop.querySelector('[data-lc-files-body]');
+      _filesModal.staged = backdrop.querySelector('[data-lc-files-staged]');
+      _filesModal.fileInput = backdrop.querySelector('[data-lc-files-input]');
+      _filesModal.dropzone = backdrop.querySelector('[data-lc-files-dz]');
+      _filesModal.uploadBtn = backdrop.querySelector('[data-lc-files-upload]');
+      _filesModal.attachBtn = backdrop.querySelector('[data-lc-files-attach]');
+      _filesModal.closeBtn = backdrop.querySelector('[data-lc-files-close]');
+
+      const close = function () {
+        _filesModal.currentNodeId = null;
+        _filesModal.stagedFiles = [];
+        _filesModal.staged.innerHTML = '';
+        _filesModal.backdrop.classList.remove('lc-open');
+        if (_filesModal.pollingTimer) {
+          clearInterval(_filesModal.pollingTimer);
+          _filesModal.pollingTimer = null;
+        }
+      };
+
+      function renderStagedFiles() {
+        if (!_filesModal.stagedFiles.length) {
+          _filesModal.staged.innerHTML = '';
+          return;
+        }
+        _filesModal.staged.innerHTML = _filesModal.stagedFiles.map(function (f, i) {
+          return '<span class="badge text-bg-light border me-1 mb-1">' + _esc(f.name || 'file') +
+            ' <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1" data-lc-files-rm="' + i + '">&times;</button></span>';
+        }).join('');
+        _filesModal.staged.querySelectorAll('[data-lc-files-rm]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            const idx = parseInt(btn.getAttribute('data-lc-files-rm') || '-1', 10);
+            if (idx >= 0) _filesModal.stagedFiles.splice(idx, 1);
+            renderStagedFiles();
+          });
+        });
+      }
+
+      function addFiles(fileList) {
+        const files = Array.from(fileList || []);
+        for (const f of files) {
+          if (!_filesModal.stagedFiles.find(function (x) { return x.name === f.name && x.size === f.size && x.lastModified === f.lastModified; })) {
+            _filesModal.stagedFiles.push(f);
+          }
+        }
+        renderStagedFiles();
+      }
+
+      async function uploadFiles() {
+        if (_filesModal.loading || !_filesModal.currentNodeId || !_filesModal.stagedFiles.length) return;
+        const nodeId = _filesModal.currentNodeId;
+        const files = _filesModal.stagedFiles.slice();
+        _filesModal.loading = true;
+        _filesModal.uploadBtn.disabled = true;
+        _filesModal.attachBtn.disabled = true;
+        _filesModal.dropzone.classList.add('lc-disabled');
+
+        try {
+          await Promise.resolve(cfg.onAction(nodeId, 'file-upload', { files }));
+          _filesModal.stagedFiles = [];
+          renderStagedFiles();
+          _refreshFilesModalList(nodeId);
+        } catch (err) {
+          _filesModal.staged.innerHTML = '<span class="text-danger">Upload failed: ' + _esc(String((err && err.message) || err)) + '</span>';
+        } finally {
+          _filesModal.loading = false;
+          _filesModal.uploadBtn.disabled = false;
+          _filesModal.attachBtn.disabled = false;
+          _filesModal.dropzone.classList.remove('lc-disabled');
+        }
+      }
+
+      _filesModal.closeBtn.addEventListener('click', close);
+      backdrop.addEventListener('click', function (evt) {
+        if (evt.target === backdrop) close();
+      });
+      _filesModal.attachBtn.addEventListener('click', function () {
+        _filesModal.fileInput.click();
+      });
+      _filesModal.fileInput.addEventListener('change', function (evt) {
+        addFiles(evt.target && evt.target.files ? evt.target.files : []);
+        evt.target.value = '';
+      });
+      _filesModal.uploadBtn.addEventListener('click', uploadFiles);
+      _filesModal.dropzone.addEventListener('click', function () {
+        if (!_filesModal.loading) _filesModal.fileInput.click();
+      });
+      _filesModal.dropzone.addEventListener('dragover', function (evt) {
+        evt.preventDefault();
+        _filesModal.dropzone.classList.add('lc-drag-over');
+      });
+      _filesModal.dropzone.addEventListener('dragleave', function () {
+        _filesModal.dropzone.classList.remove('lc-drag-over');
+      });
+      _filesModal.dropzone.addEventListener('drop', function (evt) {
+        evt.preventDefault();
+        _filesModal.dropzone.classList.remove('lc-drag-over');
+        addFiles(evt.dataTransfer && evt.dataTransfer.files ? evt.dataTransfer.files : []);
+      });
+      document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && _filesModal.backdrop && _filesModal.backdrop.classList.contains('lc-open')) close();
+      });
+    }
+
+    function _currentNodeFiles(nodeId) {
+      const node = cfg.resolve(nodeId);
+      const files = node && node.card_data && Array.isArray(node.card_data.files) ? node.card_data.files : [];
+      return files.filter(Boolean);
+    }
+
+    function _refreshFilesModalList(nodeId) {
+      if (_filesModal.currentNodeId !== nodeId) return;
+      const files = _currentNodeFiles(nodeId);
+      if (!files.length) {
+        _filesModal.body.innerHTML = '<div class="text-muted small">No files uploaded yet.</div>';
+        return;
+      }
+
+      let h = '<div class="lc-files-list">';
+      files.forEach(function (f, idx) {
+        const fileName = f && (f.name || f.stored_name) ? (f.name || f.stored_name) : 'file';
+        const sizeText = f && typeof f.size === 'number' ? ('size: ' + f.size + ' bytes') : '';
+        const stored = f && f.stored_name ? String(f.stored_name) : '';
+        const dl = stored
+          ? '/api/example-board/server/cards/' + encodeURIComponent(nodeId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
+          : null;
+        h += '<div class="lc-file-row">';
+        h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
+        h += '<div class="lc-file-meta">' + _esc(sizeText) + '</div></div>';
+        if (dl) {
+          h += '<a class="btn btn-sm btn-outline-secondary" href="' + dl + '">Download</a>';
+        }
+        h += '</div>';
+      });
+      h += '</div>';
+      _filesModal.body.innerHTML = h;
+    }
+
+    function openFilesModal(nodeId) {
+      _ensureFilesModal();
+      const node = cfg.resolve(nodeId);
+      if (!node) return;
+
+      const title = (node.card && node.card.meta && node.card.meta.title) || node.id;
+      _filesModal.currentNodeId = nodeId;
+      _filesModal.title.textContent = 'Files: ' + title;
+      _filesModal.backdrop.classList.add('lc-open');
+      _refreshFilesModalList(nodeId);
+
+      if (_filesModal.pollingTimer) clearInterval(_filesModal.pollingTimer);
+      _filesModal.pollingTimer = setInterval(function () {
+        _refreshFilesModalList(nodeId);
+      }, 1000);
     }
 
     function _resolveBind(node, bind) {
@@ -1358,6 +1565,7 @@ var LiveCard = (function () {
       if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
         h += `<span class="badge bg-danger small" title="${_esc(node.card_data.error)}">Error</span>`;
       }
+      h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-files-open" title="Open files">Files</button>`;
       h += `<button class="btn btn-sm btn-outline-primary ms-auto" id="${uid}-chat-open" title="Open chat">Chat</button>`;
       if (showRefresh) {
         h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-refresh" title="Refresh">`;
@@ -1405,6 +1613,14 @@ var LiveCard = (function () {
         chatBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           openChatModal(node.id);
+        }, { signal });
+      }
+
+      const filesBtn = document.getElementById(uid + '-files-open');
+      if (filesBtn) {
+        filesBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openFilesModal(node.id);
         }, { signal });
       }
 
@@ -1520,6 +1736,7 @@ var LiveCard = (function () {
       subscribe,
       appendChatMessage,
       openChatModal,
+      openFilesModal,
       getElement,
       registerRenderer(name, fn) { _renderers[name] = fn; },
       renderers: _renderers,

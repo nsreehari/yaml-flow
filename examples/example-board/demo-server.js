@@ -485,7 +485,9 @@ function findCardPath(cardId) {
   return found ? found.cardFilePath : null;
 }
 
-function update_card(cardId, updateFn) {
+function mutate_card(cardId, updateFn, opts) {
+  const options = opts && typeof opts === 'object' ? opts : {};
+  const syncBoard = options.syncBoard !== false;
   const cardPath = findCardPath(cardId);
   if (!cardPath || !fs.existsSync(cardPath)) {
     const err = new Error(`Card not found: ${cardId}`);
@@ -497,8 +499,17 @@ function update_card(cardId, updateFn) {
   const nextCard = updateFn(card) || card;
   fs.writeFileSync(cardPath, JSON.stringify(nextCard, null, 2));
 
-  // Upsert updated card and restart the task.
-  runCli(['upsert-card', '--rg', BOARD_DIR, '--card', cardPath, '--restart']);
+  if (syncBoard) {
+    runCli(['upsert-card', '--rg', BOARD_DIR, '--card', cardPath, '--restart']);
+  }
+}
+
+function update_card(cardId, updateFn) {
+  mutate_card(cardId, updateFn, { syncBoard: true });
+}
+
+function update_card_local_only(cardId, updateFn) {
+  mutate_card(cardId, updateFn, { syncBoard: false });
 }
 
 // Deep-merge patch into card: any top-level key in patch is merged into the
@@ -559,7 +570,8 @@ function patchCard(cardId, patch) {
 }
 
 function applyCardAction(cardId, actionType, payload) {
-  update_card(cardId, (card) => {
+  const persistCard = actionType === 'chat-send' ? update_card_local_only : update_card;
+  persistCard(cardId, (card) => {
     const now = new Date().toISOString();
     const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data : {};
     card.card_data = cardData;
@@ -824,7 +836,25 @@ async function handleApi(req, res) {
 
       const file = persistUploadedFile(cardId, requestedName, contentType, body);
       if (inChat) {
-        applyCardAction(cardId, 'file-upload', { files: [file] });
+        update_card_local_only(cardId, (card) => {
+          const now = new Date().toISOString();
+          const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data : {};
+          card.card_data = cardData;
+          const existing = Array.isArray(cardData.files) ? cardData.files.slice() : [];
+          const known = new Set(existing.map((f) => f && f.stored_name ? f.stored_name : ''));
+          if (!known.has(file.stored_name)) {
+            existing.push({
+              name: typeof file.name === 'string' ? file.name : file.stored_name,
+              stored_name: file.stored_name,
+              size: file.size || null,
+              mime_type: file.mime_type || null,
+              path: file.path || null,
+              uploaded_at: file.uploaded_at || now,
+            });
+            cardData.files = existing;
+          }
+          return card;
+        });
         writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
       }
       json(res, 200, { ok: true, file });
