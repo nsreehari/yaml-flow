@@ -124,16 +124,17 @@ function extractDecisionFromText(text) {
           ? 'task-completed'
           : 'task-progress';
         const reason = typeof parsed.reason === 'string' ? parsed.reason : undefined;
-        return { status: decision, reason };
+        const evidence = typeof parsed.evidence === 'string' ? parsed.evidence : '';
+        return { status: decision, reason, evidence };
       }
     } catch {}
   }
 
   const lower = cleaned.toLowerCase();
   if (lower.includes('task-completed') || lower.includes('completed')) {
-    return { status: 'task-completed', reason: 'LLM inferred completion from available evidence.' };
+    return { status: 'task-completed', reason: 'LLM inferred completion from available evidence.', evidence: '' };
   }
-  return { status: 'task-progress', reason: 'LLM requested additional evidence before completion.' };
+  return { status: 'task-progress', reason: 'LLM requested additional evidence before completion.', evidence: '' };
 }
 
 function fallbackDecision(payload) {
@@ -144,19 +145,19 @@ function fallbackDecision(payload) {
 
   if (question.includes('deployment')) {
     if (deploymentStatus === 'done' || deploymentStatus === 'healthy' || deploymentStatus === 'complete') {
-      return { status: 'task-completed', reason: 'Deployment signal indicates completion.' };
+      return { status: 'task-completed', reason: 'Deployment signal indicates completion.', evidence: `deploymentStatus=${deploymentStatus}` };
     }
-    return { status: 'task-progress', reason: 'Deployment completion signal not present yet.' };
+    return { status: 'task-progress', reason: 'Deployment completion signal not present yet.', evidence: `deploymentStatus=${deploymentStatus || 'unknown'}` };
   }
 
   if (question.includes('revenue data is sufficient')) {
     if (revenue >= 60000) {
-      return { status: 'task-completed', reason: `Revenue evidence is sufficient (${revenue}).` };
+      return { status: 'task-completed', reason: `Revenue evidence is sufficient (${revenue}).`, evidence: `totalRevenue=${revenue}` };
     }
-    return { status: 'task-progress', reason: `Revenue evidence is below threshold (${revenue}).` };
+    return { status: 'task-progress', reason: `Revenue evidence is below threshold (${revenue}).`, evidence: `totalRevenue=${revenue}` };
   }
 
-  return { status: 'task-progress', reason: 'No deterministic rule matched this completion question.' };
+  return { status: 'task-progress', reason: 'No deterministic rule matched this completion question.', evidence: '' };
 }
 
 function buildPrompt(payload) {
