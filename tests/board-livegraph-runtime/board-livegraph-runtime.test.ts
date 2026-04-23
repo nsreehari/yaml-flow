@@ -12,7 +12,7 @@ describe('createBoardLiveGraphRuntime', () => {
       {
         id: 'prices',
         card_data: {},
-        sources: [{ kind: 'api', bindTo: 'raw' }],
+        sources: [{ kind: 'api', bindTo: 'raw', outputFile: 'raw.json' }],
         provides: [{ bindTo: 'prices', src: 'fetched_sources.raw' }],
       },
       {
@@ -116,7 +116,7 @@ describe('createBoardLiveGraphRuntime', () => {
       {
         id: 'orders-source',
         card_data: { note: 'seed' },
-        sources: [{ bindTo: 'raw', kind: 'api' } as any],
+        sources: [{ bindTo: 'raw', outputFile: 'raw.json', kind: 'api' } as any],
         compute: [{ bindTo: 'orderCount', expr: '$count(fetched_sources.raw)' }] as any,
         provides: [{ bindTo: 'orders_count', src: 'computed_values.orderCount' }],
       },

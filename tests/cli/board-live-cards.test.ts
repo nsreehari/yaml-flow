@@ -331,7 +331,7 @@ describe('liveCardToTaskConfig', () => {
     const card: BoardLiveCard = {
       id: 'prices',
       provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
-      sources: [{ cli: 'fetch.sh', bindTo: 'raw' }],
+      sources: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }],
       card_data: { prices: {} },
     };
     const tc = liveCardToTaskConfig(card);

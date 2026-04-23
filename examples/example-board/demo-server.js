@@ -36,6 +36,7 @@ const configuredCliJs = resolveFromConfig(serverConfig.boardLiveCardsCliJs);
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
 const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath);
 const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
+const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
 
 if (!process.env.BOARD_LIVE_CARDS_CLI_JS && configuredCliJs) {
   process.env.BOARD_LIVE_CARDS_CLI_JS = configuredCliJs;
@@ -45,6 +46,9 @@ if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath) {
 }
 if (!process.env.DEMO_CHAT_HANDLER_PATH && configuredChatHandlerPath) {
   process.env.DEMO_CHAT_HANDLER_PATH = configuredChatHandlerPath;
+}
+if (!process.env.DEMO_INFERENCE_ADAPTER_PATH && configuredInferenceAdapterPath) {
+  process.env.DEMO_INFERENCE_ADAPTER_PATH = configuredInferenceAdapterPath;
 }
 
 const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
@@ -59,6 +63,7 @@ const runtime = createMultiBoardServerRuntime({
   defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || path.join(__dirname, 'demo-task-executor.js'),
   defaultStepMachineCliPath: process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath,
   defaultChatHandlerPath: process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || path.join(__dirname, 'demo-chat-handler.js'),
+  defaultInferenceAdapterPath: process.env.DEMO_INFERENCE_ADAPTER_PATH || configuredInferenceAdapterPath || path.join(__dirname, 'demo-inference-adapter.js'),
   boardLiveCardsCliJs: process.env.BOARD_LIVE_CARDS_CLI_JS || configuredCliJs,
 });
 

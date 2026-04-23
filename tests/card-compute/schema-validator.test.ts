@@ -34,7 +34,7 @@ describe('validateLiveCardSchema', () => {
       const r = validateLiveCardSchema({
         id: 'src1',
         card_data: { status: 'fresh' },
-        sources: [{ bindTo: 'raw', kind: 'api' }],
+        sources: [{ bindTo: 'raw', outputFile: 'raw.json', kind: 'api' }],
       });
       expect(r.ok).toBe(true);
     });
@@ -57,7 +57,7 @@ describe('validateLiveCardSchema', () => {
         compute: [
           { bindTo: 'total', expr: '$sum(card_data.data.revenue)' },
         ],
-        sources: [{ bindTo: 'data', kind: 'api' }, { bindTo: 'news', optionalForCompletionGating: true }],
+        sources: [{ bindTo: 'data', outputFile: 'data.json', kind: 'api' }, { bindTo: 'news', outputFile: 'news.json', optionalForCompletionGating: true }],
       });
       expect(r.ok).toBe(true);
     });
@@ -69,6 +69,7 @@ describe('validateLiveCardSchema', () => {
         sources: [{
           kind: 'api',
           bindTo: 'quotes',
+          outputFile: 'quotes.json',
           method: 'POST',
           url_template: 'https://api.example.com/{{symbol}}',
           headers: { Authorization: 'Bearer abc' },
@@ -100,7 +101,7 @@ describe('validateLiveCardSchema', () => {
       for (const kind of ['api', 'websocket', 'static', 'llm']) {
         const r = validateLiveCardSchema({
           id: `s-${kind}`, card_data: {},
-          sources: [{ kind, bindTo: 'x' }],
+          sources: [{ kind, bindTo: 'x', outputFile: 'output.json' }],
         });
         expect(r.ok, `source kind "${kind}" should be valid`).toBe(true);
       }
@@ -195,9 +196,41 @@ describe('validateLiveCardSchema', () => {
     it('sources entry missing bindTo', () => {
       const r = validateLiveCardSchema({
         id: 'x', card_data: {},
-        sources: [{ kind: 'api' }],
+        sources: [{ kind: 'api', outputFile: 'data.json' }],
       });
       expect(r.ok).toBe(false);
+    });
+
+    it('sources entry missing outputFile', () => {
+      const r = validateLiveCardSchema({
+        id: 'x', card_data: {},
+        sources: [{ kind: 'api', bindTo: 'raw' }],
+      });
+      expect(r.ok).toBe(false);
+    });
+
+    it('sources with duplicate bindTo', () => {
+      const r = validateLiveCardSchema({
+        id: 'x', card_data: {},
+        sources: [
+          { bindTo: 'data', outputFile: 'data1.json', kind: 'api' },
+          { bindTo: 'data', outputFile: 'data2.json', kind: 'api' },
+        ],
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('bindTo'))).toBe(true);
+    });
+
+    it('sources with duplicate outputFile', () => {
+      const r = validateLiveCardSchema({
+        id: 'x', card_data: {},
+        sources: [
+          { bindTo: 'raw1', outputFile: 'data.json', kind: 'api' },
+          { bindTo: 'raw2', outputFile: 'data.json', kind: 'api' },
+        ],
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('outputFile'))).toBe(true);
     });
 
     it('meta.title wrong type', () => {

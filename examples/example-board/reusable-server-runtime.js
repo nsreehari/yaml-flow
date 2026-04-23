@@ -144,6 +144,9 @@ export function createMultiBoardServerRuntime(options = {}) {
     const defaultChatHandlerPath = typeof entry.chatHandlerPath === 'string'
       ? entry.chatHandlerPath
       : options.defaultChatHandlerPath;
+    const defaultInferenceAdapterPath = typeof entry.inferenceAdapterPath === 'string'
+      ? entry.inferenceAdapterPath
+      : options.defaultInferenceAdapterPath;
 
     const service = createExampleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
@@ -156,6 +159,7 @@ export function createMultiBoardServerRuntime(options = {}) {
       defaultTaskExecutorPath,
       defaultStepMachineCliPath,
       defaultChatHandlerPath,
+      defaultInferenceAdapterPath,
       boardLiveCardsCliJs: options.boardLiveCardsCliJs,
     });
 
@@ -207,6 +211,9 @@ export function createMultiBoardServerRuntime(options = {}) {
       const entry = { id, label };
       if (typeof body.cardsDir === 'string') entry.cardsDir = body.cardsDir;
       if (typeof body.stepMachineCliPath === 'string') entry.stepMachineCliPath = body.stepMachineCliPath;
+      if (typeof body.taskExecutorPath === 'string') entry.taskExecutorPath = body.taskExecutorPath;
+      if (typeof body.chatHandlerPath === 'string') entry.chatHandlerPath = body.chatHandlerPath;
+      if (typeof body.inferenceAdapterPath === 'string') entry.inferenceAdapterPath = body.inferenceAdapterPath;
       config.boards.push(entry);
       writeBoardsConfig(config);
 
@@ -337,6 +344,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     ? (path.isAbsolute(options.defaultChatHandlerPath)
       ? options.defaultChatHandlerPath
       : path.resolve(process.cwd(), options.defaultChatHandlerPath))
+    : null;
+  const configuredInferenceAdapterPath = typeof options.defaultInferenceAdapterPath === 'string'
+    && options.defaultInferenceAdapterPath.trim()
+    ? (path.isAbsolute(options.defaultInferenceAdapterPath)
+      ? options.defaultInferenceAdapterPath
+      : path.resolve(process.cwd(), options.defaultInferenceAdapterPath))
     : null;
 
   const statusSnapshotFile = path.join(runtimeOutDir, 'board-livegraph-status.json');
@@ -679,18 +692,37 @@ export function createExampleBoardServerRuntime(options = {}) {
     return resolved;
   }
 
-  function initBoard(taskExecutorPathParam, chatHandlerPathParam) {
+  function resolveInferenceAdapterPath(inferenceAdapterPathParam) {
+    const raw = typeof inferenceAdapterPathParam === 'string' ? inferenceAdapterPathParam.trim() : '';
+    const resolved = raw
+      ? (path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw))
+      : configuredInferenceAdapterPath;
+    if (!resolved) return null;
+    if (!fs.existsSync(resolved)) {
+      const err = new Error(`Inference adapter script not found: ${resolved}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return resolved;
+  }
+
+  function initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
     fs.mkdirSync(boardDir, { recursive: true });
 
     const taskExecutorPath = resolveTaskExecutorPath(taskExecutorPathParam);
     const chatHandlerPath = resolveChatHandlerPath(chatHandlerPathParam);
+    const inferenceAdapterPath = resolveInferenceAdapterPath(inferenceAdapterPathParam);
     const taskExecutorCmd = `${shellQuote(process.execPath)} ${shellQuote(taskExecutorPath)}`;
     const chatHandlerCmd = chatHandlerPath
       ? `${shellQuote(process.execPath)} ${shellQuote(chatHandlerPath)}`
       : null;
+    const inferenceAdapterCmd = inferenceAdapterPath
+      ? `${shellQuote(process.execPath)} ${shellQuote(inferenceAdapterPath)}`
+      : null;
 
     const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd];
     if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
+    if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
     initArgs.push('--runtime-out', runtimeOutDir);
 
     try {
@@ -705,11 +737,11 @@ export function createExampleBoardServerRuntime(options = {}) {
     }
   }
 
-  function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam) {
+  function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
     ensureDemoSetup();
 
     if (!fs.existsSync(boardFile)) {
-      initBoard(taskExecutorPathParam, chatHandlerPathParam);
+      initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
     }
 
     const expectedCardsRoot = path.resolve(tmpCardsDir);
@@ -721,7 +753,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
     if (hasStaleMapping) {
       clearDirContents(boardDir);
-      initBoard(taskExecutorPathParam, chatHandlerPathParam);
+      initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
     }
   }
 

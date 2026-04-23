@@ -94,7 +94,7 @@ const CARDS = [
   {
     id: 'src-card',
     provides: [{ bindTo: 'orders', src: 'fetched_sources.raw' }],
-    sources: [{ bindTo: 'raw', mock: 'orders' }],
+    sources: [{ bindTo: 'raw', mock: 'orders', outputFile: 'orders.json' }],
     card_data: {},
   },
   {

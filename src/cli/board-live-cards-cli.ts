@@ -959,7 +959,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         : undefined;
       const inferenceCompletedAt = typeof llmCompletion.inferenceCompletedAt === 'string'
         ? llmCompletion.inferenceCompletedAt
-        : (typeof llmCompletion.evaluatedAt === 'string' ? llmCompletion.evaluatedAt : undefined);
+        : undefined;
       const inferencePending = !!inferenceRequestedAt
         && (!inferenceCompletedAt || inferenceCompletedAt < inferenceRequestedAt);
 
@@ -1949,8 +1949,6 @@ function cmdInferenceDone(args: string[]): void {
     reasoning: typeof result.reason === 'string' ? result.reason : '',
     evidence: typeof result.evidence === 'string' ? result.evidence : '',
     inferenceCompletedAt,
-    // Keep legacy field for backward compatibility while transitioning to inferenceCompletedAt.
-    evaluatedAt: inferenceCompletedAt,
   };
   fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
 
@@ -1960,7 +1958,6 @@ function cmdInferenceDone(args: string[]): void {
     update: {
       kind: 'inference-done',
       status,
-      evaluatedAt: inferenceCompletedAt,
     },
     timestamp: inferenceCompletedAt,
   });

@@ -31,10 +31,10 @@ import jsonata from 'jsonata';
 // Types
 // ---------------------------------------------------------------------------
 
-/** A source definition: cli writes to outputFile; bindTo names the fetched_sources.* key in compute context. */
+/** A source definition: cli writes to outputFile; bindTo names the fetched_sources.* key in compute context. Both bindTo and outputFile must be unique across sources in a card. */
 export interface ComputeSource {
   bindTo: string;
-  outputFile?: string;
+  outputFile: string;
   cli?: string;
   // Deprecated alias retained for compatibility with older cards.
   script?: string;
@@ -245,13 +245,29 @@ function validateNode(node: unknown): ValidationResult {
     if (!Array.isArray(n.sources)) {
       errors.push('sources: must be an array');
     } else {
+      const bindTos = new Set<string>();
+      const outputFiles = new Set<string>();
       (n.sources as unknown[]).forEach((src, i) => {
         if (!src || typeof src !== 'object' || Array.isArray(src)) {
           errors.push(`sources[${i}]: must be an object`);
         } else {
           const s = src as Record<string, unknown>;
-          if (typeof s.bindTo !== 'string' || !s.bindTo) errors.push(`sources[${i}]: missing required "bindTo" property`);
-          if (s.outputFile != null && typeof s.outputFile !== 'string') errors.push(`sources[${i}]: outputFile must be a string`);
+          if (typeof s.bindTo !== 'string' || !s.bindTo) {
+            errors.push(`sources[${i}]: missing required "bindTo" property`);
+          } else {
+            if (bindTos.has(s.bindTo)) {
+              errors.push(`sources[${i}]: bindTo "${s.bindTo}" is not unique across sources`);
+            }
+            bindTos.add(s.bindTo);
+          }
+          if (typeof s.outputFile !== 'string' || !s.outputFile) {
+            errors.push(`sources[${i}]: missing required "outputFile" property`);
+          } else {
+            if (outputFiles.has(s.outputFile)) {
+              errors.push(`sources[${i}]: outputFile "${s.outputFile}" is not unique across sources`);
+            }
+            outputFiles.add(s.outputFile);
+          }
           if (s.optionalForCompletionGating != null && typeof s.optionalForCompletionGating !== 'boolean') {
             errors.push(`sources[${i}]: optionalForCompletionGating must be a boolean`);
           }

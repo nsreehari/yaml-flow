@@ -264,8 +264,7 @@
             "inferenceCompletedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request completed" },
             "isTaskCompleted": { "type": "boolean", "description": "Whether the task is considered complete by the adapter" },
             "reasoning": { "type": "string", "description": "Explanation of completion decision" },
-            "evidence": { "type": "array", "description": "Supporting evidence from sources/compute" },
-            "evaluatedAt": { "type": "string", "format": "date-time", "description": "Legacy alias of inferenceCompletedAt" }
+            "evidence": { "type": "array", "description": "Supporting evidence from sources/compute" }
           },
           "additionalProperties": true
         }
