@@ -34,6 +34,12 @@
             "pending": "warning"
           }
         }
+      },
+      {
+        "kind": "text",
+        "label": "Inference Reason",
+        "style": "muted-italic",
+        "data": { "bind": "card_data.llm_task_completion_inference.reason", "hideIfEmpty": true }
       }
     ],
     "layout": {
