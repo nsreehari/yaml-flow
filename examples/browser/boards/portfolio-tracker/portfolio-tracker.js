@@ -149,6 +149,23 @@ function setupRuntimeCards() {
   fs.copyFileSync(path.join(__dirname, 'fetch-prices.js'), path.join(RUNTIME_ROOT, 'fetch-prices.js'));
 }
 
+function printTaskExecutorLog() {
+  console.log('\n=== Task Executor Log (board-dir) ===');
+  const candidates = fs
+    .readdirSync(BOARD, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes('executor'))
+    .map(entry => path.join(BOARD, entry.name));
+  const taskExecutorLog = candidates.find(p => path.basename(p) === 'task-executor.jsonl') ?? candidates[0];
+  if (!taskExecutorLog) {
+    console.log(`No task executor log found in board-dir: ${BOARD}`);
+    return;
+  }
+
+  console.log(`Log file: ${taskExecutorLog}`);
+  const content = fs.readFileSync(taskExecutorLog, 'utf-8');
+  process.stdout.write(content || '(empty)\n');
+}
+
 (async () => {
   setupRuntimeCards();
 
@@ -210,8 +227,96 @@ function setupRuntimeCards() {
   console.log('\n--- T3 Status ---');
   process.stdout.write(statusText());
 
-  console.log('\n=== T4: Final board status ===');
+  console.log('\n=== T4: Rapid successive portfolio updates (3x queue stress) ===');
+  fs.writeFileSync(TMP_FILE, '', 'utf-8');
+
+  const portfolioFormV3 = {
+    id: 'portfolio-form',
+    meta: { title: 'Portfolio Holdings Form' },
+    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    card_data: {
+      holdings: [
+        { symbol: 'AAPL', qty: 50 },
+        { symbol: 'MSFT', qty: 30 },
+        { symbol: 'GOOG', qty: 100 },
+        { symbol: 'AMZN', qty: 40 },
+      ],
+    },
+    view: {
+      elements: [
+        { kind: 'table', label: 'Holdings', data: { bind: 'card_data.holdings', columns: ['symbol', 'qty'] } },
+      ],
+    },
+  };
+
+  const portfolioFormV4 = {
+    id: 'portfolio-form',
+    meta: { title: 'Portfolio Holdings Form' },
+    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    card_data: {
+      holdings: [
+        { symbol: 'AAPL', qty: 45 },
+        { symbol: 'MSFT', qty: 30 },
+        { symbol: 'GOOG', qty: 110 },
+        { symbol: 'TSLA', qty: 60 },
+      ],
+    },
+    view: {
+      elements: [
+        { kind: 'table', label: 'Holdings', data: { bind: 'card_data.holdings', columns: ['symbol', 'qty'] } },
+      ],
+    },
+  };
+
+  const portfolioFormV5 = {
+    id: 'portfolio-form',
+    meta: { title: 'Portfolio Holdings Form' },
+    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    card_data: {
+      holdings: [
+        { symbol: 'AAPL', qty: 40 },
+        { symbol: 'MSFT', qty: 35 },
+        { symbol: 'GOOG', qty: 120 },
+        { symbol: 'TSLA', qty: 70 },
+      ],
+    },
+    view: {
+      elements: [
+        { kind: 'table', label: 'Holdings', data: { bind: 'card_data.holdings', columns: ['symbol', 'qty'] } },
+      ],
+    },
+  };
+
+  // First update starts a source fetch request.
+  fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV3, null, 2));
+  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+
+  // Immediate second update should queue a newer checksum while the first request is in-flight.
+  fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV4, null, 2));
+  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+
+  // Immediate third update should overwrite queued checksum (latest-state wins).
+  fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV5, null, 2));
+  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+
+  // 7) wait for first request, then 8) write response prices for update #1 tickers.
+  // await readFetchRequest('T4 first fetch', ['AAPL', 'MSFT', 'GOOG', 'AMZN']);
+  writePrices({ AAPL: 205.00, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40 });
+  await sleep(5000);
+
+  // 9) wait for second request, then 10) write response prices for update #5 tickers.
+  // await readFetchRequest('T4 second fetch', ['AAPL', 'MSFT', 'GOOG', 'TSLA']);
+  writePrices({ AAPL: 206.00, MSFT: 426.00, GOOG: 179.50, TSLA: 169.20 });
+
+  await waitForAllCompleted('T4');
+
+  console.log('\n--- T4 Status ---');
   process.stdout.write(statusText());
+
+  console.log('\n=== T5: Final board status ===');
+  process.stdout.write(statusText());
+
+  printTaskExecutorLog();
 
   console.log('\nPortfolio tracker completed successfully');
 })();

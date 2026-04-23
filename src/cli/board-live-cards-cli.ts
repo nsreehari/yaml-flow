@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fg from 'fast-glob';
@@ -337,6 +337,8 @@ export interface SourceTokenPayload {
   b: string;
   /** sources[].outputFile (relative to boardDir) */
   d: string;
+  /** Per-source invocation checksum */
+  cs?: string;
 }
 
 export function encodeSourceToken(payload: SourceTokenPayload): string {
@@ -361,6 +363,107 @@ export interface SourceRuntimeEntry {
   lastRequestedAt?: string;
   lastFetchedAt?: string;
   lastError?: string;
+  lastInputChecksum?: string;
+  queuedInputChecksum?: string;
+}
+
+function computeInputChecksum(obj: unknown): string {
+  const json = JSON.stringify(obj, null, 0);
+  return createHash('sha256').update(json).digest('hex').substring(0, 16);
+}
+
+function markSourceRequested(entry: SourceRuntimeEntry, requestedAt: string, checksum?: string): void {
+  entry.lastRequestedAt = requestedAt;
+  if (checksum) entry.lastInputChecksum = checksum;
+}
+
+function markSourceFetchFailed(entry: SourceRuntimeEntry, reason: string): void {
+  entry.lastError = reason;
+  delete entry.lastFetchedAt;
+}
+
+function markSourceFetchCompleted(entry: SourceRuntimeEntry, fetchedAt: string, checksum?: string): void {
+  entry.lastFetchedAt = fetchedAt;
+  delete entry.lastError;
+  if (checksum) entry.lastInputChecksum = checksum;
+}
+
+export function isSourceInFlight(entry: SourceRuntimeEntry | undefined): boolean {
+  if (!entry?.lastRequestedAt) return false;
+  return !entry.lastFetchedAt || entry.lastFetchedAt < entry.lastRequestedAt;
+}
+
+export function hasSourceChecksumChanged(entry: SourceRuntimeEntry | undefined, checksum: string | undefined): boolean {
+  return !!checksum && entry?.lastInputChecksum !== checksum;
+}
+
+export function decideRequiredSourceAction(entry: SourceRuntimeEntry | undefined, checksum: string | undefined): 'dispatch' | 'queue' | 'idle' {
+  if (!entry?.lastRequestedAt) return 'dispatch';
+  if (!entry.lastFetchedAt) return 'dispatch';
+
+  const inFlight = isSourceInFlight(entry);
+  const checksumChanged = hasSourceChecksumChanged(entry, checksum);
+  if (inFlight && checksumChanged) return 'queue';
+  if (inFlight) return 'idle';
+  if (entry.lastFetchedAt <= entry.lastRequestedAt) return 'dispatch';
+  return checksumChanged ? 'dispatch' : 'idle';
+}
+
+export function normalizeSourcePayloadForChecksum(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+
+  const normalizedPayload = { ...(payload as Record<string, unknown>) };
+  // Execution context fields should not affect logical dispatch gating.
+  delete normalizedPayload.cwd;
+  delete normalizedPayload.boardDir;
+
+  const bindTo = normalizedPayload.bindTo;
+  const sourcesData = normalizedPayload._sourcesData;
+  if (typeof bindTo === 'string' && bindTo && sourcesData && typeof sourcesData === 'object' && !Array.isArray(sourcesData)) {
+    const normalizedSourcesData = { ...(sourcesData as Record<string, unknown>) };
+    // Exclude source's own output from checksum to avoid self-invalidating loops.
+    delete normalizedSourcesData[bindTo];
+    normalizedPayload._sourcesData = normalizedSourcesData;
+  }
+
+  return normalizedPayload;
+}
+
+export function buildRequiredSourceChecksums(
+  requiredSources: ComputeSource[],
+  enrichedByOutput: Map<string, unknown>,
+): Record<string, string> {
+  const checksums: Record<string, string> = {};
+  for (const src of requiredSources) {
+    const outputFile = src.outputFile;
+    if (typeof outputFile !== 'string' || !outputFile) continue;
+    const payloadForChecksumRaw = enrichedByOutput.get(outputFile) ?? src;
+    const payloadForChecksum = normalizeSourcePayloadForChecksum(payloadForChecksumRaw);
+    checksums[outputFile] = computeInputChecksum(payloadForChecksum);
+  }
+  return checksums;
+}
+
+export function nextEntryAfterFetchDelivery(
+  entry: SourceRuntimeEntry,
+  fetchedAt: string,
+  sourceChecksum?: string,
+): SourceRuntimeEntry {
+  const next = { ...entry };
+  markSourceFetchCompleted(next, fetchedAt, sourceChecksum);
+  // If a newer input checksum was queued while fetch was in-flight,
+  // schedule exactly one follow-up request for the latest state.
+  if (next.queuedInputChecksum && next.queuedInputChecksum !== next.lastInputChecksum) {
+    markSourceRequested(next, new Date().toISOString(), next.queuedInputChecksum);
+  }
+  delete next.queuedInputChecksum;
+  return next;
+}
+
+export function nextEntryAfterFetchFailure(entry: SourceRuntimeEntry, reason: string): SourceRuntimeEntry {
+  const next = { ...entry };
+  markSourceFetchFailed(next, reason);
+  return next;
 }
 
 export interface CardRuntimeState {
@@ -712,10 +815,20 @@ function getCliInvocation(command: string, args: string[]): { cmd: string; args:
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
-function invokeRunSources(boardDir: string, cardPath: string, callbackToken: string, callback: (err: Error | null) => void): void {
-  const { cmd, args } = getCliInvocation('run-sources-internal', ['--card', cardPath, '--token', callbackToken, '--rg', boardDir]);
+function invokeRunSources(
+  boardDir: string,
+  cardPath: string,
+  callbackToken: string,
+  callback: (err: Error | null) => void,
+  sourceChecksums?: Record<string, string>,
+): void {
+  const args = ['--card', cardPath, '--token', callbackToken, '--rg', boardDir];
+  if (sourceChecksums && Object.keys(sourceChecksums).length > 0) {
+    args.push('--source-checksums', JSON.stringify(sourceChecksums));
+  }
+  const { cmd, args: cmdArgs } = getCliInvocation('run-sources-internal', args);
   try {
-    spawnDetachedCommand(cmd, args);
+    spawnDetachedCommand(cmd, cmdArgs);
     callback(null);
   } catch (err) {
     callback(err instanceof Error ? err : new Error(String(err)));
@@ -734,10 +847,15 @@ function invokeRunInference(boardDir: string, inputFile: string, callbackToken: 
 
 
 
-function appendTaskExecutorLog(boardDir: string, hydratedSource: unknown): void {
+function appendTaskExecutorLog(
+  boardDir: string,
+  hydratedSource: unknown,
+  mode: 'external-task-executor' | 'built-in-run-source-fetch',
+): void {
   try {
     const entry = {
       timestamp: new Date().toISOString(),
+      mode,
       hydratedSource,
     };
     fs.appendFileSync(path.join(boardDir, TASK_EXECUTOR_LOG_FILE), JSON.stringify(entry) + '\n', 'utf-8');
@@ -813,22 +931,24 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         if (input.update) {
           const u = input.update;
           const outputFile = u.outputFile as string;
+          const sourceChecksum = (u as Record<string, unknown>).sourceChecksum as string | undefined;
           // Only process source updates (which have outputFile); skip non-source updates like inference-done
           if (outputFile) {
             if (!runtime._sources[outputFile]) runtime._sources[outputFile] = {};
+            const entry = runtime._sources[outputFile];
 
             if (u.failure) {
               // Source fetch failed — record error, stay in-progress
-              runtime._sources[outputFile].lastError = (u.reason as string | undefined) ?? 'unknown';
-              delete runtime._sources[outputFile].lastFetchedAt;
+              runtime._sources[outputFile] = nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown');
               runtimeDirty = true;
-              console.log(`[card-handler] source output "${outputFile}" fetch failed: ${runtime._sources[outputFile].lastError}`);
             } else {
               // Successful delivery — output file already in place by CLI
-              runtime._sources[outputFile].lastFetchedAt = (u.fetchedAt as string | undefined) ?? new Date().toISOString();
-              delete runtime._sources[outputFile].lastError;
+              runtime._sources[outputFile] = nextEntryAfterFetchDelivery(
+                entry,
+                (u.fetchedAt as string | undefined) ?? new Date().toISOString(),
+                sourceChecksum,
+              );
               runtimeDirty = true;
-              console.log(`[card-handler] source output "${outputFile}" delivered`);
             }
 
             if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
@@ -881,51 +1001,91 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         computed_values: computeNode.computed_values ?? {},
       });
 
+      // Build enriched source payloads and checksums up-front so dispatch gating
+      // can react to input changes, not only timestamp delivery state.
+      const enrichedCard = { ...card };
+      const enrichedSources = CardCompute.enrichSources(
+        (Array.isArray(card.sources) ? card.sources : undefined),
+        {
+          requires,
+          sourcesData,
+          computed_values: computeNode.computed_values,
+        }
+      );
+      const sourceCwd = path.dirname(cardPath);
+      enrichedCard.sources = Array.isArray(enrichedSources)
+        ? enrichedSources.map((src) => ({
+            ...src,
+            cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
+            boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
+          }))
+        : enrichedSources;
+
+      const enrichedByOutput = new Map<string, unknown>();
+      for (const src of (Array.isArray(enrichedCard.sources) ? enrichedCard.sources : [])) {
+        const outputFile = (src as { outputFile?: unknown }).outputFile;
+        if (typeof outputFile === 'string' && outputFile) {
+          enrichedByOutput.set(outputFile, src);
+        }
+      }
+
+      const sourceChecksums = buildRequiredSourceChecksums(requiredSources, enrichedByOutput);
+
         // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----
         const now = new Date().toISOString();
         const undeliveredRequired = requiredSources.filter(s => {
-          const entry = runtime._sources[s.outputFile];
-          if (!entry?.lastRequestedAt) return true;  // never requested — treat as undelivered
-          if (!entry.lastFetchedAt) return true;      // requested but not yet fetched
-          return entry.lastFetchedAt <= entry.lastRequestedAt; // stale
+          const outputFile = s.outputFile;
+          if (typeof outputFile !== 'string' || !outputFile) return true;
+          const entry = runtime._sources[outputFile];
+          const currentChecksum = sourceChecksums[outputFile];
+          const action = decideRequiredSourceAction(entry, currentChecksum);
+          if (action === 'queue') {
+            entry.queuedInputChecksum = currentChecksum;
+            runtime._sources[outputFile] = entry;
+            runtimeDirty = true;
+            return false;
+          }
+          return action === 'dispatch';
         });
+
+      if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
 
       if (undeliveredRequired.length > 0) {
           // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
           // and invoke run-sources-internal to deliver them.
           let stampedAny = false;
           for (const src of undeliveredRequired) {
-            const entry = runtime._sources[src.outputFile] ?? {};
-            // Only re-stamp if not already requested after last fetch (avoid double-dispatch)
-            if (!entry.lastRequestedAt || (entry.lastFetchedAt && entry.lastFetchedAt >= entry.lastRequestedAt)) {
-              entry.lastRequestedAt = now;
-              runtime._sources[src.outputFile] = entry;
+            const outputFile = src.outputFile;
+            if (typeof outputFile !== 'string' || !outputFile) continue;
+            const entry = runtime._sources[outputFile] ?? {};
+            const currentChecksum = sourceChecksums[outputFile];
+            const checksumChanged = hasSourceChecksumChanged(entry, currentChecksum);
+            const inFlight = isSourceInFlight(entry);
+            // While in-flight, keep only queued latest checksum and avoid immediate re-dispatch.
+            if (inFlight) {
+              if (checksumChanged && currentChecksum) {
+                entry.queuedInputChecksum = currentChecksum;
+                runtime._sources[outputFile] = entry;
+                stampedAny = true;
+              }
+              continue;
+            }
+            if (!entry.lastRequestedAt || checksumChanged || (entry.lastFetchedAt && entry.lastFetchedAt >= entry.lastRequestedAt)) {
+              markSourceRequested(entry, now, currentChecksum);
+              runtime._sources[outputFile] = entry;
               stampedAny = true;
             }
           }
           if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
+          if (!stampedAny) return 'task-initiated';
 
-          // ---- Enrich sources with execution context before calling executor ----
-          // Use CardCompute.enrichSources to attach requires, sourcesData, and computed_values
-          // to each source so that copilot prompts and other templates can be interpolated with full context.
-          const enrichedCard = { ...card };
-          const enrichedSources = CardCompute.enrichSources(
-            (Array.isArray(card.sources) ? card.sources : undefined),
-            {
-              requires,
-              sourcesData,
-              computed_values: computeNode.computed_values,
-            }
-          );
-          // Preserve execution context for relative source.cli commands.
-          const sourceCwd = path.dirname(cardPath);
-          enrichedCard.sources = Array.isArray(enrichedSources)
-            ? enrichedSources.map((src) => ({
-                ...src,
-                cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
-                boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
-              }))
-            : enrichedSources;
+          const dispatchSourceChecksums: Record<string, string> = {};
+          for (const src of undeliveredRequired) {
+            const outputFile = src.outputFile;
+            if (typeof outputFile !== 'string' || !outputFile) continue;
+            const checksum = sourceChecksums[outputFile];
+            if (checksum) dispatchSourceChecksums[outputFile] = checksum;
+          }
 
           // Write enriched card to temp location for this invocation
           const enrichedCardPath = path.join(os.tmpdir(), `card-enriched-${cardId}-${Date.now()}.json`);
@@ -936,7 +1096,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               console.error(`[card-handler] ${input.nodeId}:`, err.message);
               try { fs.unlinkSync(enrichedCardPath); } catch {}
             }
-          });
+          }, dispatchSourceChecksums);
         return 'task-initiated';
       }
 
@@ -1535,7 +1695,7 @@ function cmdSourceDataFetched(args: string[]): void {
     process.exit(1);
   }
 
-  const { cbk, rg, cid, b, d } = payload;
+  const { cbk, rg, cid, b, d, cs } = payload;
   const destPath = path.join(rg, d);
 
   // Atomic move: rename from tmp into boardDir destination
@@ -1553,7 +1713,7 @@ function cmdSourceDataFetched(args: string[]): void {
   appendEventToJournal(rg, {
     type: 'task-progress',
     taskName: cbkDecoded.taskName,
-    update: { bindTo: b, outputFile: d, fetchedAt },
+    update: { bindTo: b, outputFile: d, fetchedAt, sourceChecksum: cs },
     timestamp: fetchedAt,
   });
 
@@ -1576,7 +1736,7 @@ function cmdSourceDataFetchFailure(args: string[]): void {
     process.exit(1);
   }
 
-  const { cbk, rg, cid, b, d } = payload;
+  const { cbk, rg, cid, b, d, cs } = payload;
   console.log(`[source-data-fetch-failure] ${cid}.${b}: ${reason}`);
 
   const cbkDecoded = decodeCallbackToken(cbk);
@@ -1589,7 +1749,7 @@ function cmdSourceDataFetchFailure(args: string[]): void {
   appendEventToJournal(rg, {
     type: 'task-progress',
     taskName: cbkDecoded.taskName,
-    update: { bindTo: b, outputFile: d, failure: true, reason },
+    update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs },
     timestamp,
   });
 
@@ -1600,11 +1760,14 @@ function cmdRunSources(args: string[]): void {
   const cardIdx = args.indexOf('--card');
   const tokenIdx = args.indexOf('--token');
   const rgIdx = args.indexOf('--rg');
+  const sourceChecksumsIdx = args.indexOf('--source-checksums');
   const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
   const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
   const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const sourceChecksumsJson = sourceChecksumsIdx !== -1 ? args[sourceChecksumsIdx + 1] : undefined;
+  const sourceChecksums = sourceChecksumsJson ? JSON.parse(sourceChecksumsJson) as Record<string, string> : undefined;
   if (!cardFilePath || !callbackToken || !boardDir) {
-    console.error('Usage: board-live-cards run-sources-internal --card <path> --token <token> --rg <dir>');
+    console.error('Usage: board-live-cards run-sources-internal --card <path> --token <token> --rg <dir> [--source-checksums <json>]');
     process.exit(1);
   }
 
@@ -1629,12 +1792,14 @@ function cmdRunSources(args: string[]): void {
   };
 
   function runSource(src: SourceDef): void {
+    const sourceChecksumForInvoke = src.outputFile ? sourceChecksums?.[src.outputFile] : undefined;
     const sourceToken = encodeSourceToken({
       cbk: callbackToken!,
       rg: boardDir!,
       cid: card.id as string,
       b: src.bindTo,
       d: src.outputFile ?? '',
+      cs: sourceChecksumForInvoke,
     });
 
     function reportFailure(reason: string): void {
@@ -1664,7 +1829,7 @@ function cmdRunSources(args: string[]): void {
         cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : path.dirname(cardFilePath || ''),
         boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
       };
-      appendTaskExecutorLog(boardDir!, sourceForExecutor);
+      appendTaskExecutorLog(boardDir!, sourceForExecutor, 'external-task-executor');
       fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
       console.log(`[run-sources-internal] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
       try {
@@ -1705,6 +1870,12 @@ function cmdRunSources(args: string[]): void {
     const timeout = src.timeout ?? 120_000;
     const sourceCwd = typeof src.cwd === 'string' ? src.cwd : path.dirname(cardFilePath || '');
     const sourceBoardDir = typeof src.boardDir === 'string' ? src.boardDir : boardDir;
+    const sourceForBuiltInExecutor = {
+      ...src,
+      cwd: sourceCwd,
+      boardDir: sourceBoardDir,
+    };
+    appendTaskExecutorLog(boardDir!, sourceForBuiltInExecutor, 'built-in-run-source-fetch');
     const cmdParts = splitCommandLine(src.cli);
     if (cmdParts.length === 0) {
       const errMsg = 'source.cli command is empty';
