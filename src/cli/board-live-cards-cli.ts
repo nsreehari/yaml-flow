@@ -367,37 +367,47 @@ export interface SourceRuntimeEntry {
   queuedInputChecksum?: string;
 }
 
+export interface InferenceRuntimeEntry {
+  lastRequestedAt?: string;
+  lastFetchedAt?: string;
+  lastError?: string;
+  lastInputChecksum?: string;
+  queuedInputChecksum?: string;
+}
+
+type FetchRuntimeEntry = SourceRuntimeEntry | InferenceRuntimeEntry;
+
 function computeInputChecksum(obj: unknown): string {
   const json = JSON.stringify(obj, null, 0);
   return createHash('sha256').update(json).digest('hex').substring(0, 16);
 }
 
-function markSourceRequested(entry: SourceRuntimeEntry, requestedAt: string, checksum?: string): void {
+function markRequested(entry: FetchRuntimeEntry, requestedAt: string, checksum?: string): void {
   entry.lastRequestedAt = requestedAt;
   if (checksum) entry.lastInputChecksum = checksum;
 }
 
-function markSourceFetchFailed(entry: SourceRuntimeEntry, reason: string): void {
+function markFetchFailed(entry: FetchRuntimeEntry, reason: string): void {
   entry.lastError = reason;
   delete entry.lastFetchedAt;
 }
 
-function markSourceFetchCompleted(entry: SourceRuntimeEntry, fetchedAt: string, checksum?: string): void {
+function markFetchCompleted(entry: FetchRuntimeEntry, fetchedAt: string, checksum?: string): void {
   entry.lastFetchedAt = fetchedAt;
   delete entry.lastError;
   if (checksum) entry.lastInputChecksum = checksum;
 }
 
-export function isSourceInFlight(entry: SourceRuntimeEntry | undefined): boolean {
+export function isSourceInFlight(entry: FetchRuntimeEntry | undefined): boolean {
   if (!entry?.lastRequestedAt) return false;
   return !entry.lastFetchedAt || entry.lastFetchedAt < entry.lastRequestedAt;
 }
 
-export function hasSourceChecksumChanged(entry: SourceRuntimeEntry | undefined, checksum: string | undefined): boolean {
+export function hasSourceChecksumChanged(entry: FetchRuntimeEntry | undefined, checksum: string | undefined): boolean {
   return !!checksum && entry?.lastInputChecksum !== checksum;
 }
 
-export function decideRequiredSourceAction(entry: SourceRuntimeEntry | undefined, checksum: string | undefined): 'dispatch' | 'queue' | 'idle' {
+export function decideRequiredSourceAction(entry: FetchRuntimeEntry | undefined, checksum: string | undefined): 'dispatch' | 'queue' | 'idle' {
   if (!entry?.lastRequestedAt) return 'dispatch';
   if (!entry.lastFetchedAt) return 'dispatch';
 
@@ -444,30 +454,71 @@ export function buildRequiredSourceChecksums(
   return checksums;
 }
 
-export function nextEntryAfterFetchDelivery(
-  entry: SourceRuntimeEntry,
+export function normalizeInferencePayloadForChecksum(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+
+  const normalizedPayload = { ...(payload as Record<string, unknown>) };
+  // Execution context fields should not affect logical dispatch gating.
+  delete normalizedPayload.cwd;
+  delete normalizedPayload.boardDir;
+
+  // Strip internal inference state to avoid self-invalidation
+  const context = normalizedPayload.context as Record<string, unknown> | undefined;
+  if (context && typeof context === 'object') {
+    const normalizedContext = { ...context };
+    delete normalizedContext.card_data; // Inference state lives here; skip it
+    normalizedPayload.context = normalizedContext;
+  }
+
+  return normalizedPayload;
+}
+
+export function buildInferenceChecksum(
+  requires: Record<string, unknown>,
+  sourcesData: Record<string, unknown>,
+  computedValues: Record<string, unknown>,
+  providesData: Record<string, unknown>,
+  completionRule: string,
+): string {
+  const payload = {
+    requires,
+    sourcesData,
+    computed_values: computedValues,
+    provides: providesData,
+    completionRule,
+  };
+  const normalized = normalizeInferencePayloadForChecksum(payload);
+  return computeInputChecksum(normalized);
+}
+
+export function nextEntryAfterFetchDelivery<T extends FetchRuntimeEntry>(
+  entry: T,
   fetchedAt: string,
-  sourceChecksum?: string,
-): SourceRuntimeEntry {
+  checksum?: string,
+): T {
   const next = { ...entry };
-  markSourceFetchCompleted(next, fetchedAt, sourceChecksum);
+  markFetchCompleted(next, fetchedAt, checksum);
   // If a newer input checksum was queued while fetch was in-flight,
   // schedule exactly one follow-up request for the latest state.
   if (next.queuedInputChecksum && next.queuedInputChecksum !== next.lastInputChecksum) {
-    markSourceRequested(next, new Date().toISOString(), next.queuedInputChecksum);
+    markRequested(next, new Date().toISOString(), next.queuedInputChecksum);
   }
   delete next.queuedInputChecksum;
-  return next;
+  return next as T;
 }
 
-export function nextEntryAfterFetchFailure(entry: SourceRuntimeEntry, reason: string): SourceRuntimeEntry {
+export function nextEntryAfterFetchFailure<T extends FetchRuntimeEntry>(
+  entry: T,
+  reason: string,
+): T {
   const next = { ...entry };
-  markSourceFetchFailed(next, reason);
-  return next;
+  markFetchFailed(next, reason);
+  return next as T;
 }
 
 export interface CardRuntimeState {
   _sources: Record<string, SourceRuntimeEntry>;
+  _inferenceEntry?: InferenceRuntimeEntry;
 }
 
 function runtimePath(boardDir: string, cardId: string): string {
@@ -835,8 +886,10 @@ function invokeRunSources(
   }
 }
 
-function invokeRunInference(boardDir: string, inputFile: string, callbackToken: string, callback: (err: Error | null) => void): void {
-  const { cmd, args } = getCliInvocation('run-inference-internal', ['--in', inputFile, '--token', callbackToken, '--rg', boardDir]);
+function invokeRunInference(boardDir: string, inputFile: string, callbackToken: string, checksum: string | undefined, callback: (err: Error | null) => void): void {
+  const baseArgs = ['--in', inputFile, '--token', callbackToken, '--rg', boardDir];
+  if (checksum) baseArgs.push('--checksum', checksum);
+  const { cmd, args } = getCliInvocation('run-inference-internal', baseArgs);
   try {
     spawnDetachedCommand(cmd, args);
     callback(null);
@@ -1071,7 +1124,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               continue;
             }
             if (!entry.lastRequestedAt || checksumChanged || (entry.lastFetchedAt && entry.lastFetchedAt >= entry.lastRequestedAt)) {
-              markSourceRequested(entry, now, currentChecksum);
+              markRequested(entry, now, currentChecksum);
               runtime._sources[outputFile] = entry;
               stampedAny = true;
             }
@@ -1157,6 +1210,32 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               card_data: computeNode.card_data ?? {},
             },
           };
+
+          // Compute inference checksum to gate re-invocations
+          const inferenceChecksum = buildInferenceChecksum(
+            requires,
+            sourcesData,
+            computeNode.computed_values ?? {},
+            data,
+            completionRule,
+          );
+
+          // Check inference runtime entry to decide dispatch/queue/idle
+          const inferenceEntry = runtime._inferenceEntry ?? {};
+          const inferenceAction = decideRequiredSourceAction(inferenceEntry, inferenceChecksum);
+
+          if (inferenceAction === 'idle') {
+            // Checksum unchanged; inference already in progress or completed
+            return 'task-initiated';
+          } else if (inferenceAction === 'queue') {
+            // Checksum changed but inference in-flight; queue for re-invoke on completion
+            inferenceEntry.queuedInputChecksum = inferenceChecksum;
+            runtime._inferenceEntry = inferenceEntry;
+            runtimeDirty = true;
+            return 'task-initiated';
+          }
+
+          // dispatch — proceed with invocation
           const inferenceInFile = path.join(os.tmpdir(), `card-inference-${cardId}-${Date.now()}.json`);
           fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
           appendInferenceAdapterLog(boardDir, cardId, inferencePayload);
@@ -1173,7 +1252,12 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           writeCardData.llm_task_completion_inference = writeInference;
           fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
 
-          invokeRunInference(boardDir, inferenceInFile, input.callbackToken, (err) => {
+          // Update inference runtime entry
+          markRequested(inferenceEntry, now, inferenceChecksum);
+          runtime._inferenceEntry = inferenceEntry;
+          runtimeDirty = true;
+
+          invokeRunInference(boardDir, inferenceInFile, input.callbackToken, inferenceChecksum, (err) => {
             try { fs.unlinkSync(inferenceInFile); } catch {}
             if (err) {
               console.error(`[card-handler] ${input.nodeId}:`, err.message);
@@ -2122,6 +2206,20 @@ function cmdInferenceDone(args: string[]): void {
     inferenceCompletedAt,
   };
   fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
+
+  // Update inference runtime entry to reflect completion
+  const runtimePath = path.join(dir, `${taskName}.runtime.json`);
+  let runtime: CardRuntimeState = { _sources: {} };
+  if (fs.existsSync(runtimePath)) {
+    try {
+      runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf-8')) as CardRuntimeState;
+    } catch {}
+  }
+
+  const inferenceEntry = runtime._inferenceEntry ?? {};
+  runtime._inferenceEntry = nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt);
+
+  fs.writeFileSync(runtimePath, JSON.stringify(runtime, null, 2), 'utf-8');
 
   appendEventToJournal(dir, {
     type: 'task-progress',
