@@ -1178,8 +1178,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       const cardData = card.card_data as Record<string, unknown> | undefined;
       const llmCompletion = (cardData?.llm_task_completion_inference ?? {}) as Record<string, unknown>;
       const isLlmTaskCompleted = llmCompletion.isTaskCompleted === true;
-      const inferenceRequestedAt = typeof llmCompletion.inferenceRequested === 'string'
-        ? llmCompletion.inferenceRequested
+      // inferenceRequested lives in the runtime sidecar, not the card file
+      const inferenceEntry = runtime._inferenceEntry ?? {};
+      const inferenceRequestedAt = typeof inferenceEntry.lastRequestedAt === 'string'
+        ? inferenceEntry.lastRequestedAt
         : undefined;
       const inferenceCompletedAt = typeof llmCompletion.inferenceCompletedAt === 'string'
         ? llmCompletion.inferenceCompletedAt
@@ -1232,7 +1234,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           );
 
           // Check inference runtime entry to decide dispatch/queue/idle
-          const inferenceEntry = runtime._inferenceEntry ?? {};
           const inferenceAction = decideRequiredSourceAction(inferenceEntry, inferenceChecksum);
 
           if (inferenceAction === 'idle') {
@@ -1251,19 +1252,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
           appendInferenceAdapterLog(boardDir, cardId, inferencePayload);
 
-          // Stamp request timestamp on the card before invoking inference to prevent duplicate invocations.
-          if (!card.card_data || typeof card.card_data !== 'object' || Array.isArray(card.card_data)) {
-            card.card_data = {};
-          }
-          const writeCardData = card.card_data as Record<string, unknown>;
-          const writeInference = (writeCardData.llm_task_completion_inference && typeof writeCardData.llm_task_completion_inference === 'object')
-            ? (writeCardData.llm_task_completion_inference as Record<string, unknown>)
-            : {};
-          writeInference.inferenceRequested = now;
-          writeCardData.llm_task_completion_inference = writeInference;
-          fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
-
-          // Update inference runtime entry
+          // Update inference runtime entry (inferenceRequested lives in sidecar only)
           markRequested(inferenceEntry, now, inferenceChecksum);
           runtime._inferenceEntry = inferenceEntry;
           runtimeDirty = true;
@@ -2234,7 +2223,7 @@ function cmdInferenceDone(args: string[]): void {
   cardData.llm_task_completion_inference = {
     ...existingInference,
     isTaskCompleted: status === 'task-completed',
-    reasoning: typeof result.reason === 'string' ? result.reason : '',
+    reason: typeof result.reason === 'string' ? result.reason : '',
     evidence: typeof result.evidence === 'string' ? result.evidence : '',
     inferenceCompletedAt,
   };
