@@ -1,0 +1,28 @@
+{
+  "id": "portfolio-risk-assessment",
+  "meta": { "title": "Portfolio Risk Assessment" },
+  "requires": ["table", "totalValue"],
+  "provides": [
+    { "bindTo": "riskAssessment", "src": "card_data.llm_task_completion_inference.reasoning" }
+  ],
+  "card_data": {
+    "llm_task_completion_inference": {
+      "sync_tmp_file": "tmp_file2"
+    }
+  },
+  "when_is_task_completed": "Complete this task only when the portfolio has at least 3 positions and no single holding exceeds 60 percent of the total portfolio value.",
+  "view": {
+    "elements": [
+      {
+        "kind": "text",
+        "label": "Risk Assessment",
+        "data": { "bind": "card_data.llm_task_completion_inference.reasoning" }
+      },
+      {
+        "kind": "text",
+        "label": "Risk Evidence",
+        "data": { "bind": "card_data.llm_task_completion_inference.evidence" }
+      }
+    ]
+  }
+}

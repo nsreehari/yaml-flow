@@ -713,6 +713,17 @@ function splitCommandLine(command: string): string[] {
   return tokens;
 }
 
+function resolveCommandInvocation(rawCmd: string, rawArgs: string[]): { cmd: string; args: string[] } {
+  if (/^(node|node\.exe)$/i.test(rawCmd)) {
+    return { cmd: process.execPath, args: rawArgs };
+  }
+  // Keep script-based commands consistent for source and inference paths.
+  if (/\.m?js$/i.test(rawCmd)) {
+    return { cmd: process.execPath, args: [rawCmd, ...rawArgs] };
+  }
+  return { cmd: rawCmd, args: rawArgs };
+}
+
 function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {
   const { cmd, args: cliArgs } = getCliInvocation('process-accumulated-events', ['--rg', boardDir, '--inline-loop']);
   try {
@@ -1258,7 +1269,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           runtimeDirty = true;
 
           invokeRunInference(boardDir, inferenceInFile, input.callbackToken, inferenceChecksum, (err) => {
-            try { fs.unlinkSync(inferenceInFile); } catch {}
             if (err) {
               console.error(`[card-handler] ${input.nodeId}:`, err.message);
               const failedAt = new Date().toISOString();
@@ -1969,8 +1979,7 @@ function cmdRunSources(args: string[]): void {
     }
 
     const rawCmd = cmdParts[0];
-    const cmd = /^(node|node\.exe)$/i.test(rawCmd) ? process.execPath : rawCmd;
-    const cliArgs = cmdParts.slice(1);
+    const { cmd, args: cliArgs } = resolveCommandInvocation(rawCmd, cmdParts.slice(1));
 
     let stdout: string;
     try {
@@ -2092,10 +2101,34 @@ function cmdRunInference(args: string[]): void {
 
   const outFile = path.join(os.tmpdir(), `card-inference-out-${Date.now()}.json`);
   const errFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.txt`);
+  const adapterParts = splitCommandLine(inferenceAdapter);
+  if (adapterParts.length === 0) {
+    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
+    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
+      '--rg', boardDir, '--token', callbackToken,
+      '--result', JSON.stringify({
+        status: errorStatus,
+        reason: 'inference adapter command is empty',
+      })
+    ]);
+    spawnDetachedCommand(cmd, cliArgs);
+    return;
+  }
+
+  const adapterRawCmd = adapterParts[0];
+  const adapterRawArgs = adapterParts.slice(1);
+  const { cmd: adapterCmd, args: adapterArgsPrefix } = resolveCommandInvocation(adapterRawCmd, adapterRawArgs);
+  const adapterArgs = [...adapterArgsPrefix, 'run-inference', '--in', inFile, '--out', outFile, '--err', errFile];
+
   try {
-    execCommandSync(inferenceAdapter, ['run-inference', '--in', inFile, '--out', outFile, '--err', errFile], {
-      shell: true,
+    execCommandSync(adapterCmd, adapterArgs, {
+      shell: false,
       timeout: 120_000,
+      cwd: boardDir,
+      env: {
+        ...process.env,
+        BOARD_DIR: boardDir,
+      },
     });
   } catch (err: unknown) {
     const reason = (err as Error).message ?? String(err);
@@ -2299,8 +2332,7 @@ function cmdRunSourceFetch(args: string[]): void {
     process.exit(1);
   }
   const rawCmd = cmdParts[0];
-  const cmd = /^(node|node\.exe)$/i.test(rawCmd) ? process.execPath : rawCmd;
-  const cliArgs = cmdParts.slice(1);
+  const { cmd, args: cliArgs } = resolveCommandInvocation(rawCmd, cmdParts.slice(1));
 
   let stdout: string;
   try {

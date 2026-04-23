@@ -31,6 +31,9 @@ const RUNTIME_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-tracker-')
 const BOARD = path.join(RUNTIME_ROOT, 'board-runtime');
 const CARDS = path.join(RUNTIME_ROOT, 'cards');
 const TMP_FILE = path.join(BOARD, 'tmp_file1');
+const INFERENCE_TMP_FILE_2 = path.join(BOARD, 'tmp_file2');
+const INFERENCE_TMP_FILE_3 = path.join(BOARD, 'tmp_file3');
+const INFERENCE_ADAPTER = path.join(RUNTIME_ROOT, 'portfolio-tracker-inference-adapter.js');
 
 function parseArgs(argv) {
   let taskExecutor;
@@ -112,14 +115,24 @@ function statusText() {
 
 async function waitForAllCompleted(label, timeoutMs = 30000, pollMs = 500) {
   const start = Date.now();
+  const includeInferenceCards = fs.existsSync(path.join(CARDS, 'portfolio-risk-assessment.json'))
+    && fs.existsSync(path.join(CARDS, 'rebalancing-strategy.json'));
+
   while (Date.now() - start < timeoutMs) {
     const out = statusText();
-    const completed = [
+    const requiredCards = [
       /\bcompleted\s+portfolio-form\b/.test(out),
       /\bcompleted\s+price-fetch\b/.test(out),
       /\bcompleted\s+holdings-table\b/.test(out),
       /\bcompleted\s+portfolio-value\b/.test(out),
-    ].every(Boolean);
+    ];
+    if (includeInferenceCards) {
+      requiredCards.push(
+        /\bcompleted\s+portfolio-risk-assessment\b/.test(out),
+        /\bcompleted\s+rebalancing-strategy\b/.test(out),
+      );
+    }
+    const completed = requiredCards.every(Boolean);
 
     if (completed) {
       console.log(`${label}: all cards completed.`);
@@ -142,11 +155,22 @@ function writePrices(prices) {
   console.log(`Wrote prices: ${JSON.stringify(prices)}`);
 }
 
+function releaseInferenceAdapters(label) {
+  if (!fs.existsSync(BOARD)) {
+    fs.mkdirSync(BOARD, { recursive: true });
+  }
+  const signal = JSON.stringify({ stage: label, releasedAt: new Date().toISOString() });
+  fs.writeFileSync(INFERENCE_TMP_FILE_2, signal, 'utf-8');
+  fs.writeFileSync(INFERENCE_TMP_FILE_3, signal, 'utf-8');
+  console.log(`Released inference adapters for ${label}`);
+}
+
 function setupRuntimeCards() {
   fs.rmSync(CARDS, { recursive: true, force: true });
   fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
   fs.cpSync(CARDS_TEMPLATE, CARDS, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'fetch-prices.js'), path.join(RUNTIME_ROOT, 'fetch-prices.js'));
+  fs.copyFileSync(path.join(__dirname, 'portfolio-tracker-inference-adapter.js'), INFERENCE_ADAPTER);
 }
 
 function printTaskExecutorLog() {
@@ -173,9 +197,9 @@ function printTaskExecutorLog() {
   fs.rmSync(BOARD, { recursive: true, force: true });
 
   if (options.taskExecutor) {
-    cli('init', BOARD, '--task-executor', options.taskExecutor);
+    cli('init', BOARD, '--task-executor', options.taskExecutor, '--inference-adapter', INFERENCE_ADAPTER);
   } else {
-    cli('init', BOARD);
+    cli('init', BOARD, '--inference-adapter', INFERENCE_ADAPTER);
   }
   cli('add-cards', '--rg', BOARD, '--card-glob', path.join(CARDS, '*.json'));
 
@@ -184,6 +208,7 @@ function printTaskExecutorLog() {
 
   console.log('\n=== T1: Writing market prices ===');
   writePrices({ AAPL: 198.50, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
+  releaseInferenceAdapters('T1');
   await waitForAllCompleted('T1');
 
   console.log('\n--- T1 Status ---');
@@ -213,6 +238,7 @@ function printTaskExecutorLog() {
   cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
   await sleep(500);
   writePrices({ AAPL: 198.50, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
+  releaseInferenceAdapters('T2');
   await waitForAllCompleted('T2');
 
   console.log('\n--- T2 Status ---');
@@ -222,6 +248,7 @@ function printTaskExecutorLog() {
   cli('retrigger', '--rg', BOARD, '--task', 'price-fetch');
   await sleep(500);
   writePrices({ AAPL: 205.00, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
+  releaseInferenceAdapters('T3');
   await waitForAllCompleted('T3');
 
   console.log('\n--- T3 Status ---');
@@ -302,11 +329,13 @@ function printTaskExecutorLog() {
   // 7) wait for first request, then 8) write response prices for update #1 tickers.
   // await readFetchRequest('T4 first fetch', ['AAPL', 'MSFT', 'GOOG', 'AMZN']);
   writePrices({ AAPL: 205.00, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40 });
+  releaseInferenceAdapters('T4-first');
   await sleep(5000);
 
   // 9) wait for second request, then 10) write response prices for update #5 tickers.
   // await readFetchRequest('T4 second fetch', ['AAPL', 'MSFT', 'GOOG', 'TSLA']);
   writePrices({ AAPL: 206.00, MSFT: 426.00, GOOG: 179.50, TSLA: 169.20 });
+  releaseInferenceAdapters('T4-second');
 
   await waitForAllCompleted('T4');
 
