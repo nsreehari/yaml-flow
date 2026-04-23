@@ -25,12 +25,15 @@ import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/in
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
 const TASK_EXECUTOR_LOG_FILE = 'task-executor.jsonl';
+const INFERENCE_ADAPTER_LOG_FILE = 'inference-adapter.jsonl';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
 const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
 const RUNTIME_CARDS_DIR = 'cards';
 const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
+const INFERENCE_ADAPTER_FILE = '.inference-adapter';
+const DEFAULT_TASK_COMPLETION_RULE = 'all_required_sources_fetched';
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
 /** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
@@ -719,6 +722,18 @@ function invokeRunSources(boardDir: string, cardPath: string, callbackToken: str
   }
 }
 
+function invokeRunInference(boardDir: string, inputFile: string, callbackToken: string, callback: (err: Error | null) => void): void {
+  const { cmd, args } = getCliInvocation('run-inference-internal', ['--in', inputFile, '--token', callbackToken, '--rg', boardDir]);
+  try {
+    spawnDetachedCommand(cmd, args);
+    callback(null);
+  } catch (err) {
+    callback(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+
+
 function appendTaskExecutorLog(boardDir: string, hydratedSource: unknown): void {
   try {
     const entry = {
@@ -728,6 +743,19 @@ function appendTaskExecutorLog(boardDir: string, hydratedSource: unknown): void 
     fs.appendFileSync(path.join(boardDir, TASK_EXECUTOR_LOG_FILE), JSON.stringify(entry) + '\n', 'utf-8');
   } catch (logErr) {
     console.error(`[task-executor-log] append failed: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
+  }
+}
+
+function appendInferenceAdapterLog(boardDir: string, cardId: string, payload: unknown): void {
+  try {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      cardId,
+      payload,
+    };
+    fs.appendFileSync(path.join(boardDir, INFERENCE_ADAPTER_LOG_FILE), JSON.stringify(entry) + '\n', 'utf-8');
+  } catch (logErr) {
+    console.error(`[inference-adapter-log] append failed: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
   }
 }
 
@@ -771,11 +799,11 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       if (!cardPath) return 'task-initiate-failure';
 
       const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
-        const cardId = card.id as string;
-        const cardState = (card.card_data ?? {}) as Record<string, unknown>;
-        const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
-        // optionalForCompletionGating defaults to false when absent.
-        const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
+      const cardId = card.id as string;
+      const cardState = (card.card_data ?? {}) as Record<string, unknown>;
+      const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
+      // optionalForCompletionGating defaults to false when absent.
+      const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
 
         // Read (or initialise) the runtime sidecar
         const runtime = readRuntimeState(boardDir, cardId);
@@ -784,92 +812,94 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         // ---- Handle a task-progress re-invocation (source delivery or failure) ----
         if (input.update) {
           const u = input.update;
-          const bindTo = u.bindTo as string;
-          if (!runtime._sources[bindTo]) runtime._sources[bindTo] = {};
+          const outputFile = u.outputFile as string;
+          // Only process source updates (which have outputFile); skip non-source updates like inference-done
+          if (outputFile) {
+            if (!runtime._sources[outputFile]) runtime._sources[outputFile] = {};
 
-          if (u.failure) {
-            // Source fetch failed — record error, stay in-progress
-            runtime._sources[bindTo].lastError = (u.reason as string | undefined) ?? 'unknown';
-            delete runtime._sources[bindTo].lastFetchedAt;
-            runtimeDirty = true;
-            console.log(`[card-handler] source "${bindTo}" fetch failed: ${runtime._sources[bindTo].lastError}`);
-          } else {
-            // Successful delivery — dest file already renamed into place by CLI
-            runtime._sources[bindTo].lastFetchedAt = (u.fetchedAt as string | undefined) ?? new Date().toISOString();
-            delete runtime._sources[bindTo].lastError;
-            runtimeDirty = true;
-            console.log(`[card-handler] source "${bindTo}" delivered → ${u.dest}`);
-          }
-
-          if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
-        }
-
-        // ---- Load sourcesData from outputFiles ----
-        const sourcesData: Record<string, unknown> = {};
-        for (const src of allSources) {
-          if (src.outputFile) {
-            const filePath = path.join(boardDir, src.outputFile);
-            if (fs.existsSync(filePath)) {
-              const raw = fs.readFileSync(filePath, 'utf-8').trim();
-              try { sourcesData[src.bindTo] = JSON.parse(raw); }
-              catch { sourcesData[src.bindTo] = raw; }
+            if (u.failure) {
+              // Source fetch failed — record error, stay in-progress
+              runtime._sources[outputFile].lastError = (u.reason as string | undefined) ?? 'unknown';
+              delete runtime._sources[outputFile].lastFetchedAt;
+              runtimeDirty = true;
+              console.log(`[card-handler] source output "${outputFile}" fetch failed: ${runtime._sources[outputFile].lastError}`);
+            } else {
+              // Successful delivery — output file already in place by CLI
+              runtime._sources[outputFile].lastFetchedAt = (u.fetchedAt as string | undefined) ?? new Date().toISOString();
+              delete runtime._sources[outputFile].lastError;
+              runtimeDirty = true;
+              console.log(`[card-handler] source output "${outputFile}" delivered`);
             }
+
+            if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
           }
         }
 
-        // ---- Run compute ----
-        // input.state[token] = the full task-completed data object from the producer
-        // (e.g. { orders: [...] }). Unwrap to the specific token value so that
-        // compute expressions see requires.orders = [...] not requires.orders = { orders: [...] }.
-        const requires: Record<string, unknown> = {};
-        for (const [token, taskData] of Object.entries(input.state ?? {})) {
-          if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
-            const unwrapped = (taskData as Record<string, unknown>)[token];
-            requires[token] = unwrapped !== undefined ? unwrapped : taskData;
-          } else {
-            requires[token] = taskData;
+      // ---- Load sourcesData from outputFiles ----
+      const sourcesData: Record<string, unknown> = {};
+      for (const src of allSources) {
+        if (src.outputFile) {
+          const filePath = path.join(boardDir, src.outputFile);
+          if (fs.existsSync(filePath)) {
+            const raw = fs.readFileSync(filePath, 'utf-8').trim();
+            try { sourcesData[src.bindTo] = JSON.parse(raw); }
+            catch { sourcesData[src.bindTo] = raw; }
           }
         }
+      }
 
-        const computeNode: ComputeNode = {
-          id: cardId,
-          card_data: { ...cardState },
-          requires,
-          sources: allSources,
-          compute: card.compute as ComputeStep[] | undefined,
-        };
-        // Always populate _sourcesData so resolve("sources.*") works even without compute steps.
-        computeNode._sourcesData = sourcesData;
-        if (card.compute) {
-          await CardCompute.run(computeNode, { sourcesData });
+      // ---- Run compute ----
+      // input.state[token] = the full task-completed data object from the producer
+      // (e.g. { orders: [...] }). Unwrap to the specific token value so that
+      // compute expressions see requires.orders = [...] not requires.orders = { orders: [...] }.
+      const requires: Record<string, unknown> = {};
+      for (const [token, taskData] of Object.entries(input.state ?? {})) {
+        if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
+          const unwrapped = (taskData as Record<string, unknown>)[token];
+          requires[token] = unwrapped !== undefined ? unwrapped : taskData;
+        } else {
+          requires[token] = taskData;
         }
-        const cvPath = resolveComputedValuesPath(boardDir, cardId);
-        writeJsonAtomic(cvPath, {
-          schema_version: 'v1',
-          card_id: cardId,
-          computed_values: computeNode.computed_values ?? {},
-        });
+      }
+
+      const computeNode: ComputeNode = {
+        id: cardId,
+        card_data: { ...cardState },
+        requires,
+        sources: allSources,
+        compute: card.compute as ComputeStep[] | undefined,
+      };
+      // Always populate _sourcesData so resolve("sources.*") works even without compute steps.
+      computeNode._sourcesData = sourcesData;
+      if (card.compute) {
+        await CardCompute.run(computeNode, { sourcesData });
+      }
+      const cvPath = resolveComputedValuesPath(boardDir, cardId);
+      writeJsonAtomic(cvPath, {
+        schema_version: 'v1',
+        card_id: cardId,
+        computed_values: computeNode.computed_values ?? {},
+      });
 
         // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----
         const now = new Date().toISOString();
         const undeliveredRequired = requiredSources.filter(s => {
-          if (!s.outputFile) return false;
-          const entry = runtime._sources[s.bindTo];
+          const entry = runtime._sources[s.outputFile];
           if (!entry?.lastRequestedAt) return true;  // never requested — treat as undelivered
           if (!entry.lastFetchedAt) return true;      // requested but not yet fetched
           return entry.lastFetchedAt <= entry.lastRequestedAt; // stale
         });
 
-        if (undeliveredRequired.length > 0) {
+      if (undeliveredRequired.length > 0) {
           // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
           // and invoke run-sources-internal to deliver them.
           let stampedAny = false;
           for (const src of undeliveredRequired) {
-            const entry = runtime._sources[src.bindTo] ?? {};
+            const entry = runtime._sources[src.outputFile] ?? {};
             // Only re-stamp if not already requested after last fetch (avoid double-dispatch)
             if (!entry.lastRequestedAt || (entry.lastFetchedAt && entry.lastFetchedAt >= entry.lastRequestedAt)) {
               entry.lastRequestedAt = now;
-              runtime._sources[src.bindTo] = entry;
+              runtime._sources[src.outputFile] = entry;
               stampedAny = true;
             }
           }
@@ -907,40 +937,123 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               try { fs.unlinkSync(enrichedCardPath); } catch {}
             }
           });
+        return 'task-initiated';
+      }
+
+      // ---- All required sources delivered — build provides payload ----
+      const providesBindings = (card.provides ?? []) as { bindTo: string; src: string }[];
+      const data: Record<string, unknown> = {};
+      for (const { bindTo, src } of providesBindings) {
+        data[bindTo] = CardCompute.resolve(computeNode, src);
+      }
+
+      const completionRule = typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
+        ? card.when_is_task_completed.trim()
+        : DEFAULT_TASK_COMPLETION_RULE;
+
+      const cardData = card.card_data as Record<string, unknown> | undefined;
+      const llmCompletion = (cardData?.llm_task_completion_inference ?? {}) as Record<string, unknown>;
+      const isLlmTaskCompleted = llmCompletion.isTaskCompleted === true;
+      const inferenceRequestedAt = typeof llmCompletion.inferenceRequested === 'string'
+        ? llmCompletion.inferenceRequested
+        : undefined;
+      const inferenceCompletedAt = typeof llmCompletion.inferenceCompletedAt === 'string'
+        ? llmCompletion.inferenceCompletedAt
+        : (typeof llmCompletion.evaluatedAt === 'string' ? llmCompletion.evaluatedAt : undefined);
+      const inferencePending = !!inferenceRequestedAt
+        && (!inferenceCompletedAt || inferenceCompletedAt < inferenceRequestedAt);
+
+      const latestRequiredSourceFetchedAt = requiredSources.reduce<string | undefined>((latest, src) => {
+        const fetchedAt = runtime._sources[src.outputFile]?.lastFetchedAt;
+        if (typeof fetchedAt !== 'string') return latest;
+        if (!latest || fetchedAt > latest) return fetchedAt;
+        return latest;
+      }, undefined);
+
+      const shouldRequestInference = !inferenceRequestedAt
+        || !inferenceCompletedAt
+        || (!!latestRequiredSourceFetchedAt && latestRequiredSourceFetchedAt > inferenceCompletedAt);
+
+      if (completionRule !== DEFAULT_TASK_COMPLETION_RULE) {
+        if (isLlmTaskCompleted) {
+          // Card carries adapter-evaluated completion; proceed with deterministic completion path below.
+        } else if (inferencePending) {
+          // Request already in flight. Wait for completion callback.
+          return 'task-initiated';
+        } else if (!shouldRequestInference) {
+          // Latest inference has completed and inputs are unchanged. Keep task in progress.
+          return 'task-initiated';
+        } else {
+          const now = new Date().toISOString();
+          const inferencePayload = {
+            cardId,
+            taskName: input.nodeId,
+            completionRule,
+            context: {
+              requires,
+              sourcesData,
+              computed_values: computeNode.computed_values ?? {},
+              provides: data,
+              card_data: computeNode.card_data ?? {},
+            },
+          };
+          const inferenceInFile = path.join(os.tmpdir(), `card-inference-${cardId}-${Date.now()}.json`);
+          fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
+          appendInferenceAdapterLog(boardDir, cardId, inferencePayload);
+
+          // Stamp request timestamp on the card before invoking inference to prevent duplicate invocations.
+          if (!card.card_data || typeof card.card_data !== 'object' || Array.isArray(card.card_data)) {
+            card.card_data = {};
+          }
+          const writeCardData = card.card_data as Record<string, unknown>;
+          const writeInference = (writeCardData.llm_task_completion_inference && typeof writeCardData.llm_task_completion_inference === 'object')
+            ? (writeCardData.llm_task_completion_inference as Record<string, unknown>)
+            : {};
+          writeInference.inferenceRequested = now;
+          writeCardData.llm_task_completion_inference = writeInference;
+          fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
+
+          invokeRunInference(boardDir, inferenceInFile, input.callbackToken, (err) => {
+            try { fs.unlinkSync(inferenceInFile); } catch {}
+            if (err) {
+              console.error(`[card-handler] ${input.nodeId}:`, err.message);
+              const failedAt = new Date().toISOString();
+              appendEventToJournal(boardDir, {
+                type: 'task-failed',
+                taskName: input.nodeId,
+                error: err.message,
+                timestamp: failedAt,
+              });
+            }
+          });
           return 'task-initiated';
         }
+      }
 
-        // ---- All required sources delivered — build provides + emit task-completed ----
-        const providesBindings = (card.provides ?? []) as { bindTo: string; src: string }[];
-        const data: Record<string, unknown> = {};
-        for (const { bindTo, src } of providesBindings) {
-          data[bindTo] = CardCompute.resolve(computeNode, src);
-        }
+      // Persist task-completed token objects for SSE/runtime consumers.
+      writeRuntimeDataObjects(boardDir, data);
 
-        // Persist task-completed token objects for SSE/runtime consumers.
-        writeRuntimeDataObjects(boardDir, data);
-
-        // Spawn undelivered non-gating sources in background.
+      // Spawn undelivered non-gating sources in background.
         const undeliveredOptional = allSources.filter(s => {
-          if (s.optionalForCompletionGating !== true || !s.outputFile) return false;
-          const entry = runtime._sources[s.bindTo];
+          if (s.optionalForCompletionGating !== true) return false;
+          const entry = runtime._sources[s.outputFile];
           if (!entry?.lastRequestedAt) return true;
           if (!entry.lastFetchedAt) return true;
           return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
-        if (undeliveredOptional.length > 0) {
-          invokeRunSources(boardDir, cardPath, input.callbackToken, (err) => {
-            if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
-          });
-        }
-
-        appendEventToJournal(boardDir, {
-          type: 'task-completed',
-          taskName: input.nodeId,
-          data,
-          timestamp: new Date().toISOString(),
+      if (undeliveredOptional.length > 0) {
+        invokeRunSources(boardDir, cardPath, input.callbackToken, (err) => {
+          if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
         });
-        return 'task-initiated';
+      }
+
+      appendEventToJournal(boardDir, {
+        type: 'task-completed',
+        taskName: input.nodeId,
+        data,
+        timestamp: new Date().toISOString(),
+      });
+      return 'task-initiated';
     },
   };
 
@@ -1052,17 +1165,19 @@ function cmdAddCards(args: string[]): void {
 function cmdInit(args: string[]): void {
   const dir = args[0];
   if (!dir) { 
-    throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+    throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]');
   }
 
   const teIdx = args.indexOf('--task-executor');
   const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
   const chIdx = args.indexOf('--chat-handler');
   const chatHandler = chIdx !== -1 ? args[chIdx + 1] : undefined;
+  const iaIdx = args.indexOf('--inference-adapter');
+  const inferenceAdapter = iaIdx !== -1 ? args[iaIdx + 1] : undefined;
   const roIdx = args.indexOf('--runtime-out');
   const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
   if (roIdx !== -1 && !runtimeOut) {
-    throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+    throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]');
   }
 
   const result = initBoard(dir);
@@ -1072,6 +1187,9 @@ function cmdInit(args: string[]): void {
   }
   if (chatHandler) {
     fs.writeFileSync(path.join(dir, '.chat-handler'), chatHandler, 'utf-8');
+  }
+  if (inferenceAdapter) {
+    fs.writeFileSync(path.join(dir, INFERENCE_ADAPTER_FILE), inferenceAdapter, 'utf-8');
   }
 
   const runtimeOutDir = configureRuntimeOutDir(dir, runtimeOut);
@@ -1435,7 +1553,7 @@ function cmdSourceDataFetched(args: string[]): void {
   appendEventToJournal(rg, {
     type: 'task-progress',
     taskName: cbkDecoded.taskName,
-    update: { bindTo: b, fetchedAt, dest: d },
+    update: { bindTo: b, outputFile: d, fetchedAt },
     timestamp: fetchedAt,
   });
 
@@ -1458,7 +1576,7 @@ function cmdSourceDataFetchFailure(args: string[]): void {
     process.exit(1);
   }
 
-  const { cbk, rg, cid, b } = payload;
+  const { cbk, rg, cid, b, d } = payload;
   console.log(`[source-data-fetch-failure] ${cid}.${b}: ${reason}`);
 
   const cbkDecoded = decodeCallbackToken(cbk);
@@ -1471,7 +1589,7 @@ function cmdSourceDataFetchFailure(args: string[]): void {
   appendEventToJournal(rg, {
     type: 'task-progress',
     taskName: cbkDecoded.taskName,
-    update: { bindTo: b, failure: true, reason },
+    update: { bindTo: b, outputFile: d, failure: true, reason },
     timestamp,
   });
 
@@ -1627,6 +1745,230 @@ function cmdRunSources(args: string[]): void {
     runSource(src);
   }
 }
+
+function cmdTaskProgress(args: string[]): void {
+  const rgIdx = args.indexOf('--rg');
+  const tokenIdx = args.indexOf('--token');
+  const updateIdx = args.indexOf('--update');
+
+  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+  const updateJson = updateIdx !== -1 ? args[updateIdx + 1] : '{}';
+
+  if (!dir || !token) {
+    console.error('Usage: board-live-cards task-progress --rg <dir> --token <token> [--update <json>]');
+    process.exit(1);
+  }
+
+  const decoded = decodeCallbackToken(token);
+  if (!decoded) {
+    console.error('Invalid callback token');
+    process.exit(1);
+  }
+
+  const update = updateJson ? JSON.parse(updateJson) : {};
+
+  appendEventToJournal(dir, {
+    type: 'task-progress',
+    taskName: decoded.taskName,
+    update,
+    timestamp: new Date().toISOString(),
+  });
+
+  void processAccumulatedEventsInfinitePass(dir);
+}
+
+function cmdRunInference(args: string[]): void {
+  const inIdx = args.indexOf('--in');
+  const tokenIdx = args.indexOf('--token');
+  const rgIdx = args.indexOf('--rg');
+  const inFile = inIdx !== -1 ? args[inIdx + 1] : undefined;
+  const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+  const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+
+  if (!inFile || !callbackToken || !boardDir) {
+    console.error('Usage: board-live-cards run-inference-internal --in <input.json> --token <token> --rg <dir>');
+    process.exit(1);
+  }
+
+  // Decode token to get taskName so we can check the card's completion rule
+  const decoded = decodeCallbackToken(callbackToken);
+  if (!decoded) {
+    console.error('Invalid callback token');
+    process.exit(1);
+  }
+  const taskName = decoded.taskName;
+  const cardPath = lookupCardPath(boardDir, taskName);
+  const card = cardPath && fs.existsSync(cardPath)
+    ? JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>
+    : undefined;
+  const completionRule = card && typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
+    ? card.when_is_task_completed.trim()
+    : DEFAULT_TASK_COMPLETION_RULE;
+  const hasCustomCompletion = completionRule !== DEFAULT_TASK_COMPLETION_RULE;
+
+  if (!fs.existsSync(inFile)) {
+    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
+    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
+      '--rg', boardDir, '--token', callbackToken,
+      '--result', JSON.stringify({
+        status: errorStatus,
+        reason: `inference input not found: ${inFile}`,
+      })
+    ]);
+    spawnDetachedCommand(cmd, cliArgs);
+    return;
+  }
+
+  const adapterFile = path.join(boardDir, INFERENCE_ADAPTER_FILE);
+  const inferenceAdapter = fs.existsSync(adapterFile) ? fs.readFileSync(adapterFile, 'utf-8').trim() : undefined;
+  if (!inferenceAdapter) {
+    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
+    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
+      '--rg', boardDir, '--token', callbackToken,
+      '--result', JSON.stringify({
+        status: errorStatus,
+        reason: `inference adapter is not configured (${INFERENCE_ADAPTER_FILE})`,
+      })
+    ]);
+    spawnDetachedCommand(cmd, cliArgs);
+    return;
+  }
+
+  const outFile = path.join(os.tmpdir(), `card-inference-out-${Date.now()}.json`);
+  const errFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.txt`);
+  try {
+    execCommandSync(inferenceAdapter, ['run-inference', '--in', inFile, '--out', outFile, '--err', errFile], {
+      shell: true,
+      timeout: 120_000,
+    });
+  } catch (err: unknown) {
+    const reason = (err as Error).message ?? String(err);
+    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
+    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
+      '--rg', boardDir, '--token', callbackToken,
+      '--result', JSON.stringify({
+        status: errorStatus,
+        reason,
+      })
+    ]);
+    spawnDetachedCommand(cmd, cliArgs);
+    return;
+  }
+
+  let decision: 'task-completed' | 'task-progress' = 'task-progress';
+  let reason: string | undefined;
+  let evidence: string | undefined;
+  let data: Record<string, unknown> | undefined;
+
+  if (!fs.existsSync(outFile)) {
+    reason = fs.existsSync(errFile)
+      ? fs.readFileSync(errFile, 'utf-8').trim()
+      : 'inference adapter produced no output file';
+  } else {
+    try {
+      const raw = fs.readFileSync(outFile, 'utf-8').trim();
+      const result = JSON.parse(raw) as {
+        status?: string;
+        decision?: string;
+        reason?: string;
+        evidence?: string;
+        data?: Record<string, unknown>;
+      };
+
+      const status = typeof result.status === 'string'
+        ? result.status
+        : (typeof result.decision === 'string' ? result.decision : 'task-progress');
+      decision = status === 'task-completed' ? 'task-completed' : 'task-progress';
+      reason = typeof result.reason === 'string' ? result.reason : undefined;
+      evidence = typeof result.evidence === 'string' ? result.evidence : undefined;
+      data = result.data && typeof result.data === 'object' ? result.data : undefined;
+    } catch (err) {
+      reason = `failed to parse inference output: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
+    '--rg', boardDir,
+    '--token', callbackToken,
+    '--result', JSON.stringify({
+      status: decision,
+      reason,
+      evidence,
+      data,
+    }),
+  ]);
+  spawnDetachedCommand(cmd, cliArgs);
+}
+
+function cmdInferenceDone(args: string[]): void {
+  const rgIdx = args.indexOf('--rg');
+  const tokenIdx = args.indexOf('--token');
+  const resultIdx = args.indexOf('--result');
+
+  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+  const resultJson = resultIdx !== -1 ? args[resultIdx + 1] : '{}';
+
+  if (!dir || !token) {
+    console.error('Usage: board-live-cards inference-done --rg <dir> --token <token> [--result <json>]');
+    process.exit(1);
+  }
+
+  const decoded = decodeCallbackToken(token);
+  if (!decoded) {
+    console.error('Invalid callback token');
+    process.exit(1);
+  }
+
+  const taskName = decoded.taskName;
+  const cardPath = lookupCardPath(dir, taskName);
+  if (!cardPath) {
+    console.error(`Card file for task "${taskName}" not found in inventory`);
+    process.exit(1);
+  }
+
+  const result = resultJson ? JSON.parse(resultJson) as {
+    status?: string;
+    reason?: string;
+    evidence?: string;
+  } : {};
+
+  const status = result.status === 'task-completed' ? 'task-completed' : 'task-progress';
+  const inferenceCompletedAt = new Date().toISOString();
+
+  const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
+  if (!card.card_data) card.card_data = {};
+  const cardData = card.card_data as Record<string, unknown>;
+  const existingInference = (cardData.llm_task_completion_inference && typeof cardData.llm_task_completion_inference === 'object')
+    ? (cardData.llm_task_completion_inference as Record<string, unknown>)
+    : {};
+  cardData.llm_task_completion_inference = {
+    ...existingInference,
+    isTaskCompleted: status === 'task-completed',
+    reasoning: typeof result.reason === 'string' ? result.reason : '',
+    evidence: typeof result.evidence === 'string' ? result.evidence : '',
+    inferenceCompletedAt,
+    // Keep legacy field for backward compatibility while transitioning to inferenceCompletedAt.
+    evaluatedAt: inferenceCompletedAt,
+  };
+  fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
+
+  appendEventToJournal(dir, {
+    type: 'task-progress',
+    taskName,
+    update: {
+      kind: 'inference-done',
+      status,
+      evaluatedAt: inferenceCompletedAt,
+    },
+    timestamp: inferenceCompletedAt,
+  });
+
+  void processAccumulatedEventsInfinitePass(dir);
+}
+
+
 
 /**
  * Run-source-fetch protocol: execute a source definition.
@@ -1979,9 +2321,12 @@ export async function cli(argv: string[]): Promise<void> {
     case 'retrigger':                 return cmdRetrigger(rest);
     case 'task-completed':            return cmdTaskCompleted(rest);
     case 'task-failed':               return cmdTaskFailed(rest);
+    case 'task-progress':             return cmdTaskProgress(rest);
     case 'source-data-fetched':       return cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
     case 'run-sources-internal':      return cmdRunSources(rest);
+    case 'run-inference-internal':    return cmdRunInference(rest);
+    case 'inference-done':            return cmdInferenceDone(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
     case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
@@ -1997,14 +2342,16 @@ USAGE
   board-live-cards-cli <command> [options]
 
 BOARD MANAGEMENT
-  init <dir> [--task-executor <script>] [--runtime-out <dir>]
+  init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]
     Create a new board in <dir>.
     If --task-executor is given, writes <dir>/.task-executor with the script path.
+    If --chat-handler is given, writes <dir>/.chat-handler with the script path.
+    If --inference-adapter is given, writes <dir>/.inference-adapter with the script path.
     Writes <dir>/.runtime-out (default: <dir>/runtime-out).
     Published runtime files:
       <runtime-out>/board-livegraph-status.json
       <runtime-out>/cards/<card-id>.computed.json
-    Re-running init on an existing board is safe; --task-executor updates the registration.
+    Re-running init on an existing board is safe; handler registrations are updated.
 
   status --rg <dir> [--json]
     Read and print the published status snapshot from <runtime-out>/board-livegraph-status.json.
@@ -2044,13 +2391,16 @@ TASK CALLBACKS  (called by task executor scripts)
   task-failed --token <callbackToken> [--error <message>]
     Signal task failure with an optional error message.
 
+  task-progress --rg <dir> --token <callbackToken> [--update <json>]
+    Signal task progress with optional update payload (for waiting on more evidence, etc.).
+
 SOURCE CALLBACKS  (called internally by run-sources-internal)
   source-data-fetched --tmp <file> --token <sourceToken>
     Atomically rename <file> into the outputFile destination and record delivery
-    in runtime.json. Appends a task-progress event to re-invoke the card handler.
+    via journal events. Appends a task-progress event to re-invoke the card handler.
 
   source-data-fetch-failure --token <sourceToken> [--reason <message>]
-    Record a source fetch failure in runtime.json and append a task-progress event.
+    Record a source fetch failure via journal events and append a task-progress event.
 
 INTERNAL COMMANDS
   process-accumulated-events --rg <dir>
@@ -2065,7 +2415,7 @@ INTERNAL COMMANDS
     3) lock stays healthy,
     4) event production eventually quiesces.
 
-  run-sources-internal-internal --card <card.json> --token <callbackToken> --rg <dir>
+  run-sources-internal --card <card.json> --token <callbackToken> --rg <dir>
     Execute all source[] entries for a card, then report delivery or failure.
     (Internal command — invoked by the card-handler. Not intended for direct use.)
 
@@ -2077,6 +2427,14 @@ INTERNAL COMMANDS
   run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
     Execute a source definition. Board-live-cards reads source.cli and executes it.
     Writes result to --out. Presence of --out after exit indicates success.
+
+  run-inference-internal --in <input.json> --token <callbackToken> --rg <dir>
+    Execute inference via registered .inference-adapter and forward result to inference-done.
+    (Internal command — invoked by the card-handler when custom completion rule is used.)
+
+  inference-done --rg <dir> --token <callbackToken> [--result <json>]
+    Persist llm_task_completion_inference on the card and append a task-progress event.
+    (Internal command — invoked by run-inference-internal.)
 
 RUN-SOURCE-FETCH PROTOCOL
   External task-executors implement:
