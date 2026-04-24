@@ -6,14 +6,23 @@
  * Protocol (invoked by board-live-cards-cli):
  *   node demo-task-executor.js run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
  *
- * Expected source definition:
- *   { "bindTo": "...", "outputFile": "...", "mock": "keyName" }
+ * Expected source definition (--in payload):
+ *   {
+ *     "bindTo": "...",
+ *     "outputFile": "...",
+ *     // custom fields authored on the source entry (e.g. mock, copilot, http, prompt_template, etc.)
+ *     "cwd": "<card directory>",
+ *     "boardDir": "<board runtime directory>",
+ *     "_requires": { /* upstream token data (from card requires[]) */ },
+ *     "_sourcesData": { /* already-fetched sources on this card */ },
+ *     "_computed_values": { /* computed_values from the card's compute stage */ }
+ *   }
  *
- * Behavior:
- *   1. Read mock.db (JSON file next to this script)
- *   2. Look up source.mock value as a key in mock.db
- *   3. Write corresponding value to --out file (as JSON)
- *   4. Exit 0 on success, exit 1 on error
+ * Supported source kinds (based on custom fields):
+ *   - { mock: "key" }              → look up key in mock.db
+ *   - { copilot: { prompt_template, args? } }  → call Copilot CLI with interpolated prompt
+ *   - { prompt_template: "..." }   → shorthand copilot call (top-level template)
+ *   A real executor can also handle: http, graphapi, teams, mail, incidentdb, script, etc.
  */
 
 import fs from 'node:fs';
@@ -62,8 +71,16 @@ function resolveCopilotPrompt(sourceDef) {
   const template = cfg.prompt_template ?? sourceDef.prompt_template;
   const args = cfg.args ?? cfg.prompt_args ?? sourceDef.prompt_args ?? sourceDef.args ?? {};
   
-  // Merge explicit args with context from card-handler (_requires includes card-level computed values)
-  const interpolationContext = { ...sourceDef._requires, ...args };
+  // Merge all injected context for template interpolation.
+  // _requires = upstream token data, _computed_values = card compute stage outputs,
+  // _sourcesData = already-fetched sources on this card.
+  // Explicit args defined on the source take highest precedence.
+  const interpolationContext = {
+    ...sourceDef._requires,
+    ...sourceDef._sourcesData,
+    ...sourceDef._computed_values,
+    ...args,
+  };
   
   if (!template || typeof template !== 'string') return null;
   return interpolatePrompt(template, interpolationContext);
