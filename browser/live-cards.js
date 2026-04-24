@@ -197,8 +197,12 @@ var LiveCard = (function () {
       getChatMessages: config.getChatMessages || null,
     };
 
-    const _cleanup = {};   // nodeId → { ac, timers, charts, unsubs }
-    const _subs = {};      // nodeId → Set<callback>
+    const _cleanup = {};    // nodeId → { ac, timers, charts, unsubs }
+    const _subs = {};       // nodeId → Set<callback>
+    const _etState = {};    // stateKey → { currentState, pending } for editable-table dirty tracking
+    const _formState = {};  // stateKey → { currentState, pending } for form dirty tracking
+    const _notesState = {}; // stateKey → { currentState, pending } for notes dirty tracking
+    const _todoState = {};  // stateKey → { currentState, pending } for todo dirty tracking
     const _renderers = {}; // kind → fn
     const _nodeEls = {};   // nodeId → { container, resultEl, uid }
     const _chatModal = {
@@ -949,7 +953,48 @@ var LiveCard = (function () {
       const schema = ed.fields || {};
       const props = schema.properties || {};
       const required = schema.required || [];
-      const values = writeTo ? (_resolveBind(node, writeTo) || {}) : (data && typeof data === 'object' ? data : {});
+
+      // --- Journal-style dirty tracking (mirrors editable-table) ---
+      // currentState = what the server last sent (updated each SSE re-render)
+      // pending      = user's local field values accumulated on top of currentState
+      // dirty        = JSON.stringify(currentState) !== JSON.stringify(pending)
+      //
+      // On SSE re-render:
+      //   - currentState updated to new server values
+      //   - if NOT dirty: pending follows currentState (no unsaved edits)
+      //   - if dirty: pending untouched, form is rebuilt from pending (edits survive)
+      const stateKey = node.id + ':' + (writeTo || '');
+      const incomingValues = writeTo ? (_resolveBind(node, writeTo) || {}) : (data && typeof data === 'object' ? data : {});
+      const incomingCopy = Object.assign({}, incomingValues);
+
+      if (!_formState[stateKey]) {
+        _formState[stateKey] = { currentState: incomingCopy, pending: Object.assign({}, incomingCopy) };
+      } else {
+        const s = _formState[stateKey];
+        const wasDirty = JSON.stringify(s.currentState) !== JSON.stringify(s.pending);
+        s.currentState = incomingCopy;
+        if (!wasDirty) {
+          s.pending = Object.assign({}, incomingCopy);
+        }
+        // if dirty, pending stays so user's in-progress edits survive the SSE tick
+      }
+
+      const st = _formState[stateKey];
+
+      function isDirty() {
+        return JSON.stringify(st.currentState) !== JSON.stringify(st.pending);
+      }
+
+      // Snapshot current input values into pending (called on each input event)
+      function capturePending(form) {
+        form.querySelectorAll('[data-key]').forEach(inp => {
+          const k = inp.dataset.key, p = props[k];
+          if (!p) return;
+          if (p.type === 'boolean') st.pending[k] = inp.checked;
+          else if (p.type === 'number' || p.type === 'integer') st.pending[k] = inp.value !== '' ? parseFloat(inp.value) : 0;
+          else st.pending[k] = inp.value;
+        });
+      }
 
       const form = document.createElement('form');
       form.className = 'row g-2';
@@ -999,10 +1044,12 @@ var LiveCard = (function () {
 
         input.dataset.key = key;
         if (isReq) input.required = true;
-        if (values[key] != null) {
-          if (prop.type === 'boolean') input.checked = !!values[key];
-          else if (prop.format === 'date') input.value = String(values[key]).slice(0, 10);
-          else input.value = values[key];
+        // Populate from pending (not from server values directly)
+        const v = st.pending[key];
+        if (v != null) {
+          if (prop.type === 'boolean') input.checked = !!v;
+          else if (prop.format === 'date') input.value = String(v).slice(0, 10);
+          else input.value = v;
         }
         form.appendChild(col);
       });
@@ -1010,26 +1057,31 @@ var LiveCard = (function () {
       const btnCol = document.createElement('div');
       btnCol.className = 'col-12 mt-1';
       const btn = document.createElement('button');
-      btn.type = 'submit'; btn.className = 'btn btn-sm btn-primary'; btn.textContent = 'Submit';
+      btn.type = 'submit';
+      btn.className = 'btn btn-sm btn-primary' + (isDirty() ? '' : ' d-none');
+      btn.textContent = 'Submit';
       btnCol.appendChild(btn);
       form.appendChild(btnCol);
 
       el.innerHTML = '';
       el.appendChild(form);
 
+      // Real-time input → update pending + show Submit if now dirty
+      form.addEventListener('input', () => {
+        capturePending(form);
+        if (isDirty()) btn.classList.remove('d-none');
+      }, { signal });
+
       form.addEventListener('submit', e => {
         e.preventDefault();
         if (!form.checkValidity()) { form.classList.add('was-validated'); return; }
-        const vals = {};
-        form.querySelectorAll('[data-key]').forEach(inp => {
-          const k = inp.dataset.key, p = props[k];
-          if (p.type === 'boolean') vals[k] = inp.checked;
-          else if (p.type === 'number' || p.type === 'integer') vals[k] = inp.value ? parseFloat(inp.value) : 0;
-          else vals[k] = inp.value;
-        });
-        if (writeTo) _deepSet(node, writeTo, vals);
-        cfg.onPatchState(node.id, { fieldValues: vals });
-        notify(node.id, vals);
+        capturePending(form);
+        if (writeTo) _deepSet(node, writeTo, st.pending);
+        cfg.onPatchState(node.id, { fieldValues: st.pending });
+        notify(node.id, st.pending);
+        // After save, currentState = pending (no longer dirty)
+        st.currentState = Object.assign({}, st.pending);
+        btn.classList.add('d-none');
         btn.textContent = '✓ Saved';
         setTimeout(() => { btn.textContent = 'Submit'; }, 1500);
       }, { signal });
@@ -1042,14 +1094,29 @@ var LiveCard = (function () {
       const signal = cleanup.ac.signal;
       const ed = elemDef.data || {};
       const writeTo = ed.writeTo;
-      const content = typeof data === 'string' ? data : '';
+      const incomingContent = typeof data === 'string' ? data : '';
+
+      // --- Journal-style dirty tracking ---
+      // currentState = last server value; pending = textarea content
+      // On SSE re-render: if dirty, leave textarea alone; if clean, sync from server
+      const stateKey = node.id + ':' + (writeTo || '');
+      if (!_notesState[stateKey]) {
+        _notesState[stateKey] = { currentState: incomingContent, pending: incomingContent };
+      } else {
+        const s = _notesState[stateKey];
+        const wasDirty = s.currentState !== s.pending;
+        s.currentState = incomingContent;
+        if (!wasDirty) s.pending = incomingContent;
+        // if dirty, pending stays so user's typing survives the SSE tick
+      }
+      const st = _notesState[stateKey];
 
       el.innerHTML = `
         <div class="btn-group btn-group-sm mb-2" role="group">
           <button class="btn btn-outline-secondary active lc-n-edit" type="button">Edit</button>
           <button class="btn btn-outline-secondary lc-n-preview" type="button">Preview</button>
         </div>
-        <textarea class="form-control form-control-sm lc-notes-textarea" rows="8" placeholder="Write markdown...">${_esc(content)}</textarea>
+        <textarea class="form-control form-control-sm lc-notes-textarea" rows="8" placeholder="Write markdown...">${_esc(st.pending)}</textarea>
         <div class="lc-notes-preview d-none border rounded p-2 small"></div>`;
 
       const textarea = el.querySelector('.lc-notes-textarea');
@@ -1069,10 +1136,12 @@ var LiveCard = (function () {
 
       let timer;
       textarea.addEventListener('input', () => {
+        st.pending = textarea.value; // track in journal
         clearTimeout(timer);
         timer = setTimeout(() => {
           if (writeTo) _deepSet(node, writeTo, textarea.value);
           cfg.onPatchState(node.id, { notes: textarea.value });
+          st.currentState = textarea.value; // saved — no longer dirty
         }, 800);
         cleanup.timers.push(timer);
       }, { signal });
@@ -1097,13 +1166,7 @@ var LiveCard = (function () {
       const canAdd    = ed.addRow    !== false;
       const canDelete = ed.deleteRow !== false;
 
-      // Live reference — read from writeTo path when present so we always see latest
-      function getRows() {
-        const src = writeTo ? _resolveBind(node, writeTo) : data;
-        return Array.isArray(src) ? src.slice() : [];
-      }
-
-      // Derive columns from first pass of data if not specified
+      // Derive columns from rows if not specified
       function getCols(rows) {
         if (ed.columns && ed.columns.length) return ed.columns;
         const s = new Set();
@@ -1111,14 +1174,57 @@ var LiveCard = (function () {
         return [...s];
       }
 
-      function save(rows) {
-        if (writeTo) _deepSet(node, writeTo, rows);
-        cfg.onPatchState(node.id, { items: rows });
-        notify(node.id, rows);
+      // --- Journal-style dirty tracking ---
+      // currentState = what the server last sent (updated each SSE re-render)
+      // pending      = user's local accumulation of edits on top of currentState
+      // dirty        = JSON.stringify(currentState) !== JSON.stringify(pending)
+      //
+      // When SSE fires and re-renders this element:
+      //   - currentState is updated to the new server value
+      //   - if NOT dirty: pending follows currentState (no unsaved edits)
+      //   - if dirty: pending is left untouched (user's edits survive the SSE tick)
+      const stateKey = node.id + ':' + (ed.bind || ed.writeTo || '');
+      const incomingRows = Array.isArray(writeTo ? _resolveBind(node, writeTo) : data)
+        ? (writeTo ? _resolveBind(node, writeTo) : data)
+        : [];
+      const incomingCopy = incomingRows.map(r => Object.assign({}, r));
+
+      if (!_etState[stateKey]) {
+        // First render — initialise both sides from server data
+        _etState[stateKey] = { currentState: incomingCopy, pending: incomingCopy.map(r => Object.assign({}, r)) };
+      } else {
+        const s = _etState[stateKey];
+        const wasDirty = JSON.stringify(s.currentState) !== JSON.stringify(s.pending);
+        s.currentState = incomingCopy;
+        if (!wasDirty) {
+          // No unsaved edits — sync pending to new server state
+          s.pending = incomingCopy.map(r => Object.assign({}, r));
+        }
+        // If dirty, pending stays as-is so user's edits survive the SSE tick
+      }
+
+      const st = _etState[stateKey];
+
+      function isDirty() {
+        return JSON.stringify(st.currentState) !== JSON.stringify(st.pending);
+      }
+
+      function markDirty() {
+        const saveBtn = el.querySelector('.lc-et-save');
+        if (saveBtn) saveBtn.classList.remove('d-none');
+      }
+
+      function commitSave() {
+        if (writeTo) _deepSet(node, writeTo, st.pending);
+        cfg.onPatchState(node.id, { fieldValues: st.pending });
+        notify(node.id, st.pending);
+        // After save, currentState = pending (no longer dirty)
+        st.currentState = st.pending.map(r => Object.assign({}, r));
+        build();
       }
 
       function build() {
-        const rows = getRows();
+        const rows = st.pending;
         const cols = getCols(rows);
 
         if (!cols.length && !canAdd) {
@@ -1134,7 +1240,7 @@ var LiveCard = (function () {
         rows.forEach((row, rowIdx) => {
           h += `<tr>`;
           cols.forEach(c => {
-            const v   = row[c];
+            const v    = row[c];
             const prop = schemaProps[c] || {};
             const isNum = prop.type === 'number' || prop.type === 'integer' || (v != null && typeof v === 'number');
             const displayVal = v != null ? String(v) : '';
@@ -1159,42 +1265,52 @@ var LiveCard = (function () {
         }
 
         h += '</tbody></table></div>';
-        if (canAdd) h += '<button class="btn btn-sm btn-outline-secondary mt-1 lc-et-add">+ Add row</button>';
-        el.innerHTML = h;
+        let footer = '';
+        if (canAdd) footer += '<button class="btn btn-sm btn-outline-secondary mt-1 me-1 lc-et-add">+ Add row</button>';
+        footer += `<button class="btn btn-sm btn-primary mt-1 lc-et-save${isDirty() ? '' : ' d-none'}">Save</button>`;
+        el.innerHTML = h + footer;
 
-        // Cell edit → save on blur/change
+        // Cell edit → update pending on blur, show Save if now dirty
         el.querySelectorAll('.lc-et-cell').forEach(inp => {
           inp.addEventListener('change', () => {
             const rowIdx  = parseInt(inp.dataset.row);
             const colName = inp.dataset.col;
             const prop    = schemaProps[colName] || {};
             const isNum   = prop.type === 'number' || prop.type === 'integer' || inp.type === 'number';
-            const updated = getRows();
-            if (!updated[rowIdx]) return;
-            updated[rowIdx] = { ...updated[rowIdx] };
-            updated[rowIdx][colName] = isNum ? (inp.value !== '' ? parseFloat(inp.value) : 0) : inp.value;
-            save(updated);
-            // Do NOT rebuild — keep focus in the cell the user just edited
+            if (!st.pending[rowIdx]) return;
+            st.pending[rowIdx] = Object.assign({}, st.pending[rowIdx]);
+            st.pending[rowIdx][colName] = isNum ? (inp.value !== '' ? parseFloat(inp.value) : 0) : inp.value;
+            if (isDirty()) markDirty();
           }, { signal });
         });
 
-        // Delete row
+        // Delete row — updates pending, rebuilds (Save button shown if dirty)
         el.querySelectorAll('.lc-et-del').forEach(btn => {
           btn.addEventListener('click', () => {
             const rowIdx = parseInt(btn.dataset.row);
-            save(getRows().filter((_, i) => i !== rowIdx));
+            st.pending = st.pending.filter((_, i) => i !== rowIdx);
             build();
           }, { signal });
         });
 
-        // Add row
+        // Add row — appends blank row to pending, rebuilds (Save button shown if dirty)
         const addBtn = el.querySelector('.lc-et-add');
         if (addBtn) {
           addBtn.addEventListener('click', () => {
             const newRow = {};
-            getCols(getRows()).forEach(c => { newRow[c] = ''; });
-            save([...getRows(), newRow]);
+            getCols(st.pending).forEach(c => { newRow[c] = ''; });
+            st.pending = [...st.pending, newRow];
             build();
+          }, { signal });
+        }
+
+        // Save button — persist pending to server via fieldValues (same as form submit)
+        const saveBtn = el.querySelector('.lc-et-save');
+        if (saveBtn) {
+          saveBtn.addEventListener('click', () => {
+            commitSave();
+            saveBtn.textContent = '✓ Saved';
+            setTimeout(() => { saveBtn.textContent = 'Save'; }, 1500);
           }, { signal });
         }
       }
@@ -1209,14 +1325,34 @@ var LiveCard = (function () {
       const signal = cleanup.ac.signal;
       const ed = elemDef.data || {};
       const writeTo = ed.writeTo;
-      const items = Array.isArray(data) ? data : [];
+
+      // --- Journal-style dirty tracking ---
+      // currentState = last confirmed server state; pending = local working copy
+      // On SSE re-render: if dirty (action in-flight), keep pending; if clean, sync from server
+      const stateKey = node.id + ':' + (writeTo || '');
+      const incomingItems = Array.isArray(data) ? data.map(r => Object.assign({}, r)) : [];
+
+      if (!_todoState[stateKey]) {
+        _todoState[stateKey] = { currentState: incomingItems, pending: incomingItems.map(r => Object.assign({}, r)) };
+      } else {
+        const s = _todoState[stateKey];
+        const wasDirty = JSON.stringify(s.currentState) !== JSON.stringify(s.pending);
+        s.currentState = incomingItems;
+        if (!wasDirty) s.pending = incomingItems.map(r => Object.assign({}, r));
+        // if dirty, pending stays so in-flight changes survive the SSE tick
+      }
+      const st = _todoState[stateKey];
 
       function save() {
-        if (writeTo) _deepSet(node, writeTo, items);
-        cfg.onPatchState(node.id, { items });
+        if (writeTo) _deepSet(node, writeTo, st.pending);
+        cfg.onPatchState(node.id, { fieldValues: st.pending });
+        notify(node.id, st.pending);
+        // mark clean after save so next SSE sync resumes normally
+        st.currentState = st.pending.map(r => Object.assign({}, r));
       }
 
       function build() {
+        const items = st.pending;
         let h = '<div class="lc-todo-list">';
         items.forEach((item, i) => {
           const chk = item.done ? ' checked' : '';
@@ -1232,14 +1368,25 @@ var LiveCard = (function () {
         el.innerHTML = h;
 
         el.querySelectorAll('input[data-idx]').forEach(cb => {
-          cb.addEventListener('change', () => { items[parseInt(cb.dataset.idx)].done = cb.checked; save(); build(); }, { signal });
+          cb.addEventListener('change', () => {
+            st.pending[parseInt(cb.dataset.idx)].done = cb.checked;
+            save(); build();
+          }, { signal });
         });
         el.querySelectorAll('[data-rm]').forEach(btn => {
-          btn.addEventListener('click', () => { items.splice(parseInt(btn.dataset.rm), 1); save(); build(); }, { signal });
+          btn.addEventListener('click', () => {
+            st.pending.splice(parseInt(btn.dataset.rm), 1);
+            save(); build();
+          }, { signal });
         });
         const addInput = el.querySelector('.input-group input');
         const addBtn = el.querySelector('.lc-todo-add');
-        const addItem = () => { const t = addInput.value.trim(); if (!t) return; items.push({ text: t, done: false }); save(); build(); };
+        const addItem = () => {
+          const t = addInput.value.trim();
+          if (!t) return;
+          st.pending.push({ text: t, done: false });
+          save(); build();
+        };
         addBtn.addEventListener('click', addItem, { signal });
         addInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItem(); } }, { signal });
       }
