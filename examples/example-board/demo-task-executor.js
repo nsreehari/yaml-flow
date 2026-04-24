@@ -22,7 +22,14 @@
  *   - { mock: "key" }              → look up key in mock.db
  *   - { copilot: { prompt_template, args? } }  → call Copilot CLI with interpolated prompt
  *   - { prompt_template: "..." }   → shorthand copilot call (top-level template)
- *   A real executor can also handle: http, graphapi, teams, mail, incidentdb, script, etc.
+ *   - { http: { url, method?, headers?, args? }, tickersFrom? }  → HTTP fetch (Node 18+ fetch)
+ *   A real executor can also handle: graphapi, teams, mail, incidentdb, script, etc.
+ *
+ * http source notes:
+ *   - URL supports {{key}} interpolation from _requires, _computed_values, explicit http.args
+ *   - tickersFrom: "tokenName.fieldName" extracts a comma-joined list from _requires array
+ *     e.g. tickersFrom: "holdings.ticker" → tickers = "AAPL,MSFT,GOOGL" from requires.holdings[]
+ *   - If the HTTP call fails AND the source also has a "mock" field, falls back to mock.db
  */
 
 import fs from 'node:fs';
@@ -185,7 +192,7 @@ function fail(msg, errFile) {
   process.exit(1);
 }
 
-function runSourceFetchSubcommand(argv) {
+async function runSourceFetchSubcommand(argv) {
   const inIdx = argv.indexOf('--in');
   const outIdx = argv.indexOf('--out');
   const errIdx = argv.indexOf('--err');
@@ -210,7 +217,63 @@ function runSourceFetchSubcommand(argv) {
 
   let resultValue;
 
-  if (sourceDef.copilot || sourceDef.prompt_template) {
+  if (sourceDef.http) {
+    // ---------------------------------------------------------------------------
+    // HTTP source kind (Node 18+ built-in fetch)
+    // ---------------------------------------------------------------------------
+    const httpCfg = sourceDef.http;
+
+    // Build tickers string if tickersFrom is specified on the source
+    // e.g. tickersFrom: "holdings.ticker" → joins _requires.holdings[*].ticker with ','
+    const httpArgs = { ...(httpCfg.args || {}) };
+    if (sourceDef.tickersFrom) {
+      const dotIdx = sourceDef.tickersFrom.indexOf('.');
+      if (dotIdx > 0) {
+        const tokenName = sourceDef.tickersFrom.slice(0, dotIdx);
+        const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
+        const arr = sourceDef._requires?.[tokenName];
+        if (Array.isArray(arr)) {
+          httpArgs.tickers = arr.map(h => h[fieldName]).filter(Boolean).join(',');
+        }
+      }
+    }
+
+    // Interpolate URL template with all available context
+    const urlContext = {
+      ...(sourceDef._requires || {}),
+      ...(sourceDef._computed_values || {}),
+      ...httpArgs,
+    };
+    const url = interpolatePrompt(httpCfg.url, urlContext);
+    const method = (httpCfg.method || 'GET').toUpperCase();
+    const headers = { ...(httpCfg.headers || {}) };
+
+    try {
+      const resp = await fetch(url, { method, headers });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status} ${resp.statusText} from ${url}`);
+      }
+      resultValue = await resp.json();
+    } catch (httpErr) {
+      // If source also declares a mock key, fall back to mock.db (useful for offline dev)
+      if (sourceDef.mock) {
+        console.warn(`[demo-task-executor] HTTP fetch failed (${httpErr.message}), falling back to mock key "${sourceDef.mock}"`);
+        let mockDb;
+        try {
+          mockDb = readJson(MOCK_DB_PATH);
+        } catch (e) {
+          fail(`HTTP fetch failed and cannot read mock.db: ${String(e && e.message || e)}`, errFile);
+        }
+        resultValue = mockDb[sourceDef.mock];
+        if (resultValue === undefined) {
+          fail(`HTTP fetch failed and mock key "${sourceDef.mock}" not found in mock.db`, errFile);
+        }
+      } else {
+        fail(`HTTP fetch failed: ${httpErr.message}`, errFile);
+      }
+    }
+
+  } else if (sourceDef.copilot || sourceDef.prompt_template) {
     const prompt = resolveCopilotPrompt(sourceDef);
     if (!prompt) {
       fail('Source definition missing copilot.prompt_template (or prompt_template)', errFile);
@@ -258,10 +321,10 @@ function runSourceFetchSubcommand(argv) {
   process.exit(0);
 }
 
-function main() {
+async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {
-    runSourceFetchSubcommand(process.argv.slice(3));
+    await runSourceFetchSubcommand(process.argv.slice(3));
     return;
   }
 
@@ -269,4 +332,7 @@ function main() {
   process.exit(0);
 }
 
-main();
+main().catch(err => {
+  console.error(`[demo-task-executor] fatal: ${err && err.message || err}`);
+  process.exit(1);
+});

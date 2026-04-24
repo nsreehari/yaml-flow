@@ -1,23 +1,15 @@
-# Example board.yaml — demonstrates board configuration
-name: Example Dashboard
-desc: Reference board demonstrating all LiveCard v4 card patterns and element kinds
+# Portfolio Tracker board.yaml
+name: Portfolio Tracker
+desc: Live portfolio tracking — manage stock holdings and fetch market prices from Yahoo Finance
 
-# Connections are domain-specific. Define your own based on what your task-executor supports.
-# The schema allows any properties on source entries (additionalProperties: true).
-# These connect entries are examples — replace with your actual data sources.
 connects:
-  - id: orders-db
-    type: script
-    desc: Order data fetched via a local script
-
-  - id: pricing-api
+  - id: yahoo-finance
     type: http
-    url: https://api.example.com/v1/prices
-    desc: External pricing API
+    url: https://query1.finance.yahoo.com/v7/finance/quote
+    desc: Yahoo Finance v7 quote API
 
 vocabulary:
   tokens:
-    fresh:    { color: "green",  label: "Fresh" }
-    stale:    { color: "orange", label: "Stale" }
-    linked:   { color: "blue",   label: "Linked" }
-    alert:    { color: "red",    label: "Alert" }
+    up:   { color: "green",     label: "Up" }
+    down: { color: "red",       label: "Down" }
+    flat: { color: "secondary", label: "Flat" }

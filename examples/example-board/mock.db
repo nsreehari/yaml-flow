@@ -1,15 +1,14 @@
 {
-  "orders": [
-    { "id": "ORD-1001", "product": "Widget A", "quantity": 3, "amount": 12400, "region": "North" },
-    { "id": "ORD-1002", "product": "Widget B", "quantity": 2, "amount": 8700, "region": "South" },
-    { "id": "ORD-1003", "product": "Widget A", "quantity": 4, "amount": 15200, "region": "East" },
-    { "id": "ORD-1004", "product": "Widget C", "quantity": 1, "amount": 6300, "region": "West" },
-    { "id": "ORD-1005", "product": "Widget B", "quantity": 2, "amount": 9100, "region": "North" },
-    { "id": "ORD-1006", "product": "Widget C", "quantity": 3, "amount": 9800, "region": "South" }
-  ],
-  "prices": [
-    { "product": "Widget A", "price": 4133.33, "currency": "USD" },
-    { "product": "Widget B", "price": 4450.0, "currency": "USD" },
-    { "product": "Widget C", "price": 3266.67, "currency": "USD" }
-  ]
+  "quotes": {
+    "quoteResponse": {
+      "result": [
+        { "symbol": "AAPL",  "shortName": "Apple Inc.",          "regularMarketPrice": 198.15, "regularMarketChange": 2.15,  "regularMarketChangePercent": 1.10 },
+        { "symbol": "MSFT",  "shortName": "Microsoft Corp.",     "regularMarketPrice": 415.32, "regularMarketChange": -1.23, "regularMarketChangePercent": -0.30 },
+        { "symbol": "GOOGL", "shortName": "Alphabet Inc.",       "regularMarketPrice": 174.89, "regularMarketChange": 0.89,  "regularMarketChangePercent": 0.51 },
+        { "symbol": "TSLA",  "shortName": "Tesla Inc.",          "regularMarketPrice": 247.12, "regularMarketChange": 5.43,  "regularMarketChangePercent": 2.25 }
+      ],
+      "error": null
+    }
+  }
 }
+

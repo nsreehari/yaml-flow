@@ -1,0 +1,88 @@
+{
+  "id": "card-portfolio",
+  "meta": {
+    "title": "My Portfolio",
+    "tags": ["portfolio"],
+    "desc": "Manage your stock holdings — view positions and add or update ticker symbols and quantities. Edit card_data.holdings directly or use the form to stage a new entry."
+  },
+  "provides": [
+    { "bindTo": "holdings", "src": "card_data.holdings" }
+  ],
+  "compute": [
+    {
+      "bindTo": "holdingsCount",
+      "expr": "$count(card_data.holdings)"
+    },
+    {
+      "bindTo": "totalShares",
+      "expr": "$sum(card_data.holdings.quantity)"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "metric",
+        "label": "Positions",
+        "data": { "bind": "computed_values.holdingsCount" }
+      },
+      {
+        "kind": "metric",
+        "label": "Total Shares",
+        "data": { "bind": "computed_values.totalShares" }
+      },
+      {
+        "kind": "table",
+        "label": "Holdings",
+        "data": {
+          "bind": "card_data.holdings",
+          "columns": ["ticker", "quantity"],
+          "sortable": true
+        }
+      },
+      {
+        "kind": "form",
+        "label": "Stage New / Updated Holding",
+        "data": {
+          "writeTo": "card_data.entry",
+          "fields": {
+            "type": "object",
+            "properties": {
+              "ticker": {
+                "type": "string",
+                "title": "Ticker Symbol",
+                "description": "e.g. AAPL, MSFT, GOOGL, TSLA"
+              },
+              "quantity": {
+                "type": "number",
+                "title": "Quantity (shares)",
+                "minimum": 0,
+                "description": "Number of shares held"
+              }
+            },
+            "required": ["ticker", "quantity"]
+          }
+        }
+      },
+      {
+        "kind": "text",
+        "label": "Staged Entry",
+        "style": "muted",
+        "data": { "bind": "card_data.entry", "hideIfEmpty": true }
+      }
+    ],
+    "layout": {
+      "board": { "col": 4, "order": 1 },
+      "canvas": { "x": 50, "y": 50, "w": 300, "h": 380 }
+    },
+    "features": { "chat": true }
+  },
+  "card_data": {
+    "holdings": [
+      { "ticker": "AAPL",  "quantity": 10 },
+      { "ticker": "MSFT",  "quantity": 5  },
+      { "ticker": "GOOGL", "quantity": 2  },
+      { "ticker": "TSLA",  "quantity": 3  }
+    ],
+    "entry": {}
+  }
+}
