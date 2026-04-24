@@ -32,7 +32,6 @@
         <button class="btn btn-sm btn-outline-primary" id="modeCanvas">Canvas</button>
         <button class="btn btn-sm btn-outline-secondary" id="autoLayout">Auto Layout</button>
         <button class="btn btn-sm btn-outline-dark" id="refreshAll" style="display:none">Refresh All</button>
-        <button class="btn btn-sm btn-outline-danger" id="resetBoard" title="Reset board to source cards">↺ Reset</button>
         <div class="form-check ms-2">
           <input class="form-check-input" type="checkbox" id="devModeToggle" />
           <label class="form-check-label" for="devModeToggle">Dev Mode</label>
@@ -206,30 +205,6 @@
       document.getElementById('autoLayout').addEventListener('click', function () {
         currentMode = 'canvas';
         runtimeClient.autoLayout();
-      });
-
-      document.getElementById('resetBoard').addEventListener('click', async function () {
-        const btn = document.getElementById('resetBoard');
-        btn.disabled = true;
-        btn.textContent = '↺ Resetting…';
-        try {
-          const paths = boardPaths(activeBoardId);
-          await fetch(paths.demoSetup + '?reset=true');
-          runtimeClient.dispose();
-          bootstrapCompleted = false;
-          document.getElementById('boardRoot').innerHTML =
-            '<div class="d-flex align-items-center justify-content-center" style="height:72vh">'
-            + '<div class="text-center"><div class="spinner-border mb-3" role="status">'
-            + '<span class="visually-hidden">Loading…</span></div>'
-            + '<p class="text-muted">Reinitializing board…</p></div></div>';
-          await bootstrap(activeBoardId);
-        } catch (err) {
-          console.error('Reset failed', err);
-          alert('Reset failed: ' + err.message);
-        } finally {
-          btn.disabled = false;
-          btn.textContent = '↺ Reset';
-        }
       });
 
       document.getElementById('devModeToggle').addEventListener('change', function () {
