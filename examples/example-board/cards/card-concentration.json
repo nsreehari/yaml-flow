@@ -1,9 +1,9 @@
 {
-  "id": "card-concentration",
+  "id": "card-portfolio-intelligence",
   "meta": {
     "title": "Portfolio Intelligence",
-    "tags": ["portfolio", "analysis", "risk"],
-    "desc": "AI-powered portfolio analysis — concentration risk, sector exposure, unrealised gains, and market risks to watch for each position."
+    "tags": ["portfolio", "analysis"],
+    "desc": "AI analysis of portfolio mix and P&L. Publishes structured insights as tokens for downstream risk and action cards."
   },
   "requires": ["positions"],
   "sources": [
@@ -11,21 +11,30 @@
       "bindTo": "analysis",
       "outputFile": "card-concentration-analysis.json",
       "copilot": {
-        "prompt_template": "You are a concise equity analyst. Use web search to get today's news and upcoming events for each ticker before answering.\n\nIMPORTANT OUTPUT RULES — follow exactly:\n- Output ONLY the four Markdown sections below. Nothing else.\n- Do NOT show tool calls, search queries, intermediate reasoning, bullet logs, or any text before the first ## heading.\n- Your entire response must start with '## Mix' and contain nothing before it.\n- No emojis anywhere in your response.\n- Total length: ≤200 words, fit in one phone screen.\n\nPortfolio positions:\n{{positions}}\n\nFields: ticker, quantity, cost_basis ($), price ($), value ($), gain_$ (unrealised P&L), gain_% (unrealised return), chg_$ (today's position P&L $), chg_pct (today's % move).\n\n## Mix\n- Dominant holding (ticker, % of total) and whether that's a risk\n- Sector clustering in one line\n\n## P&L\n- Best: ticker +X% (+$Y)\n- Worst: ticker +X% (+$Y)\n\n## Risks\n- TICKER: one specific current risk with event name or date\n- (one bullet per position)\n\n## Action\n- One sentence: what to do and why, grounded in today's market."
+        "prompt_template": "You are a concise equity analyst. Use web search to get today's news and upcoming events for each ticker before answering.\n\nPortfolio positions:\n{{positions}}\n\nFields: ticker, quantity, cost_basis ($), price ($), value ($), gain_$ (unrealised P&L), gain_% (unrealised return), chg_$ (today's position P&L $), chg_pct (today's % move).\n\nIMPORTANT OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown code fences, no preamble, no trailing text.\n- Start your response with { and end with }.\n- No emojis anywhere.\n- Each value is a Markdown string using - bullet points. No sub-headings inside values.\n- Maximum 40 words per section.\n\n{\n  \"mix\": \"- <dominant holding ticker, % of total, and whether that is a risk>\\n- <sector clustering in one line>\",\n  \"pnl\": \"- Best: <ticker> +X% (+$Y)\\n- Worst: <ticker> +X% (+$Y)\",\n  \"risks\": \"- <TICKER>: <one specific current risk with event name or date>\\n- <TICKER>: ...\\n- (one bullet per position from today's news)\",\n  \"action\": \"- <one sentence: specific action and reason grounded in today's market>\"\n}"
       }
     }
   ],
-  "compute": [],
+  "compute": [
+    { "bindTo": "mix",    "expr": "fetched_sources.analysis.mix" },
+    { "bindTo": "pnl",    "expr": "fetched_sources.analysis.pnl" },
+    { "bindTo": "risks",  "expr": "fetched_sources.analysis.risks" },
+    { "bindTo": "action", "expr": "fetched_sources.analysis.action" }
+  ],
+  "provides": [
+    { "bindTo": "portfolio_mix",    "src": "computed_values.mix" },
+    { "bindTo": "portfolio_pnl",    "src": "computed_values.pnl" },
+    { "bindTo": "portfolio_risks",  "src": "computed_values.risks" },
+    { "bindTo": "portfolio_action", "src": "computed_values.action" }
+  ],
   "view": {
     "elements": [
-      {
-        "kind": "markdown",
-        "data": { "bind": "fetched_sources.analysis" }
-      }
+      { "kind": "markdown", "label": "Mix",  "data": { "bind": "computed_values.mix" } },
+      { "kind": "markdown", "label": "P&L",  "data": { "bind": "computed_values.pnl" } }
     ],
     "layout": {
-      "board": { "col": 4, "order": 4 },
-      "canvas": { "x": 1300, "y": 50, "w": 380, "h": 500 }
+      "board": { "col": 3, "order": 4 },
+      "canvas": { "x": 1300, "y": 50, "w": 340, "h": 200 }
     },
     "features": { "refresh": true, "chat": true }
   },

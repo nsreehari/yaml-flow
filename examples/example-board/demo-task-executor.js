@@ -411,7 +411,15 @@ function runSourceFetchSubcommand(argv) {
       fail(`copilot invocation failed: ${msg}`, errFile);
     }
 
-    resultValue = stripCopilotFooter(rawOutput);
+    const cleaned = stripCopilotFooter(rawOutput);
+    // If the response is a JSON object/array, parse it so downstream compute
+    // can reference fields directly (e.g. fetched_sources.analysis.mix).
+    try {
+      const parsed = JSON.parse(cleaned);
+      resultValue = (parsed && typeof parsed === 'object') ? parsed : cleaned;
+    } catch {
+      resultValue = cleaned;
+    }
   } else if (sourceDef.mock) {
     // mock.db lookup (explicit mock source — dev/test only)
     let mockDb;
