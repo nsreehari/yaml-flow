@@ -23,13 +23,14 @@
  *   - { copilot: { prompt_template, args? } }  → call Copilot CLI with interpolated prompt
  *   - { prompt_template: "..." }   → shorthand copilot call (top-level template)
  *   - { http: { url, method?, headers?, args? }, tickersFrom? }  → HTTP fetch (Node 18+ fetch)
+ *   - { chartApi: { url, headers? }, tickersFrom }  → Yahoo Finance chart API, one request per ticker;
+ *     returns { quoteResponse: { result: [...] } } compatible with the quote API shape
  *   A real executor can also handle: graphapi, teams, mail, incidentdb, script, etc.
  *
- * http source notes:
- *   - URL supports {{key}} interpolation from _requires, _computed_values, explicit http.args
- *   - tickersFrom: "tokenName.fieldName" extracts a comma-joined list from _requires array
- *     e.g. tickersFrom: "holdings.ticker" → tickers = "AAPL,MSFT,GOOGL" from requires.holdings[]
- *   - If the HTTP call fails AND the source also has a "mock" field, falls back to mock.db
+ * http / chartApi source notes:
+ *   - URL supports {{key}} interpolation (http) or {{ticker}} (chartApi)
+ *   - tickersFrom: "tokenName.fieldName" extracts tickers from a _requires array
+ *   - If the fetch fails AND the source has a "mock" field, falls back to mock.db
  */
 
 import fs from 'node:fs';
@@ -217,7 +218,91 @@ async function runSourceFetchSubcommand(argv) {
 
   let resultValue;
 
-  if (sourceDef.http) {
+  if (sourceDef.chartApi) {
+    // ---------------------------------------------------------------------------
+    // chartApi source kind — Yahoo Finance v8/finance/chart (free, per-ticker)
+    // Makes one request per ticker and assembles a quoteResponse-compatible shape.
+    // URL template must contain {{ticker}}, e.g.:
+    //   https://query1.finance.yahoo.com/v8/finance/chart/{{ticker}}?interval=1d&range=1d
+    // ---------------------------------------------------------------------------
+    const chartCfg = sourceDef.chartApi;
+    const headers = { ...(chartCfg.headers || {}) };
+
+    // Extract tickers array from _requires via tickersFrom
+    let tickers = [];
+    if (sourceDef.tickersFrom) {
+      const dotIdx = sourceDef.tickersFrom.indexOf('.');
+      if (dotIdx > 0) {
+        const tokenName = sourceDef.tickersFrom.slice(0, dotIdx);
+        const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
+        const arr = sourceDef._requires?.[tokenName];
+        if (Array.isArray(arr)) {
+          tickers = arr.map(h => h[fieldName]).filter(Boolean);
+        }
+      }
+    }
+
+    if (tickers.length === 0) {
+      console.warn('[demo-task-executor] chartApi: tickersFrom resolved to empty list — falling back to mock');
+    } else {
+      try {
+        const results = await Promise.all(tickers.map(async (ticker) => {
+          const url = interpolatePrompt(chartCfg.url, { ticker });
+          const abort = new AbortController();
+          const timeoutId = setTimeout(() => abort.abort(), 10_000);
+          let resp;
+          try {
+            resp = await fetch(url, { headers, signal: abort.signal });
+          } finally {
+            clearTimeout(timeoutId);
+          }
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status} for ${ticker}`);
+          }
+          const data = await resp.json();
+          const meta = data?.chart?.result?.[0]?.meta;
+          if (!meta) throw new Error(`No chart meta for ${ticker}`);
+          // Map to quote-compatible shape; compute change from chartPreviousClose
+          const price = meta.regularMarketPrice ?? 0;
+          const prevClose = meta.chartPreviousClose ?? price;
+          const change = price - prevClose;
+          const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
+          return {
+            symbol: meta.symbol ?? ticker,
+            shortName: meta.shortName ?? meta.longName ?? ticker,
+            regularMarketPrice: price,
+            regularMarketChange: change,
+            regularMarketChangePercent: changePct,
+          };
+        }));
+        resultValue = { quoteResponse: { result: results, error: null } };
+      } catch (chartErr) {
+        if (sourceDef.mock) {
+          console.warn(`[demo-task-executor] chartApi fetch failed (${chartErr.message}), falling back to mock key "${sourceDef.mock}"`);
+        } else {
+          fail(`chartApi fetch failed: ${chartErr.message}`, errFile);
+        }
+      }
+    }
+
+    // Fall back to mock if fetch failed or tickers were empty
+    if (resultValue === undefined) {
+      if (!sourceDef.mock) {
+        fail('chartApi: no tickers and no mock fallback defined', errFile);
+      }
+      let mockDb;
+      try {
+        mockDb = readJson(MOCK_DB_PATH);
+      } catch (e) {
+        fail(`chartApi failed and cannot read mock.db: ${String(e && e.message || e)}`, errFile);
+      }
+      resultValue = mockDb[sourceDef.mock];
+      if (resultValue === undefined) {
+        fail(`chartApi mock key "${sourceDef.mock}" not found in mock.db`, errFile);
+      }
+    }
+
+  } else if (sourceDef.http) {
     // ---------------------------------------------------------------------------
     // HTTP source kind (Node 18+ built-in fetch)
     // ---------------------------------------------------------------------------

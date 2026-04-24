@@ -5,8 +5,8 @@ desc: Live portfolio tracking — manage stock holdings and fetch market prices 
 connects:
   - id: yahoo-finance
     type: http
-    url: https://query1.finance.yahoo.com/v8/finance/quote
-    desc: Yahoo Finance v8 quote API
+    url: https://query1.finance.yahoo.com/v8/finance/chart
+    desc: Yahoo Finance v8 chart API (free, per-symbol)
 
 vocabulary:
   tokens:

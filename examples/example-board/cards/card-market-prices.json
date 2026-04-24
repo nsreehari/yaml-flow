@@ -3,16 +3,15 @@
   "meta": {
     "title": "Market Prices",
     "tags": ["prices", "market"],
-    "desc": "Fetches live market prices for portfolio holdings from Yahoo Finance v7. Computes per-position value and total portfolio value."
+    "desc": "Fetches market prices for portfolio holdings from Yahoo Finance chart API (free, per-ticker). Computes per-position value and total portfolio value."
   },
   "requires": ["holdings"],
   "sources": [
     {
       "bindTo": "quotes",
       "outputFile": "market-prices-quotes.json",
-      "http": {
-        "url": "https://query1.finance.yahoo.com/v8/finance/quote?symbols={{tickers}}",
-        "method": "GET",
+      "chartApi": {
+        "url": "https://query1.finance.yahoo.com/v8/finance/chart/{{ticker}}?interval=1d&range=1d",
         "headers": {
           "User-Agent": "Mozilla/5.0 (compatible; portfolio-tracker-demo/1.0)"
         }
