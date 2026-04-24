@@ -1,0 +1,30 @@
+{
+  "id": "card-ex-chart",
+  "meta": {
+    "title": "Orders by Region",
+    "tags": [],
+    "desc": "Bar chart — JSONata group-by region with count aggregation"
+  },
+  "requires": ["orders"],
+  "compute": [
+    {
+      "bindTo": "regionCounts",
+      "expr": "$each($reduce(requires.orders, function($acc, $v){ $merge([$acc, { $v.region: ($lookup($acc, $v.region) ? $lookup($acc, $v.region) + 1 : 1) }]) }, {}), function($v, $k){ { 'region': $k, 'count': $v } })"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "chart",
+        "label": "Orders by Region",
+        "data": {
+          "bind": "computed_values.regionCounts",
+          "chartType": "bar",
+          "chartOptions": { "indexAxis": "x" }
+        }
+      }
+    ],
+    "layout": { "board": { "col": 6, "order": 6 }, "canvas": { "x": 50, "y": 530, "w": 350, "h": 220 } }
+  },
+  "card_data": {}
+}

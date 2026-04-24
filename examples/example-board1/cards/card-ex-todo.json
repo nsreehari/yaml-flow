@@ -1,0 +1,29 @@
+{
+  "id": "card-ex-todo",
+  "meta": {
+    "title": "Action Items",
+    "tags": [],
+    "desc": "Interactive todo list — persistent user input via writeTo"
+  },
+  "view": {
+    "elements": [
+      {
+        "kind": "todo",
+        "label": "Tasks",
+        "data": {
+          "bind": "card_data.items",
+          "writeTo": "card_data.items",
+          "placeholder": "No tasks yet — add one above"
+        }
+      }
+    ],
+    "layout": { "board": { "col": 4, "order": 11 }, "canvas": { "x": 700, "y": 320, "w": 260, "h": 180 } }
+  },
+  "card_data": {
+    "items": [
+      { "text": "Set up task-executor for your data sources", "done": false },
+      { "text": "Configure board.yaml connections", "done": false },
+      { "text": "Run board-live-cards-cli init", "done": false }
+    ]
+  }
+}

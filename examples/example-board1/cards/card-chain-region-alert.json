@@ -1,0 +1,39 @@
+{
+  "id": "card-chain-region-alert",
+  "meta": {
+    "title": "Region Dominance Alert",
+    "tags": ["chain", "level-4"],
+    "desc": "Chain level 4 of 4 — computes whether the top region dominates total revenue. Full cascade: orders → regionTotals → topRegion → this card. Change any upstream source and all four levels update automatically."
+  },
+  "requires": ["topRegion", "regionTotals"],
+  "compute": [
+    {
+      "bindTo": "totalRevenue",
+      "expr": "$sum(requires.regionTotals.total)"
+    },
+    {
+      "bindTo": "topShare",
+      "expr": "$round(requires.topRegion.total / computed_values.totalRevenue * 100, 1)"
+    },
+    {
+      "bindTo": "dominance",
+      "expr": "computed_values.topShare > 40 ? 'Dominant' : computed_values.topShare > 25 ? 'Leading' : 'Balanced'"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "badge",
+        "data": {
+          "bind": "computed_values.dominance",
+          "colorMap": { "Dominant": "danger", "Leading": "warning", "Balanced": "success" }
+        }
+      },
+      { "kind": "metric", "label": "Top Region",  "data": { "bind": "requires.topRegion.region" } },
+      { "kind": "metric", "label": "Share %",     "data": { "bind": "computed_values.topShare" } },
+      { "kind": "metric", "label": "Total Revenue", "data": { "bind": "computed_values.totalRevenue" } }
+    ],
+    "layout": { "board": { "col": 4, "order": 22 }, "canvas": { "x": 560, "y": 1100, "w": 260, "h": 210 } }
+  },
+  "card_data": {}
+}

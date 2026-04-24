@@ -1,0 +1,36 @@
+{
+  "id": "card-ex-filter",
+  "meta": {
+    "title": "Filters",
+    "tags": [],
+    "desc": "Interactive filter controls — user selects region and product"
+  },
+  "requires": ["orders"],
+  "provides": [{ "bindTo": "selections", "src": "card_data.fieldValues" }],
+  "compute": [
+    { "bindTo": "region",  "expr": "$sort($distinct(requires.orders.region))" },
+    { "bindTo": "product", "expr": "$sort($distinct(requires.orders.product))" }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "filter",
+        "data": {
+          "bind": "computed_values",
+          "writeTo": "card_data.fieldValues",
+          "fields": {
+            "type": "object",
+            "properties": {
+              "region":  { "type": "string", "title": "Region" },
+              "product": { "type": "string", "title": "Product" }
+            }
+          }
+        }
+      }
+    ],
+    "layout": { "board": { "col": 4, "order": 3 }, "canvas": { "x": 50, "y": 320, "w": 220, "h": 160 } }
+  },
+  "card_data": {
+    "fieldValues": {}
+  }
+}

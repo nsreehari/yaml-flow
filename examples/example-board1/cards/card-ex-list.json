@@ -1,0 +1,22 @@
+{
+  "id": "card-ex-list",
+  "meta": {
+    "title": "Top 5 Products",
+    "tags": [],
+    "desc": "Ranked list — JSONata sort by revenue descending, slice top 5"
+  },
+  "requires": ["orders"],
+  "compute": [
+    {
+      "bindTo": "topProducts",
+      "expr": "requires.orders^(>amount)#$i[$i<5].(product & ' — $' & $string(amount))"
+    }
+  ],
+  "view": {
+    "elements": [
+      { "kind": "list", "data": { "bind": "computed_values.topProducts" } }
+    ],
+    "layout": { "board": { "col": 3, "order": 5 }, "canvas": { "x": 550, "y": 320, "w": 220, "h": 180 } }
+  },
+  "card_data": {}
+}

@@ -1,0 +1,36 @@
+{
+  "id": "card-ex-narrative",
+  "meta": {
+    "title": "Sales Insight",
+    "tags": [],
+    "desc": "AI-generated narrative from Copilot source execution"
+  },
+  "requires": ["orders", "prices"],
+  "compute": [
+    {
+      "bindTo": "orderCount",
+      "expr": "$count(requires.orders)"
+    },
+    {
+      "bindTo": "totalRevenue",
+      "expr": "$sum(requires.orders.amount)"
+    }
+  ],
+  "sources": [
+    {
+      "bindTo": "raw",
+      "outputFile": "card-ex-narrative-raw.json",
+      "copilot": {
+        "prompt_template": "You are a concise sales analyst. Write 5-7 bullet points about business signals to monitor this week for a small B2B widget company. Keep it under 120 words."
+      }
+    }
+  ],
+  "view": {
+    "elements": [
+      { "kind": "narrative", "data": { "bind": "fetched_sources.raw" } }
+    ],
+    "layout": { "board": { "col": 6, "order": 10 }, "canvas": { "x": 600, "y": 800, "w": 350, "h": 250 } },
+    "features": { "refresh": true, "chat": true }
+  },
+  "card_data": {}
+}

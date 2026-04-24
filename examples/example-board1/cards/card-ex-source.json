@@ -1,0 +1,21 @@
+{
+  "id": "card-ex-source",
+  "meta": {
+    "title": "Order Data",
+    "tags": ["data"],
+    "desc": "Root data source — fetches order records via a script"
+  },
+  "provides": [{ "bindTo": "orders", "src": "fetched_sources.raw" }],
+  "sources": [{
+    "bindTo": "raw",
+    "outputFile": "card-ex-source-raw.json",
+    "mock": "orders"
+  }],
+  "view": {
+    "elements": [
+      { "kind": "table", "data": { "bind": "fetched_sources.raw", "columns": ["id", "product", "quantity", "amount", "region"], "maxRows": 10 } }
+    ],
+    "layout": { "board": { "col": 6, "order": 1 }, "canvas": { "x": 50, "y": 50, "w": 350, "h": 220 } }
+  },
+  "card_data": {}
+}
