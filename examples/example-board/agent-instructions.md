@@ -188,6 +188,26 @@ Data table. `columns` selects fields. `sortable: true` enables click-to-sort. `m
 { "kind": "table", "data": { "bind": "fetched_sources.raw", "columns": ["id","name","value"], "sortable": true, "maxRows": 20 } }
 ```
 
+### `editable-table`
+Inline-editable table. Each cell is an `<input>`; changes save on blur. `writeTo` persists the updated array back to `card_data`. `columns` controls which fields appear. Optional `schema.properties` per column sets `type` (`number`/`integer` renders a numeric input). `addRow` (default `true`) shows a "+ Add row" button; `deleteRow` (default `true`) shows per-row delete buttons.
+```json
+{
+  "kind": "editable-table",
+  "label": "Holdings",
+  "data": {
+    "bind": "card_data.holdings",
+    "writeTo": "card_data.holdings",
+    "columns": ["ticker", "quantity"],
+    "schema": {
+      "properties": {
+        "quantity": { "type": "number" }
+      }
+    }
+  }
+}
+```
+Pair with a `provides` pointing at `card_data.holdings` so downstream cards receive the live array. Use `addRow: false` / `deleteRow: false` to make the table append-only or read-fixed-length.
+
 ### `chart`
 Chart.js chart. `chartType`: `bar`, `line`, `pie`, `doughnut`, etc. `chartOptions` passed to Chart.js.
 ```json
@@ -430,7 +450,7 @@ When in doubt about allowed fields, consult:
 - `sources[]` each entry must have `bindTo` + `outputFile` strings; both must be unique across the array
 - `view.elements` required, non-empty; each element must have a valid `kind`
 - Top-level unknown keys are flagged as errors
-- Valid element `kind` values: `metric`, `table`, `chart`, `form`, `filter`, `list`, `notes`, `todo`, `alert`, `narrative`, `badge`, `text`, `markdown`, `custom`
+- Valid element `kind` values: `metric`, `table`, `editable-table`, `chart`, `form`, `filter`, `list`, `notes`, `todo`, `alert`, `narrative`, `badge`, `text`, `markdown`, `custom`
 
 ---
 

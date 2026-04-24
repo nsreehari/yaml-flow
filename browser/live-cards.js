@@ -1080,6 +1080,130 @@ var LiveCard = (function () {
 
     // ---- todo ----
 
+    // ---- editable-table ----
+    // Renders an array bound via `data.bind` as an inline-editable table.
+    // Each row is editable in-place; changes are saved on blur (change event).
+    // `data.writeTo` persists changes back to card_data (same pattern as form).
+    // `data.columns` restricts which columns appear (and in what order).
+    // `data.schema.properties[col].type` ("number"/"integer") controls input type.
+    // `data.addRow` (default true) shows "+ Add row" button.
+    // `data.deleteRow` (default true) shows per-row delete button.
+    function _renderEditableTable(data, el, elemDef, node) {
+      const cleanup = _getCleanup(node.id);
+      const signal = cleanup.ac.signal;
+      const ed = elemDef.data || {};
+      const writeTo = ed.writeTo;
+      const schemaProps = (ed.schema && ed.schema.properties) || {};
+      const canAdd    = ed.addRow    !== false;
+      const canDelete = ed.deleteRow !== false;
+
+      // Live reference — read from writeTo path when present so we always see latest
+      function getRows() {
+        const src = writeTo ? _resolveBind(node, writeTo) : data;
+        return Array.isArray(src) ? src.slice() : [];
+      }
+
+      // Derive columns from first pass of data if not specified
+      function getCols(rows) {
+        if (ed.columns && ed.columns.length) return ed.columns;
+        const s = new Set();
+        rows.forEach(r => { if (r && typeof r === 'object') Object.keys(r).forEach(k => s.add(k)); });
+        return [...s];
+      }
+
+      function save(rows) {
+        if (writeTo) _deepSet(node, writeTo, rows);
+        cfg.onPatchState(node.id, { items: rows });
+        notify(node.id, rows);
+      }
+
+      function build() {
+        const rows = getRows();
+        const cols = getCols(rows);
+
+        if (!cols.length && !canAdd) {
+          el.innerHTML = `<p class="text-muted small">${_esc(ed.placeholder || 'No data')}</p>`;
+          return;
+        }
+
+        let h = '<div class="table-responsive"><table class="table table-sm table-bordered mb-0 lc-editable-table"><thead><tr>';
+        cols.forEach(c => { h += `<th class="small text-nowrap">${_esc(c)}</th>`; });
+        if (canDelete) h += '<th style="width:2rem"></th>';
+        h += '</tr></thead><tbody>';
+
+        rows.forEach((row, rowIdx) => {
+          h += `<tr>`;
+          cols.forEach(c => {
+            const v   = row[c];
+            const prop = schemaProps[c] || {};
+            const isNum = prop.type === 'number' || prop.type === 'integer' || (v != null && typeof v === 'number');
+            const displayVal = v != null ? String(v) : '';
+            h += `<td class="p-0">` +
+              `<input type="${isNum ? 'number' : 'text'}" ` +
+              `class="form-control form-control-sm border-0 rounded-0 lc-et-cell" ` +
+              `data-row="${rowIdx}" data-col="${_esc(c)}" value="${_esc(displayVal)}"` +
+              `${isNum ? ' step="any"' : ''}>` +
+              `</td>`;
+          });
+          if (canDelete) {
+            h += `<td class="text-center align-middle p-0">` +
+              `<button class="btn btn-sm btn-link text-danger p-0 lc-et-del" data-row="${rowIdx}" title="Remove row">✕</button>` +
+              `</td>`;
+          }
+          h += '</tr>';
+        });
+
+        if (!rows.length) {
+          const span = cols.length + (canDelete ? 1 : 0);
+          h += `<tr><td colspan="${span}" class="text-muted small text-center">${_esc(ed.placeholder || 'No rows')}</td></tr>`;
+        }
+
+        h += '</tbody></table></div>';
+        if (canAdd) h += '<button class="btn btn-sm btn-outline-secondary mt-1 lc-et-add">+ Add row</button>';
+        el.innerHTML = h;
+
+        // Cell edit → save on blur/change
+        el.querySelectorAll('.lc-et-cell').forEach(inp => {
+          inp.addEventListener('change', () => {
+            const rowIdx  = parseInt(inp.dataset.row);
+            const colName = inp.dataset.col;
+            const prop    = schemaProps[colName] || {};
+            const isNum   = prop.type === 'number' || prop.type === 'integer' || inp.type === 'number';
+            const updated = getRows();
+            if (!updated[rowIdx]) return;
+            updated[rowIdx] = { ...updated[rowIdx] };
+            updated[rowIdx][colName] = isNum ? (inp.value !== '' ? parseFloat(inp.value) : 0) : inp.value;
+            save(updated);
+            // Do NOT rebuild — keep focus in the cell the user just edited
+          }, { signal });
+        });
+
+        // Delete row
+        el.querySelectorAll('.lc-et-del').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const rowIdx = parseInt(btn.dataset.row);
+            save(getRows().filter((_, i) => i !== rowIdx));
+            build();
+          }, { signal });
+        });
+
+        // Add row
+        const addBtn = el.querySelector('.lc-et-add');
+        if (addBtn) {
+          addBtn.addEventListener('click', () => {
+            const newRow = {};
+            getCols(getRows()).forEach(c => { newRow[c] = ''; });
+            save([...getRows(), newRow]);
+            build();
+          }, { signal });
+        }
+      }
+
+      build();
+    }
+
+    // ---- todo ----
+
     function _renderTodo(data, el, elemDef, node) {
       const cleanup = _getCleanup(node.id);
       const signal = cleanup.ac.signal;
@@ -1533,8 +1657,9 @@ var LiveCard = (function () {
 
     // ---- Register built-in renderers ----
 
-    _renderers.table     = _renderTable;
-    _renderers.filter    = _renderFilter;
+    _renderers.table          = _renderTable;
+    _renderers['editable-table'] = _renderEditableTable;
+    _renderers.filter         = _renderFilter;
     _renderers.metric    = _renderMetric;
     _renderers.list      = _renderList;
     _renderers.chart     = _renderChart;

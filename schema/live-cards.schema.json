@@ -119,7 +119,7 @@
       "properties": {
         "id":        { "type": "string", "description": "Optional element ID for targeted updates" },
         "kind":      {
-          "enum": ["metric", "table", "chart", "form", "filter", "list",
+          "enum": ["metric", "table", "editable-table", "chart", "form", "filter", "list",
                    "notes", "todo", "alert", "narrative", "badge", "text",
                    "markdown", "custom", "actions"]
         },
