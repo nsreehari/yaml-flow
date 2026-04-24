@@ -519,6 +519,7 @@ export function nextEntryAfterFetchFailure<T extends FetchRuntimeEntry>(
 export interface CardRuntimeState {
   _sources: Record<string, SourceRuntimeEntry>;
   _inferenceEntry?: InferenceRuntimeEntry;
+  _lastExecutionCount?: number;
 }
 
 function runtimePath(boardDir: string, cardId: string): string {
@@ -990,6 +991,17 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         // Read (or initialise) the runtime sidecar
         const runtime = readRuntimeState(boardDir, cardId);
         let runtimeDirty = false;
+
+        // ---- If the task was restarted, clear stale source/inference state ----
+        const currentExecutionCount = input.taskState?.executionCount ?? 0;
+        if (typeof runtime._lastExecutionCount === 'number' && runtime._lastExecutionCount !== currentExecutionCount) {
+          runtime._sources = {};
+          runtime._inferenceEntry = undefined;
+        }
+        if (runtime._lastExecutionCount !== currentExecutionCount) {
+          runtime._lastExecutionCount = currentExecutionCount;
+          runtimeDirty = true;
+        }
 
         // ---- Handle a task-progress re-invocation (source delivery or failure) ----
         if (input.update) {
