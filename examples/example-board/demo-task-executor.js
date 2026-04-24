@@ -13,9 +13,9 @@
  *     // custom fields authored on the source entry (e.g. mock, copilot, http, prompt_template, etc.)
  *     "cwd": "<card directory>",
  *     "boardDir": "<board runtime directory>",
- *     "_requires": { },   // upstream token data (from card requires[])
- *     "_sourcesData": { }, // already-fetched sources on this card
- *     "_computed_values": { } // computed_values from the card's compute stage
+ *     "_requires": { /* upstream token data (from card requires[]) */ },
+ *     "_sourcesData": { /* already-fetched sources on this card */ },
+ *     "_computed_values": { /* computed_values from the card's compute stage */ }
  *   }
  *
  * Supported source kinds (based on custom fields):
@@ -185,14 +185,11 @@ function runCopilotPrompt(prompt) {
 
 function fail(msg, errFile) {
   if (errFile) {
-    try { fs.writeFileSync(errFile, msg); } catch {}
+    try {
+      fs.writeFileSync(errFile, msg);
+    } catch {}
   }
   console.error(`[demo-task-executor] ${msg}`);
-  // In probe mode: throw so probeSourceSubcommand can catch and report gracefully
-  if (globalThis.__probeMode) {
-    globalThis.__probeFailMsg = msg;
-    throw new Error(msg);
-  }
   process.exit(1);
 }
 
@@ -420,220 +417,13 @@ async function runSourceFetchSubcommand(argv) {
     fail(`Cannot write output file: ${String(err && err.message || err)}`, errFile);
   }
 
-  // In probe mode, return normally so probeSourceSubcommand can read the result
-  if (!globalThis.__probeMode) {
-    process.exit(0);
-  }
-}
-
-/**
- * probe-source — Agent-facing validation subcommand.
- *
- * Usage:
- *   node demo-task-executor.js probe-source \
- *     --card <card.json>         path to the card file to probe
- *     --source-idx <n>           0-based index into card.sources[]
- *   [ --source-bind <name> ]     alternative: select source by bindTo name
- *   [ --mock-requires <json> ]   JSON string (or @file.json) providing _requires tokens
- *                                If omitted, stubs are auto-generated from the card's
- *                                requires[] declarations using card_data where possible
- *   [ --out <result.json> ]      optional: also write result to this file
- *
- * Exits 0 and prints a PROBE_PASS / PROBE_FAIL report to stdout.
- * The report is machine-readable JSON on the last line (prefixed [probe:result]).
- *
- * Example — agents can run this after authoring a card:
- *   node demo-task-executor.js probe-source \
- *     --card examples/example-board/cards/card-market-prices.json \
- *     --source-idx 0 \
- *     --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'
- */
-async function probeSourceSubcommand(argv) {
-  const get = (flag) => {
-    const i = argv.indexOf(flag);
-    return i !== -1 ? argv[i + 1] : undefined;
-  };
-
-  const cardPath  = get('--card');
-  const idxArg    = get('--source-idx');
-  const bindArg   = get('--source-bind');
-  const mockReqArg = get('--mock-requires');
-  const outArg    = get('--out');
-
-  if (!cardPath) {
-    console.error('[probe] ERROR: --card <card.json> is required');
-    process.exit(1);
-  }
-
-  // ── Load card ─────────────────────────────────────────────────────────────
-  let card;
-  try {
-    card = readJson(path.resolve(cardPath));
-  } catch (e) {
-    console.error(`[probe] ERROR: cannot read card file: ${e.message}`);
-    process.exit(1);
-  }
-
-  const sources = card.sources || [];
-  if (sources.length === 0) {
-    console.error(`[probe] ERROR: card "${card.id}" has no sources`);
-    process.exit(1);
-  }
-
-  // ── Select source ─────────────────────────────────────────────────────────
-  let sourceIdx;
-  if (bindArg) {
-    sourceIdx = sources.findIndex(s => s.bindTo === bindArg);
-    if (sourceIdx === -1) {
-      console.error(`[probe] ERROR: no source with bindTo="${bindArg}" in card "${card.id}"`);
-      process.exit(1);
-    }
-  } else {
-    sourceIdx = idxArg !== undefined ? parseInt(idxArg, 10) : 0;
-    if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= sources.length) {
-      console.error(`[probe] ERROR: --source-idx ${idxArg} out of range (card has ${sources.length} source(s))`);
-      process.exit(1);
-    }
-  }
-
-  const sourceDef = sources[sourceIdx];
-  const cardDir   = path.resolve(path.dirname(cardPath));
-
-  // ── Build _requires ────────────────────────────────────────────────────────
-  // Priority: --mock-requires arg > auto-stub from card_data + requires[]
-  let mockRequires = {};
-
-  if (mockReqArg) {
-    const raw = mockReqArg.startsWith('@')
-      ? fs.readFileSync(path.resolve(mockReqArg.slice(1)), 'utf-8')
-      : mockReqArg;
-    try {
-      mockRequires = JSON.parse(raw);
-    } catch (e) {
-      console.error(`[probe] ERROR: --mock-requires is not valid JSON: ${e.message}`);
-      process.exit(1);
-    }
-  } else {
-    // Auto-generate stubs from card.requires[] + card_data where possible.
-    // For each required token, look for a matching key in card_data first
-    // (e.g. the portfolio card stores holdings in card_data.holdings).
-    // If not found, generate a minimal typed stub based on known token shapes.
-    const KNOWN_STUBS = {
-      holdings: [{ ticker: 'AAPL', quantity: 10 }, { ticker: 'MSFT', quantity: 5 }],
-    };
-    for (const token of (card.requires || [])) {
-      if (card.card_data?.[token] !== undefined) {
-        mockRequires[token] = card.card_data[token];
-      } else if (KNOWN_STUBS[token]) {
-        mockRequires[token] = KNOWN_STUBS[token];
-        console.log(`[probe] auto-stub for requires["${token}"]: ${JSON.stringify(KNOWN_STUBS[token])}`);
-      } else {
-        mockRequires[token] = {};
-        console.log(`[probe] auto-stub for requires["${token}"]: {} (unknown token — provide --mock-requires for accuracy)`);
-      }
-    }
-  }
-
-  // ── Assemble --in payload ──────────────────────────────────────────────────
-  const inPayload = {
-    ...sourceDef,
-    cwd: cardDir,
-    boardDir: cardDir,
-    _requires: mockRequires,
-    _sourcesData: {},
-    _computed_values: {},
-  };
-
-  // ── Run via temp files (reuses runSourceFetchSubcommand unchanged) ─────────
-  const os = await import('node:os');
-  const tmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-'));
-  const inFile  = path.join(tmpDir, 'probe-in.json');
-  const outFile = path.join(tmpDir, 'probe-out.json');
-
-  fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2));
-
-  // Identify source kind label for the report
-  const sourceKind = sourceDef.chartApi ? 'chartApi'
-    : sourceDef.http ? 'http'
-    : sourceDef.copilot || sourceDef.prompt_template ? 'copilot'
-    : 'mock';
-
-  console.log(`[probe] card:        ${card.id}`);
-  console.log(`[probe] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
-  console.log(`[probe] _requires:   ${JSON.stringify(mockRequires)}`);
-  console.log(`[probe] running fetch...`);
-
-  let probeResult;
-  let probeError = null;
-  let exitedOk = false;
-
-  globalThis.__probeMode = true;
-  globalThis.__probeFailMsg = null;
-
-  try {
-    await runSourceFetchSubcommand(['--in', inFile, '--out', outFile]);
-    exitedOk = true;
-  } catch (e) {
-    probeError = globalThis.__probeFailMsg || e.message;
-  } finally {
-    globalThis.__probeMode = false;
-    globalThis.__probeFailMsg = null;
-  }
-
-  // Read result if written
-  if (fs.existsSync(outFile)) {
-    try {
-      probeResult = readJson(outFile);
-    } catch {}
-  }
-
-  // Cleanup temp dir
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-
-  // ── Report ─────────────────────────────────────────────────────────────────
-  const passed = exitedOk && probeResult !== undefined;
-
-  if (passed) {
-    const resultSize = JSON.stringify(probeResult).length;
-    const sample = JSON.stringify(probeResult).slice(0, 300);
-    console.log(`[probe] STATUS:      PROBE_PASS`);
-    console.log(`[probe] result size: ${resultSize} bytes`);
-    console.log(`[probe] sample:      ${sample}${resultSize > 300 ? '...' : ''}`);
-  } else {
-    console.log(`[probe] STATUS:      PROBE_FAIL`);
-    if (probeError) console.log(`[probe] error:       ${probeError}`);
-  }
-
-  // Machine-readable summary line for agent consumption
-  const summary = {
-    status: passed ? 'PROBE_PASS' : 'PROBE_FAIL',
-    cardId: card.id,
-    sourceIdx,
-    bindTo: sourceDef.bindTo,
-    sourceKind,
-    mockRequiresKeys: Object.keys(mockRequires),
-    resultSizeBytes: probeResult !== undefined ? JSON.stringify(probeResult).length : 0,
-    error: probeError || undefined,
-  };
-  console.log(`[probe:result] ${JSON.stringify(summary)}`);
-
-  // Optionally write result to --out
-  if (outArg && probeResult !== undefined) {
-    fs.writeFileSync(path.resolve(outArg), JSON.stringify(probeResult, null, 2));
-    console.log(`[probe] result written to: ${outArg}`);
-  }
-
-  process.exit(passed ? 0 : 1);
+  process.exit(0);
 }
 
 async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {
     await runSourceFetchSubcommand(process.argv.slice(3));
-    return;
-  }
-  if (sub === 'probe-source') {
-    await probeSourceSubcommand(process.argv.slice(3));
     return;
   }
 
