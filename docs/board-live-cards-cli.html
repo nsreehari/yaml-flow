@@ -108,6 +108,7 @@
           <tr><td><code>source-data-fetched --tmp &lt;file&gt; --token &lt;sourceToken&gt;</code></td><td>Source callback: atomically move tmp file to output destination and record delivery.</td><td><code>board-live-cards-cli source-data-fetched --tmp /tmp/out.json --token TOKEN</code></td></tr>
           <tr><td><code>source-data-fetch-failure --token &lt;sourceToken&gt; [--reason &lt;msg&gt;]</code></td><td>Source callback: record a source fetch failure.</td><td><code>board-live-cards-cli source-data-fetch-failure --token TOKEN --reason "timeout"</code></td></tr>
           <tr><td><code>run-source-fetch --in &lt;file&gt; --out &lt;file&gt; [--err &lt;file&gt;]</code></td><td>Execute one source definition using <code>source.cli</code>. Also the protocol entry point for custom <code>.task-executor</code> scripts.</td><td><code>board-live-cards-cli run-source-fetch --in source.json --out out.json</code></td></tr>
+          <tr><td><code>probe-source --card &lt;file&gt; [--source-idx &lt;n&gt;] [--source-bind &lt;name&gt;] [--mock-requires &lt;json&gt;] [--rg &lt;dir&gt;] [--out &lt;file&gt;]</code></td><td>Validate that a card source can be fetched. Builds the <code>run-source-fetch</code> payload, invokes the registered executor, and reports <code>PROBE_PASS</code> / <code>PROBE_FAIL</code>. Intended for agents to self-validate source configs before deploying a card.</td><td><code>board-live-cards-cli probe-source --card cards/prices.json --rg ./my-board --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></td></tr>
           <tr><td><code>process-accumulated-events --rg &lt;dir&gt; [--inline-loop]</code></td><td>Drain accumulated board journal events.</td><td><code>board-live-cards-cli process-accumulated-events --rg ./my-board</code></td></tr>
         </tbody>
       </table>
@@ -271,6 +272,29 @@
       <pre><code>board-live-cards-cli init ./my-board --task-executor "node ./my-executor.js"
 echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
       <p><strong>Example Implementation:</strong> See <code>examples/browser/boards/portfolio-tracker/portfolio-tracker-task-executor.cjs</code> for a complete working executor that runs CLI commands synchronously and captures output.</p>
+    </section>
+
+    <section class="card">
+      <h2>Probing Sources Before Deployment</h2>
+      <p>The <code>probe-source</code> command lets agents validate that a card source works end-to-end before adding the card to a live board. It builds the exact same <code>run-source-fetch</code> <code>--in</code> payload the runtime would send, invokes the registered executor, and reports <code>PROBE_PASS</code> or <code>PROBE_FAIL</code>.</p>
+      <pre><code>board-live-cards-cli probe-source \
+  --card cards/card-market-prices.json \
+  --source-idx 0 \
+  --rg ./my-board \
+  --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></pre>
+      <table>
+        <thead><tr><th>Flag</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>--card &lt;card.json&gt;</code></td><td>yes</td><td>Path to the card file to probe.</td></tr>
+          <tr><td><code>--source-idx &lt;n&gt;</code></td><td>no (default 0)</td><td>0-based index into <code>sources[]</code>.</td></tr>
+          <tr><td><code>--source-bind &lt;name&gt;</code></td><td>no</td><td>Select source by <code>bindTo</code> name instead of index.</td></tr>
+          <tr><td><code>--mock-requires &lt;json&gt;</code></td><td>no</td><td>JSON string (or <code>@file.json</code>) supplying <code>_requires</code> token values. The agent crafts this to match what the source expects. Omit to pass empty <code>{}</code>.</td></tr>
+          <tr><td><code>--rg &lt;dir&gt;</code></td><td>no</td><td>Board runtime directory used to locate <code>.task-executor</code>. Defaults to the card file's directory.</td></tr>
+          <tr><td><code>--out &lt;file&gt;</code></td><td>no</td><td>Write the raw fetch result JSON to this path.</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Output:</strong> human-readable report ending with a machine-readable <code>[probe-source:result] {...}</code> JSON line. Exit <code>0</code> = <code>PROBE_PASS</code>, exit <code>1</code> = <code>PROBE_FAIL</code>.</p>
+      <p><strong>Agent workflow:</strong> author card → <code>probe-source</code> each source → fix until <code>PROBE_PASS</code> → <code>add-cards</code> / <code>upsert-card</code>.</p>
     </section>
 
     <section class="card">

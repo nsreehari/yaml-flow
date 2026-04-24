@@ -494,6 +494,37 @@ All customFields are executor-defined — the runtime passes them through unchan
 - **0** — success; runtime reads `--out`
 - **non-zero** — failure; runtime reads `--err` if present
 
+### Probing a source before deploying
+
+Before adding a card to a running board, agents should validate that each source can actually be fetched. Use the `probe-source` command — it reads the card file, extracts the source at the chosen index, builds the exact same `--in` payload the runtime would build, invokes the registered executor, and reports pass/fail.
+
+```bash
+node board-live-cards-cli.js probe-source \
+  --card cards/card-market-prices.json \
+  --source-idx 0 \
+  --rg <boardRuntimeDir> \
+  --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--card <card.json>` | yes | Path to the card file to probe |
+| `--source-idx <n>` | no (default 0) | 0-based index into `sources[]` |
+| `--source-bind <name>` | no | Select source by `bindTo` name instead of index |
+| `--mock-requires <json>` | no | JSON string (or `@file.json`) providing the `_requires` token values the source needs. If omitted, `_requires` is `{}`. |
+| `--rg <boardDir>` | no | Board runtime directory used to locate `.task-executor`. Defaults to the card file's directory. |
+| `--out <result.json>` | no | Write the raw fetch result to this path |
+
+**Output:** the command prints a human-readable report ending with a machine-readable `[probe-source:result]` JSON line. Exit `0` = `PROBE_PASS`, exit `1` = `PROBE_FAIL`.
+
+**`--mock-requires` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card `requires: ["holdings"]` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
+
+**Workflow for agents authoring a new card:**
+1. Author the card JSON with `sources[]`.
+2. For each source, run `probe-source` with representative `--mock-requires` data.
+3. If `PROBE_PASS` → proceed with `add-cards` or `upsert-card`.
+4. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry.
+
 ---
 
 ## Inference Adapter Protocol
