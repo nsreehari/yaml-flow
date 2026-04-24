@@ -258,7 +258,7 @@
         },
         "llm_task_completion_inference": {
           "type": "object",
-          "description": "Inference evaluation result when custom when_is_task_completed rule is present. Written by inference adapter after evaluating completion rule.",
+          "description": "Runtime state written by the inference adapter (advanced/undocumented). Prefer the standard sources → compute → provides pattern for LLM-based signals.",
           "properties": {
             "inferenceRequested": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request was initiated" },
             "inferenceCompletedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request completed" },
@@ -283,7 +283,7 @@
     },
     "when_is_task_completed": {
       "type": "string",
-      "description": "Custom task completion rule. When present, invokes the inference adapter (--inference-adapter) instead of gating on source delivery. The rule text is passed as the 'completionRule' field to the adapter. Absence defaults to 'all_required_sources_fetched'."
+      "description": "Advanced/undocumented: invokes a registered inference adapter instead of the default source-delivery completion gate. Prefer the standard pattern: use an LLM-backed source, compute a verdict token, and publish it via provides."
     }
   }
 }
