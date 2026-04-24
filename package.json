@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -82,7 +82,9 @@
       "types": "./dist/runtime-artifacts/index.d.ts",
       "import": "./dist/runtime-artifacts/index.js",
       "require": "./dist/runtime-artifacts/index.cjs"
-    }
+    },
+    "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
+    "./package.json": "./package.json"
   },
   "browser": {
     "./stores/file": false
@@ -90,6 +92,7 @@
   "files": [
     "board-live-cards-cli.js",
     "step-machine-cli.js",
+    "board-livecards-server-runtime.js",
     "dist",
     "schema",
     "browser",
@@ -98,6 +101,7 @@
   "scripts": {
     "build": "tsup",
     "build:browser": "tsup --config tsup.browser.config.ts",
+    "build:example": "node example-board-src/build.js",
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",

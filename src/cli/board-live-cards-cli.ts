@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fg from 'fast-glob';
@@ -363,28 +363,24 @@ export interface SourceRuntimeEntry {
   lastRequestedAt?: string;
   lastFetchedAt?: string;
   lastError?: string;
-  lastInputChecksum?: string;
-  queuedInputChecksum?: string;
+  /** Timestamp of the most recent card-handler dispatch — updated on every fresh invocation.
+   * Replaces checksum-based gating: a source fetch is needed whenever
+   * lastFetchedAt is absent or older than queueRequestedAt. */
+  queueRequestedAt?: string;
 }
 
 export interface InferenceRuntimeEntry {
   lastRequestedAt?: string;
   lastFetchedAt?: string;
   lastError?: string;
-  lastInputChecksum?: string;
-  queuedInputChecksum?: string;
+  /** Same semantics as SourceRuntimeEntry.queueRequestedAt. */
+  queueRequestedAt?: string;
 }
 
 type FetchRuntimeEntry = SourceRuntimeEntry | InferenceRuntimeEntry;
 
-function computeInputChecksum(obj: unknown): string {
-  const json = JSON.stringify(obj, null, 0);
-  return createHash('sha256').update(json).digest('hex').substring(0, 16);
-}
-
-function markRequested(entry: FetchRuntimeEntry, requestedAt: string, checksum?: string): void {
+function markRequested(entry: FetchRuntimeEntry, requestedAt: string): void {
   entry.lastRequestedAt = requestedAt;
-  if (checksum) entry.lastInputChecksum = checksum;
 }
 
 function markFetchFailed(entry: FetchRuntimeEntry, reason: string): void {
@@ -392,10 +388,9 @@ function markFetchFailed(entry: FetchRuntimeEntry, reason: string): void {
   delete entry.lastFetchedAt;
 }
 
-function markFetchCompleted(entry: FetchRuntimeEntry, fetchedAt: string, checksum?: string): void {
+function markFetchCompleted(entry: FetchRuntimeEntry, fetchedAt: string): void {
   entry.lastFetchedAt = fetchedAt;
   delete entry.lastError;
-  if (checksum) entry.lastInputChecksum = checksum;
 }
 
 export function isSourceInFlight(entry: FetchRuntimeEntry | undefined): boolean {
@@ -403,107 +398,36 @@ export function isSourceInFlight(entry: FetchRuntimeEntry | undefined): boolean 
   return !entry.lastFetchedAt || entry.lastFetchedAt < entry.lastRequestedAt;
 }
 
-export function hasSourceChecksumChanged(entry: FetchRuntimeEntry | undefined, checksum: string | undefined): boolean {
-  return !!checksum && entry?.lastInputChecksum !== checksum;
-}
-
-export function decideRequiredSourceAction(entry: FetchRuntimeEntry | undefined, checksum: string | undefined): 'dispatch' | 'queue' | 'idle' {
+/**
+ * Decide what to do with a source/inference fetch given the current runtime entry
+ * and the timestamp of the latest card-handler dispatch (queueRequestedAt).
+ *
+ * - 'dispatch' : fetch not yet started for this run, or previous fetch predates the request
+ * - 'in-flight': fetch is already running for this run — update queueRequestedAt and wait
+ * - 'idle'     : fetch already completed for this run — nothing to do
+ */
+export function decideSourceAction(
+  entry: FetchRuntimeEntry | undefined,
+  queueRequestedAt: string,
+): 'dispatch' | 'in-flight' | 'idle' {
   if (!entry?.lastRequestedAt) return 'dispatch';
-  if (!entry.lastFetchedAt) return 'dispatch';
-
   const inFlight = isSourceInFlight(entry);
-  const checksumChanged = hasSourceChecksumChanged(entry, checksum);
-  if (inFlight && checksumChanged) return 'queue';
-  if (inFlight) return 'idle';
-  if (entry.lastFetchedAt <= entry.lastRequestedAt) return 'dispatch';
-  return checksumChanged ? 'dispatch' : 'idle';
-}
-
-export function normalizeSourcePayloadForChecksum(payload: unknown): unknown {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-
-  const normalizedPayload = { ...(payload as Record<string, unknown>) };
-  // Execution context fields should not affect logical dispatch gating.
-  delete normalizedPayload.cwd;
-  delete normalizedPayload.boardDir;
-
-  const bindTo = normalizedPayload.bindTo;
-  const sourcesData = normalizedPayload._sourcesData;
-  if (typeof bindTo === 'string' && bindTo && sourcesData && typeof sourcesData === 'object' && !Array.isArray(sourcesData)) {
-    const normalizedSourcesData = { ...(sourcesData as Record<string, unknown>) };
-    // Exclude source's own output from checksum to avoid self-invalidating loops.
-    delete normalizedSourcesData[bindTo];
-    normalizedPayload._sourcesData = normalizedSourcesData;
-  }
-
-  return normalizedPayload;
-}
-
-export function buildRequiredSourceChecksums(
-  requiredSources: ComputeSource[],
-  enrichedByOutput: Map<string, unknown>,
-): Record<string, string> {
-  const checksums: Record<string, string> = {};
-  for (const src of requiredSources) {
-    const outputFile = src.outputFile;
-    if (typeof outputFile !== 'string' || !outputFile) continue;
-    const payloadForChecksumRaw = enrichedByOutput.get(outputFile) ?? src;
-    const payloadForChecksum = normalizeSourcePayloadForChecksum(payloadForChecksumRaw);
-    checksums[outputFile] = computeInputChecksum(payloadForChecksum);
-  }
-  return checksums;
-}
-
-export function normalizeInferencePayloadForChecksum(payload: unknown): unknown {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-
-  const normalizedPayload = { ...(payload as Record<string, unknown>) };
-  // Execution context fields should not affect logical dispatch gating.
-  delete normalizedPayload.cwd;
-  delete normalizedPayload.boardDir;
-
-  // Strip internal inference state to avoid self-invalidation
-  const context = normalizedPayload.context as Record<string, unknown> | undefined;
-  if (context && typeof context === 'object') {
-    const normalizedContext = { ...context };
-    delete normalizedContext.card_data; // Inference state lives here; skip it
-    normalizedPayload.context = normalizedContext;
-  }
-
-  return normalizedPayload;
-}
-
-export function buildInferenceChecksum(
-  requires: Record<string, unknown>,
-  sourcesData: Record<string, unknown>,
-  computedValues: Record<string, unknown>,
-  providesData: Record<string, unknown>,
-  completionRule: string,
-): string {
-  const payload = {
-    requires,
-    sourcesData,
-    computed_values: computedValues,
-    provides: providesData,
-    completionRule,
-  };
-  const normalized = normalizeInferencePayloadForChecksum(payload);
-  return computeInputChecksum(normalized);
+  if (inFlight) return 'in-flight';                           // wait; caller updates queueRequestedAt
+  if (!entry.lastFetchedAt) return 'dispatch';                // requested but never fetched
+  if (entry.lastFetchedAt < queueRequestedAt) return 'dispatch'; // fetched before current run
+  return 'idle';                                              // already fetched for this run
 }
 
 export function nextEntryAfterFetchDelivery<T extends FetchRuntimeEntry>(
   entry: T,
   fetchedAt: string,
-  checksum?: string,
 ): T {
   const next = { ...entry };
-  markFetchCompleted(next, fetchedAt, checksum);
-  // If a newer input checksum was queued while fetch was in-flight,
-  // schedule exactly one follow-up request for the latest state.
-  if (next.queuedInputChecksum && next.queuedInputChecksum !== next.lastInputChecksum) {
-    markRequested(next, new Date().toISOString(), next.queuedInputChecksum);
-  }
-  delete next.queuedInputChecksum;
+  markFetchCompleted(next, fetchedAt);
+  // If queueRequestedAt is newer than the fetch just completed, the caller
+  // already updated queueRequestedAt while the fetch was in-flight.
+  // The next card-handler invocation will see lastFetchedAt < queueRequestedAt
+  // and dispatch again — no special queuing needed here.
   return next as T;
 }
 
@@ -883,12 +807,8 @@ function invokeRunSources(
   cardPath: string,
   callbackToken: string,
   callback: (err: Error | null) => void,
-  sourceChecksums?: Record<string, string>,
 ): void {
   const args = ['--card', cardPath, '--token', callbackToken, '--rg', boardDir];
-  if (sourceChecksums && Object.keys(sourceChecksums).length > 0) {
-    args.push('--source-checksums', JSON.stringify(sourceChecksums));
-  }
   const { cmd, args: cmdArgs } = getCliInvocation('run-sources-internal', args);
   try {
     spawnDetachedCommand(cmd, cmdArgs);
@@ -898,10 +818,9 @@ function invokeRunSources(
   }
 }
 
-function invokeRunInference(boardDir: string, inputFile: string, callbackToken: string, checksum: string | undefined, callback: (err: Error | null) => void): void {
-  const baseArgs = ['--in', inputFile, '--token', callbackToken, '--rg', boardDir];
-  if (checksum) baseArgs.push('--checksum', checksum);
-  const { cmd, args } = getCliInvocation('run-inference-internal', baseArgs);
+function invokeRunInference(boardDir: string, cardId: string, inputFile: string, callbackToken: string, checksum: string | undefined, callback: (err: Error | null) => void): void {
+  const inferenceToken = encodeSourceToken({ cbk: callbackToken, rg: boardDir, cid: cardId, b: '', d: '', cs: checksum });
+  const { cmd, args } = getCliInvocation('run-inference-internal', ['--in', inputFile, '--token', inferenceToken]);
   try {
     spawnDetachedCommand(cmd, args);
     callback(null);
@@ -1007,7 +926,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         if (input.update) {
           const u = input.update;
           const outputFile = u.outputFile as string;
-          const sourceChecksum = (u as Record<string, unknown>).sourceChecksum as string | undefined;
           // Only process source updates (which have outputFile); skip non-source updates like inference-done
           if (outputFile) {
             if (!runtime._sources[outputFile]) runtime._sources[outputFile] = {};
@@ -1022,7 +940,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               runtime._sources[outputFile] = nextEntryAfterFetchDelivery(
                 entry,
                 (u.fetchedAt as string | undefined) ?? new Date().toISOString(),
-                sourceChecksum,
               );
               runtimeDirty = true;
             }
@@ -1105,63 +1022,45 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         }
       }
 
-      const sourceChecksums = buildRequiredSourceChecksums(requiredSources, enrichedByOutput);
-
-        // ---- Delivery check: lastFetchedAt > lastRequestedAt for all required sources ----
+        // ---- Delivery check: source fetched after queueRequestedAt for all required sources ----
+        // queueRequestedAt is stamped on every fresh card-handler dispatch (not-started / completed).
+        // A source needs fetching when: never fetched, or lastFetchedAt < queueRequestedAt.
+        // While a fetch is in-flight we just update queueRequestedAt so the next completion
+        // sees the latest request and re-fetches if needed.
         const now = new Date().toISOString();
+        // Use the invocation time as queueRequestedAt for this run.
+        const runQueuedAt = input.update ? undefined : now; // only stamp on fresh dispatch, not task-progress
+
         const undeliveredRequired = requiredSources.filter(s => {
           const outputFile = s.outputFile;
           if (typeof outputFile !== 'string' || !outputFile) return true;
+          if (!runtime._sources[outputFile]) runtime._sources[outputFile] = {};
           const entry = runtime._sources[outputFile];
-          const currentChecksum = sourceChecksums[outputFile];
-          const action = decideRequiredSourceAction(entry, currentChecksum);
-          if (action === 'queue') {
-            entry.queuedInputChecksum = currentChecksum;
-            runtime._sources[outputFile] = entry;
+          // On a fresh dispatch, update queueRequestedAt to the current time.
+          if (runQueuedAt) {
+            entry.queueRequestedAt = runQueuedAt;
             runtimeDirty = true;
-            return false;
           }
+          const qrt = entry.queueRequestedAt ?? entry.lastRequestedAt ?? now;
+          const action = decideSourceAction(entry, qrt);
+          if (action === 'in-flight') return false; // wait; queueRequestedAt already updated above
           return action === 'dispatch';
         });
 
       if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
 
       if (undeliveredRequired.length > 0) {
-          // First-time or re-request: stamp lastRequestedAt for any not-yet-requested sources
-          // and invoke run-sources-internal to deliver them.
           let stampedAny = false;
           for (const src of undeliveredRequired) {
             const outputFile = src.outputFile;
             if (typeof outputFile !== 'string' || !outputFile) continue;
             const entry = runtime._sources[outputFile] ?? {};
-            const currentChecksum = sourceChecksums[outputFile];
-            const checksumChanged = hasSourceChecksumChanged(entry, currentChecksum);
-            const inFlight = isSourceInFlight(entry);
-            // While in-flight, keep only queued latest checksum and avoid immediate re-dispatch.
-            if (inFlight) {
-              if (checksumChanged && currentChecksum) {
-                entry.queuedInputChecksum = currentChecksum;
-                runtime._sources[outputFile] = entry;
-                stampedAny = true;
-              }
-              continue;
-            }
-            if (!entry.lastRequestedAt || checksumChanged || (entry.lastFetchedAt && entry.lastFetchedAt >= entry.lastRequestedAt)) {
-              markRequested(entry, now, currentChecksum);
-              runtime._sources[outputFile] = entry;
-              stampedAny = true;
-            }
+            markRequested(entry, now);
+            runtime._sources[outputFile] = entry;
+            stampedAny = true;
           }
           if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
           if (!stampedAny) return 'task-initiated';
-
-          const dispatchSourceChecksums: Record<string, string> = {};
-          for (const src of undeliveredRequired) {
-            const outputFile = src.outputFile;
-            if (typeof outputFile !== 'string' || !outputFile) continue;
-            const checksum = sourceChecksums[outputFile];
-            if (checksum) dispatchSourceChecksums[outputFile] = checksum;
-          }
 
           // Write enriched card to temp location for this invocation
           const enrichedCardPath = path.join(os.tmpdir(), `card-enriched-${cardId}-${Date.now()}.json`);
@@ -1172,7 +1071,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
               console.error(`[card-handler] ${input.nodeId}:`, err.message);
               try { fs.unlinkSync(enrichedCardPath); } catch {}
             }
-          }, dispatchSourceChecksums);
+          });
         return 'task-initiated';
       }
 
@@ -1236,26 +1135,24 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
             },
           };
 
-          // Compute inference checksum to gate re-invocations
-          const inferenceChecksum = buildInferenceChecksum(
-            requires,
-            sourcesData,
-            computeNode.computed_values ?? {},
-            data,
-            completionRule,
-          );
+          // Gate inference dispatch using queueRequestedAt — same pattern as source fetches.
+          // On a fresh card-handler dispatch update queueRequestedAt; if in-flight just wait.
+          if (runQueuedAt) {
+            inferenceEntry.queueRequestedAt = runQueuedAt;
+            runtimeDirty = true;
+          }
+          const inferenceQrt = inferenceEntry.queueRequestedAt ?? inferenceEntry.lastRequestedAt ?? now;
+          const inferenceAction = decideSourceAction(inferenceEntry, inferenceQrt);
 
-          // Check inference runtime entry to decide dispatch/queue/idle
-          const inferenceAction = decideRequiredSourceAction(inferenceEntry, inferenceChecksum);
+          if (inferenceAction === 'in-flight') {
+            // Fetch in-flight; queueRequestedAt already updated — wait for completion.
+            runtime._inferenceEntry = inferenceEntry;
+            if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
+            return 'task-initiated';
+          }
 
           if (inferenceAction === 'idle') {
-            // Checksum unchanged; inference already in progress or completed
-            return 'task-initiated';
-          } else if (inferenceAction === 'queue') {
-            // Checksum changed but inference in-flight; queue for re-invoke on completion
-            inferenceEntry.queuedInputChecksum = inferenceChecksum;
-            runtime._inferenceEntry = inferenceEntry;
-            runtimeDirty = true;
+            // Already fetched for this run.
             return 'task-initiated';
           }
 
@@ -1264,12 +1161,11 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
           appendInferenceAdapterLog(boardDir, cardId, inferencePayload);
 
-          // Update inference runtime entry (inferenceRequested lives in sidecar only)
-          markRequested(inferenceEntry, now, inferenceChecksum);
+          markRequested(inferenceEntry, now);
           runtime._inferenceEntry = inferenceEntry;
           runtimeDirty = true;
 
-          invokeRunInference(boardDir, inferenceInFile, input.callbackToken, inferenceChecksum, (err) => {
+          invokeRunInference(boardDir, cardId, inferenceInFile, input.callbackToken, undefined, (err) => {
             if (err) {
               console.error(`[card-handler] ${input.nodeId}:`, err.message);
               const failedAt = new Date().toISOString();
@@ -2046,57 +1942,49 @@ function cmdTaskProgress(args: string[]): void {
 function cmdRunInference(args: string[]): void {
   const inIdx = args.indexOf('--in');
   const tokenIdx = args.indexOf('--token');
-  const rgIdx = args.indexOf('--rg');
   const inFile = inIdx !== -1 ? args[inIdx + 1] : undefined;
-  const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-  const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
 
-  if (!inFile || !callbackToken || !boardDir) {
-    console.error('Usage: board-live-cards run-inference-internal --in <input.json> --token <token> --rg <dir>');
+  if (!inFile || !inferenceToken) {
+    console.error('Usage: board-live-cards run-inference-internal --in <input.json> --token <inference-token>');
     process.exit(1);
   }
 
-  // Decode token to get taskName so we can check the card's completion rule
-  const decoded = decodeCallbackToken(callbackToken);
-  if (!decoded) {
-    console.error('Invalid callback token');
+  // Decode inference token (encoded via encodeSourceToken: cbk, rg, cid, b='', d='', cs)
+  const decodedToken = decodeSourceToken(inferenceToken);
+  if (!decodedToken) {
+    console.error('Invalid inference token');
     process.exit(1);
   }
-  const taskName = decoded.taskName;
-  const cardPath = lookupCardPath(boardDir, taskName);
-  const card = cardPath && fs.existsSync(cardPath)
-    ? JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>
-    : undefined;
-  const completionRule = card && typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
-    ? card.when_is_task_completed.trim()
-    : DEFAULT_TASK_COMPLETION_RULE;
-  const hasCustomCompletion = completionRule !== DEFAULT_TASK_COMPLETION_RULE;
+  const callbackToken = decodedToken.cbk;
+  const boardDir = decodedToken.rg;
+
+  const cbkDecoded = decodeCallbackToken(callbackToken);
+  if (!cbkDecoded) {
+    console.error('Invalid callback token embedded in inference token');
+    process.exit(1);
+  }
+
+  function spawnInferenceDone(tmpFile: string): void {
+    const { cmd, args: cliArgs } = getCliInvocation('inference-done', ['--tmp', tmpFile, '--token', inferenceToken!]);
+    spawnDetachedCommand(cmd, cliArgs);
+  }
+
+  function spawnInferenceDoneError(reason: string): void {
+    const tmpFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify({ isTaskCompleted: false, reason }), 'utf-8');
+    spawnInferenceDone(tmpFile);
+  }
 
   if (!fs.existsSync(inFile)) {
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        status: errorStatus,
-        reason: `inference input not found: ${inFile}`,
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError(`inference input not found: ${inFile}`);
     return;
   }
 
   const adapterFile = path.join(boardDir, INFERENCE_ADAPTER_FILE);
   const inferenceAdapter = fs.existsSync(adapterFile) ? fs.readFileSync(adapterFile, 'utf-8').trim() : undefined;
   if (!inferenceAdapter) {
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        status: errorStatus,
-        reason: `inference adapter is not configured (${INFERENCE_ADAPTER_FILE})`,
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError(`inference adapter is not configured (${INFERENCE_ADAPTER_FILE})`);
     return;
   }
 
@@ -2104,15 +1992,7 @@ function cmdRunInference(args: string[]): void {
   const errFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.txt`);
   const adapterParts = splitCommandLine(inferenceAdapter);
   if (adapterParts.length === 0) {
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        status: errorStatus,
-        reason: 'inference adapter command is empty',
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError('inference adapter command is empty');
     return;
   }
 
@@ -2133,80 +2013,45 @@ function cmdRunInference(args: string[]): void {
     });
   } catch (err: unknown) {
     const reason = (err as Error).message ?? String(err);
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        status: errorStatus,
-        reason,
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError(reason);
     return;
   }
 
-  let decision: 'task-completed' | 'task-progress' = 'task-progress';
-  let reason: string | undefined;
-  let evidence: string | undefined;
-  let data: Record<string, unknown> | undefined;
-
   if (!fs.existsSync(outFile)) {
-    reason = fs.existsSync(errFile)
+    const errMsg = fs.existsSync(errFile)
       ? fs.readFileSync(errFile, 'utf-8').trim()
       : 'inference adapter produced no output file';
-  } else {
-    try {
-      const raw = fs.readFileSync(outFile, 'utf-8').trim();
-      const result = JSON.parse(raw) as {
-        status?: string;
-        decision?: string;
-        reason?: string;
-        evidence?: string;
-        data?: Record<string, unknown>;
-      };
-
-      const status = typeof result.status === 'string'
-        ? result.status
-        : (typeof result.decision === 'string' ? result.decision : 'task-progress');
-      decision = status === 'task-completed' ? 'task-completed' : 'task-progress';
-      reason = typeof result.reason === 'string' ? result.reason : undefined;
-      evidence = typeof result.evidence === 'string' ? result.evidence : undefined;
-      data = result.data && typeof result.data === 'object' ? result.data : undefined;
-    } catch (err) {
-      reason = `failed to parse inference output: ${err instanceof Error ? err.message : String(err)}`;
-    }
+    spawnInferenceDoneError(errMsg);
+    return;
   }
 
-  const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-    '--rg', boardDir,
-    '--token', callbackToken,
-    '--result', JSON.stringify({
-      status: decision,
-      reason,
-      evidence,
-      data,
-    }),
-  ]);
-  spawnDetachedCommand(cmd, cliArgs);
+  // Adapter wrote outFile — pass it directly as --tmp; cmdInferenceDone reads and deletes it.
+  spawnInferenceDone(outFile);
 }
 
 function cmdInferenceDone(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
+  const tmpIdx = args.indexOf('--tmp');
   const tokenIdx = args.indexOf('--token');
-  const resultIdx = args.indexOf('--result');
 
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-  const resultJson = resultIdx !== -1 ? args[resultIdx + 1] : '{}';
+  const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
+  const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
 
-  if (!dir || !token) {
-    console.error('Usage: board-live-cards inference-done --rg <dir> --token <token> [--result <json>]');
+  if (!tmpFile || !inferenceToken) {
+    console.error('Usage: board-live-cards inference-done --tmp <result.json> --token <inference-token>');
     process.exit(1);
   }
 
-  const decoded = decodeCallbackToken(token);
+  const decodedToken = decodeSourceToken(inferenceToken);
+  if (!decodedToken) {
+    console.error('Invalid inference token');
+    process.exit(1);
+  }
+
+  const { cbk: callbackToken, rg: dir, cs: inputChecksum } = decodedToken;
+
+  const decoded = decodeCallbackToken(callbackToken);
   if (!decoded) {
-    console.error('Invalid callback token');
+    console.error('Invalid callback token embedded in inference token');
     process.exit(1);
   }
 
@@ -2217,13 +2062,19 @@ function cmdInferenceDone(args: string[]): void {
     process.exit(1);
   }
 
-  const result = resultJson ? JSON.parse(resultJson) as {
-    status?: string;
-    reason?: string;
-    evidence?: string;
-  } : {};
+  let result: { isTaskCompleted?: boolean; reason?: string; evidence?: string; data?: Record<string, unknown> } = {};
+  if (fs.existsSync(tmpFile)) {
+    try {
+      result = JSON.parse(fs.readFileSync(tmpFile, 'utf-8').trim());
+    } catch (err) {
+      result = { isTaskCompleted: false, reason: `failed to parse inference result: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    try { fs.unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
+  } else {
+    result = { isTaskCompleted: false, reason: `inference result file not found: ${tmpFile}` };
+  }
 
-  const status = result.status === 'task-completed' ? 'task-completed' : 'task-progress';
+  const isTaskCompletedFlag = result.isTaskCompleted === true;
   const inferenceCompletedAt = new Date().toISOString();
 
   const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
@@ -2234,7 +2085,7 @@ function cmdInferenceDone(args: string[]): void {
     : {};
   cardData.llm_task_completion_inference = {
     ...existingInference,
-    isTaskCompleted: status === 'task-completed',
+    isTaskCompleted: isTaskCompletedFlag,
     reason: typeof result.reason === 'string' ? result.reason : '',
     evidence: typeof result.evidence === 'string' ? result.evidence : '',
     inferenceCompletedAt,
@@ -2260,7 +2111,8 @@ function cmdInferenceDone(args: string[]): void {
     taskName,
     update: {
       kind: 'inference-done',
-      status,
+      isTaskCompleted: isTaskCompletedFlag,
+      inputChecksum,
     },
     timestamp: inferenceCompletedAt,
   });
@@ -2627,10 +2479,193 @@ export async function cli(argv: string[]): Promise<void> {
     case 'run-inference-internal':    return cmdRunInference(rest);
     case 'inference-done':            return cmdInferenceDone(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
+    case 'probe-source':               return await cmdProbeSource(rest);
     case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
       throw new Error(`Unknown command: ${cmd ?? '(none)'}`);
   }
+}
+
+async function cmdProbeSource(args: string[]): Promise<void> {
+  const cardIdx = args.indexOf('--card');
+  const sourceIdxArg = args.indexOf('--source-idx');
+  const sourceBindArg = args.indexOf('--source-bind');
+  const mockReqIdx = args.indexOf('--mock-requires');
+  const rgIdx = args.indexOf('--rg');
+  const outIdx = args.indexOf('--out');
+
+  const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+  const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
+  const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
+  const mockReqRaw = mockReqIdx !== -1 ? args[mockReqIdx + 1] : undefined;
+  const boardDirArg = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
+
+  if (!cardFilePath) {
+    console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]');
+    process.exit(1);
+  }
+
+  // Read card
+  let card: any;
+  try {
+    card = JSON.parse(fs.readFileSync(path.resolve(cardFilePath), 'utf-8'));
+  } catch (e) {
+    console.error(`[probe-source] Cannot read card: ${(e as Error).message}`);
+    process.exit(1);
+  }
+
+  const sources: any[] = card.sources ?? [];
+  if (sources.length === 0) {
+    console.error(`[probe-source] Card "${card.id}" has no sources`);
+    process.exit(1);
+  }
+
+  // Select source by index or bindTo name
+  let sourceIdx: number;
+  if (sourceBindVal) {
+    sourceIdx = sources.findIndex((s: any) => s.bindTo === sourceBindVal);
+    if (sourceIdx === -1) {
+      console.error(`[probe-source] No source with bindTo="${sourceBindVal}" in card "${card.id}"`);
+      process.exit(1);
+    }
+  } else {
+    sourceIdx = sourceIdxVal;
+    if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= sources.length) {
+      console.error(`[probe-source] --source-idx ${sourceIdxVal} out of range (card has ${sources.length} source(s))`);
+      process.exit(1);
+    }
+  }
+
+  const sourceDef = sources[sourceIdx];
+  const cardDir = path.resolve(path.dirname(cardFilePath));
+  const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
+
+  // Parse --mock-requires (JSON string or @file.json)
+  let mockRequires: Record<string, unknown> = {};
+  if (mockReqRaw) {
+    const raw = mockReqRaw.startsWith('@')
+      ? fs.readFileSync(path.resolve(mockReqRaw.slice(1)), 'utf-8')
+      : mockReqRaw;
+    try {
+      mockRequires = JSON.parse(raw);
+    } catch (e) {
+      console.error(`[probe-source] --mock-requires is not valid JSON: ${(e as Error).message}`);
+      process.exit(1);
+    }
+  }
+
+  // Detect registered task-executor
+  const executorFile = path.join(boardDir, '.task-executor');
+  const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
+
+  // Build --in payload — mirrors exactly what run-sources-internal passes to the executor
+  const inPayload: Record<string, unknown> = {
+    ...sourceDef,
+    cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
+    boardDir: typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : boardDir,
+    _requires: mockRequires,
+    _sourcesData: {},
+    _computed_values: {},
+  };
+
+  const sourceKind: string = sourceDef.chartApi ? 'chartApi'
+    : sourceDef.http ? 'http'
+    : (sourceDef.copilot || sourceDef.prompt_template) ? 'copilot'
+    : sourceDef.cli ? 'cli'
+    : 'mock';
+
+  console.log(`[probe-source] card:        ${card.id}`);
+  console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
+  console.log(`[probe-source] _requires:   ${JSON.stringify(mockRequires)}`);
+  console.log(`[probe-source] executor:    ${taskExecutor ?? 'built-in (source.cli only)'}`);
+  console.log(`[probe-source] running fetch...`);
+
+  const ts = Date.now();
+  const inFile  = path.join(os.tmpdir(), `probe-in-${sourceDef.bindTo}-${ts}.json`);
+  const tmpOut  = path.join(os.tmpdir(), `probe-out-${sourceDef.bindTo}-${ts}.json`);
+  const errFile = path.join(os.tmpdir(), `probe-err-${sourceDef.bindTo}-${ts}.txt`);
+
+  fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2), 'utf-8');
+
+  let passed = false;
+  let errorMsg: string | undefined;
+  let resultRaw: string | undefined;
+
+  try {
+    if (taskExecutor) {
+      execCommandSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile], {
+        shell: true,
+        timeout: (sourceDef.timeout as number) ?? 30_000,
+      });
+    } else {
+      // Built-in path: only source.cli is supported
+      if (!inPayload.cli) {
+        throw new Error('No task-executor registered and source has no cli field — cannot probe with built-in executor');
+      }
+      const cmdParts = splitCommandLine(inPayload.cli as string);
+      const rawCmd = cmdParts[0];
+      const { cmd, args: cliArgs } = resolveCommandInvocation(rawCmd, cmdParts.slice(1));
+      const stdout = execCommandSync(cmd, cliArgs, {
+        shell: false,
+        encoding: 'utf-8',
+        timeout: (sourceDef.timeout as number) ?? 30_000,
+        cwd: inPayload.cwd as string,
+      });
+      fs.writeFileSync(tmpOut, (stdout as string).trim(), 'utf-8');
+    }
+
+    passed = fs.existsSync(tmpOut);
+    if (passed) {
+      resultRaw = fs.readFileSync(tmpOut, 'utf-8');
+    } else {
+      errorMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
+    }
+  } catch (e) {
+    errorMsg = (e as Error).message ?? String(e);
+    if (!errorMsg && fs.existsSync(errFile)) {
+      errorMsg = fs.readFileSync(errFile, 'utf-8').trim();
+    }
+  }
+
+  // Cleanup temp inputs
+  for (const f of [inFile, errFile]) {
+    try { fs.unlinkSync(f); } catch { /* best-effort */ }
+  }
+
+  // Report
+  if (passed && resultRaw !== undefined) {
+    const resultSize = resultRaw.length;
+    const sample = resultRaw.slice(0, 300);
+    console.log(`[probe-source] STATUS:      PROBE_PASS`);
+    console.log(`[probe-source] result size: ${resultSize} bytes`);
+    console.log(`[probe-source] sample:      ${sample}${resultSize > 300 ? '...' : ''}`);
+    if (outFile) {
+      fs.writeFileSync(path.resolve(outFile), resultRaw);
+      console.log(`[probe-source] result written to: ${outFile}`);
+    } else {
+      try { fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+    }
+  } else {
+    console.log(`[probe-source] STATUS:      PROBE_FAIL`);
+    if (errorMsg) console.log(`[probe-source] error:       ${errorMsg}`);
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+  }
+
+  // Machine-readable summary line — agents parse this
+  const summary = {
+    status: passed ? 'PROBE_PASS' : 'PROBE_FAIL',
+    cardId: card.id as string,
+    sourceIdx,
+    bindTo: sourceDef.bindTo as string,
+    sourceKind,
+    mockRequiresKeys: Object.keys(mockRequires),
+    resultSizeBytes: resultRaw !== undefined ? resultRaw.length : 0,
+    error: errorMsg ?? undefined,
+  };
+  console.log(`[probe-source:result] ${JSON.stringify(summary)}`);
+
+  process.exit(passed ? 0 : 1);
 }
 
 function cmdHelp(): void {
@@ -2727,12 +2762,32 @@ INTERNAL COMMANDS
     Execute a source definition. Board-live-cards reads source.cli and executes it.
     Writes result to --out. Presence of --out after exit indicates success.
 
-  run-inference-internal --in <input.json> --token <callbackToken> --rg <dir>
+  probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
+               [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]
+    Validate that a card source can be fetched successfully.
+    Reads the card file, extracts the chosen source (default: index 0), builds the
+    run-source-fetch --in payload with the supplied _requires data, invokes the
+    registered task-executor (or built-in executor for source.cli), and reports pass/fail.
+    --mock-requires: JSON string (or @file.json) providing the _requires token values
+                     the source needs.  Craft the minimal payload that exercises the
+                     source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
+                     If omitted, _requires is passed as empty ({}).
+    --source-idx:    0-based index into card.sources[]. Default: 0.
+    --source-bind:   Select source by its bindTo name instead of index.
+    --rg:            Board directory used to find .task-executor. Defaults to the
+                     directory containing the card file.
+    --out:           Optional path to write the raw fetch result JSON.
+    Prints a structured report ending with a [probe-source:result] JSON line.
+    Exits 0 on PROBE_PASS, 1 on PROBE_FAIL.
+
+  run-inference-internal --in <input.json> --token <inferenceToken>
     Execute inference via registered .inference-adapter and forward result to inference-done.
+    inferenceToken encodes boardDir (rg), cardId (cid), callbackToken (cbk), checksum (cs).
     (Internal command — invoked by the card-handler when custom completion rule is used.)
 
-  inference-done --rg <dir> --token <callbackToken> [--result <json>]
+  inference-done --tmp <result.json> --token <inferenceToken>
     Persist llm_task_completion_inference on the card and append a task-progress event.
+    Reads boardDir/callbackToken/checksum from decoded inferenceToken; deletes --tmp file after reading.
     (Internal command — invoked by run-inference-internal.)
 
 RUN-SOURCE-FETCH PROTOCOL
@@ -2771,6 +2826,7 @@ EXAMPLES
   board-live-cards-cli add-cards --rg ./my-board --card cards/prices.json
   board-live-cards-cli status --rg ./my-board
   board-live-cards-cli retrigger --rg ./my-board --task price-fetch
+  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
 `.trimStart());
 }
 

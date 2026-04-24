@@ -1,118 +1,98 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildRequiredSourceChecksums,
-  decideRequiredSourceAction,
-  hasSourceChecksumChanged,
+  decideSourceAction,
   isSourceInFlight,
   nextEntryAfterFetchDelivery,
   nextEntryAfterFetchFailure,
-  normalizeSourcePayloadForChecksum,
   type SourceRuntimeEntry,
 } from '../../src/cli/board-live-cards-cli.js';
 
-describe('board-live-cards-cli queue/checksum helpers', () => {
-  it('classifies source actions from runtime entry state', () => {
-    const noEntry = undefined;
-    expect(decideRequiredSourceAction(noEntry, 'abc')).toBe('dispatch');
+describe('board-live-cards-cli queueRequestedAt-based dispatch helpers', () => {
+  it('dispatches when no entry exists', () => {
+    expect(decideSourceAction(undefined, '2026-04-23T10:00:05.000Z')).toBe('dispatch');
+  });
 
-    const requestedNotFetched: SourceRuntimeEntry = {
-      lastRequestedAt: '2026-04-23T10:00:00.000Z',
+  it('returns in-flight when lastRequestedAt set but no lastFetchedAt yet', () => {
+    const entry: SourceRuntimeEntry = {
+      lastRequestedAt: '2026-04-23T10:00:01.000Z',
     };
-    expect(decideRequiredSourceAction(requestedNotFetched, 'abc')).toBe('dispatch');
+    expect(decideSourceAction(entry, '2026-04-23T10:00:05.000Z')).toBe('in-flight');
+  });
 
-    const inFlightSameChecksum: SourceRuntimeEntry = {
-      lastRequestedAt: '2026-04-23T10:00:02.000Z',
+  it('returns in-flight when fetch is still running (lastRequestedAt > lastFetchedAt)', () => {
+    const entry: SourceRuntimeEntry = {
+      lastRequestedAt: '2026-04-23T10:00:03.000Z',
       lastFetchedAt: '2026-04-23T10:00:01.000Z',
-      lastInputChecksum: 'same',
     };
-    expect(decideRequiredSourceAction(inFlightSameChecksum, 'same')).toBe('idle');
+    expect(decideSourceAction(entry, '2026-04-23T10:00:05.000Z')).toBe('in-flight');
+  });
 
-    const inFlightChangedChecksum: SourceRuntimeEntry = {
-      lastRequestedAt: '2026-04-23T10:00:02.000Z',
-      lastFetchedAt: '2026-04-23T10:00:01.000Z',
-      lastInputChecksum: 'old',
-    };
-    expect(decideRequiredSourceAction(inFlightChangedChecksum, 'new')).toBe('queue');
-
-    const deliveredChangedChecksum: SourceRuntimeEntry = {
+  it('dispatches when fetch completed before queueRequestedAt (stale result)', () => {
+    const entry: SourceRuntimeEntry = {
       lastRequestedAt: '2026-04-23T10:00:01.000Z',
       lastFetchedAt: '2026-04-23T10:00:02.000Z',
-      lastInputChecksum: 'old',
+      queueRequestedAt: '2026-04-23T10:00:04.000Z',
     };
-    expect(decideRequiredSourceAction(deliveredChangedChecksum, 'new')).toBe('dispatch');
+    // lastFetchedAt (T+2) < queueRequestedAt (T+4) → need another fetch
+    expect(decideSourceAction(entry, entry.queueRequestedAt!)).toBe('dispatch');
+  });
 
-    const deliveredSameChecksum: SourceRuntimeEntry = {
+  it('returns idle when fetch already completed for the current run', () => {
+    const entry: SourceRuntimeEntry = {
+      lastRequestedAt: '2026-04-23T10:00:04.000Z',
+      lastFetchedAt: '2026-04-23T10:00:05.000Z',
+      queueRequestedAt: '2026-04-23T10:00:03.000Z',
+    };
+    // lastFetchedAt (T+5) >= queueRequestedAt (T+3) → already served
+    expect(decideSourceAction(entry, entry.queueRequestedAt!)).toBe('idle');
+  });
+
+  it('isSourceInFlight reflects request/fetch timestamps correctly', () => {
+    expect(isSourceInFlight(undefined)).toBe(false);
+    expect(isSourceInFlight({ lastRequestedAt: '2026-04-23T10:00:01.000Z' })).toBe(true);
+    expect(isSourceInFlight({
+      lastRequestedAt: '2026-04-23T10:00:03.000Z',
+      lastFetchedAt: '2026-04-23T10:00:01.000Z',
+    })).toBe(true);
+    expect(isSourceInFlight({
       lastRequestedAt: '2026-04-23T10:00:01.000Z',
-      lastFetchedAt: '2026-04-23T10:00:02.000Z',
-      lastInputChecksum: 'same',
-    };
-    expect(decideRequiredSourceAction(deliveredSameChecksum, 'same')).toBe('idle');
+      lastFetchedAt: '2026-04-23T10:00:03.000Z',
+    })).toBe(false);
   });
 
-  it('normalizes checksum payload by stripping execution-only context and self output data', () => {
-    const payload = {
-      cli: 'node ../fetch-prices.js',
-      bindTo: 'prices',
-      outputFile: 'prices.json',
-      cwd: 'C:/tmp/cards',
-      boardDir: 'C:/tmp/board-runtime',
-      _requires: { holdings: [{ symbol: 'AAPL', qty: 50 }] },
-      _sourcesData: {
-        prices: { AAPL: 100.0 },
-        unrelated: { marker: true },
-      },
-    };
-
-    const normalized = normalizeSourcePayloadForChecksum(payload) as Record<string, unknown>;
-    expect(normalized.cwd).toBeUndefined();
-    expect(normalized.boardDir).toBeUndefined();
-    expect((normalized._sourcesData as Record<string, unknown>).prices).toBeUndefined();
-    expect((normalized._sourcesData as Record<string, unknown>).unrelated).toEqual({ marker: true });
-  });
-
-  it('produces stable checksums across path-format changes and ignores self prices payload', () => {
-    const requiredSources = [{ bindTo: 'prices', outputFile: 'prices.json' }] as any[];
-
-    const sourcePayloadA = {
-      bindTo: 'prices',
-      outputFile: 'prices.json',
-      cli: 'node ../fetch-prices.js',
-      cwd: 'C:\\tmp\\cards',
-      boardDir: 'C:\\tmp\\board-runtime',
-      _requires: { holdings: [{ symbol: 'AAPL', qty: 50 }, { symbol: 'MSFT', qty: 30 }] },
-      _sourcesData: { prices: { AAPL: 111.11 } },
-      _computed_values: {},
-    };
-
-    const sourcePayloadB = {
-      ...sourcePayloadA,
-      cwd: 'C:/tmp/cards',
-      boardDir: 'C:/tmp/board-runtime',
-      _sourcesData: { prices: { AAPL: 999.99 } },
-    };
-
-    const checksumsA = buildRequiredSourceChecksums(requiredSources as any, new Map([['prices.json', sourcePayloadA]]));
-    const checksumsB = buildRequiredSourceChecksums(requiredSources as any, new Map([['prices.json', sourcePayloadB]]));
-
-    expect(checksumsA['prices.json']).toBe(checksumsB['prices.json']);
-  });
-
-  it('transitions entry state on fetch success/failure with queue semantics', () => {
-    const inFlightWithQueued: SourceRuntimeEntry = {
+  it('nextEntryAfterFetchDelivery marks completion; stale queueRequestedAt triggers re-dispatch on next evaluation', () => {
+    // queueRequestedAt was updated mid-flight to T+4 while the fetch was already in-flight for T+1
+    const inFlight: SourceRuntimeEntry = {
       lastRequestedAt: '2026-04-23T10:00:01.000Z',
       lastFetchedAt: '2026-04-23T10:00:00.000Z',
-      lastInputChecksum: 'old',
-      queuedInputChecksum: 'new',
+      queueRequestedAt: '2026-04-23T10:00:04.000Z', // updated mid-flight
     };
 
-    const delivered = nextEntryAfterFetchDelivery(inFlightWithQueued, '2026-04-23T10:00:02.000Z', 'old');
+    const delivered = nextEntryAfterFetchDelivery(inFlight, '2026-04-23T10:00:02.000Z');
     expect(delivered.lastFetchedAt).toBe('2026-04-23T10:00:02.000Z');
-    expect(delivered.lastInputChecksum).toBe('new');
-    expect(delivered.queuedInputChecksum).toBeUndefined();
-    expect(isSourceInFlight(delivered)).toBe(true);
-    expect(hasSourceChecksumChanged(delivered, 'new')).toBe(false);
+    expect(isSourceInFlight(delivered)).toBe(false);
+    // lastFetchedAt (T+2) < queueRequestedAt (T+4) → next card-handler will dispatch again
+    expect(decideSourceAction(delivered, delivered.queueRequestedAt!)).toBe('dispatch');
+  });
 
-    const failed = nextEntryAfterFetchFailure(delivered, 'network timeout');
+  it('nextEntryAfterFetchDelivery is idle when queueRequestedAt was not updated mid-flight', () => {
+    const entry: SourceRuntimeEntry = {
+      lastRequestedAt: '2026-04-23T10:00:01.000Z',
+      lastFetchedAt: '2026-04-23T10:00:00.000Z',
+      queueRequestedAt: '2026-04-23T10:00:01.000Z', // same as when dispatched
+    };
+
+    const delivered = nextEntryAfterFetchDelivery(entry, '2026-04-23T10:00:02.000Z');
+    // lastFetchedAt (T+2) >= queueRequestedAt (T+1) → idle
+    expect(decideSourceAction(delivered, delivered.queueRequestedAt!)).toBe('idle');
+  });
+
+  it('nextEntryAfterFetchFailure clears lastFetchedAt and records error', () => {
+    const entry: SourceRuntimeEntry = {
+      lastRequestedAt: '2026-04-23T10:00:01.000Z',
+      lastFetchedAt: '2026-04-23T10:00:00.000Z',
+    };
+    const failed = nextEntryAfterFetchFailure(entry, 'network timeout');
     expect(failed.lastError).toContain('timeout');
     expect(failed.lastFetchedAt).toBeUndefined();
   });

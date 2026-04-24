@@ -1,12 +1,12 @@
 /**
- * Browser IIFE bundle for board-livegraph-runtime.
+ * Browser IIFE bundle for board-livegraph-engine.
  *
- * Output: browser/board-livegraph-runtime.js
+ * Output: browser/board-livegraph-engine.js
  * Global: window.BoardLiveGraph
  *
  * External users need only two script tags:
  *   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
- *   <script src="browser/board-livegraph-runtime.js"></script>
+ *   <script src="browser/board-livegraph-engine.js"></script>
  *
  * jsonata is kept external (window.jsonata must be loaded first, same as card-compute.js).
  * All Node-only modules (ajv, ajv-formats, child_process, proper-lockfile, yaml, etc.)
@@ -78,7 +78,7 @@ const jsonataGlobalShim: Plugin = {
 
 export default defineConfig({
   entry: {
-    'board-livegraph-runtime': 'src/board-livegraph-runtime/index.ts',
+    'board-livegraph-engine': 'src/board-livegraph-runtime/index.ts',
   },
   outDir: 'browser',
   format: ['iife'],

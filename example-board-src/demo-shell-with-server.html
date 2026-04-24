@@ -5,11 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Example Board Demo (Server Runtime)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    /* Scale down markdown headings inside cards to stay in proportion with card body text */
+    .lc-result h1 { font-size: 1rem;   font-weight: 700; margin: 0.5rem 0 0.25rem; }
+    .lc-result h2 { font-size: 0.9rem; font-weight: 700; margin: 0.5rem 0 0.25rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.1rem; }
+    .lc-result h3 { font-size: 0.85rem; font-weight: 600; margin: 0.4rem 0 0.2rem; }
+    .lc-result p  { font-size: 0.8rem; margin: 0 0 0.25rem; }
+    .lc-result ul, .lc-result ol { font-size: 0.8rem; margin: 0 0 0.25rem; padding-left: 1.2rem; }
+    .lc-result li { margin-bottom: 0.15rem; }
+  </style>
   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/card-compute.js" onerror="this.onerror=null;this.src='../../browser/card-compute.js';"></script>
-  <script src="https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/live-cards.js" onerror="this.onerror=null;this.src='../../browser/live-cards.js';"></script>
-  <script src="./reusable-runtime-artifacts-adapter.js"></script>
-  <script src="./reusable-board-runtime-client.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="../../browser/card-compute.js"></script>
+  <script src="../../browser/live-cards.js"></script>
+  <script src="../../browser/board-livegraph-engine.js"></script>
+  <script src="./reusable-board-livecards-runtime-client.js"></script>
 </head>
 <body class="bg-light">
   <div class="container-fluid py-3">
@@ -19,7 +29,6 @@
         <div class="small text-muted" id="boardDesc"></div>
       </div>
       <div class="d-flex align-items-center gap-2">
-        <a class="btn btn-sm btn-outline-secondary" href="demo-shell-browser.html">Open Browser Runtime Shell</a>
         <select class="form-select form-select-sm" id="boardSelector" style="max-width:180px" title="Active board"></select>
         <button class="btn btn-sm btn-outline-success" id="addBoardBtn">+ Board</button>
         <div id="addBoardForm" class="d-flex align-items-center gap-1" style="display:none!important">
@@ -42,10 +51,6 @@
     <div class="alert alert-info small py-2 mb-3">
       Server runtime mode: updates stream in via SSE from the thin demo-server bridge to board-live-cards-cli.
       Source execution and event processing happen on the server side.
-    </div>
-
-    <div class="alert alert-secondary small py-2 mb-3">
-      Contract and decision notes live in <a href="./demo-shell.html#assumptions-and-tradeoffs">Assumptions and Tradeoffs</a>.
     </div>
 
     <div id="boardRoot">

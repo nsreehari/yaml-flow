@@ -1,0 +1,5 @@
+{
+  "port": 7799,
+  "taskExecutorPath": "./demo-task-executor.js",
+  "chatHandlerPath": "./demo-chat-handler.js"
+}

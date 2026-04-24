@@ -6,10 +6,9 @@
   <title>Example Board Demo (Browser Runtime)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/card-compute.js" onerror="this.onerror=null;this.src='../../browser/card-compute.js';"></script>
-  <script src="https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/live-cards.js" onerror="this.onerror=null;this.src='../../browser/live-cards.js';"></script>
-  <script src="https://cdn.jsdelivr.net/npm/yaml-flow@latest/browser/board-livegraph-runtime.js" onerror="this.onerror=null;this.src='../../browser/board-livegraph-runtime.js';"></script>
-   <script src="./reusable-runtime-artifacts-adapter.js"></script>
+  <script src="../../browser/card-compute.js"></script>
+  <script src="../../browser/live-cards.js"></script>
+  <script src="../../browser/board-livegraph-engine.js"></script>
 </head>
 <body class="bg-light">
   <div class="container-fluid py-3">
@@ -63,50 +62,44 @@
         console.error(message);
       }
 
-      // Get LocalStorageService from board-livegraph-runtime export
+      // Get exports from board-livegraph-engine
       const LocalStorageService = (window.BoardLiveGraph && window.BoardLiveGraph.LocalStorageService);
-      if (!LocalStorageService) {
-        failInit('LocalStorageService not loaded. Run "npm run build:browser" first.');
+      const buildLiveCardModelsFromArtifacts = (window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts);
+      const buildBrowserArtifactsFromRuntime = (window.BoardLiveGraph && window.BoardLiveGraph.buildBrowserArtifactsFromRuntime);
+      if (!LocalStorageService || !buildLiveCardModelsFromArtifacts || !buildBrowserArtifactsFromRuntime) {
+        failInit('board-livegraph-engine.js not loaded. Run "npm run build:browser" first.');
         return;
       }
 
       // ========================================================================
-      // Demo Setup
+      // Demo Setup — Portfolio Domain
       // ========================================================================
       const CARD_FILES = [
-        'card-ex-source.json',
-        'card-ex-source-http.json',
-        'card-ex-filter.json',
-        'card-ex-metric.json',
-        'card-ex-list.json',
-        'card-ex-chart.json',
-        'card-ex-table.json',
-        'card-ex-status.json',
-        'card-ex-markdown.json',
-        'card-ex-narrative.json',
-        'card-ex-todo.json',
-        'card-ex-form.json',
-        'card-ex-filtered-by-preference.json',
-        'card-ex-actions.json',
-        'card-chain-region-totals.json',
-        'card-chain-top-region.json',
-        'card-chain-region-alert.json',
+        'card-portfolio.json',
+        'card-market-prices.json',
+        'card-portfolio-value.json',
+        'card-concentration.json',
+        'card-portfolio-risks.json',
+        'card-portfolio-action.json',
       ];
 
-      const ORDER_SEED = [
-        { id: 'ORD-1001', product: 'Widget A', quantity: 3, amount: 12400, region: 'North' },
-        { id: 'ORD-1002', product: 'Widget B', quantity: 2, amount: 8700, region: 'South' },
-        { id: 'ORD-1003', product: 'Widget A', quantity: 4, amount: 15200, region: 'East' },
-        { id: 'ORD-1004', product: 'Widget C', quantity: 1, amount: 6300, region: 'West' },
-        { id: 'ORD-1005', product: 'Widget B', quantity: 2, amount: 9100, region: 'North' },
-        { id: 'ORD-1006', product: 'Widget C', quantity: 3, amount: 9800, region: 'South' },
-      ];
+      const QUOTES_SEED = {
+        quoteResponse: {
+          result: [
+            { symbol: 'AAPL',  shortName: 'Apple Inc.',  regularMarketPrice: 180, regularMarketChange:  2.5, regularMarketChangePercent:  1.41 },
+            { symbol: 'MSFT',  shortName: 'Microsoft',   regularMarketPrice: 420, regularMarketChange: -1.2, regularMarketChangePercent: -0.28 },
+            { symbol: 'GOOGL', shortName: 'Alphabet',    regularMarketPrice: 165, regularMarketChange:  0.8, regularMarketChangePercent:  0.49 },
+            { symbol: 'TSLA',  shortName: 'Tesla',       regularMarketPrice: 250, regularMarketChange: -5.0, regularMarketChangePercent: -1.96 },
+          ],
+        },
+      };
 
-      const PRICE_SEED = [
-        { product: 'Widget A', price: 4133.33, currency: 'USD' },
-        { product: 'Widget B', price: 4450.0, currency: 'USD' },
-        { product: 'Widget C', price: 3266.67, currency: 'USD' },
-      ];
+      const MOCK_ANALYSIS = {
+        mix:    '- AAPL dominates at 36%\n- Tech-heavy portfolio',
+        pnl:    '- Best: MSFT +35%\n- Worst: GOOGL -41%',
+        risks:  '- AAPL: earnings risk\n- TSLA: high volatility',
+        action: '- Trim GOOGL — below cost basis and deteriorating momentum',
+      };
 
       const clone = (x) => JSON.parse(JSON.stringify(x));
       const nowIso = () => new Date().toISOString();
@@ -135,10 +128,6 @@
         localStorage.setItem(mockFsKey(cardId, dirName), JSON.stringify(Array.isArray(items) ? items : []));
       }
 
-      function clearMockDir(cardId, dirName) {
-        localStorage.removeItem(mockFsKey(cardId, dirName));
-      }
-
       function toFileMetadataOnly(entry) {
         if (!entry || typeof entry !== 'object') return null;
         return {
@@ -155,8 +144,7 @@
         const input = String(name || '').trim();
         if (!input) return 'upload.bin';
         const parts = input.split(/[/\\]/);
-        const base = parts[parts.length - 1] || 'upload.bin';
-        return base;
+        return parts[parts.length - 1] || 'upload.bin';
       }
 
       function normalizeStem(rawStem) {
@@ -209,13 +197,11 @@
             keepExt = '';
             stemBudget = maxLen - prefix.length;
           }
-
           const stem = stemNorm.slice(0, Math.max(1, stemBudget));
           let candidate = `${prefix}${stem}${keepExt}`;
           if (candidate.length > maxLen) {
             candidate = candidate.slice(0, maxLen).replace(/\.$/, '');
           }
-
           if (!names.includes(candidate)) return candidate;
           serial += 1;
         }
@@ -236,9 +222,7 @@
       }
 
       function readPersistedFileMetadata(cardId) {
-        return readMockDir(cardId, 'files')
-          .map(toFileMetadataOnly)
-          .filter(Boolean);
+        return readMockDir(cardId, 'files').map(toFileMetadataOnly).filter(Boolean);
       }
 
       function readPersistedChatMessages(cardId) {
@@ -262,8 +246,7 @@
         let binary = '';
         const chunkSize = 0x8000;
         for (let i = 0; i < bytes.length; i += chunkSize) {
-          const chunk = bytes.subarray(i, i + chunkSize);
-          binary += String.fromCharCode.apply(null, chunk);
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
         }
         return btoa(binary);
       }
@@ -282,12 +265,8 @@
             path: `${cardId}/files/${storedName}`,
             uploaded_at: now,
           };
-
           const filesDir = readMockDir(cardId, 'files');
-          filesDir.push({
-            ...metadata,
-            content_base64: await fileToBase64(fileLike),
-          });
+          filesDir.push({ ...metadata, content_base64: await fileToBase64(fileLike) });
           writeMockDir(cardId, 'files', filesDir);
           return metadata;
         }
@@ -303,30 +282,12 @@
             path: fileLike.path || `${cardId}/files/${storedName}`,
             uploaded_at: fileLike.uploaded_at || now,
           };
-
           const filesDir = readMockDir(cardId, 'files');
-          const knownPaths = new Set(filesDir.map((entry) => entry && entry.path).filter(Boolean));
+          const knownPaths = new Set(filesDir.map((e) => e && e.path).filter(Boolean));
           if (!knownPaths.has(metadata.path)) {
             filesDir.push(metadata);
             writeMockDir(cardId, 'files', filesDir);
           }
-          return metadata;
-        }
-
-        if (typeof fileLike === 'string') {
-          const displayName = normalizeDisplayFileName(fileLike);
-          const storedName = buildStoredFileName(cardId, displayName);
-          const metadata = {
-            name: displayName,
-            stored_name: storedName,
-            size: null,
-            mime_type: 'application/octet-stream',
-            path: `${cardId}/files/${storedName}`,
-            uploaded_at: now,
-          };
-          const filesDir = readMockDir(cardId, 'files');
-          filesDir.push(metadata);
-          writeMockDir(cardId, 'files', filesDir);
           return metadata;
         }
 
@@ -336,9 +297,7 @@
       function appendChatRecord(cardId, record) {
         const chatsDir = readMockDir(cardId, 'chats');
         const next = { ...(record || {}) };
-        if (!next.path) {
-          next.path = nextChatPath(cardId, next.role || 'system');
-        }
+        if (!next.path) next.path = nextChatPath(cardId, next.role || 'system');
         chatsDir.push(next);
         writeMockDir(cardId, 'chats', chatsDir);
       }
@@ -348,11 +307,9 @@
         if (!el) return;
 
         const tasks = runtimeState && runtimeState.state && runtimeState.state.tasks
-          ? runtimeState.state.tasks
-          : {};
+          ? runtimeState.state.tasks : {};
         const availableOutputs = runtimeState && runtimeState.state && Array.isArray(runtimeState.state.availableOutputs)
-          ? runtimeState.state.availableOutputs
-          : [];
+          ? runtimeState.state.availableOutputs : [];
 
         const byStatus = {};
         for (const task of Object.values(tasks)) {
@@ -361,38 +318,20 @@
         }
 
         const cardRuntimeById = artifacts && artifacts.cardRuntimeById ? artifacts.cardRuntimeById : {};
-        const metric = cardRuntimeById['card-ex-metric'] && cardRuntimeById['card-ex-metric'].computed_values
-          ? cardRuntimeById['card-ex-metric'].computed_values.totalRevenue
-          : undefined;
-        const topProducts = cardRuntimeById['card-ex-list'] && cardRuntimeById['card-ex-list'].computed_values
-          ? cardRuntimeById['card-ex-list'].computed_values.topProducts
-          : undefined;
-        const regionCounts = cardRuntimeById['card-ex-chart'] && cardRuntimeById['card-ex-chart'].computed_values
-          ? cardRuntimeById['card-ex-chart'].computed_values.regionCounts
-          : undefined;
-        const filteredOrders = cardRuntimeById['card-ex-table'] && cardRuntimeById['card-ex-table'].computed_values
-          ? cardRuntimeById['card-ex-table'].computed_values.filtered
-          : undefined;
 
-        const watched = {
-          orders: availableOutputs.includes('orders'),
-          prices: availableOutputs.includes('prices'),
-          selections: availableOutputs.includes('selections'),
-          formToken: availableOutputs.includes('card-ex-form'),
-        };
+        const portfolioValue = cardRuntimeById['card-portfolio-value'] && cardRuntimeById['card-portfolio-value'].computed_values;
+        const totalValue = portfolioValue && portfolioValue.totalValue;
+        const totalGain = portfolioValue && portfolioValue.totalGain;
+        const positions = portfolioValue && portfolioValue.positions;
 
-        const lines = [
+        el.textContent = [
           `updatedAt: ${new Date().toISOString()}`,
           `statusCounts: ${JSON.stringify(byStatus)}`,
           `availableOutputs(${availableOutputs.length}): ${availableOutputs.slice().sort().join(', ')}`,
-          `watchedTokens: ${JSON.stringify(watched)}`,
-          `card-ex-metric.totalRevenue: ${JSON.stringify(metric)}`,
-          `card-ex-list.topProducts.length: ${Array.isArray(topProducts) ? topProducts.length : 'n/a'}`,
-          `card-ex-chart.regionCounts.length: ${Array.isArray(regionCounts) ? regionCounts.length : 'n/a'}`,
-          `card-ex-table.filtered.length: ${Array.isArray(filteredOrders) ? filteredOrders.length : 'n/a'}`,
-        ];
-
-        el.textContent = lines.join('\n');
+          `card-portfolio-value.totalValue: ${JSON.stringify(totalValue)}`,
+          `card-portfolio-value.totalGain: ${JSON.stringify(totalGain)}`,
+          `card-portfolio-value.positions.length: ${Array.isArray(positions) ? positions.length : 'n/a'}`,
+        ].join('\n');
       }
 
       function hasCompatiblePersistedArtifacts(cardDefinitions, cardRuntimeById) {
@@ -403,44 +342,30 @@
           const artifact = cardRuntimeById[card.id];
           if (!artifact || typeof artifact !== 'object') return false;
           if (card.sources && card.sources.length > 0) {
-            if (!(artifact.fetched_sources && typeof artifact.fetched_sources === 'object' && !Array.isArray(artifact.fetched_sources))) {
-              return false;
-            }
+            if (!(artifact.fetched_sources && typeof artifact.fetched_sources === 'object' && !Array.isArray(artifact.fetched_sources))) return false;
           }
           if (card.requires && card.requires.length > 0) {
-            if (!(artifact.requires && typeof artifact.requires === 'object' && !Array.isArray(artifact.requires))) {
-              return false;
-            }
+            if (!(artifact.requires && typeof artifact.requires === 'object' && !Array.isArray(artifact.requires))) return false;
           }
           return true;
         });
       }
 
-      function parseBoardMeta(yamlText) {
-        const nameMatch = yamlText.match(/^name:\s*(.+)$/m);
-        const descMatch = yamlText.match(/^desc:\s*(.+)$/m);
-        return {
-          name: nameMatch ? nameMatch[1].trim() : 'Example Board',
-          desc: descMatch ? descMatch[1].trim() : '',
-        };
-      }
-
       async function loadBoardFromFiles() {
-        const [boardYaml, ...cards] = await Promise.all([
-          fetch('./board.yaml').then(r => r.text()),
-          ...CARD_FILES.map(name => fetch(`./cards/${name}`).then(r => r.json())),
-        ]);
+        const boardMeta = {
+          name: 'Portfolio Tracker',
+          desc: 'Track your stock portfolio with live market prices and AI-powered risk analysis.',
+        };
+        const cards = await Promise.all(
+          CARD_FILES.map(name => fetch(`./cards/${name}`).then(r => r.json()))
+        );
 
-        const boardMeta = parseBoardMeta(boardYaml);
         for (const c of cards) {
           c.card_data = c.card_data || {};
           const persistedFiles = readPersistedFileMetadata(c.id);
           if (persistedFiles.length > 0) c.card_data.files = persistedFiles;
-
           const persistedChats = readPersistedChatMessages(c.id);
           if (persistedChats.length > 0) c.card_data.messages = persistedChats;
-
-          // Persist card definition to localStorage (mirrors server's tmp/cards/<id>.json)
           LocalStorageService.writeCard(c.id, c);
         }
 
@@ -448,22 +373,19 @@
       }
 
       function makeMockSourceServer() {
-        let orderRows = clone(ORDER_SEED);
-        let priceRows = clone(PRICE_SEED);
+        let quoteData = clone(QUOTES_SEED);
+        let mockAnalysis = clone(MOCK_ANALYSIS);
 
         return {
           fetchSource: async function (card, sourceDef) {
-            const mockKey = sourceDef && typeof sourceDef.mock === 'string' ? sourceDef.mock : '';
-            const script = String(sourceDef && sourceDef.script || sourceDef && sourceDef.cli || '').toLowerCase();
-            if (mockKey === 'orders') return clone(orderRows);
-            if (mockKey === 'prices') return clone(priceRows);
-            if (card.id === 'card-ex-source' || script.includes('fetch-orders')) return clone(orderRows);
-            if (card.id === 'card-ex-source-http' || script.includes('fetch-prices')) return clone(priceRows);
+            // chartApi source with mock="quotes" → return mock quote data
+            if (sourceDef && sourceDef.mock === 'quotes') return clone(quoteData);
+            // copilot source → return mock analysis object
+            if (sourceDef && sourceDef.copilot) return clone(mockAnalysis);
             return null;
           },
-          setDatasets: function (nextOrders, nextPrices) {
-            if (Array.isArray(nextOrders)) orderRows = clone(nextOrders);
-            if (Array.isArray(nextPrices)) priceRows = clone(nextPrices);
+          setQuotes: function (nextQuotes) {
+            if (nextQuotes && typeof nextQuotes === 'object') quoteData = clone(nextQuotes);
           },
         };
       }
@@ -498,24 +420,10 @@
         return `${hh}:${mm}:${ss}`;
       }
 
-      function compactFiles(files) {
-        if (!Array.isArray(files)) return [];
-        return files
-          .map((f) => {
-            if (!f) return null;
-            if (typeof f === 'string') return { name: f };
-            if (typeof f === 'object' && typeof f.name === 'string') return { name: f.name, size: f.size || null };
-            return null;
-          })
-          .filter(Boolean);
-      }
-
       async function handleActionInBrowserRuntime(id, actionType, payload) {
         const node = nodesById[id];
         if (!node) return;
-
         const now = nowIso();
-        const cardData = node.card_data || {};
 
         if (actionType === 'chat-send') {
           const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
@@ -528,25 +436,18 @@
             if (persisted) fileMetas.push(persisted);
           }
 
-          appendChatRecord(id, {
-            at: now,
-            role: 'user',
-            text,
-            files: fileMetas,
-          });
+          appendChatRecord(id, { at: now, role: 'user', text, files: fileMetas });
 
           fileMetas.forEach((fileMeta) => {
             if (!fileMeta || !fileMeta.stored_name) return;
-            const display = fileMeta.name || 'file';
             appendChatRecord(id, {
               at: now,
               role: 'system',
-              text: `File ${display} uploaded as ${fileMeta.stored_name}.`,
+              text: `File ${fileMeta.name || 'file'} uploaded as ${fileMeta.stored_name}.`,
               files: [],
             });
           });
 
-          // Keep chat render state in sync with local-storage-backed chat entries.
           runtime.patchCardState(id, {
             messages: readPersistedChatMessages(id),
             lastInteractionAt: now,
@@ -557,7 +458,6 @@
         if (actionType === 'action') {
           const buttonId = payload && typeof payload.buttonId === 'string' ? payload.buttonId : '';
           if (!buttonId) return;
-
           runtime.patchCardState(id, {
             lastAction: { buttonId, at: now },
             lastActionText: `${buttonId} @ ${toIsoTimeTag(now)}`,
@@ -601,6 +501,7 @@
 
         const cardDefinitions = loaded.cards;
         const cardDefsById = Object.fromEntries(cardDefinitions.map(c => [c.id, c]));
+
         const deepSet = (obj, path, value) => {
           if (!path) return;
           const parts = String(path).split('.');
@@ -624,11 +525,10 @@
           },
         });
 
-        // Restore previous runtime artifacts from localStorage (mirrors reading runtime-out/ from disk on server)
+        // Restore previous runtime artifacts from localStorage
         const cardRuntimeById = LocalStorageService.readAllComputedArtifacts(cardDefinitions.map(c => c.id));
         let statusSnapshot = LocalStorageService.readStatusSnapshot();
 
-        // Build initial renderable nodes from artifacts (same pattern as server shell)
         const initialArtifacts = statusSnapshot && Object.keys(cardRuntimeById).length > 0 && hasCompatiblePersistedArtifacts(cardDefinitions, cardRuntimeById)
           ? { cardDefinitions, statusSnapshot, cardRuntimeById }
           : buildBrowserArtifactsFromRuntime({
@@ -644,8 +544,6 @@
         const engine = LiveCard.init({
           resolve: (id) => nodesById[id],
           onPatchState: (id, patch) => {
-            // Form submissions pass { fieldValues: {...} } from LiveCard form elements.
-            // Persist those values in localStorage card at the card's writeTo path.
             if (patch && Object.keys(patch).length === 1 && patch.fieldValues) {
               const cardDef = cardDefsById[id];
               let writeTo = null;
@@ -657,40 +555,18 @@
                   }
                 }
               }
-
               const statePatch = {};
               if (typeof writeTo === 'string' && writeTo.startsWith('card_data.')) {
                 deepSet(statePatch, writeTo.slice('card_data.'.length), patch.fieldValues);
               } else {
                 Object.assign(statePatch, patch.fieldValues);
               }
-
-              // Apply patch to card definition in memory and in localStorage
               const cardInMem = cardDefsById[id];
               if (cardInMem) {
                 deepSet(cardInMem, 'card_data', { ...cardInMem.card_data, ...statePatch });
                 LocalStorageService.writeCard(id, cardInMem);
               }
-
-              // Also patch the runtime (which may be used by compute)
               runtime.patchCardState(id, statePatch);
-              return;
-            }
-
-            // Auto-commit: file-upload element reports staged files via _stagedFiles.
-            // Persist metadata immediately and update the rendered list — no commit button needed.
-            if (patch && Array.isArray(patch._stagedFiles) && patch._stagedFiles.length > 0) {
-              const now = nowIso();
-              const existing = readPersistedFileMetadata(id);
-              const seen = new Set(existing.map((f) => f && f.name ? f.name : String(f)));
-              for (const item of patch._stagedFiles) {
-                if (!item || typeof item.name !== 'string') continue;
-                if (seen.has(item.name)) continue;
-                existing.push(persistStagedFileMetadata(id, item));
-                seen.add(item.name);
-              }
-              writeStoredFiles(id, existing);
-              runtime.patchCardState(id, { files: existing, _stagedFiles: [] });
               return;
             }
 
@@ -701,8 +577,7 @@
             void handleActionInBrowserRuntime(id, actionType, payload || {});
           },
           getChatMessages: (id) => {
-            const items = readPersistedChatMessages(id);
-            return items.map((m) => ({
+            return readPersistedChatMessages(id).map((m) => ({
               role: m && typeof m.role === 'string' ? m.role : 'system',
               text: m && typeof m.text === 'string' ? m.text : '',
               files: Array.isArray(m && m.files) ? m.files : [],
@@ -718,7 +593,6 @@
 
         runtimeUnsub = runtime.subscribe(function () {
           const runtimeState = runtime.getState();
-          // Build runtime artifacts (mirrors what CLI does after compute)
           const artifacts = buildBrowserArtifactsFromRuntime({
             boardPath: 'browser',
             cardDefinitions,
@@ -726,28 +600,23 @@
             graphState: runtimeState,
           });
 
-          // Persist to localStorage (mirrors CLI writing to runtime-out/)
-          for (const [id, artifact] of Object.entries(artifacts.cardRuntimeById)) {
+          for (const [, artifact] of Object.entries(artifacts.cardRuntimeById)) {
             LocalStorageService.writeComputedArtifact(artifact);
           }
           LocalStorageService.writeStatusSnapshot(artifacts.statusSnapshot);
 
-          // Rebuild renderable nodes from persisted artifacts (same pattern as server shell)
           syncBoardNodes(buildLiveCardModelsFromArtifacts(artifacts));
-
-          // Keep a compact runtime snapshot visible for debugging token flow issues.
           renderDebugPanel(runtimeState, artifacts);
         });
 
         runtime.push({ type: 'inject-tokens', tokens: [], timestamp: nowIso() });
-        // Force a full recompute pass to recover from stale/incomplete localStorage artifacts.
         runtime.retriggerAll();
 
         window.demoLiveGraph = {
           mode: 'browser',
           runtime,
-          setDatasets: function (nextOrders, nextPrices) {
-            mockServer.setDatasets(nextOrders, nextPrices);
+          setQuotes: function (nextQuotes) {
+            mockServer.setQuotes(nextQuotes);
             runtime.retriggerAll();
           },
           clearLocalStorage: function () {
@@ -786,7 +655,6 @@
           setDebugPanelVisibility(this.checked);
         });
 
-        // Keep debug UI out of the way unless Dev Mode is explicitly enabled.
         setDebugPanelVisibility(document.getElementById('devModeToggle').checked);
       }
 

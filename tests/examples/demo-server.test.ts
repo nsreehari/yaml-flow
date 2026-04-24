@@ -191,7 +191,7 @@ function findNewestSystemChatFile(cardId: string): string | null {
 }
 
 describe('demo-server file upload + card list + download', () => {
-  const cardId = 'card-ex-actions';
+  const cardId = 'card-portfolio';
 
   it('uploads file, updates card file list, and downloads via card entry lookup', async () => {
     const originalText = 'hello-download-flow';
@@ -228,7 +228,7 @@ describe('demo-server file upload + card list + download', () => {
   }, 30000);
 
   it('sends chat message and persists it to card chat files (not card_data)', async () => {
-    const chatCardId = 'card-ex-actions';
+    const chatCardId = 'card-portfolio';
     const testMessage = 'Hello from test user';
 
     const before = readChatFileNames(chatCardId);
@@ -267,7 +267,7 @@ describe('demo-server file upload + card list + download', () => {
   }, 30000);
 
   it('uploads with inChat=true, stores file metadata on card, and appends system chat record', async () => {
-    const chatCardId = 'card-ex-actions';
+    const chatCardId = 'card-portfolio';
     const originalName = 'meeting_notes.md';
     const content = '# notes\n- item 1';
 
@@ -295,24 +295,45 @@ describe('demo-server file upload + card list + download', () => {
     const cardRuntimeById = payload.cardRuntimeById as Record<string, Record<string, unknown>> | undefined;
     expect(cardRuntimeById && typeof cardRuntimeById === 'object').toBe(true);
 
-    const sourceCard = cardRuntimeById?.['card-ex-source'];
+    const sourceCard = cardRuntimeById?.['card-market-prices'];
     expect(sourceCard).toBeTruthy();
     expect(typeof sourceCard?.card_data).toBe('object');
     expect(typeof sourceCard?.computed_values).toBe('object');
     expect(typeof sourceCard?.fetched_sources).toBe('object');
 
-    const dependentCard = cardRuntimeById?.['card-ex-table'];
+    const dependentCard = cardRuntimeById?.['card-portfolio-value'];
     expect(dependentCard).toBeTruthy();
     expect(typeof dependentCard?.requires).toBe('object');
   }, 30000);
 
   it('invokes .chat-handler after chat-send and demo handler writes an echo assistant reply', async () => {
-    const chatCardId = 'card-ex-actions';
-    const demoHandlerPath = path.join(repoRoot, 'examples', 'example-board', 'demo-chat-handler.js');
+    const chatCardId = 'card-portfolio';
 
-    // Write .chat-handler to the board runtime directory so the server picks it up.
+    // Write a minimal echo handler to the board runtime directory so the server picks it up.
+    // This avoids calling the real Copilot CLI (which is an LLM and not available in tests).
     fs.mkdirSync(BOARD_DIR, { recursive: true });
-    const handlerCmd = `"${process.execPath}" "${demoHandlerPath}"`;
+    const echoHandlerSrc = `#!/usr/bin/env node
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+const args = process.argv.slice(2);
+function getArg(name) { const i = args.indexOf(name); return i !== -1 ? args[i + 1] : null; }
+const extraStr = getArg('--extraEncJson') || '';
+let extra = {};
+try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); } catch {}
+const { chatDir, lastChatFile } = extra;
+if (!chatDir || !lastChatFile) process.exit(0);
+let lastUserText = '';
+try {
+  const files = fs.readdirSync(chatDir).filter(f => /_user\\.txt$/.test(f)).sort();
+  if (files.length) lastUserText = fs.readFileSync(path.join(chatDir, files[files.length - 1]), 'utf-8').trim();
+} catch {}
+const serial = parseInt(String(lastChatFile).match(/^(\\d+)/)?.[1] ?? '0', 10) + 1;
+const outFile = path.join(chatDir, String(serial).padStart(3,'0') + '_assistant.txt');
+fs.writeFileSync(outFile, 'Echoing: ' + lastUserText + '\\n', 'utf-8');
+`;
+    const echoHandlerPath = path.join(TEST_ROOT, 'echo-chat-handler.mjs');
+    fs.writeFileSync(echoHandlerPath, echoHandlerSrc, 'utf-8');
+    const handlerCmd = `"${process.execPath}" "${echoHandlerPath}"`;
     fs.writeFileSync(path.join(BOARD_DIR, '.chat-handler'), handlerCmd, 'utf-8');
 
     // Ensure board is bootstrapped so the card chats dir exists.
@@ -329,7 +350,7 @@ describe('demo-server file upload + card list + download', () => {
     while (Date.now() < deadline) {
       const names = readChatFileNames(chatCardId);
       const newNames = names.filter((n) => !beforeNames.includes(n));
-      assistantFile = newNames.find((n) => /-assistant\.txt$/.test(n)) ?? null;
+      assistantFile = newNames.find((n) => /_assistant\.txt$/.test(n)) ?? null;
       if (assistantFile) break;
       await new Promise((r) => setTimeout(r, 250));
     }

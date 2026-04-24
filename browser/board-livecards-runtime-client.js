@@ -19,13 +19,14 @@
 
     const fetchServer = options.fetchServer;
     const boardPaths = options.boardPaths;
-    const buildLiveCardModelsFromArtifacts = options.buildLiveCardModelsFromArtifacts;
+    const buildLiveCardModelsFromArtifacts = options.buildLiveCardModelsFromArtifacts
+      || (typeof window !== 'undefined' && window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts);
     const getServerOrigin = options.getServerOrigin;
 
     if (typeof fetchServer !== 'function') throw new Error('options.fetchServer is required');
     if (typeof boardPaths !== 'function') throw new Error('options.boardPaths is required');
     if (typeof buildLiveCardModelsFromArtifacts !== 'function') {
-      throw new Error('options.buildLiveCardModelsFromArtifacts is required');
+      throw new Error('options.buildLiveCardModelsFromArtifacts is required (or load board-livegraph-engine.js first)');
     }
     if (typeof getServerOrigin !== 'function') throw new Error('options.getServerOrigin is required');
 
@@ -155,6 +156,9 @@
 
       const engine = LiveCard.init({
         resolve: (id) => nodesById[id],
+        markdown: (typeof marked !== 'undefined')
+          ? (text) => marked.parse(text)
+          : null,
         onPatchState: async (id, patch) => {
           await fetchServer(paths.patchCard(id), {
             method: 'PATCH',

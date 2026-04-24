@@ -468,3 +468,241 @@ export function createBoardLiveGraphRuntime(
 
   return runtime;
 }
+
+// ---------------------------------------------------------------------------
+// Runtime-artifacts adapter (ported from reusable-runtime-artifacts-adapter.js)
+// ---------------------------------------------------------------------------
+
+export interface CardRuntimeArtifact {
+  schema_version?: string;
+  card_id?: string;
+  card_data?: Record<string, unknown>;
+  computed_values?: Record<string, unknown>;
+  fetched_sources?: Record<string, unknown>;
+  requires?: Record<string, unknown>;
+}
+
+export interface BoardRuntimeArtifactsPayload {
+  cardDefinitions: LiveCard[];
+  cardRuntimeById?: Record<string, CardRuntimeArtifact>;
+  dataObjectsByToken?: Record<string, unknown>;
+  statusSnapshot?: {
+    cards?: Array<{
+      name: string;
+      status?: string;
+      error?: { message?: string } | null;
+      runtime?: { last_transition_at?: string | null };
+      blocked_by?: string[];
+      requires_missing?: string[];
+    }>;
+  };
+}
+
+function taskStatusToCardStatus(taskStatus: string | null | undefined): string {
+  if (taskStatus === 'running' || taskStatus === 'in-progress') return 'loading';
+  if (taskStatus === 'failed') return 'error';
+  if (taskStatus === 'completed') return 'fresh';
+  return 'fresh';
+}
+
+function cardStatusToTaskStatus(cardStatus: string | null | undefined): string {
+  if (cardStatus === 'loading') return 'in-progress';
+  if (cardStatus === 'error') return 'failed';
+  if (cardStatus === 'stale') return 'pending';
+  if (cardStatus === 'fresh') return 'completed';
+  return 'pending';
+}
+
+function normalizeCardRuntimeArtifact(cardId: string, artifact: CardRuntimeArtifact | undefined): Required<CardRuntimeArtifact> {
+  const safe = artifact && typeof artifact === 'object' && !Array.isArray(artifact) ? artifact : {};
+  return {
+    schema_version: (safe.schema_version as string) || 'v1',
+    card_id: typeof safe.card_id === 'string' ? safe.card_id : cardId,
+    card_data: safe.card_data && typeof safe.card_data === 'object' && !Array.isArray(safe.card_data)
+      ? structuredClone(safe.card_data) : {},
+    computed_values: safe.computed_values && typeof safe.computed_values === 'object' && !Array.isArray(safe.computed_values)
+      ? structuredClone(safe.computed_values) : {},
+    fetched_sources: safe.fetched_sources && typeof safe.fetched_sources === 'object' && !Array.isArray(safe.fetched_sources)
+      ? structuredClone(safe.fetched_sources) : {},
+    requires: safe.requires && typeof safe.requires === 'object' && !Array.isArray(safe.requires)
+      ? structuredClone(safe.requires) : {},
+  };
+}
+
+/**
+ * Converts a server bootstrap payload (cardDefinitions + cardRuntimeById + statusSnapshot)
+ * into an array of LiveCardRuntimeModel ready for rendering.
+ */
+export function buildLiveCardModelsFromArtifacts(payload: BoardRuntimeArtifactsPayload): LiveCardRuntimeModel[] {
+  if (!payload || typeof payload !== 'object') throw new Error('payload must be an object');
+  const cardDefinitions = Array.isArray(payload.cardDefinitions) ? payload.cardDefinitions : [];
+  const statusSnapshot = payload.statusSnapshot && typeof payload.statusSnapshot === 'object' ? payload.statusSnapshot : {};
+  const cardRuntimeById = payload.cardRuntimeById && typeof payload.cardRuntimeById === 'object' ? payload.cardRuntimeById : {};
+  const dataObjectsByToken = payload.dataObjectsByToken && typeof payload.dataObjectsByToken === 'object' ? payload.dataObjectsByToken : {};
+  const statusCards = Array.isArray((statusSnapshot as { cards?: unknown[] }).cards) ? (statusSnapshot as { cards: Array<{ name: string; status?: string; error?: { message?: string } | null; runtime?: { last_transition_at?: string | null }; blocked_by?: string[]; requires_missing?: string[] }> }).cards : [];
+  const statusById = new Map(statusCards.map((c) => [c.name, c]));
+
+  return cardDefinitions.map((cardDefinition) => {
+    const card = structuredClone(cardDefinition) as LiveCard & Record<string, unknown>;
+    const cardId = card.id;
+    if (!cardId) throw new Error('cardDefinitions entry missing id');
+
+    const statusCard = statusById.get(cardId);
+    const runtimeArtifact = normalizeCardRuntimeArtifact(cardId, cardRuntimeById[cardId]);
+
+    const baseCardData = card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data)
+      ? card.card_data as Record<string, unknown> : {};
+
+    const card_data: Record<string, unknown> = {
+      ...baseCardData,
+      ...(runtimeArtifact.card_data || {}),
+      status: taskStatusToCardStatus(statusCard?.status),
+      lastRun: (statusCard?.runtime?.last_transition_at) ?? null,
+    };
+    if (statusCard?.error?.message) card_data['error'] = statusCard.error.message;
+
+    const runtime_state: Record<string, unknown> = statusCard
+      ? {
+          task_status: statusCard.status ?? null,
+          card_status: taskStatusToCardStatus(statusCard.status),
+          runtime: structuredClone(statusCard.runtime ?? {}),
+          error: statusCard.error ? structuredClone(statusCard.error) : null,
+          blocked_by: Array.isArray(statusCard.blocked_by) ? structuredClone(statusCard.blocked_by) : [],
+          requires_missing: Array.isArray(statusCard.requires_missing) ? structuredClone(statusCard.requires_missing) : [],
+        }
+      : {
+          task_status: null,
+          card_status: card_data['status'] ?? 'fresh',
+          runtime: { last_transition_at: card_data['lastRun'] ?? null },
+          error: card_data['error'] ? { message: card_data['error'] } : null,
+          blocked_by: [],
+          requires_missing: [],
+        };
+
+    const requiresTokens = Array.isArray((card as { requires?: unknown }).requires) ? (card as { requires: string[] }).requires : [];
+    const requires: Record<string, unknown> = {};
+    for (const token of requiresTokens) {
+      if (Object.prototype.hasOwnProperty.call(dataObjectsByToken, token)) {
+        requires[token] = structuredClone((dataObjectsByToken as Record<string, unknown>)[token]);
+      }
+    }
+
+    return {
+      id: cardId,
+      card: card as LiveCard,
+      card_data,
+      fetched_sources: runtimeArtifact.fetched_sources,
+      requires,
+      computed_values: runtimeArtifact.computed_values,
+      runtime_state,
+    };
+  });
+}
+
+export interface BuildBrowserArtifactsOptions {
+  boardPath?: string;
+  cardDefinitions: LiveCard[];
+  runtimeModels: LiveCardRuntimeModel[];
+  graphState: LiveGraph;
+}
+
+/**
+ * Converts browser-runtime state (LiveCardRuntimeModel[] + LiveGraph) back into
+ * the server-payload format expected by buildLiveCardModelsFromArtifacts.
+ * Used by the browser-only shell to keep the same rendering path as the server shell.
+ */
+export function buildBrowserArtifactsFromRuntime({
+  boardPath,
+  cardDefinitions,
+  runtimeModels,
+  graphState,
+}: BuildBrowserArtifactsOptions): BoardRuntimeArtifactsPayload {
+  const safeCardDefs = Array.isArray(cardDefinitions) ? cardDefinitions : [];
+  const safeModels = Array.isArray(runtimeModels) ? runtimeModels : [];
+  const runtimeModelById = new Map(safeModels.map((m) => [m.id, m]));
+  type TaskEntry = { data?: { provides_data?: Record<string, unknown> }; status?: string; error?: string; executionCount?: number; retryCount?: number; startedAt?: string; lastUpdated?: string; completedAt?: string; failedAt?: string };
+  const graphStateAny = graphState as { state?: { tasks?: Record<string, TaskEntry> } };
+  const taskStates: Record<string, TaskEntry> = graphStateAny.state?.tasks ?? {};
+
+  const cardRuntimeById: Record<string, CardRuntimeArtifact> = {};
+  for (const model of safeModels) {
+    if (!model?.id) continue;
+    cardRuntimeById[model.id] = {
+      schema_version: 'v1',
+      card_id: model.id,
+      card_data: structuredClone(model.card_data ?? {}),
+      computed_values: structuredClone(model.computed_values ?? {}),
+      fetched_sources: structuredClone(model.fetched_sources ?? {}),
+      requires: structuredClone(model.requires ?? {}),
+    };
+  }
+
+  const dataObjectsByToken: Record<string, unknown> = {};
+  for (const taskName of Object.keys(taskStates)) {
+    const providesData = taskStates[taskName]?.data?.provides_data;
+    if (providesData && typeof providesData === 'object') {
+      for (const token of Object.keys(providesData)) {
+        dataObjectsByToken[token] = structuredClone(providesData[token]);
+      }
+    }
+  }
+
+  const statusCards = safeCardDefs.map((cardDef) => {
+    const model = runtimeModelById.get(cardDef.id) ?? {} as Partial<LiveCardRuntimeModel>;
+    const taskState = taskStates[cardDef.id];
+    const taskStatus = typeof taskState?.status === 'string'
+      ? taskState.status
+      : cardStatusToTaskStatus((model.card_data as Record<string, unknown> | undefined)?.['status'] as string | undefined);
+    const errorMessage = typeof taskState?.error === 'string'
+      ? taskState.error
+      : typeof (model.card_data as Record<string, unknown> | undefined)?.['error'] === 'string'
+        ? (model.card_data as Record<string, unknown>)['error'] as string
+        : null;
+    return {
+      name: cardDef.id,
+      status: taskStatus,
+      ...(errorMessage ? { error: { message: errorMessage, code: 'TASK_FAILED', at: taskState?.failedAt ?? null, source: 'browser-runtime' } } : {}),
+      requires: Array.isArray((cardDef as { requires?: unknown }).requires) ? (cardDef as { requires: string[] }).requires : [],
+      requires_satisfied: [] as string[],
+      requires_missing: [] as string[],
+      provides_declared: Array.isArray((cardDef as { provides?: Array<{ bindTo: string }> }).provides)
+        ? (cardDef as { provides: Array<{ bindTo: string }> }).provides.map((e) => e.bindTo)
+        : [cardDef.id],
+      provides_runtime: Object.keys(taskState?.data?.provides_data ?? {}).sort(),
+      blocked_by: [] as string[],
+      unblocks: [] as string[],
+      runtime: {
+        attempt_count: taskState?.executionCount ?? 0,
+        restart_count: taskState?.retryCount ?? 0,
+        in_progress_since: taskStatus === 'in-progress' ? (taskState?.startedAt ?? null) : null,
+        last_transition_at: taskState?.lastUpdated ?? (model.card_data as Record<string, unknown> | undefined)?.['lastRun'] as string ?? null,
+        last_completed_at: taskState?.completedAt ?? null,
+        last_restarted_at: taskState?.startedAt ?? null,
+        status_age_ms: null as null,
+      },
+    };
+  });
+
+  return {
+    cardDefinitions: structuredClone(safeCardDefs) as LiveCard[],
+    cardRuntimeById,
+    dataObjectsByToken,
+    statusSnapshot: {
+      schema_version: 'v1',
+      meta: { board: { path: boardPath ?? 'browser-runtime' } },
+      summary: {
+        card_count: statusCards.length,
+        completed: statusCards.filter((c) => c.status === 'completed').length,
+        eligible: 0,
+        pending: statusCards.filter((c) => c.status === 'pending').length,
+        blocked: 0,
+        unresolved: 0,
+        failed: statusCards.filter((c) => c.status === 'failed').length,
+        in_progress: statusCards.filter((c) => c.status === 'in-progress').length,
+        orphan_cards: 0,
+        topology: { edge_count: 0, max_fan_out_card: null, max_fan_out: 0 },
+      },
+      cards: statusCards,
+    } as BoardRuntimeArtifactsPayload['statusSnapshot'],
+  };
+}

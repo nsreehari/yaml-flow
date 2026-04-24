@@ -4,15 +4,29 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 import {
   createMultiBoardServerRuntime,
   createRuntimeRequestDispatcher,
   isRuntimeRoute,
-} from './reusable-server-runtime.js';
+} from 'yaml-flow/board-livecards-server-runtime';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const _require = createRequire(import.meta.url);
+
+function resolveYamlFlowDir() {
+  try {
+    return path.dirname(_require.resolve('yaml-flow/package.json'));
+  } catch {
+    return null;
+  }
+}
+
+const _yamlFlowDir = resolveYamlFlowDir();
+const _pkgCliJs = _yamlFlowDir ? path.join(_yamlFlowDir, 'board-live-cards-cli.js') : null;
+const _pkgStepMachineCli = _yamlFlowDir ? path.join(_yamlFlowDir, 'step-machine-cli.js') : null;
 
 function loadServerConfig() {
   const configPath = path.join(__dirname, 'demo-server-config.json');
@@ -32,9 +46,9 @@ function resolveFromConfig(configValue) {
 }
 
 const serverConfig = loadServerConfig();
-const configuredCliJs = resolveFromConfig(serverConfig.boardLiveCardsCliJs);
+const configuredCliJs = resolveFromConfig(serverConfig.boardLiveCardsCliJs) || _pkgCliJs;
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
-const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath);
+const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath) || _pkgStepMachineCli;
 const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
 const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
 
@@ -52,6 +66,8 @@ if (!process.env.DEMO_INFERENCE_ADAPTER_PATH && configuredInferenceAdapterPath) 
 }
 
 const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
+const RESET_ON_START = process.argv.includes('--reset');
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'content-type,x-file-name',
@@ -60,12 +76,25 @@ const CORS_HEADERS = {
 
 const runtime = createMultiBoardServerRuntime({
   apiBasePath: '/api/boards',
+  defaultCardsDir: path.join(__dirname, 'cards'),
   defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || path.join(__dirname, 'demo-task-executor.js'),
   defaultStepMachineCliPath: process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath,
   defaultChatHandlerPath: process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || path.join(__dirname, 'demo-chat-handler.js'),
-  defaultInferenceAdapterPath: process.env.DEMO_INFERENCE_ADAPTER_PATH || configuredInferenceAdapterPath || path.join(__dirname, 'demo-inference-adapter.js'),
+  defaultInferenceAdapterPath: process.env.DEMO_INFERENCE_ADAPTER_PATH || configuredInferenceAdapterPath || null,
   boardLiveCardsCliJs: process.env.BOARD_LIVE_CARDS_CLI_JS || configuredCliJs,
 });
+
+function resetRuntime() {
+  const setupDir = runtime.setupDir;
+  if (fs.existsSync(setupDir)) {
+    fs.rmSync(setupDir, { recursive: true, force: true });
+    console.log(`[demo-server] reset: wiped ${setupDir}`);
+  }
+}
+
+if (RESET_ON_START) {
+  resetRuntime();
+}
 
 const dispatch = createRuntimeRequestDispatcher(runtime);
 
@@ -79,11 +108,16 @@ function jsonReply(res, status, payload) {
 }
 
 async function handleDemoSetup(req, res, boardId) {
-  const url = new URL(req.url, 'http://localhost');
-  const reset = String(url.searchParams.get('reset') || '').toLowerCase() === 'true';
   try {
-    const result = runtime.performDemoSetup(boardId, reset);
-    jsonReply(res, 200, result);
+    const { service, boardRoot } = runtime.requireBoardService(boardId);
+    let setupPerformed = false;
+
+    if (!fs.existsSync(path.join(boardRoot, 'surface', 'tmp-cards'))) {
+      service.ensureDemoSetup();
+      setupPerformed = true;
+    }
+
+    jsonReply(res, 200, { ok: true, setupPerformed });
   } catch (err) {
     jsonReply(res, err.statusCode || 500, { error: String((err && err.message) || err) });
   }

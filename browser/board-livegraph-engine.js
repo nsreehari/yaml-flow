@@ -140,13 +140,29 @@ var BoardLiveGraph = (function (exports) {
       if (!Array.isArray(n.sources)) {
         errors.push("sources: must be an array");
       } else {
+        const bindTos = /* @__PURE__ */ new Set();
+        const outputFiles = /* @__PURE__ */ new Set();
         n.sources.forEach((src, i) => {
           if (!src || typeof src !== "object" || Array.isArray(src)) {
             errors.push(`sources[${i}]: must be an object`);
           } else {
             const s = src;
-            if (typeof s.bindTo !== "string" || !s.bindTo) errors.push(`sources[${i}]: missing required "bindTo" property`);
-            if (s.outputFile != null && typeof s.outputFile !== "string") errors.push(`sources[${i}]: outputFile must be a string`);
+            if (typeof s.bindTo !== "string" || !s.bindTo) {
+              errors.push(`sources[${i}]: missing required "bindTo" property`);
+            } else {
+              if (bindTos.has(s.bindTo)) {
+                errors.push(`sources[${i}]: bindTo "${s.bindTo}" is not unique across sources`);
+              }
+              bindTos.add(s.bindTo);
+            }
+            if (typeof s.outputFile !== "string" || !s.outputFile) {
+              errors.push(`sources[${i}]: missing required "outputFile" property`);
+            } else {
+              if (outputFiles.has(s.outputFile)) {
+                errors.push(`sources[${i}]: outputFile "${s.outputFile}" is not unique across sources`);
+              }
+              outputFiles.add(s.outputFile);
+            }
             if (s.optionalForCompletionGating != null && typeof s.optionalForCompletionGating !== "boolean") {
               errors.push(`sources[${i}]: optionalForCompletionGating must be a boolean`);
             }
@@ -262,15 +278,30 @@ var BoardLiveGraph = (function (exports) {
   }
 
   // src/event-graph/task-transitions.ts
-  function applyTaskStart(state, taskName) {
+  function applyTaskStart(state, taskName, graph) {
     const existingTask = state.tasks[taskName] ?? createDefaultGraphEngineStore();
+    const startConsumedHashes = {};
+    if (graph) {
+      const taskConfig = graph.tasks[taskName];
+      const requires = getRequires(taskConfig);
+      for (const token of requires) {
+        for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
+          if (getProvides(otherConfig).includes(token)) {
+            const otherState = state.tasks[otherName];
+            if (otherState?.lastDataHash) startConsumedHashes[token] = otherState.lastDataHash;
+            break;
+          }
+        }
+      }
+    }
     const updatedTask = {
       ...existingTask,
       status: "running",
       startedAt: (/* @__PURE__ */ new Date()).toISOString(),
       lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
       progress: 0,
-      error: void 0
+      error: void 0,
+      startConsumedHashes
     };
     return {
       ...state,
@@ -290,16 +321,18 @@ var BoardLiveGraph = (function (exports) {
     } else {
       outputTokens = getProvides(taskConfig);
     }
-    const lastConsumedHashes = { ...existingTask.lastConsumedHashes };
-    const requires = taskConfig.requires ?? [];
-    for (const token of requires) {
-      for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
-        if (getProvides(otherConfig).includes(token)) {
-          const otherState = state.tasks[otherName];
-          if (otherState?.lastDataHash) {
-            lastConsumedHashes[token] = otherState.lastDataHash;
+    const lastConsumedHashes = existingTask.startConsumedHashes ? { ...existingTask.startConsumedHashes } : { ...existingTask.lastConsumedHashes };
+    if (!existingTask.startConsumedHashes) {
+      const requires = taskConfig.requires ?? [];
+      for (const token of requires) {
+        for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
+          if (getProvides(otherConfig).includes(token)) {
+            const otherState = state.tasks[otherName];
+            if (otherState?.lastDataHash) {
+              lastConsumedHashes[token] = otherState.lastDataHash;
+            }
+            break;
           }
-          break;
         }
       }
     }
@@ -444,7 +477,7 @@ var BoardLiveGraph = (function (exports) {
     switch (event.type) {
       // --- Execution state transitions ---
       case "task-started":
-        return { config, state: applyTaskStart(state, event.taskName) };
+        return { config, state: applyTaskStart(state, event.taskName, config) };
       case "task-completed":
         return { config, state: applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash, event.data) };
       case "task-failed":
@@ -1442,12 +1475,175 @@ var BoardLiveGraph = (function (exports) {
     };
     return runtime;
   }
+  function taskStatusToCardStatus(taskStatus) {
+    if (taskStatus === "running" || taskStatus === "in-progress") return "loading";
+    if (taskStatus === "failed") return "error";
+    if (taskStatus === "completed") return "fresh";
+    return "fresh";
+  }
+  function cardStatusToTaskStatus(cardStatus) {
+    if (cardStatus === "loading") return "in-progress";
+    if (cardStatus === "error") return "failed";
+    if (cardStatus === "stale") return "pending";
+    if (cardStatus === "fresh") return "completed";
+    return "pending";
+  }
+  function normalizeCardRuntimeArtifact(cardId, artifact) {
+    const safe = artifact && typeof artifact === "object" && !Array.isArray(artifact) ? artifact : {};
+    return {
+      schema_version: safe.schema_version || "v1",
+      card_id: typeof safe.card_id === "string" ? safe.card_id : cardId,
+      card_data: safe.card_data && typeof safe.card_data === "object" && !Array.isArray(safe.card_data) ? structuredClone(safe.card_data) : {},
+      computed_values: safe.computed_values && typeof safe.computed_values === "object" && !Array.isArray(safe.computed_values) ? structuredClone(safe.computed_values) : {},
+      fetched_sources: safe.fetched_sources && typeof safe.fetched_sources === "object" && !Array.isArray(safe.fetched_sources) ? structuredClone(safe.fetched_sources) : {},
+      requires: safe.requires && typeof safe.requires === "object" && !Array.isArray(safe.requires) ? structuredClone(safe.requires) : {}
+    };
+  }
+  function buildLiveCardModelsFromArtifacts(payload) {
+    if (!payload || typeof payload !== "object") throw new Error("payload must be an object");
+    const cardDefinitions = Array.isArray(payload.cardDefinitions) ? payload.cardDefinitions : [];
+    const statusSnapshot = payload.statusSnapshot && typeof payload.statusSnapshot === "object" ? payload.statusSnapshot : {};
+    const cardRuntimeById = payload.cardRuntimeById && typeof payload.cardRuntimeById === "object" ? payload.cardRuntimeById : {};
+    const dataObjectsByToken = payload.dataObjectsByToken && typeof payload.dataObjectsByToken === "object" ? payload.dataObjectsByToken : {};
+    const statusCards = Array.isArray(statusSnapshot.cards) ? statusSnapshot.cards : [];
+    const statusById = new Map(statusCards.map((c) => [c.name, c]));
+    return cardDefinitions.map((cardDefinition) => {
+      const card = structuredClone(cardDefinition);
+      const cardId = card.id;
+      if (!cardId) throw new Error("cardDefinitions entry missing id");
+      const statusCard = statusById.get(cardId);
+      const runtimeArtifact = normalizeCardRuntimeArtifact(cardId, cardRuntimeById[cardId]);
+      const baseCardData = card.card_data && typeof card.card_data === "object" && !Array.isArray(card.card_data) ? card.card_data : {};
+      const card_data = {
+        ...baseCardData,
+        ...runtimeArtifact.card_data || {},
+        status: taskStatusToCardStatus(statusCard?.status),
+        lastRun: statusCard?.runtime?.last_transition_at ?? null
+      };
+      if (statusCard?.error?.message) card_data["error"] = statusCard.error.message;
+      const runtime_state = statusCard ? {
+        task_status: statusCard.status ?? null,
+        card_status: taskStatusToCardStatus(statusCard.status),
+        runtime: structuredClone(statusCard.runtime ?? {}),
+        error: statusCard.error ? structuredClone(statusCard.error) : null,
+        blocked_by: Array.isArray(statusCard.blocked_by) ? structuredClone(statusCard.blocked_by) : [],
+        requires_missing: Array.isArray(statusCard.requires_missing) ? structuredClone(statusCard.requires_missing) : []
+      } : {
+        task_status: null,
+        card_status: card_data["status"] ?? "fresh",
+        runtime: { last_transition_at: card_data["lastRun"] ?? null },
+        error: card_data["error"] ? { message: card_data["error"] } : null,
+        blocked_by: [],
+        requires_missing: []
+      };
+      const requiresTokens = Array.isArray(card.requires) ? card.requires : [];
+      const requires = {};
+      for (const token of requiresTokens) {
+        if (Object.prototype.hasOwnProperty.call(dataObjectsByToken, token)) {
+          requires[token] = structuredClone(dataObjectsByToken[token]);
+        }
+      }
+      return {
+        id: cardId,
+        card,
+        card_data,
+        fetched_sources: runtimeArtifact.fetched_sources,
+        requires,
+        computed_values: runtimeArtifact.computed_values,
+        runtime_state
+      };
+    });
+  }
+  function buildBrowserArtifactsFromRuntime({
+    boardPath,
+    cardDefinitions,
+    runtimeModels,
+    graphState
+  }) {
+    const safeCardDefs = Array.isArray(cardDefinitions) ? cardDefinitions : [];
+    const safeModels = Array.isArray(runtimeModels) ? runtimeModels : [];
+    const runtimeModelById = new Map(safeModels.map((m) => [m.id, m]));
+    const graphStateAny = graphState;
+    const taskStates = graphStateAny.state?.tasks ?? {};
+    const cardRuntimeById = {};
+    for (const model of safeModels) {
+      if (!model?.id) continue;
+      cardRuntimeById[model.id] = {
+        schema_version: "v1",
+        card_id: model.id,
+        card_data: structuredClone(model.card_data ?? {}),
+        computed_values: structuredClone(model.computed_values ?? {}),
+        fetched_sources: structuredClone(model.fetched_sources ?? {}),
+        requires: structuredClone(model.requires ?? {})
+      };
+    }
+    const dataObjectsByToken = {};
+    for (const taskName of Object.keys(taskStates)) {
+      const providesData = taskStates[taskName]?.data?.provides_data;
+      if (providesData && typeof providesData === "object") {
+        for (const token of Object.keys(providesData)) {
+          dataObjectsByToken[token] = structuredClone(providesData[token]);
+        }
+      }
+    }
+    const statusCards = safeCardDefs.map((cardDef) => {
+      const model = runtimeModelById.get(cardDef.id) ?? {};
+      const taskState = taskStates[cardDef.id];
+      const taskStatus = typeof taskState?.status === "string" ? taskState.status : cardStatusToTaskStatus(model.card_data?.["status"]);
+      const errorMessage = typeof taskState?.error === "string" ? taskState.error : typeof model.card_data?.["error"] === "string" ? model.card_data["error"] : null;
+      return {
+        name: cardDef.id,
+        status: taskStatus,
+        ...errorMessage ? { error: { message: errorMessage, code: "TASK_FAILED", at: taskState?.failedAt ?? null, source: "browser-runtime" } } : {},
+        requires: Array.isArray(cardDef.requires) ? cardDef.requires : [],
+        requires_satisfied: [],
+        requires_missing: [],
+        provides_declared: Array.isArray(cardDef.provides) ? cardDef.provides.map((e) => e.bindTo) : [cardDef.id],
+        provides_runtime: Object.keys(taskState?.data?.provides_data ?? {}).sort(),
+        blocked_by: [],
+        unblocks: [],
+        runtime: {
+          attempt_count: taskState?.executionCount ?? 0,
+          restart_count: taskState?.retryCount ?? 0,
+          in_progress_since: taskStatus === "in-progress" ? taskState?.startedAt ?? null : null,
+          last_transition_at: taskState?.lastUpdated ?? model.card_data?.["lastRun"] ?? null,
+          last_completed_at: taskState?.completedAt ?? null,
+          last_restarted_at: taskState?.startedAt ?? null,
+          status_age_ms: null
+        }
+      };
+    });
+    return {
+      cardDefinitions: structuredClone(safeCardDefs),
+      cardRuntimeById,
+      dataObjectsByToken,
+      statusSnapshot: {
+        schema_version: "v1",
+        meta: { board: { path: boardPath ?? "browser-runtime" } },
+        summary: {
+          card_count: statusCards.length,
+          completed: statusCards.filter((c) => c.status === "completed").length,
+          eligible: 0,
+          pending: statusCards.filter((c) => c.status === "pending").length,
+          blocked: 0,
+          unresolved: 0,
+          failed: statusCards.filter((c) => c.status === "failed").length,
+          in_progress: statusCards.filter((c) => c.status === "in-progress").length,
+          orphan_cards: 0,
+          topology: { edge_count: 0, max_fan_out_card: null, max_fan_out: 0 }
+        },
+        cards: statusCards
+      }
+    };
+  }
 
   exports.LocalStorageService = LocalStorageService;
+  exports.buildBrowserArtifactsFromRuntime = buildBrowserArtifactsFromRuntime;
+  exports.buildLiveCardModelsFromArtifacts = buildLiveCardModelsFromArtifacts;
   exports.createBoardLiveGraphRuntime = createBoardLiveGraphRuntime;
 
   return exports;
 
 })({});
-//# sourceMappingURL=board-livegraph-runtime.js.map
-//# sourceMappingURL=board-livegraph-runtime.js.map
+//# sourceMappingURL=board-livegraph-engine.js.map
+//# sourceMappingURL=board-livegraph-engine.js.map
