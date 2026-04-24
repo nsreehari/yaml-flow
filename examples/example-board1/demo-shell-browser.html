@@ -9,7 +9,6 @@
   <script src="../../browser/card-compute.js"></script>
   <script src="../../browser/live-cards.js"></script>
   <script src="../../browser/board-livegraph-runtime.js"></script>
-   <script src="./reusable-runtime-artifacts-adapter.js"></script>
 </head>
 <body class="bg-light">
   <div class="container-fluid py-3">
@@ -63,10 +62,12 @@
         console.error(message);
       }
 
-      // Get LocalStorageService from board-livegraph-runtime export
+      // Get exports from board-livegraph-runtime
       const LocalStorageService = (window.BoardLiveGraph && window.BoardLiveGraph.LocalStorageService);
-      if (!LocalStorageService) {
-        failInit('LocalStorageService not loaded. Run "npm run build:browser" first.');
+      const buildLiveCardModelsFromArtifacts = (window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts);
+      const buildBrowserArtifactsFromRuntime = (window.BoardLiveGraph && window.BoardLiveGraph.buildBrowserArtifactsFromRuntime);
+      if (!LocalStorageService || !buildLiveCardModelsFromArtifacts || !buildBrowserArtifactsFromRuntime) {
+        failInit('board-livegraph-runtime.js not loaded. Run "npm run build:browser" first.');
         return;
       }
 

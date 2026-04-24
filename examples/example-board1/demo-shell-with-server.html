@@ -8,7 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
   <script src="../../browser/card-compute.js"></script>
   <script src="../../browser/live-cards.js"></script>
-  <script src="./reusable-runtime-artifacts-adapter.js"></script>
+  <script src="../../browser/board-livegraph-runtime.js"></script>
   <script src="./reusable-board-runtime-client.js"></script>
 </head>
 <body class="bg-light">
@@ -131,7 +131,6 @@
       runtimeClient = window.ReusableBoardRuntimeClient.createBoardRuntimeClient({
         fetchServer,
         boardPaths,
-        buildLiveCardModelsFromArtifacts,
         getServerOrigin: function () { return activeServerOrigin; },
         initialMode: currentMode,
         canvas: { height: '72vh', overflow: 'auto' },
