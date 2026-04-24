@@ -1795,7 +1795,7 @@ var LiveCard = (function () {
         if (iconEl) {
           iconEl.title = done ? 'Task completed' : 'Awaiting inference';
           iconEl.style.color = done ? '#198754' : '#aaa';
-          iconEl.innerHTML = done ? '&#10003;' : '&#8987;';
+          iconEl.innerHTML = done ? '&#x25CF;' : '&#x25CB;';
         }
       }
 
