@@ -2624,10 +2624,193 @@ export async function cli(argv: string[]): Promise<void> {
     case 'run-inference-internal':    return cmdRunInference(rest);
     case 'inference-done':            return cmdInferenceDone(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
+    case 'probe-source':               return await cmdProbeSource(rest);
     case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
       throw new Error(`Unknown command: ${cmd ?? '(none)'}`);
   }
+}
+
+async function cmdProbeSource(args: string[]): Promise<void> {
+  const cardIdx = args.indexOf('--card');
+  const sourceIdxArg = args.indexOf('--source-idx');
+  const sourceBindArg = args.indexOf('--source-bind');
+  const mockReqIdx = args.indexOf('--mock-requires');
+  const rgIdx = args.indexOf('--rg');
+  const outIdx = args.indexOf('--out');
+
+  const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+  const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
+  const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
+  const mockReqRaw = mockReqIdx !== -1 ? args[mockReqIdx + 1] : undefined;
+  const boardDirArg = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
+
+  if (!cardFilePath) {
+    console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]');
+    process.exit(1);
+  }
+
+  // Read card
+  let card: any;
+  try {
+    card = JSON.parse(fs.readFileSync(path.resolve(cardFilePath), 'utf-8'));
+  } catch (e) {
+    console.error(`[probe-source] Cannot read card: ${(e as Error).message}`);
+    process.exit(1);
+  }
+
+  const sources: any[] = card.sources ?? [];
+  if (sources.length === 0) {
+    console.error(`[probe-source] Card "${card.id}" has no sources`);
+    process.exit(1);
+  }
+
+  // Select source by index or bindTo name
+  let sourceIdx: number;
+  if (sourceBindVal) {
+    sourceIdx = sources.findIndex((s: any) => s.bindTo === sourceBindVal);
+    if (sourceIdx === -1) {
+      console.error(`[probe-source] No source with bindTo="${sourceBindVal}" in card "${card.id}"`);
+      process.exit(1);
+    }
+  } else {
+    sourceIdx = sourceIdxVal;
+    if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= sources.length) {
+      console.error(`[probe-source] --source-idx ${sourceIdxVal} out of range (card has ${sources.length} source(s))`);
+      process.exit(1);
+    }
+  }
+
+  const sourceDef = sources[sourceIdx];
+  const cardDir = path.resolve(path.dirname(cardFilePath));
+  const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
+
+  // Parse --mock-requires (JSON string or @file.json)
+  let mockRequires: Record<string, unknown> = {};
+  if (mockReqRaw) {
+    const raw = mockReqRaw.startsWith('@')
+      ? fs.readFileSync(path.resolve(mockReqRaw.slice(1)), 'utf-8')
+      : mockReqRaw;
+    try {
+      mockRequires = JSON.parse(raw);
+    } catch (e) {
+      console.error(`[probe-source] --mock-requires is not valid JSON: ${(e as Error).message}`);
+      process.exit(1);
+    }
+  }
+
+  // Detect registered task-executor
+  const executorFile = path.join(boardDir, '.task-executor');
+  const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
+
+  // Build --in payload — mirrors exactly what run-sources-internal passes to the executor
+  const inPayload: Record<string, unknown> = {
+    ...sourceDef,
+    cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
+    boardDir: typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : boardDir,
+    _requires: mockRequires,
+    _sourcesData: {},
+    _computed_values: {},
+  };
+
+  const sourceKind: string = sourceDef.chartApi ? 'chartApi'
+    : sourceDef.http ? 'http'
+    : (sourceDef.copilot || sourceDef.prompt_template) ? 'copilot'
+    : sourceDef.cli ? 'cli'
+    : 'mock';
+
+  console.log(`[probe-source] card:        ${card.id}`);
+  console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
+  console.log(`[probe-source] _requires:   ${JSON.stringify(mockRequires)}`);
+  console.log(`[probe-source] executor:    ${taskExecutor ?? 'built-in (source.cli only)'}`);
+  console.log(`[probe-source] running fetch...`);
+
+  const ts = Date.now();
+  const inFile  = path.join(os.tmpdir(), `probe-in-${sourceDef.bindTo}-${ts}.json`);
+  const tmpOut  = path.join(os.tmpdir(), `probe-out-${sourceDef.bindTo}-${ts}.json`);
+  const errFile = path.join(os.tmpdir(), `probe-err-${sourceDef.bindTo}-${ts}.txt`);
+
+  fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2), 'utf-8');
+
+  let passed = false;
+  let errorMsg: string | undefined;
+  let resultRaw: string | undefined;
+
+  try {
+    if (taskExecutor) {
+      execCommandSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile], {
+        shell: true,
+        timeout: (sourceDef.timeout as number) ?? 30_000,
+      });
+    } else {
+      // Built-in path: only source.cli is supported
+      if (!inPayload.cli) {
+        throw new Error('No task-executor registered and source has no cli field — cannot probe with built-in executor');
+      }
+      const cmdParts = splitCommandLine(inPayload.cli as string);
+      const rawCmd = cmdParts[0];
+      const { cmd, args: cliArgs } = resolveCommandInvocation(rawCmd, cmdParts.slice(1));
+      const stdout = execCommandSync(cmd, cliArgs, {
+        shell: false,
+        encoding: 'utf-8',
+        timeout: (sourceDef.timeout as number) ?? 30_000,
+        cwd: inPayload.cwd as string,
+      });
+      fs.writeFileSync(tmpOut, (stdout as string).trim(), 'utf-8');
+    }
+
+    passed = fs.existsSync(tmpOut);
+    if (passed) {
+      resultRaw = fs.readFileSync(tmpOut, 'utf-8');
+    } else {
+      errorMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
+    }
+  } catch (e) {
+    errorMsg = (e as Error).message ?? String(e);
+    if (!errorMsg && fs.existsSync(errFile)) {
+      errorMsg = fs.readFileSync(errFile, 'utf-8').trim();
+    }
+  }
+
+  // Cleanup temp inputs
+  for (const f of [inFile, errFile]) {
+    try { fs.unlinkSync(f); } catch { /* best-effort */ }
+  }
+
+  // Report
+  if (passed && resultRaw !== undefined) {
+    const resultSize = resultRaw.length;
+    const sample = resultRaw.slice(0, 300);
+    console.log(`[probe-source] STATUS:      PROBE_PASS`);
+    console.log(`[probe-source] result size: ${resultSize} bytes`);
+    console.log(`[probe-source] sample:      ${sample}${resultSize > 300 ? '...' : ''}`);
+    if (outFile) {
+      fs.writeFileSync(path.resolve(outFile), resultRaw);
+      console.log(`[probe-source] result written to: ${outFile}`);
+    } else {
+      try { fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+    }
+  } else {
+    console.log(`[probe-source] STATUS:      PROBE_FAIL`);
+    if (errorMsg) console.log(`[probe-source] error:       ${errorMsg}`);
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+  }
+
+  // Machine-readable summary line — agents parse this
+  const summary = {
+    status: passed ? 'PROBE_PASS' : 'PROBE_FAIL',
+    cardId: card.id as string,
+    sourceIdx,
+    bindTo: sourceDef.bindTo as string,
+    sourceKind,
+    mockRequiresKeys: Object.keys(mockRequires),
+    resultSizeBytes: resultRaw !== undefined ? resultRaw.length : 0,
+    error: errorMsg ?? undefined,
+  };
+  console.log(`[probe-source:result] ${JSON.stringify(summary)}`);
+
+  process.exit(passed ? 0 : 1);
 }
 
 function cmdHelp(): void {
@@ -2724,6 +2907,24 @@ INTERNAL COMMANDS
     Execute a source definition. Board-live-cards reads source.cli and executes it.
     Writes result to --out. Presence of --out after exit indicates success.
 
+  probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
+               [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]
+    Validate that a card source can be fetched successfully.
+    Reads the card file, extracts the chosen source (default: index 0), builds the
+    run-source-fetch --in payload with the supplied _requires data, invokes the
+    registered task-executor (or built-in executor for source.cli), and reports pass/fail.
+    --mock-requires: JSON string (or @file.json) providing the _requires token values
+                     the source needs.  Craft the minimal payload that exercises the
+                     source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
+                     If omitted, _requires is passed as empty ({}).
+    --source-idx:    0-based index into card.sources[]. Default: 0.
+    --source-bind:   Select source by its bindTo name instead of index.
+    --rg:            Board directory used to find .task-executor. Defaults to the
+                     directory containing the card file.
+    --out:           Optional path to write the raw fetch result JSON.
+    Prints a structured report ending with a [probe-source:result] JSON line.
+    Exits 0 on PROBE_PASS, 1 on PROBE_FAIL.
+
   run-inference-internal --in <input.json> --token <callbackToken> --rg <dir>
     Execute inference via registered .inference-adapter and forward result to inference-done.
     (Internal command — invoked by the card-handler when custom completion rule is used.)
@@ -2768,6 +2969,7 @@ EXAMPLES
   board-live-cards-cli add-cards --rg ./my-board --card cards/prices.json
   board-live-cards-cli status --rg ./my-board
   board-live-cards-cli retrigger --rg ./my-board --task price-fetch
+  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
 `.trimStart());
 }
 

@@ -13,9 +13,9 @@
  *     // custom fields authored on the source entry (e.g. mock, copilot, http, prompt_template, etc.)
  *     "cwd": "<card directory>",
  *     "boardDir": "<board runtime directory>",
- *     "_requires": { /* upstream token data (from card requires[]) */ },
- *     "_sourcesData": { /* already-fetched sources on this card */ },
- *     "_computed_values": { /* computed_values from the card's compute stage */ }
+ *     "_requires": { },            // upstream token data (from card requires[])
+ *     "_sourcesData": { },         // already-fetched sources on this card
+ *     "_computed_values": { }      // computed_values from the card's compute stage
  *   }
  *
  * Supported source kinds (based on custom fields):
