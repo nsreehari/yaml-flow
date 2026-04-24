@@ -445,7 +445,7 @@ A JSON file at the board root keyed by mock name. Used by `"mock": "key"` source
 The task executor is a **card-source-driven** component — its behaviour is determined entirely by the `customFields` defined on each card's `sources[]` entries. One executor is registered for the whole board, but it must know how to handle every source kind (`mock`, `copilot`, `http`, `graphapi`, etc.) used by any card on the board. The executor is the only handler where the card's source definition directly drives what the handler needs to do. It is registered once per board:
 
 ```bash
-node board-live-cards-cli.js init-board --board-dir ./my-board --task-executor ./my-executor.js
+node board-live-cards-cli.js init ./my-board --task-executor ./my-executor.js
 # stores path in <boardDir>/.task-executor
 ```
 
@@ -536,7 +536,7 @@ The demo adapter (`demo-inference-adapter.js`) shows this pattern: builds a prom
 The adapter is invoked only when a card has a custom `when_is_task_completed` string. Register once per board:
 
 ```bash
-node board-live-cards-cli.js init-board --board-dir ./my-board --inference-adapter ./my-adapter.js
+node board-live-cards-cli.js init ./my-board --inference-adapter ./my-adapter.js
 # stores path in <boardDir>/.inference-adapter
 ```
 
@@ -613,7 +613,7 @@ Enable chat on a card by setting `"chat": true` in the card's `view.features`:
 
 Register once per board:
 ```bash
-node board-live-cards-cli.js init-board --board-dir ./my-board --chat-handler ./my-chat-handler.js
+node board-live-cards-cli.js init ./my-board --chat-handler ./my-chat-handler.js
 # stores path in <boardDir>/.chat-handler
 ```
 
