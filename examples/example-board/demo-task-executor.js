@@ -30,16 +30,48 @@
  * http / chartApi source notes:
  *   - URL supports {{key}} interpolation (http) or {{ticker}} (chartApi)
  *   - tickersFrom: "tokenName.fieldName" extracts tickers from a _requires array
- *   - If the fetch fails AND the source has a "mock" field, falls back to mock.db
+ *   - http and chartApi results are cached in os.tmpdir()/demo-executor-cache/ for 1 hour
+ *     so Yahoo Finance is not hammered on every card refresh during demos
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOCK_DB_PATH = path.join(__dirname, 'mock.db');
+
+// ---------------------------------------------------------------------------
+// Simple 1-hour file cache for HTTP / chartApi results.
+// Stored in os.tmpdir()/demo-executor-cache/<hash>.json
+// ---------------------------------------------------------------------------
+const CACHE_DIR = path.join(os.tmpdir(), 'demo-executor-cache');
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function cacheKey(str) {
+  return crypto.createHash('sha1').update(str).digest('hex');
+}
+
+function readCache(key) {
+  const file = path.join(CACHE_DIR, `${key}.json`);
+  try {
+    const stat = fs.statSync(file);
+    if (Date.now() - stat.mtimeMs < CACHE_TTL_MS) {
+      return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    }
+  } catch {}
+  return null;
+}
+
+function writeCache(key, value) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(CACHE_DIR, `${key}.json`), JSON.stringify(value));
+  } catch {}
+}
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
@@ -77,21 +109,34 @@ function curlFetchJson(url, method, headers) {
 function stripCopilotFooter(rawText) {
   const lines = String(rawText ?? '').split(/\r?\n/);
 
-  // Remove trailing blank lines first.
-  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+  // Strip CLI-level tool-call telemetry lines emitted by the copilot binary when
+  // --allow-all activates MCP tools. These are NOT model output — the prompt cannot
+  // suppress them. They look like:
+  //   ● Web Search (MCP: github-mcp-server) · ...
+  //   └ {"type":"output_text",...}
+  const filtered = lines.filter(line => {
+    const t = line.trimStart();
+    return !(
+      /^[●•]\s+/.test(t) ||  // tool invocation lines
+      /^└\s+/.test(t)         // tool result lines
+    );
+  });
+
+  // Remove trailing blank lines.
+  while (filtered.length > 0 && filtered[filtered.length - 1].trim() === '') filtered.pop();
 
   // Remove the standard trailing Copilot metadata footer, if present.
   if (
-    lines.length >= 3 &&
-    /^Changes\b/i.test(lines[lines.length - 3]) &&
-    /^Requests\b/i.test(lines[lines.length - 2]) &&
-    /^Tokens\b/i.test(lines[lines.length - 1])
+    filtered.length >= 3 &&
+    /^Changes\b/i.test(filtered[filtered.length - 3]) &&
+    /^Requests\b/i.test(filtered[filtered.length - 2]) &&
+    /^Tokens\b/i.test(filtered[filtered.length - 1])
   ) {
-    lines.splice(lines.length - 3, 3);
+    filtered.splice(filtered.length - 3, 3);
   }
 
-  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
-  return lines.join('\n');
+  while (filtered.length > 0 && filtered[filtered.length - 1].trim() === '') filtered.pop();
+  return filtered.join('\n');
 }
 
 function resolveCopilotPrompt(sourceDef) {
@@ -263,51 +308,42 @@ function runSourceFetchSubcommand(argv) {
     if (tickers.length === 0) {
       console.warn('[demo-task-executor] chartApi: tickersFrom resolved to empty list — falling back to mock');
     } else {
-      try {
-        const results = [];
-        for (const ticker of tickers) {
-          const url = interpolatePrompt(chartCfg.url, { ticker });
-          const data = curlFetchJson(url, 'GET', headers);
-          const meta = data?.chart?.result?.[0]?.meta;
-          if (!meta) throw new Error(`No chart meta for ${ticker}`);
-          // Map to quote-compatible shape; compute change from chartPreviousClose
-          const price = meta.regularMarketPrice ?? 0;
-          const prevClose = meta.chartPreviousClose ?? price;
-          const change = price - prevClose;
-          const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
-          results.push({
-            symbol: meta.symbol ?? ticker,
-            shortName: meta.shortName ?? meta.longName ?? ticker,
-            regularMarketPrice: price,
-            regularMarketChange: change,
-            regularMarketChangePercent: changePct,
-          });
-        }
-        resultValue = { quoteResponse: { result: results, error: null } };
-      } catch (chartErr) {
-        if (sourceDef.mock) {
-          console.warn(`[demo-task-executor] chartApi fetch failed (${chartErr.message}), falling back to mock key "${sourceDef.mock}"`);
-        } else {
+      const chartCacheKey = cacheKey('chartApi:' + tickers.sort().join(',') + chartCfg.url);
+      const cached = readCache(chartCacheKey);
+      if (cached) {
+        console.warn(`[demo-task-executor] chartApi: cache hit for [${tickers.join(', ')}]`);
+        resultValue = cached;
+      } else {
+        try {
+          const results = [];
+          for (const ticker of tickers) {
+            const url = interpolatePrompt(chartCfg.url, { ticker });
+            const data = curlFetchJson(url, 'GET', headers);
+            const meta = data?.chart?.result?.[0]?.meta;
+            if (!meta) throw new Error(`No chart meta for ${ticker}`);
+            // Map to quote-compatible shape; compute change from chartPreviousClose
+            const price = meta.regularMarketPrice ?? 0;
+            const prevClose = meta.chartPreviousClose ?? price;
+            const change = price - prevClose;
+            const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
+            results.push({
+              symbol: meta.symbol ?? ticker,
+              shortName: meta.shortName ?? meta.longName ?? ticker,
+              regularMarketPrice: price,
+              regularMarketChange: change,
+              regularMarketChangePercent: changePct,
+            });
+          }
+          resultValue = { quoteResponse: { result: results, error: null } };
+          writeCache(chartCacheKey, resultValue);
+        } catch (chartErr) {
           fail(`chartApi fetch failed: ${chartErr.message}`, errFile);
         }
       }
     }
 
-    // Fall back to mock if fetch failed or tickers were empty
     if (resultValue === undefined) {
-      if (!sourceDef.mock) {
-        fail('chartApi: no tickers and no mock fallback defined', errFile);
-      }
-      let mockDb;
-      try {
-        mockDb = readJson(MOCK_DB_PATH);
-      } catch (e) {
-        fail(`chartApi failed and cannot read mock.db: ${String(e && e.message || e)}`, errFile);
-      }
-      resultValue = mockDb[sourceDef.mock];
-      if (resultValue === undefined) {
-        fail(`chartApi mock key "${sourceDef.mock}" not found in mock.db`, errFile);
-      }
+      fail('chartApi: no tickers resolved — cannot fetch', errFile);
     }
 
   } else if (sourceDef.http) {
@@ -344,26 +380,19 @@ function runSourceFetchSubcommand(argv) {
     // Skip fetch entirely if tickers ended up empty (guard against empty ?symbols=)
     const httpFetchSkipped = sourceDef.tickersFrom && !httpArgs.tickers;
 
-    try {
-      if (httpFetchSkipped) {
-        throw new Error('tickersFrom resolved to empty list — skipping fetch');
-      }
-      resultValue = curlFetchJson(url, method, headers);
-    } catch (httpErr) {
-      // If source also declares a mock key, fall back to mock.db (useful for offline dev)
-      if (sourceDef.mock) {
-        console.warn(`[demo-task-executor] HTTP fetch failed (${httpErr.message}), falling back to mock key "${sourceDef.mock}"`);
-        let mockDb;
-        try {
-          mockDb = readJson(MOCK_DB_PATH);
-        } catch (e) {
-          fail(`HTTP fetch failed and cannot read mock.db: ${String(e && e.message || e)}`, errFile);
+    const httpCacheKey = cacheKey(`http:${method}:${url}`);
+    const httpCached = readCache(httpCacheKey);
+    if (httpCached && !httpFetchSkipped) {
+      console.warn(`[demo-task-executor] http: cache hit for ${url}`);
+      resultValue = httpCached;
+    } else {
+      try {
+        if (httpFetchSkipped) {
+          throw new Error('tickersFrom resolved to empty list — skipping fetch');
         }
-        resultValue = mockDb[sourceDef.mock];
-        if (resultValue === undefined) {
-          fail(`HTTP fetch failed and mock key "${sourceDef.mock}" not found in mock.db`, errFile);
-        }
-      } else {
+        resultValue = curlFetchJson(url, method, headers);
+        writeCache(httpCacheKey, resultValue);
+      } catch (httpErr) {
         fail(`HTTP fetch failed: ${httpErr.message}`, errFile);
       }
     }
@@ -383,8 +412,8 @@ function runSourceFetchSubcommand(argv) {
     }
 
     resultValue = stripCopilotFooter(rawOutput);
-  } else {
-    // Default mode: mockdb lookup
+  } else if (sourceDef.mock) {
+    // mock.db lookup (explicit mock source — dev/test only)
     let mockDb;
     try {
       if (!fs.existsSync(MOCK_DB_PATH)) {
@@ -394,16 +423,12 @@ function runSourceFetchSubcommand(argv) {
     } catch (err) {
       fail(`Cannot parse mock.db: ${String(err && err.message || err)}`, errFile);
     }
-
-    const mockKey = sourceDef.mock;
-    if (!mockKey) {
-      fail('Source definition missing "mock" field (key to lookup)', errFile);
-    }
-
-    resultValue = mockDb[mockKey];
+    resultValue = mockDb[sourceDef.mock];
     if (resultValue === undefined) {
-      fail(`Key "${mockKey}" not found in mock.db`, errFile);
+      fail(`Key "${sourceDef.mock}" not found in mock.db`, errFile);
     }
+  } else {
+    fail('Source definition has no recognised kind (copilot, http, chartApi, mock)', errFile);
   }
 
   // Write result to --out as JSON payload, same contract as current mock mode.

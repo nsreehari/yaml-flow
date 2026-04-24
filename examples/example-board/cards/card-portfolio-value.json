@@ -6,10 +6,13 @@
     "desc": "Computes total portfolio value, gainers/losers summary, and per-position P&L from holdings and live market quotes."
   },
   "requires": ["holdings", "quotes"],
+  "provides": [
+    { "bindTo": "positions", "src": "computed_values.positions" }
+  ],
   "compute": [
     {
       "bindTo": "positions",
-      "expr": "($hMap := $merge(requires.holdings.{ticker: quantity}); $map(requires.quotes.quoteResponse.result, function($q) { ($qty := $lookup($hMap, $q.symbol); {\"ticker\": $q.symbol, \"quantity\": $qty, \"price\": $round($q.regularMarketPrice, 2), \"value\": $round($q.regularMarketPrice * $qty, 2), \"chg_pct\": $round($q.regularMarketChangePercent, 2)}) }))"
+      "expr": "($hMap := $merge(requires.holdings.{ticker: $}); $map(requires.quotes.quoteResponse.result, function($q) { ($h := $lookup($hMap, $q.symbol); $qty := $h.quantity; $cb := $h.cost_basis; $val := $round($q.regularMarketPrice * $qty, 2); $cost := $round($cb * $qty, 2); $chg := $round($q.regularMarketChange * $qty, 2); {\"ticker\": $q.symbol, \"quantity\": $qty, \"cost_basis\": $cb, \"price\": $round($q.regularMarketPrice, 2), \"value\": $val, \"gain_$\": $round($val - $cost, 2), \"gain_%\": $round(($val - $cost) / $cost * 100, 2), \"chg_$\": $chg, \"chg_pct\": $round($q.regularMarketChangePercent, 2)}) }))"
     },
     {
       "bindTo": "totalValue",
@@ -44,14 +47,14 @@
         "label": "Positions",
         "data": {
           "bind": "computed_values.positions",
-          "columns": ["ticker", "value"],
+          "columns": ["ticker", "value", "gain_$", "gain_%"],
           "sortable": true
         }
       }
     ],
     "layout": {
       "board": { "col": 4, "order": 3 },
-      "canvas": { "x": 840, "y": 50, "w": 380, "h": 360 }
+      "canvas": { "x": 840, "y": 50, "w": 420, "h": 380 }
     },
     "features": { "chat": true }
   },

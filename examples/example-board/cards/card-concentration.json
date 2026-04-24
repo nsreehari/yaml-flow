@@ -1,0 +1,33 @@
+{
+  "id": "card-concentration",
+  "meta": {
+    "title": "Portfolio Intelligence",
+    "tags": ["portfolio", "analysis", "risk"],
+    "desc": "AI-powered portfolio analysis — concentration risk, sector exposure, unrealised gains, and market risks to watch for each position."
+  },
+  "requires": ["positions"],
+  "sources": [
+    {
+      "bindTo": "analysis",
+      "outputFile": "card-concentration-analysis.json",
+      "copilot": {
+        "prompt_template": "You are a concise equity analyst. Use web search to get today's news and upcoming events for each ticker before answering.\n\nIMPORTANT OUTPUT RULES — follow exactly:\n- Output ONLY the four Markdown sections below. Nothing else.\n- Do NOT show tool calls, search queries, intermediate reasoning, bullet logs, or any text before the first ## heading.\n- Your entire response must start with '## Mix' and contain nothing before it.\n- No emojis anywhere in your response.\n- Total length: ≤200 words, fit in one phone screen.\n\nPortfolio positions:\n{{positions}}\n\nFields: ticker, quantity, cost_basis ($), price ($), value ($), gain_$ (unrealised P&L), gain_% (unrealised return), chg_$ (today's position P&L $), chg_pct (today's % move).\n\n## Mix\n- Dominant holding (ticker, % of total) and whether that's a risk\n- Sector clustering in one line\n\n## P&L\n- Best: ticker +X% (+$Y)\n- Worst: ticker +X% (+$Y)\n\n## Risks\n- TICKER: one specific current risk with event name or date\n- (one bullet per position)\n\n## Action\n- One sentence: what to do and why, grounded in today's market."
+      }
+    }
+  ],
+  "compute": [],
+  "view": {
+    "elements": [
+      {
+        "kind": "markdown",
+        "data": { "bind": "fetched_sources.analysis" }
+      }
+    ],
+    "layout": {
+      "board": { "col": 4, "order": 4 },
+      "canvas": { "x": 1300, "y": 50, "w": 380, "h": 500 }
+    },
+    "features": { "refresh": true, "chat": true }
+  },
+  "card_data": {}
+}

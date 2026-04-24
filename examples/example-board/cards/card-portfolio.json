@@ -17,10 +17,11 @@
         "data": {
           "bind": "card_data.holdings",
           "writeTo": "card_data.holdings",
-          "columns": ["ticker", "quantity"],
+          "columns": ["ticker", "quantity", "cost_basis"],
           "schema": {
             "properties": {
-              "quantity": { "type": "number" }
+              "quantity":   { "type": "number" },
+              "cost_basis": { "type": "number" }
             }
           }
         }
@@ -34,10 +35,10 @@
   },
   "card_data": {
     "holdings": [
-      { "ticker": "AAPL",  "quantity": 10 },
-      { "ticker": "MSFT",  "quantity": 5  },
-      { "ticker": "GOOGL", "quantity": 2  },
-      { "ticker": "TSLA",  "quantity": 3  }
+      { "ticker": "AAPL",  "quantity": 10, "cost_basis": 150.00 },
+      { "ticker": "MSFT",  "quantity": 5,  "cost_basis": 310.00 },
+      { "ticker": "GOOGL", "quantity": 2,  "cost_basis": 280.00 },
+      { "ticker": "TSLA",  "quantity": 3,  "cost_basis": 200.00 }
     ]
   }
 }

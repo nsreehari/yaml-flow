@@ -155,6 +155,9 @@
 
       const engine = LiveCard.init({
         resolve: (id) => nodesById[id],
+        markdown: (typeof marked !== 'undefined')
+          ? (text) => marked.parse(text)
+          : null,
         onPatchState: async (id, patch) => {
           await fetchServer(paths.patchCard(id), {
             method: 'PATCH',
