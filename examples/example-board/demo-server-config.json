@@ -3,6 +3,5 @@
   "boardLiveCardsCliJs": "../../dist/cli/board-live-cards-cli.js",
   "stepMachineCliPath": "../../step-machine-cli.js",
   "taskExecutorPath": "./demo-task-executor.js",
-  "chatHandlerPath": "./demo-chat-handler.js",
-  "inferenceAdapterPath": "./demo-inference-adapter.js"
+  "chatHandlerPath": "./demo-chat-handler.js"
 }
