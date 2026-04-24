@@ -31,7 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = __dirname;
 const OUT_DIR = path.resolve(__dirname, '../examples/example-board');
 
-const CDN_BASE = 'https://cdn.jsdelivr.net/npm/yaml-flow';
+const CDN_BASE = 'https://cdn.jsdelivr.net/npm/yaml-flow@5.2.0';
 
 // ---------------------------------------------------------------------------
 // Replacement rules — applied to every text file in order
