@@ -1564,11 +1564,24 @@ var LiveCard = (function () {
       const container = document.createElement('div');
       container.className = 'row g-2';
 
-      if (node.card_data && node.card_data.status === 'loading') {
-        const refreshingEl = document.createElement('div');
-        refreshingEl.className = 'col-12 d-flex align-items-center gap-2 mb-1';
-        refreshingEl.innerHTML = '<span class="spinner-border spinner-border-sm text-muted" style="width:.75rem;height:.75rem"></span><span class="text-muted" style="font-size:.75rem">Refreshing…</span>';
-        container.appendChild(refreshingEl);
+      const _taskStatus = node.runtime_state && node.runtime_state.task_status;
+      if (_taskStatus && _taskStatus !== 'completed') {
+        const statusEl = document.createElement('div');
+        statusEl.className = 'col-12 d-flex align-items-center gap-2 mb-1';
+        var _statusIconHtml;
+        if (_taskStatus === 'running') {
+          _statusIconHtml = '<span class="spinner-border spinner-border-sm text-muted" style="width:.75rem;height:.75rem;flex-shrink:0"></span>';
+        } else if (_taskStatus === 'failed') {
+          _statusIconHtml = '<span style="font-size:.75rem;line-height:1;flex-shrink:0;color:#dc3545">&#x26A0;&#xFE0E;</span>'; // ⚠ (text variant)
+        } else if (_taskStatus === 'not-started') {
+          _statusIconHtml = '<span style="font-size:.75rem;line-height:1;flex-shrink:0" class="text-muted">&#x25CB;</span>'; // ○
+        } else if (_taskStatus === 'inactivated') {
+          _statusIconHtml = '<span style="font-size:.75rem;line-height:1;flex-shrink:0" class="text-muted">&#x2296;</span>'; // ⊖
+        } else {
+          _statusIconHtml = '<span style="font-size:.75rem;line-height:1;flex-shrink:0" class="text-muted">&#x2013;</span>'; // –
+        }
+        statusEl.innerHTML = _statusIconHtml + '<span class="text-muted" style="font-size:.75rem">' + _esc(_taskStatus) + '</span>';
+        container.appendChild(statusEl);
       }
 
       view.elements.forEach(elemDef => {
@@ -1663,9 +1676,9 @@ var LiveCard = (function () {
       if (whenIs || isTaskCompleted) {
         h += `<div class="d-flex align-items-start gap-2 mb-2 px-1 py-1 rounded lc-inference-bar" style="background:rgba(0,0,0,.03)">`;
         if (isTaskCompleted) {
-          h += `<span class="lc-inference-icon" title="Task completed" style="color:#198754;font-size:1rem;line-height:1.2;flex-shrink:0">&#10003;</span>`;
+          h += `<span class="lc-inference-icon" title="Task completed" style="color:#198754;font-size:.75rem;line-height:1.2;flex-shrink:0">&#x25CF;</span>`;
         } else {
-          h += `<span class="lc-inference-icon" style="color:#aaa;font-size:.85rem;line-height:1.4;flex-shrink:0" title="Awaiting inference">&#8987;</span>`;
+          h += `<span class="lc-inference-icon" style="color:#aaa;font-size:.75rem;line-height:1.4;flex-shrink:0" title="Awaiting inference">&#x25CB;</span>`;
         }
         if (whenIs) {
           h += `<span class="text-muted" style="font-size:.72rem;line-height:1.4;font-style:italic"><span style="opacity:.55;font-style:normal">done when:</span> ${_esc(whenIs)}</span>`;
