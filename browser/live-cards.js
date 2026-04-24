@@ -1171,7 +1171,10 @@ var LiveCard = (function () {
     function _renderText(data, el, elemDef) {
       const ed = elemDef.data || {};
       const format = ed.format || 'default';
-      const style = ed.style || 'default';
+      const style = elemDef.style || ed.style || 'default';
+      const hideIfEmpty = ed.hideIfEmpty || elemDef.hideIfEmpty;
+
+      if (hideIfEmpty && (data == null || data === '')) { el.innerHTML = ''; return; }
 
       // Handle file-links format
       if (format === 'file-links') {
@@ -1195,7 +1198,10 @@ var LiveCard = (function () {
 
       // Default text rendering
       const tag = style === 'heading' ? 'h4' : 'div';
-      const cls = style === 'muted' ? 'text-muted small' : (style === 'heading' ? 'fw-bold' : 'small');
+      const cls = style === 'muted' ? 'text-muted small'
+        : style === 'muted-italic' ? 'text-muted small fst-italic'
+        : style === 'heading' ? 'fw-bold'
+        : 'small';
       el.innerHTML = `<${tag} class="${cls}">${_esc(data != null ? String(data) : '')}</${tag}>`;
     }
 
@@ -1558,6 +1564,13 @@ var LiveCard = (function () {
       const container = document.createElement('div');
       container.className = 'row g-2';
 
+      if (node.card_data && node.card_data.status === 'loading') {
+        const refreshingEl = document.createElement('div');
+        refreshingEl.className = 'col-12 d-flex align-items-center gap-2 mb-1';
+        refreshingEl.innerHTML = '<span class="spinner-border spinner-border-sm text-muted" style="width:.75rem;height:.75rem"></span><span class="text-muted" style="font-size:.75rem">Refreshing…</span>';
+        container.appendChild(refreshingEl);
+      }
+
       view.elements.forEach(elemDef => {
         // Visibility gate
         if (elemDef.visible) {
@@ -1643,6 +1656,23 @@ var LiveCard = (function () {
       h += '</div>';
       h += '</div>';
 
+      // Inference status bar: completion criteria + task-completed tick
+      const inferenceData = node.card_data && node.card_data.llm_task_completion_inference;
+      const isTaskCompleted = !!(inferenceData && inferenceData.isTaskCompleted);
+      const whenIs = node.card && typeof node.card.when_is_task_completed === 'string' && node.card.when_is_task_completed.trim();
+      if (whenIs || isTaskCompleted) {
+        h += `<div class="d-flex align-items-start gap-2 mb-2 px-1 py-1 rounded lc-inference-bar" style="background:rgba(0,0,0,.03)">`;
+        if (isTaskCompleted) {
+          h += `<span class="lc-inference-icon" title="Task completed" style="color:#198754;font-size:1rem;line-height:1.2;flex-shrink:0">&#10003;</span>`;
+        } else {
+          h += `<span class="lc-inference-icon" style="color:#aaa;font-size:.85rem;line-height:1.4;flex-shrink:0" title="Awaiting inference">&#8987;</span>`;
+        }
+        if (whenIs) {
+          h += `<span class="text-muted" style="font-size:.72rem;line-height:1.4;font-style:italic"><span style="opacity:.55;font-style:normal">done when:</span> ${_esc(whenIs)}</span>`;
+        }
+        h += `</div>`;
+      }
+
       // Elements area
       h += `<div class="lc-result" id="${uid}-result"></div>`;
 
@@ -1659,9 +1689,7 @@ var LiveCard = (function () {
       const resultEl = document.getElementById(uid + '-result');
       _nodeEls[node.id] = { container: containerEl, resultEl, uid };
 
-      if (node.card_data && node.card_data.status === 'loading') {
-        resultEl.innerHTML = '<div class="d-flex align-items-center gap-2"><span class="spinner-border spinner-border-sm text-muted"></span><span class="text-muted small">Loading…</span></div>';
-      } else if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
+      if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
         resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.card_data.error)}</pre>`;
       } else {
         _runCompute(node).then(function () { _renderElements(node, resultEl); });
@@ -1758,9 +1786,20 @@ var LiveCard = (function () {
       const filesCountEl = document.getElementById(info.uid + '-files-count');
       if (filesCountEl && filesCountEl.parentNode) filesCountEl.parentNode.removeChild(filesCountEl);
 
-      if (node.card_data.status === 'loading') {
-        info.resultEl.innerHTML = '<div class="d-flex align-items-center gap-2"><span class="spinner-border spinner-border-sm text-muted"></span><span class="text-muted small">Loading…</span></div>';
-      } else if (node.card_data.status === 'error' && node.card_data.error) {
+      // Update inference status bar (tick / hourglass) if card_data changed
+      const infBar = info.container.querySelector('.lc-inference-bar');
+      if (infBar) {
+        const infData = node.card_data && node.card_data.llm_task_completion_inference;
+        const done = !!(infData && infData.isTaskCompleted);
+        const iconEl = infBar.querySelector('.lc-inference-icon');
+        if (iconEl) {
+          iconEl.title = done ? 'Task completed' : 'Awaiting inference';
+          iconEl.style.color = done ? '#198754' : '#aaa';
+          iconEl.innerHTML = done ? '&#10003;' : '&#8987;';
+        }
+      }
+
+      if (node.card_data.status === 'error' && node.card_data.error) {
         info.resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.card_data.error)}</pre>`;
       } else {
         _runCompute(node).then(function () { _renderElements(node, info.resultEl); });

@@ -36,6 +36,7 @@
         }
       },
       {
+
         "kind": "text",
         "label": "Inference Reason",
         "style": "muted-italic",
