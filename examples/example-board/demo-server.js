@@ -52,6 +52,8 @@ if (!process.env.DEMO_INFERENCE_ADAPTER_PATH && configuredInferenceAdapterPath) 
 }
 
 const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
+const RESET_ON_START = process.argv.includes('--reset');
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'content-type,x-file-name',
@@ -67,6 +69,18 @@ const runtime = createMultiBoardServerRuntime({
   boardLiveCardsCliJs: process.env.BOARD_LIVE_CARDS_CLI_JS || configuredCliJs,
 });
 
+function resetRuntime() {
+  const setupDir = runtime.setupDir;
+  if (fs.existsSync(setupDir)) {
+    fs.rmSync(setupDir, { recursive: true, force: true });
+    console.log(`[demo-server] reset: wiped ${setupDir}`);
+  }
+}
+
+if (RESET_ON_START) {
+  resetRuntime();
+}
+
 const dispatch = createRuntimeRequestDispatcher(runtime);
 
 // Board-id segment regex: /api/boards/:boardId/...
@@ -76,15 +90,6 @@ function jsonReply(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
-}
-
-function clearFilesOnly(dir) {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const target = path.join(dir, entry.name);
-    if (entry.isDirectory()) clearFilesOnly(target);
-    else fs.rmSync(target, { force: true });
-  }
 }
 
 async function handleDemoSetup(req, res, boardId) {
