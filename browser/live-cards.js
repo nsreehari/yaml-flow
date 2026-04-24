@@ -1929,12 +1929,12 @@ var LiveCard = (function () {
       if (filesCount > 0) h += `<span class="ms-1 small" aria-label="${filesCount} files">${filesCount}</span>`;
       h += '</button>';
       // Chat icon button (speech bubble)
-      h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-chat-open" title="Chat">`;
+      h += `<button class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center" id="${uid}-chat-open" title="Chat">`;
       h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>';
       h += '</button>';
       // Refresh icon button
       if (showRefresh) {
-        h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-refresh" title="Refresh">`;
+        h += `<button class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center" id="${uid}-refresh" title="Refresh">`;
         h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>';
         h += '</button>';
       }

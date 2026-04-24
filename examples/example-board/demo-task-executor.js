@@ -54,6 +54,26 @@ function interpolatePrompt(template, args) {
   });
 }
 
+/**
+ * Fetch a URL using the system curl binary (synchronous, no Node event-loop handles).
+ * Throws if curl exits non-zero (e.g. HTTP 4xx/5xx with -f, or network error).
+ */
+function curlFetchJson(url, method, headers) {
+  const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+  // -s  : silent (no progress bar)
+  // -S  : show errors despite -s
+  // -f  : fail (non-zero exit) on HTTP 4xx/5xx
+  // -L  : follow redirects
+  // --max-time 10 : hard timeout
+  const args = ['-s', '-S', '-f', '-L', '--max-time', '10', '-X', method];
+  for (const [k, v] of Object.entries(headers)) {
+    args.push('-H', `${k}: ${v}`);
+  }
+  args.push(url);
+  const raw = execFileSync(bin, args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  return JSON.parse(raw);
+}
+
 function stripCopilotFooter(rawText) {
   const lines = String(rawText ?? '').split(/\r?\n/);
 
@@ -193,7 +213,7 @@ function fail(msg, errFile) {
   process.exit(1);
 }
 
-async function runSourceFetchSubcommand(argv) {
+function runSourceFetchSubcommand(argv) {
   const inIdx = argv.indexOf('--in');
   const outIdx = argv.indexOf('--out');
   const errIdx = argv.indexOf('--err');
@@ -221,9 +241,7 @@ async function runSourceFetchSubcommand(argv) {
   if (sourceDef.chartApi) {
     // ---------------------------------------------------------------------------
     // chartApi source kind — Yahoo Finance v8/finance/chart (free, per-ticker)
-    // Makes one request per ticker and assembles a quoteResponse-compatible shape.
-    // URL template must contain {{ticker}}, e.g.:
-    //   https://query1.finance.yahoo.com/v8/finance/chart/{{ticker}}?interval=1d&range=1d
+    // Uses curl (synchronous subprocess) to avoid Node.js libuv handle issues.
     // ---------------------------------------------------------------------------
     const chartCfg = sourceDef.chartApi;
     const headers = { ...(chartCfg.headers || {}) };
@@ -246,20 +264,10 @@ async function runSourceFetchSubcommand(argv) {
       console.warn('[demo-task-executor] chartApi: tickersFrom resolved to empty list — falling back to mock');
     } else {
       try {
-        const results = await Promise.all(tickers.map(async (ticker) => {
+        const results = [];
+        for (const ticker of tickers) {
           const url = interpolatePrompt(chartCfg.url, { ticker });
-          const abort = new AbortController();
-          const timeoutId = setTimeout(() => abort.abort(), 10_000);
-          let resp;
-          try {
-            resp = await fetch(url, { headers, signal: abort.signal });
-          } finally {
-            clearTimeout(timeoutId);
-          }
-          if (!resp.ok) {
-            throw new Error(`HTTP ${resp.status} for ${ticker}`);
-          }
-          const data = await resp.json();
+          const data = curlFetchJson(url, 'GET', headers);
           const meta = data?.chart?.result?.[0]?.meta;
           if (!meta) throw new Error(`No chart meta for ${ticker}`);
           // Map to quote-compatible shape; compute change from chartPreviousClose
@@ -267,14 +275,14 @@ async function runSourceFetchSubcommand(argv) {
           const prevClose = meta.chartPreviousClose ?? price;
           const change = price - prevClose;
           const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
-          return {
+          results.push({
             symbol: meta.symbol ?? ticker,
             shortName: meta.shortName ?? meta.longName ?? ticker,
             regularMarketPrice: price,
             regularMarketChange: change,
             regularMarketChangePercent: changePct,
-          };
-        }));
+          });
+        }
         resultValue = { quoteResponse: { result: results, error: null } };
       } catch (chartErr) {
         if (sourceDef.mock) {
@@ -304,7 +312,7 @@ async function runSourceFetchSubcommand(argv) {
 
   } else if (sourceDef.http) {
     // ---------------------------------------------------------------------------
-    // HTTP source kind (Node 18+ built-in fetch)
+    // HTTP source kind — uses curl (synchronous subprocess)
     // ---------------------------------------------------------------------------
     const httpCfg = sourceDef.http;
 
@@ -340,19 +348,7 @@ async function runSourceFetchSubcommand(argv) {
       if (httpFetchSkipped) {
         throw new Error('tickersFrom resolved to empty list — skipping fetch');
       }
-      // Hard timeout: 10 s — prevents the subprocess from hanging indefinitely
-      const abort = new AbortController();
-      const timeoutId = setTimeout(() => abort.abort(), 10_000);
-      let resp;
-      try {
-        resp = await fetch(url, { method, headers, signal: abort.signal });
-      } finally {
-        clearTimeout(timeoutId);
-      }
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status} ${resp.statusText} from ${url}`);
-      }
-      resultValue = await resp.json();
+      resultValue = curlFetchJson(url, method, headers);
     } catch (httpErr) {
       // If source also declares a mock key, fall back to mock.db (useful for offline dev)
       if (sourceDef.mock) {
@@ -417,13 +413,12 @@ async function runSourceFetchSubcommand(argv) {
     fail(`Cannot write output file: ${String(err && err.message || err)}`, errFile);
   }
 
-  process.exit(0);
 }
 
 async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {
-    await runSourceFetchSubcommand(process.argv.slice(3));
+    runSourceFetchSubcommand(process.argv.slice(3));
     return;
   }
 

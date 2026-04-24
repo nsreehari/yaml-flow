@@ -100,9 +100,9 @@
     },
 
     "source_def": {
-      "description": "One source entry. The engine only cares about 'bindTo' (compute namespace key) and 'outputFile' (delivery signal). Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
+      "description": "One source entry. The engine requires 'bindTo' (compute namespace key) and 'outputFile' (delivery signal path). bindTo and outputFile must be unique across all sources in a card. Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
       "type": "object",
-      "required": ["bindTo"],
+      "required": ["bindTo", "outputFile"],
       "additionalProperties": true,
       "properties": {
         "bindTo":     { "type": "string",  "description": "Key under fetched_sources.* available in compute expressions" },
@@ -119,7 +119,7 @@
       "properties": {
         "id":        { "type": "string", "description": "Optional element ID for targeted updates" },
         "kind":      {
-          "enum": ["metric", "table", "chart", "form", "filter", "list",
+          "enum": ["metric", "table", "editable-table", "chart", "form", "filter", "list",
                    "notes", "todo", "alert", "narrative", "badge", "text",
                    "markdown", "custom", "actions"]
         },
@@ -227,7 +227,7 @@
     "view":     { "$ref": "#/definitions/view" },
     "card_data": {
       "type": "object",
-      "description": "Authored card data supplied in the card definition",
+      "description": "Authored card data and runtime metadata. Includes uploaded-file metadata maintained by host handlers and inference evaluation results.",
       "properties": {
         "files": {
           "type": "array",
@@ -255,6 +255,18 @@
             },
             "additionalProperties": false
           }
+        },
+        "llm_task_completion_inference": {
+          "type": "object",
+          "description": "Inference evaluation result when custom when_is_task_completed rule is present. Written by inference adapter after evaluating completion rule.",
+          "properties": {
+            "inferenceRequested": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request was initiated" },
+            "inferenceCompletedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request completed" },
+            "isTaskCompleted": { "type": "boolean", "description": "Whether the task is considered complete by the adapter" },
+            "reasoning": { "type": "string", "description": "Explanation of completion decision" },
+            "evidence": { "type": "array", "description": "Supporting evidence from sources/compute" }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true
@@ -268,6 +280,10 @@
       "type": "array",
       "description": "Ordered array of compute steps. Each reads card_data.*/requires.*/fetched_sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
       "items": { "$ref": "#/definitions/compute_step" }
+    },
+    "when_is_task_completed": {
+      "type": "string",
+      "description": "Custom task completion rule. When present, invokes the inference adapter (--inference-adapter) instead of gating on source delivery. The rule text is passed as the 'completionRule' field to the adapter. Absence defaults to 'all_required_sources_fetched'."
     }
   }
 }

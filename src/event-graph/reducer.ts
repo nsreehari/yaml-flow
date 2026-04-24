@@ -41,7 +41,7 @@ export function apply(
 
   switch (event.type) {
     case 'task-started':
-      return applyTaskStart(state, event.taskName);
+      return applyTaskStart(state, event.taskName, graph);
 
     case 'task-completed':
       return applyTaskCompletion(state, graph, event.taskName, event.result, event.dataHash, event.data);

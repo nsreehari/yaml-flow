@@ -6,13 +6,31 @@
  */
 
 import type { ExecutionState, GraphEngineStore, GraphConfig } from './types.js';
-import { getProvides } from './graph-helpers.js';
+import { getProvides, getRequires } from './graph-helpers.js';
 
 /**
  * Apply task start to execution state. Pure function.
  */
-export function applyTaskStart(state: ExecutionState, taskName: string): ExecutionState {
+export function applyTaskStart(state: ExecutionState, taskName: string, graph?: GraphConfig): ExecutionState {
   const existingTask = state.tasks[taskName] ?? createDefaultGraphEngineStore();
+
+  // Snapshot upstream hashes at start time so that if an upstream task
+  // completes while this task is running, applyTaskCompletion can detect
+  // the mid-flight change and not absorb it into lastConsumedHashes.
+  const startConsumedHashes: Record<string, string> = {};
+  if (graph) {
+    const taskConfig = graph.tasks[taskName];
+    const requires = getRequires(taskConfig);
+    for (const token of requires) {
+      for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
+        if (getProvides(otherConfig).includes(token)) {
+          const otherState = state.tasks[otherName];
+          if (otherState?.lastDataHash) startConsumedHashes[token] = otherState.lastDataHash;
+          break;
+        }
+      }
+    }
+  }
 
   const updatedTask: GraphEngineStore = {
     ...existingTask,
@@ -21,6 +39,7 @@ export function applyTaskStart(state: ExecutionState, taskName: string): Executi
     lastUpdated: new Date().toISOString(),
     progress: 0,
     error: undefined,
+    startConsumedHashes,
   };
 
   return {
@@ -59,18 +78,29 @@ export function applyTaskCompletion(
     outputTokens = getProvides(taskConfig);
   }
 
-  // Build lastConsumedHashes: snapshot the data hashes of all upstream tasks
-  const lastConsumedHashes: Record<string, string> = { ...existingTask.lastConsumedHashes };
-  const requires = taskConfig.requires ?? [];
-  for (const token of requires) {
-    // Find the task that provides this token and grab its hash
-    for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
-      if (getProvides(otherConfig).includes(token)) {
-        const otherState = state.tasks[otherName];
-        if (otherState?.lastDataHash) {
-          lastConsumedHashes[token] = otherState.lastDataHash;
+  // Use hashes snapshotted at task-start time as lastConsumedHashes.
+  // This ensures that if an upstream task completed while this task was
+  // running (mid-flight change), the old hash is preserved in
+  // lastConsumedHashes → data-changed detects the difference on the
+  // next schedule pass and re-runs this task.
+  // Fall back to reading current upstream state only when startConsumedHashes
+  // is absent (e.g. restored from an older snapshot without the field).
+  const lastConsumedHashes: Record<string, string> = existingTask.startConsumedHashes
+    ? { ...existingTask.startConsumedHashes }
+    : { ...existingTask.lastConsumedHashes };
+
+  if (!existingTask.startConsumedHashes) {
+    // Legacy fallback: populate from current upstream state
+    const requires = taskConfig.requires ?? [];
+    for (const token of requires) {
+      for (const [otherName, otherConfig] of Object.entries(graph.tasks)) {
+        if (getProvides(otherConfig).includes(token)) {
+          const otherState = state.tasks[otherName];
+          if (otherState?.lastDataHash) {
+            lastConsumedHashes[token] = otherState.lastDataHash;
+          }
+          break;
         }
-        break;
       }
     }
   }

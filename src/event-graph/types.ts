@@ -131,6 +131,10 @@ export interface GraphEngineStore {
   data?: Record<string, unknown>;
   /** Per-require token: the data hash consumed on last run */
   lastConsumedHashes?: Record<string, string>;
+  /** Per-require token: upstream hashes snapshot at task-start time.
+   * Used by applyTaskCompletion so mid-flight upstream changes are not
+   * silently absorbed into lastConsumedHashes. */
+  startConsumedHashes?: Record<string, string>;
   startedAt?: string;
   completedAt?: string;
   failedAt?: string;

@@ -77,7 +77,7 @@ export function applyEvent(live: LiveGraph, event: GraphEvent): LiveGraph {
     // --- Execution state transitions ---
 
     case 'task-started':
-      return { config, state: applyTaskStart(state, event.taskName) };
+      return { config, state: applyTaskStart(state, event.taskName, config) };
 
     case 'task-completed':
       return { config, state: applyTaskCompletion(state, config, event.taskName, event.result, event.dataHash, event.data) };
