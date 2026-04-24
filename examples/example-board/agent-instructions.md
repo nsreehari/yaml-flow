@@ -349,45 +349,9 @@ view: badge(colorMap) + text(llm_task_completion_inference.reason, hideIfEmpty)
 
 ---
 
-## Card Design Principles
+## Card Design Principles & Layout
 
-### Single responsibility
-Each card should answer one question. If a card title would need "and" in it, split it into two cards.
-
-### Information density
-Keep table column counts to ≤5 for standard-width cards. Wide tables overflow and become unreadable on typical card widths. Omit or split rather than cramming.
-
-### Separate input from derived output
-Cards that hold editable state (`editable-table`, `form`, `filter`) should stay lean — a summary metric alongside the editable element at most. Put all heavy compute and display in a separate downstream card that `requires` the published token.
-
-### Propagate data, not display
-Use `provides` to pass data between cards. The consuming card decides how to display it. Never duplicate a `sources[]` fetch just to get data that another card already provides.
-
-### Stale state after restart
-`computed_values` are persisted to disk. After a server restart without wiping runtime state, a card may show stale metrics alongside live `card_data`. This is expected — wipe the runtime directory on restart if a clean slate is needed.
-
-### Layout sizing guidelines
-| Content | Recommended `col` | Typical `w` (canvas) |
-|---|---|---|
-| 1–2 metrics only | `3` | 220px |
-| Metrics + small table (≤4 cols) | `4` | 320–380px |
-| Metrics + medium table (5 cols) | `6` | 480px |
-| Wide table or chart | `8`–`12` | 560px+ |
-
----
-
-## Layout
-
-```json
-"layout": {
-  "board":  { "col": 4, "order": 5 },
-  "canvas": { "x": 300, "y": 400, "w": 280, "h": 180 }
-}
-```
-
-- `board.col` — Bootstrap 12-column span: `3`=quarter, `4`=third, `6`=half, `8`=two-thirds, `12`=full
-- `board.order` — ascending integer, controls vertical sort in board view
-- `canvas` — pixel coordinates/size for drag-layout (canvas mode)
+See [agent-instructions-cardlayout.md](agent-instructions-cardlayout.md).
 
 ---
 

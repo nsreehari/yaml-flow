@@ -8,28 +8,9 @@
   "provides": [
     { "bindTo": "holdings", "src": "card_data.holdings" }
   ],
-  "compute": [
-    {
-      "bindTo": "holdingsCount",
-      "expr": "$count(card_data.holdings)"
-    },
-    {
-      "bindTo": "totalShares",
-      "expr": "$sum(card_data.holdings.quantity)"
-    }
-  ],
+  "compute": [],
   "view": {
     "elements": [
-      {
-        "kind": "metric",
-        "label": "Positions",
-        "data": { "bind": "computed_values.holdingsCount" }
-      },
-      {
-        "kind": "metric",
-        "label": "Total Shares",
-        "data": { "bind": "computed_values.totalShares" }
-      },
       {
         "kind": "editable-table",
         "label": "Holdings",
@@ -47,7 +28,7 @@
     ],
     "layout": {
       "board": { "col": 4, "order": 1 },
-      "canvas": { "x": 50, "y": 50, "w": 300, "h": 280 }
+      "canvas": { "x": 50, "y": 50, "w": 320, "h": 340 }
     },
     "features": { "chat": true }
   },

@@ -43,7 +43,7 @@
     ],
     "layout": {
       "board": { "col": 4, "order": 2 },
-      "canvas": { "x": 400, "y": 50, "w": 380, "h": 240 }
+      "canvas": { "x": 400, "y": 50, "w": 400, "h": 340 }
     },
     "features": { "refresh": true }
   },

@@ -22,6 +22,10 @@
     {
       "bindTo": "losers",
       "expr": "$count($filter(computed_values.positions, function($p){ $p.chg_pct < 0 }))"
+    },
+    {
+      "bindTo": "gainersLosers",
+      "expr": "computed_values.gainers & ' up · ' & computed_values.losers & ' down'"
     }
   ],
   "view": {
@@ -32,28 +36,22 @@
         "data": { "bind": "computed_values.totalValue" }
       },
       {
-        "kind": "metric",
-        "label": "Gainers",
-        "data": { "bind": "computed_values.gainers" }
-      },
-      {
-        "kind": "metric",
-        "label": "Losers",
-        "data": { "bind": "computed_values.losers" }
+        "kind": "text",
+        "data": { "bind": "computed_values.gainersLosers" }
       },
       {
         "kind": "table",
         "label": "Positions",
         "data": {
           "bind": "computed_values.positions",
-          "columns": ["ticker", "quantity", "price", "value", "chg_pct"],
+          "columns": ["ticker", "value"],
           "sortable": true
         }
       }
     ],
     "layout": {
       "board": { "col": 4, "order": 3 },
-      "canvas": { "x": 820, "y": 50, "w": 380, "h": 300 }
+      "canvas": { "x": 840, "y": 50, "w": 380, "h": 360 }
     },
     "features": { "chat": true }
   },
