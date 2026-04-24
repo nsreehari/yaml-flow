@@ -262,27 +262,17 @@ export function createMultiBoardServerRuntime(options = {}) {
     return false;
   }
 
-  // Exposed for host transport layers to execute demo-setup for a specific board.
-  function performDemoSetup(boardId, reset = false) {
+  // Exposed so host layers (e.g. demo-server) can reach a board's service and root path.
+  // Throws a 404 error if the board is not registered.
+  function requireBoardService(boardId) {
     const config = readBoardsConfig();
     if (!config.boards.some((b) => b.id === boardId)) {
       const err = new Error(`Board "${boardId}" not registered`);
       err.statusCode = 404;
       throw err;
     }
-
-    const service = getBoardService(boardId);
-    let setupPerformed = false;
-
-    if (reset) {
-      service.demoPrepSetup();
-      setupPerformed = true;
-    } else if (!fs.existsSync(service.tmpCardsDir)) {
-      service.ensureDemoSetup();
-      setupPerformed = true;
-    }
-
-    return { ok: true, setupPerformed, reset, tmpCardsDir: service.tmpCardsDir };
+    const boardRoot = path.join(setupDir, `board-${boardId}`);
+    return { service: getBoardService(boardId), boardRoot };
   }
 
   return {
@@ -294,7 +284,7 @@ export function createMultiBoardServerRuntime(options = {}) {
     handleBoardsRegistryApi,
     handleBoardApi,
     handleApi,
-    performDemoSetup,
+    requireBoardService,
   };
 }
 

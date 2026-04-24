@@ -78,12 +78,34 @@ function jsonReply(res, status, payload) {
   res.end(body);
 }
 
+function clearFilesOnly(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const target = path.join(dir, entry.name);
+    if (entry.isDirectory()) clearFilesOnly(target);
+    else fs.rmSync(target, { force: true });
+  }
+}
+
 async function handleDemoSetup(req, res, boardId) {
   const url = new URL(req.url, 'http://localhost');
   const reset = String(url.searchParams.get('reset') || '').toLowerCase() === 'true';
   try {
-    const result = runtime.performDemoSetup(boardId, reset);
-    jsonReply(res, 200, result);
+    const { service, boardRoot } = runtime.requireBoardService(boardId);
+    let setupPerformed = false;
+
+    if (reset) {
+      // Wipe all files under boardRoot, keeping directories so open handles stay valid
+      clearFilesOnly(boardRoot);
+      // Force re-sync of surface card templates (ensureDemoSetup would skip since dirs still exist)
+      service.demoPrepSetup();
+      setupPerformed = true;
+    } else if (!fs.existsSync(path.join(boardRoot, 'surface', 'tmp-cards'))) {
+      service.ensureDemoSetup();
+      setupPerformed = true;
+    }
+
+    jsonReply(res, 200, { ok: true, setupPerformed, reset });
   } catch (err) {
     jsonReply(res, err.statusCode || 500, { error: String((err && err.message) || err) });
   }
