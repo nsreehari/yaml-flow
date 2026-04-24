@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -82,7 +82,8 @@
       "types": "./dist/runtime-artifacts/index.d.ts",
       "import": "./dist/runtime-artifacts/index.js",
       "require": "./dist/runtime-artifacts/index.cjs"
-    }
+    },
+    "./server-runtime": "./examples/example-board/reusable-server-runtime.js"
   },
   "browser": {
     "./stores/file": false

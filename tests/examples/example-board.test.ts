@@ -9,8 +9,8 @@ import type { ComputeNode } from '../../src/card-compute/index.js';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const exampleBoardDir = path.join(repoRoot, 'examples', 'example-board');
 const cardsDir = path.join(exampleBoardDir, 'cards');
-// example-board1 keeps the original orders-domain cards used by the stable-outputs test.
-const cardsDir1 = path.join(repoRoot, 'examples', 'example-board1', 'cards');
+// Orders-domain card fixtures for the stable-outputs test.
+const cardsDir1 = path.join(repoRoot, 'tests', 'fixtures', 'orders-domain-cards');
 
 // ── portfolio-board seed data ────────────────────────────────────────────────
 const HOLDINGS_SEED = [
@@ -90,7 +90,7 @@ const TOKEN_FIXTURES: Record<string, unknown> = {
   portfolio_pnl:    '- Best: MSFT\n- Worst: GOOGL',
   portfolio_risks:  '- AAPL: earnings risk',
   portfolio_action: '- Trim GOOGL',
-  // example-board1 orders domain
+  // orders-domain fixtures (used by the orders-domain stable-outputs test)
   orders:        ORDER_SEED,
   prices:        PRICE_SEED,
   selections:    {},
@@ -163,7 +163,7 @@ describe('example-board', () => {
     }
   });
 
-  it('produces stable compute outputs for representative cards (example-board1)', async () => {
+  it('produces stable compute outputs for representative cards (orders-domain)', async () => {
     const filterCard = await computeCard('card-ex-filter.json', { orders: ORDER_SEED }, cardsDir1);
     expect(filterCard.computed_values).toEqual({
       region: ['East', 'North', 'South', 'West'],
