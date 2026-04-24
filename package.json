@@ -83,7 +83,8 @@
       "import": "./dist/runtime-artifacts/index.js",
       "require": "./dist/runtime-artifacts/index.cjs"
     },
-    "./board-livecards-server-runtime": "./board-livecards-server-runtime.js"
+    "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
+    "./package.json": "./package.json"
   },
   "browser": {
     "./stores/file": false
