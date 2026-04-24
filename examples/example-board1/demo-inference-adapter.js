@@ -22,9 +22,9 @@
  *
  * Output payload shape:
  *   {
- *     status: "task-completed" | "task-progress",
+ *     isTaskCompleted: boolean,
  *     reason: string,
- *     data?: object
+ *     evidence?: string
  *   }
  */
 
@@ -122,21 +122,30 @@ function extractDecisionFromText(text) {
     try {
       const parsed = JSON.parse(objectMatch[0]);
       if (parsed && typeof parsed === 'object') {
-        const decision = parsed.status === 'task-completed' || parsed.decision === 'task-completed'
-          ? 'task-completed'
-          : 'task-progress';
-        const reason = typeof parsed.reason === 'string' ? parsed.reason : undefined;
-        const evidence = typeof parsed.evidence === 'string' ? parsed.evidence : '';
-        return { status: decision, reason, evidence };
+        // Primary format: isTaskCompleted boolean
+        if (typeof parsed.isTaskCompleted === 'boolean') {
+          return {
+            isTaskCompleted: parsed.isTaskCompleted,
+            reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+            evidence: typeof parsed.evidence === 'string' ? parsed.evidence : '',
+          };
+        }
+        // Fallback: status/decision string (backward compat with older prompts)
+        const isCompleted = parsed.status === 'task-completed' || parsed.decision === 'task-completed';
+        return {
+          isTaskCompleted: isCompleted,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+          evidence: typeof parsed.evidence === 'string' ? parsed.evidence : '',
+        };
       }
     } catch {}
   }
 
   const lower = cleaned.toLowerCase();
-  if (lower.includes('task-completed') || lower.includes('completed')) {
-    return { status: 'task-completed', reason: 'LLM inferred completion from available evidence.', evidence: '' };
+  if (lower.includes('true') || lower.includes('task-completed') || lower.includes('completed')) {
+    return { isTaskCompleted: true, reason: 'LLM inferred completion from available evidence.', evidence: '' };
   }
-  return { status: 'task-progress', reason: 'LLM requested additional evidence before completion.', evidence: '' };
+  return { isTaskCompleted: false, reason: 'LLM requested additional evidence before completion.', evidence: '' };
 }
 
 function fallbackDecision(payload) {
@@ -147,26 +156,26 @@ function fallbackDecision(payload) {
 
   if (question.includes('deployment')) {
     if (deploymentStatus === 'done' || deploymentStatus === 'healthy' || deploymentStatus === 'complete') {
-      return { status: 'task-completed', reason: 'Deployment signal indicates completion.', evidence: `deploymentStatus=${deploymentStatus}` };
+      return { isTaskCompleted: true, reason: 'Deployment signal indicates completion.', evidence: `deploymentStatus=${deploymentStatus}` };
     }
-    return { status: 'task-progress', reason: 'Deployment completion signal not present yet.', evidence: `deploymentStatus=${deploymentStatus || 'unknown'}` };
+    return { isTaskCompleted: false, reason: 'Deployment completion signal not present yet.', evidence: `deploymentStatus=${deploymentStatus || 'unknown'}` };
   }
 
   if (question.includes('revenue data is sufficient')) {
     if (revenue >= 60000) {
-      return { status: 'task-completed', reason: `Revenue evidence is sufficient (${revenue}).`, evidence: `totalRevenue=${revenue}` };
+      return { isTaskCompleted: true, reason: `Revenue evidence is sufficient (${revenue}).`, evidence: `totalRevenue=${revenue}` };
     }
-    return { status: 'task-progress', reason: `Revenue evidence is below threshold (${revenue}).`, evidence: `totalRevenue=${revenue}` };
+    return { isTaskCompleted: false, reason: `Revenue evidence is below threshold (${revenue}).`, evidence: `totalRevenue=${revenue}` };
   }
 
-  return { status: 'task-progress', reason: 'No deterministic rule matched this completion question.', evidence: '' };
+  return { isTaskCompleted: false, reason: 'No deterministic rule matched this completion question.', evidence: '' };
 }
 
 function buildPrompt(payload) {
   return [
     'You are a strict workflow completion classifier.',
-    'Return JSON only with shape: {"status":"task-completed"|"task-progress","reason":"..."}.',
-    'Mark task-completed only when evidence is clearly sufficient.',
+    'Return JSON only with shape: {"isTaskCompleted":true|false,"reason":"..."}.',
+    'Set isTaskCompleted to true only when evidence is clearly sufficient.',
     '',
     `Card: ${payload.cardId}`,
     `Task: ${payload.taskName}`,
