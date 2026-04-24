@@ -1,0 +1,61 @@
+{
+  "id": "card-portfolio-value",
+  "meta": {
+    "title": "Portfolio Value",
+    "tags": ["portfolio", "value"],
+    "desc": "Computes total portfolio value, gainers/losers summary, and per-position P&L from holdings and live market quotes."
+  },
+  "requires": ["holdings", "quotes"],
+  "compute": [
+    {
+      "bindTo": "positions",
+      "expr": "($hMap := $merge(requires.holdings.{ticker: quantity}); $map(requires.quotes.quoteResponse.result, function($q) { ($qty := $lookup($hMap, $q.symbol); {\"ticker\": $q.symbol, \"quantity\": $qty, \"price\": $round($q.regularMarketPrice, 2), \"value\": $round($q.regularMarketPrice * $qty, 2), \"chg_pct\": $round($q.regularMarketChangePercent, 2)}) }))"
+    },
+    {
+      "bindTo": "totalValue",
+      "expr": "$round($sum(computed_values.positions.value), 2)"
+    },
+    {
+      "bindTo": "gainers",
+      "expr": "$count($filter(computed_values.positions, function($p){ $p.chg_pct > 0 }))"
+    },
+    {
+      "bindTo": "losers",
+      "expr": "$count($filter(computed_values.positions, function($p){ $p.chg_pct < 0 }))"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "metric",
+        "label": "Portfolio Value ($)",
+        "data": { "bind": "computed_values.totalValue" }
+      },
+      {
+        "kind": "metric",
+        "label": "Gainers",
+        "data": { "bind": "computed_values.gainers" }
+      },
+      {
+        "kind": "metric",
+        "label": "Losers",
+        "data": { "bind": "computed_values.losers" }
+      },
+      {
+        "kind": "table",
+        "label": "Positions",
+        "data": {
+          "bind": "computed_values.positions",
+          "columns": ["ticker", "quantity", "price", "value", "chg_pct"],
+          "sortable": true
+        }
+      }
+    ],
+    "layout": {
+      "board": { "col": 4, "order": 3 },
+      "canvas": { "x": 820, "y": 50, "w": 380, "h": 300 }
+    },
+    "features": { "chat": true }
+  },
+  "card_data": {}
+}

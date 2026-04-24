@@ -3,7 +3,7 @@
   "meta": {
     "title": "Market Prices",
     "tags": ["prices", "market"],
-    "desc": "Fetches market prices for portfolio holdings from Yahoo Finance chart API (free, per-ticker). Computes per-position value and total portfolio value."
+    "desc": "Fetches live prices for portfolio tickers. Publishes enriched quote data for downstream portfolio value calculations."
   },
   "requires": ["holdings"],
   "sources": [
@@ -22,54 +22,30 @@
   ],
   "compute": [
     {
-      "bindTo": "positions",
-      "expr": "($holdings := $merge(requires.holdings.{ticker: quantity}); $map(fetched_sources.quotes.quoteResponse.result, function($q) { ($qty := $lookup($holdings, $q.symbol); {\"ticker\": $q.symbol, \"name\": $q.shortName, \"price\": $round($q.regularMarketPrice, 2), \"change\": $round($q.regularMarketChange, 2), \"chg_pct\": $round($q.regularMarketChangePercent, 2), \"quantity\": $qty, \"value\": $round($q.regularMarketPrice * $qty, 2)}) }))"
-    },
-    {
-      "bindTo": "totalValue",
-      "expr": "$round($sum(computed_values.positions.value), 2)"
-    },
-    {
-      "bindTo": "gainers",
-      "expr": "$count($filter(computed_values.positions, function($p){ $p.change > 0 }))"
-    },
-    {
-      "bindTo": "losers",
-      "expr": "$count($filter(computed_values.positions, function($p){ $p.change < 0 }))"
+      "bindTo": "prices",
+      "expr": "$map(fetched_sources.quotes.quoteResponse.result, function($q) { {\"ticker\": $q.symbol, \"name\": $q.shortName, \"price\": $round($q.regularMarketPrice, 2), \"change\": $round($q.regularMarketChange, 2), \"chg_pct\": $round($q.regularMarketChangePercent, 2)} })"
     }
+  ],
+  "provides": [
+    { "bindTo": "quotes", "src": "fetched_sources.quotes" }
   ],
   "view": {
     "elements": [
       {
-        "kind": "metric",
-        "label": "Portfolio Value ($)",
-        "data": { "bind": "computed_values.totalValue" }
-      },
-      {
-        "kind": "metric",
-        "label": "Gainers",
-        "data": { "bind": "computed_values.gainers" }
-      },
-      {
-        "kind": "metric",
-        "label": "Losers",
-        "data": { "bind": "computed_values.losers" }
-      },
-      {
         "kind": "table",
-        "label": "Positions",
+        "label": "Prices",
         "data": {
-          "bind": "computed_values.positions",
-          "columns": ["ticker", "name", "price", "change", "chg_pct", "quantity", "value"],
+          "bind": "computed_values.prices",
+          "columns": ["ticker", "name", "price", "change", "chg_pct"],
           "sortable": true
         }
       }
     ],
     "layout": {
-      "board": { "col": 8, "order": 2 },
-      "canvas": { "x": 400, "y": 50, "w": 560, "h": 320 }
+      "board": { "col": 4, "order": 2 },
+      "canvas": { "x": 400, "y": 50, "w": 380, "h": 240 }
     },
-    "features": { "refresh": true, "chat": true }
+    "features": { "refresh": true }
   },
   "card_data": {}
 }

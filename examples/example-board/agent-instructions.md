@@ -349,6 +349,39 @@ view: badge(colorMap) + text(llm_task_completion_inference.reason, hideIfEmpty)
 
 ---
 
+## Card Design Principles
+
+### Single responsibility
+Each card should answer one question. If a card title would need "and" in it, split it.
+
+- **Bad**: "Market Prices & Portfolio Value" — two distinct concerns in one card
+- **Good**: "Market Prices" (what is the market doing?) + "Portfolio Value" (what is my portfolio worth?)
+
+### Information density
+Keep table column counts to ≤5 for cards in standard `col: 4` width. Wide tables (7+ columns) overflow and become unreadable. Split or omit columns rather than cramming everything in.
+
+### Separate input from derived output
+Cards that hold **editable state** (`editable-table`, `form`, `filter`) should not also display heavy derived computations. Keep them lean — just a count or summary metric alongside the editable element. Put computed results in a separate downstream card.
+
+- **Bad**: editable-table card that also runs a 4-step `compute[]` chain and shows a full data table
+- **Good**: editable-table card provides a token → downstream card does all the heavy compute and display
+
+### Propagate data, not display
+Use `provides` to pass data between cards. The consuming card decides how to display it. Never duplicate a `sources[]` fetch just to get data that another card already provides.
+
+### Stale computed_values are a session artifact
+`computed_values` are written to disk by the CLI. If the server is restarted without `--reset`, a card may show stale metrics alongside live `card_data`. Use `node demo-server.js --reset` to wipe the runtime state and start clean. This is normal and expected — not a bug in the card definition.
+
+### Layout sizing guidelines
+| Content | Recommended `col` | Typical `w` (canvas) |
+|---|---|---|
+| 1–2 metrics only | `3` | 220px |
+| Metrics + small table (≤4 cols) | `4` | 320–380px |
+| Metrics + medium table (5 cols) | `6` | 480px |
+| Wide table or chart | `8`–`12` | 560px+ |
+
+---
+
 ## Layout
 
 ```json

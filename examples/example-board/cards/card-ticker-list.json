@@ -30,7 +30,7 @@
       }
     ],
     "layout": {
-      "board": { "col": 4, "order": 3 },
+      "board": { "col": 4, "order": 4 },
       "canvas": { "x": 50, "y": 360, "w": 300, "h": 120 }
     }
   }
