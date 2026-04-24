@@ -898,10 +898,9 @@ function invokeRunSources(
   }
 }
 
-function invokeRunInference(boardDir: string, inputFile: string, callbackToken: string, checksum: string | undefined, callback: (err: Error | null) => void): void {
-  const baseArgs = ['--in', inputFile, '--token', callbackToken, '--rg', boardDir];
-  if (checksum) baseArgs.push('--checksum', checksum);
-  const { cmd, args } = getCliInvocation('run-inference-internal', baseArgs);
+function invokeRunInference(boardDir: string, cardId: string, inputFile: string, callbackToken: string, checksum: string | undefined, callback: (err: Error | null) => void): void {
+  const inferenceToken = encodeSourceToken({ cbk: callbackToken, rg: boardDir, cid: cardId, b: '', d: '', cs: checksum });
+  const { cmd, args } = getCliInvocation('run-inference-internal', ['--in', inputFile, '--token', inferenceToken]);
   try {
     spawnDetachedCommand(cmd, args);
     callback(null);
@@ -1269,7 +1268,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
           runtime._inferenceEntry = inferenceEntry;
           runtimeDirty = true;
 
-          invokeRunInference(boardDir, inferenceInFile, input.callbackToken, inferenceChecksum, (err) => {
+          invokeRunInference(boardDir, cardId, inferenceInFile, input.callbackToken, inferenceChecksum, (err) => {
             if (err) {
               console.error(`[card-handler] ${input.nodeId}:`, err.message);
               const failedAt = new Date().toISOString();
@@ -2046,38 +2045,36 @@ function cmdTaskProgress(args: string[]): void {
 function cmdRunInference(args: string[]): void {
   const inIdx = args.indexOf('--in');
   const tokenIdx = args.indexOf('--token');
-  const rgIdx = args.indexOf('--rg');
   const inFile = inIdx !== -1 ? args[inIdx + 1] : undefined;
-  const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-  const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
 
-  if (!inFile || !callbackToken || !boardDir) {
-    console.error('Usage: board-live-cards run-inference-internal --in <input.json> --token <token> --rg <dir>');
+  if (!inFile || !inferenceToken) {
+    console.error('Usage: board-live-cards run-inference-internal --in <input.json> --token <inference-token>');
     process.exit(1);
   }
 
-  // Decode token to get taskName so we can check the card's completion rule
-  const decoded = decodeCallbackToken(callbackToken);
-  if (!decoded) {
-    console.error('Invalid callback token');
+  // Decode inference token (encoded via encodeSourceToken: cbk, rg, cid, b='', d='', cs)
+  const decodedToken = decodeSourceToken(inferenceToken);
+  if (!decodedToken) {
+    console.error('Invalid inference token');
     process.exit(1);
   }
-  const taskName = decoded.taskName;
-  const cardPath = lookupCardPath(boardDir, taskName);
-  const card = cardPath && fs.existsSync(cardPath)
-    ? JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>
-    : undefined;
-  const completionRule = card && typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
-    ? card.when_is_task_completed.trim()
-    : DEFAULT_TASK_COMPLETION_RULE;
-  const hasCustomCompletion = completionRule !== DEFAULT_TASK_COMPLETION_RULE;
+  const callbackToken = decodedToken.cbk;
+  const boardDir = decodedToken.rg;
+  const inputChecksum = decodedToken.cs;
+
+  const cbkDecoded = decodeCallbackToken(callbackToken);
+  if (!cbkDecoded) {
+    console.error('Invalid callback token embedded in inference token');
+    process.exit(1);
+  }
 
   if (!fs.existsSync(inFile)) {
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
     const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
       '--rg', boardDir, '--token', callbackToken,
       '--result', JSON.stringify({
-        status: errorStatus,
+        isTaskCompleted: false,
+        inputChecksum,
         reason: `inference input not found: ${inFile}`,
       })
     ]);
@@ -2088,11 +2085,11 @@ function cmdRunInference(args: string[]): void {
   const adapterFile = path.join(boardDir, INFERENCE_ADAPTER_FILE);
   const inferenceAdapter = fs.existsSync(adapterFile) ? fs.readFileSync(adapterFile, 'utf-8').trim() : undefined;
   if (!inferenceAdapter) {
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
     const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
       '--rg', boardDir, '--token', callbackToken,
       '--result', JSON.stringify({
-        status: errorStatus,
+        isTaskCompleted: false,
+        inputChecksum,
         reason: `inference adapter is not configured (${INFERENCE_ADAPTER_FILE})`,
       })
     ]);
@@ -2104,11 +2101,11 @@ function cmdRunInference(args: string[]): void {
   const errFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.txt`);
   const adapterParts = splitCommandLine(inferenceAdapter);
   if (adapterParts.length === 0) {
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
     const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
       '--rg', boardDir, '--token', callbackToken,
       '--result', JSON.stringify({
-        status: errorStatus,
+        isTaskCompleted: false,
+        inputChecksum,
         reason: 'inference adapter command is empty',
       })
     ]);
@@ -2133,11 +2130,11 @@ function cmdRunInference(args: string[]): void {
     });
   } catch (err: unknown) {
     const reason = (err as Error).message ?? String(err);
-    const errorStatus = hasCustomCompletion ? 'task-failed' : 'task-progress';
     const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
       '--rg', boardDir, '--token', callbackToken,
       '--result', JSON.stringify({
-        status: errorStatus,
+        isTaskCompleted: false,
+        inputChecksum,
         reason,
       })
     ]);
@@ -2158,17 +2155,13 @@ function cmdRunInference(args: string[]): void {
     try {
       const raw = fs.readFileSync(outFile, 'utf-8').trim();
       const result = JSON.parse(raw) as {
-        status?: string;
-        decision?: string;
+        isTaskCompleted?: boolean;
         reason?: string;
         evidence?: string;
         data?: Record<string, unknown>;
       };
 
-      const status = typeof result.status === 'string'
-        ? result.status
-        : (typeof result.decision === 'string' ? result.decision : 'task-progress');
-      decision = status === 'task-completed' ? 'task-completed' : 'task-progress';
+      decision = result.isTaskCompleted === true ? 'task-completed' : 'task-progress';
       reason = typeof result.reason === 'string' ? result.reason : undefined;
       evidence = typeof result.evidence === 'string' ? result.evidence : undefined;
       data = result.data && typeof result.data === 'object' ? result.data : undefined;
@@ -2181,7 +2174,8 @@ function cmdRunInference(args: string[]): void {
     '--rg', boardDir,
     '--token', callbackToken,
     '--result', JSON.stringify({
-      status: decision,
+      isTaskCompleted: decision === 'task-completed',
+      inputChecksum,
       reason,
       evidence,
       data,
@@ -2218,12 +2212,14 @@ function cmdInferenceDone(args: string[]): void {
   }
 
   const result = resultJson ? JSON.parse(resultJson) as {
-    status?: string;
+    isTaskCompleted?: boolean;
+    inputChecksum?: string;
     reason?: string;
     evidence?: string;
   } : {};
 
-  const status = result.status === 'task-completed' ? 'task-completed' : 'task-progress';
+  const isTaskCompletedFlag = result.isTaskCompleted === true;
+  const inputChecksum = typeof result.inputChecksum === 'string' ? result.inputChecksum : undefined;
   const inferenceCompletedAt = new Date().toISOString();
 
   const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
@@ -2234,7 +2230,7 @@ function cmdInferenceDone(args: string[]): void {
     : {};
   cardData.llm_task_completion_inference = {
     ...existingInference,
-    isTaskCompleted: status === 'task-completed',
+    isTaskCompleted: isTaskCompletedFlag,
     reason: typeof result.reason === 'string' ? result.reason : '',
     evidence: typeof result.evidence === 'string' ? result.evidence : '',
     inferenceCompletedAt,
@@ -2251,7 +2247,7 @@ function cmdInferenceDone(args: string[]): void {
   }
 
   const inferenceEntry = runtime._inferenceEntry ?? {};
-  runtime._inferenceEntry = nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt);
+  runtime._inferenceEntry = nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt, inputChecksum);
 
   fs.writeFileSync(runtimePath, JSON.stringify(runtime, null, 2), 'utf-8');
 
@@ -2260,7 +2256,8 @@ function cmdInferenceDone(args: string[]): void {
     taskName,
     update: {
       kind: 'inference-done',
-      status,
+      isTaskCompleted: isTaskCompletedFlag,
+      inputChecksum,
     },
     timestamp: inferenceCompletedAt,
   });
