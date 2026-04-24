@@ -19,7 +19,6 @@
         <div class="small text-muted" id="boardDesc"></div>
       </div>
       <div class="d-flex align-items-center gap-2">
-        <a class="btn btn-sm btn-outline-secondary" href="demo-shell-browser.html">Open Browser Runtime Shell</a>
         <select class="form-select form-select-sm" id="boardSelector" style="max-width:180px" title="Active board"></select>
         <button class="btn btn-sm btn-outline-success" id="addBoardBtn">+ Board</button>
         <div id="addBoardForm" class="d-flex align-items-center gap-1" style="display:none!important">
@@ -42,10 +41,6 @@
     <div class="alert alert-info small py-2 mb-3">
       Server runtime mode: updates stream in via SSE from the thin demo-server bridge to board-live-cards-cli.
       Source execution and event processing happen on the server side.
-    </div>
-
-    <div class="alert alert-secondary small py-2 mb-3">
-      Contract and decision notes live in <a href="./demo-shell.html#assumptions-and-tradeoffs">Assumptions and Tradeoffs</a>.
     </div>
 
     <div id="boardRoot">
