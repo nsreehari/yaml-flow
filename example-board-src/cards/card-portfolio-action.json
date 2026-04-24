@@ -1,0 +1,19 @@
+{
+  "id": "card-portfolio-action",
+  "meta": {
+    "title": "Action Signal",
+    "tags": ["portfolio", "action"],
+    "desc": "Actionable recommendation sourced from Portfolio Intelligence."
+  },
+  "requires": ["portfolio_action"],
+  "view": {
+    "elements": [
+      { "kind": "markdown", "data": { "bind": "requires.portfolio_action" } }
+    ],
+    "layout": {
+      "board": { "col": 4, "order": 6 },
+      "canvas": { "x": 1660, "y": 50, "w": 300, "h": 160 }
+    }
+  },
+  "card_data": {}
+}

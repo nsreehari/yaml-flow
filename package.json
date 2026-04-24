@@ -83,7 +83,7 @@
       "import": "./dist/runtime-artifacts/index.js",
       "require": "./dist/runtime-artifacts/index.cjs"
     },
-    "./server-runtime": "./examples/example-board/reusable-server-runtime.js"
+    "./board-livecards-server-runtime": "./board-livecards-server-runtime.js"
   },
   "browser": {
     "./stores/file": false
@@ -91,6 +91,7 @@
   "files": [
     "board-live-cards-cli.js",
     "step-machine-cli.js",
+    "board-livecards-server-runtime.js",
     "dist",
     "schema",
     "browser",
@@ -99,6 +100,7 @@
   "scripts": {
     "build": "tsup",
     "build:browser": "tsup --config tsup.browser.config.ts",
+    "build:example": "node example-board-src/build.js",
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",

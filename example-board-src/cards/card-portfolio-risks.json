@@ -1,0 +1,19 @@
+{
+  "id": "card-portfolio-risks",
+  "meta": {
+    "title": "Risk Watch",
+    "tags": ["portfolio", "risk"],
+    "desc": "Per-ticker risk signals sourced from Portfolio Intelligence."
+  },
+  "requires": ["portfolio_risks"],
+  "view": {
+    "elements": [
+      { "kind": "markdown", "data": { "bind": "requires.portfolio_risks" } }
+    ],
+    "layout": {
+      "board": { "col": 3, "order": 5 },
+      "canvas": { "x": 1300, "y": 270, "w": 340, "h": 220 }
+    }
+  },
+  "card_data": {}
+}

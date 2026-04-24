@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Example Board Demo (Server Runtime)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    /* Scale down markdown headings inside cards to stay in proportion with card body text */
+    .lc-result h1 { font-size: 1rem;   font-weight: 700; margin: 0.5rem 0 0.25rem; }
+    .lc-result h2 { font-size: 0.9rem; font-weight: 700; margin: 0.5rem 0 0.25rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.1rem; }
+    .lc-result h3 { font-size: 0.85rem; font-weight: 600; margin: 0.4rem 0 0.2rem; }
+    .lc-result p  { font-size: 0.8rem; margin: 0 0 0.25rem; }
+    .lc-result ul, .lc-result ol { font-size: 0.8rem; margin: 0 0 0.25rem; padding-left: 1.2rem; }
+    .lc-result li { margin-bottom: 0.15rem; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="../../browser/card-compute.js"></script>
+  <script src="../../browser/live-cards.js"></script>
+  <script src="../../browser/board-livegraph-engine.js"></script>
+  <script src="./reusable-board-livecards-runtime-client.js"></script>
+</head>
+<body class="bg-light">
+  <div class="container-fluid py-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div>
+        <h1 class="h4 mb-0" id="boardTitle">Example Board (Server Runtime)</h1>
+        <div class="small text-muted" id="boardDesc"></div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <select class="form-select form-select-sm" id="boardSelector" style="max-width:180px" title="Active board"></select>
+        <button class="btn btn-sm btn-outline-success" id="addBoardBtn">+ Board</button>
+        <div id="addBoardForm" class="d-flex align-items-center gap-1" style="display:none!important">
+          <input class="form-control form-control-sm" id="newBoardId" placeholder="board-id" style="max-width:110px" />
+          <input class="form-control form-control-sm" id="newBoardLabel" placeholder="Label (optional)" style="max-width:150px" />
+          <button class="btn btn-sm btn-success" id="addBoardSubmit">Add</button>
+          <button class="btn btn-sm btn-secondary" id="addBoardCancel">Cancel</button>
+        </div>
+        <button class="btn btn-sm btn-outline-primary" id="modeBoard">Board</button>
+        <button class="btn btn-sm btn-outline-primary" id="modeCanvas">Canvas</button>
+        <button class="btn btn-sm btn-outline-secondary" id="autoLayout">Auto Layout</button>
+        <button class="btn btn-sm btn-outline-dark" id="refreshAll" style="display:none">Refresh All</button>
+        <div class="form-check ms-2">
+          <input class="form-check-input" type="checkbox" id="devModeToggle" />
+          <label class="form-check-label" for="devModeToggle">Dev Mode</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-info small py-2 mb-3">
+      Server runtime mode: updates stream in via SSE from the thin demo-server bridge to board-live-cards-cli.
+      Source execution and event processing happen on the server side.
+    </div>
+
+    <div id="boardRoot">
+      <div class="d-flex align-items-center justify-content-center" style="height: 72vh;">
+        <div class="text-center">
+          <div class="spinner-border mb-3" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <p class="text-muted">Initializing board...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      let currentMode = 'board';
+      let bootstrapCompleted = false;
+      let activeBoardId = 'default';
+      let runtimeClient = null;
+
+      function boardPaths(boardId) {
+        const b = encodeURIComponent(boardId || activeBoardId || 'default');
+        const base = `/api/boards/${b}`;
+        return {
+          demoSetup: `${base}/demo-setup`,
+          initBoard: `${base}/init-board`,
+          bootstrapCards: `${base}/bootstrap-cards`,
+          bootstrap: `${base}/bootstrap`,
+          stream: `${base}/sse`,
+          patchCard: function (id) { return `${base}/cards/${encodeURIComponent(id)}`; },
+          cardAction: function (id) { return `${base}/cards/${encodeURIComponent(id)}/actions`; },
+          cardFile: function (id) { return `${base}/cards/${encodeURIComponent(id)}/files`; },
+          cardChats: function (id) { return `${base}/cards/${encodeURIComponent(id)}/chats`; },
+        };
+      }
+
+      function localServerOrigins() {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = params.get('demoServerOrigin');
+        const fromWindow = window.DEMO_SERVER_ORIGIN;
+        const hostPref = window.location.hostname === 'localhost' ? 'localhost' : '127.0.0.1';
+        const hostAlt = hostPref === 'localhost' ? '127.0.0.1' : 'localhost';
+        const defaults = [
+          `http://${hostPref}:7799`,
+          `http://${hostAlt}:7799`,
+        ];
+
+        const unique = [];
+        const push = (v) => {
+          if (!v || typeof v !== 'string') return;
+          if (unique.includes(v)) return;
+          unique.push(v);
+        };
+
+        push(fromWindow);
+        push(fromQuery);
+        defaults.forEach(push);
+        return unique;
+      }
+
+      let activeServerOrigin = null;
+
+      async function fetchServer(path, init) {
+        const origins = activeServerOrigin ? [activeServerOrigin] : localServerOrigins();
+        const failures = [];
+
+        for (const origin of origins) {
+          const url = `${origin}${path}`;
+          try {
+            const res = await fetch(url, init);
+            activeServerOrigin = origin;
+            return res;
+          } catch (err) {
+            failures.push(`${url} -> ${String(err && err.message || err)}`);
+          }
+        }
+
+        const tip = 'Start the API bridge from the yaml-flow folder: node examples/example-board/demo-server.js';
+        throw new Error(`Unable to reach example-board demo server. Tried: ${failures.join(' | ')}. ${tip}`);
+      }
+
+      runtimeClient = window.ReusableBoardRuntimeClient.createBoardRuntimeClient({
+        fetchServer,
+        boardPaths,
+        buildLiveCardModelsFromArtifacts,
+        getServerOrigin: function () { return activeServerOrigin; },
+        initialMode: currentMode,
+        canvas: { height: '72vh', overflow: 'auto' },
+      });
+
+      function resolveTaskExecutorPathParam() {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = params.get('taskExecutorPath');
+        const fromWindow = window.DEMO_TASK_EXECUTOR_PATH;
+        if (typeof fromQuery === 'string' && fromQuery.trim()) return fromQuery.trim();
+        if (typeof fromWindow === 'string' && fromWindow.trim()) return fromWindow.trim();
+        return '';
+      }
+
+      async function loadBoardList() {
+        try {
+          const res = await fetchServer('/api/boards');
+          if (!res.ok) return;
+          const data = await res.json();
+          const boards = Array.isArray(data && data.boards) ? data.boards : [];
+          const sel = document.getElementById('boardSelector');
+          const prev = sel.value;
+          sel.innerHTML = boards.map((b) =>
+            `<option value="${b.id}"${b.id === (prev || activeBoardId) ? ' selected' : ''}>${b.label || b.id}</option>`
+          ).join('');
+          if (boards.length && !boards.some((b) => b.id === activeBoardId)) {
+            activeBoardId = boards[0].id;
+            sel.value = activeBoardId;
+          }
+        } catch (err) {
+          console.warn('Could not load board list', err);
+        }
+      }
+
+      async function switchBoard(boardId) {
+        if (boardId === activeBoardId && bootstrapCompleted) return;
+        runtimeClient.dispose();
+        bootstrapCompleted = false;
+        activeBoardId = boardId;
+        document.getElementById('boardRoot').innerHTML =
+          '<div class="d-flex align-items-center justify-content-center" style="height:72vh">'
+          + '<div class="text-center"><div class="spinner-border mb-3" role="status">'
+          + '<span class="visually-hidden">Loading...</span></div>'
+          + '<p class="text-muted">Loading board...</p></div></div>';
+        await bootstrap(boardId);
+      }
+
+      async function bootstrap(boardId) {
+        const bid = boardId || activeBoardId || 'default';
+
+        // Board title from registry label or fallback
+        document.getElementById('boardTitle').textContent = bid + ' (Server Runtime)';
+        document.getElementById('boardDesc').textContent = '';
+
+        await runtimeClient.bootstrapBoard({
+          boardId: bid,
+          taskExecutorPath: resolveTaskExecutorPathParam(),
+          rootElement: document.getElementById('boardRoot'),
+          runDemoSetup: true,
+          mode: currentMode,
+        });
+
+        bootstrapCompleted = true;
+      }
+
+      document.getElementById('modeBoard').addEventListener('click', function () {
+        currentMode = 'board';
+        runtimeClient.setMode('board');
+      });
+
+      document.getElementById('modeCanvas').addEventListener('click', function () {
+        currentMode = 'canvas';
+        runtimeClient.setMode('canvas');
+      });
+
+      document.getElementById('autoLayout').addEventListener('click', function () {
+        currentMode = 'canvas';
+        runtimeClient.autoLayout();
+      });
+
+      document.getElementById('devModeToggle').addEventListener('change', function () {
+        runtimeClient.setDevMode(this.checked);
+      });
+
+      document.getElementById('boardSelector').addEventListener('change', function () {
+        switchBoard(this.value).catch(function (err) {
+          console.error(err);
+          document.getElementById('boardRoot').innerHTML =
+            `<div class="alert alert-danger">Failed to switch board: ${String(err && err.message || err)}</div>`;
+        });
+      });
+
+      document.getElementById('addBoardBtn').addEventListener('click', function () {
+        document.getElementById('addBoardForm').style.removeProperty('display');
+        document.getElementById('newBoardId').focus();
+      });
+
+      document.getElementById('addBoardCancel').addEventListener('click', function () {
+        document.getElementById('addBoardForm').style.display = 'none';
+        document.getElementById('newBoardId').value = '';
+        document.getElementById('newBoardLabel').value = '';
+      });
+
+      document.getElementById('addBoardSubmit').addEventListener('click', async function () {
+        const id = document.getElementById('newBoardId').value.trim();
+        const label = document.getElementById('newBoardLabel').value.trim();
+        if (!id) {
+          alert('Board id is required');
+          return;
+        }
+        try {
+          const res = await fetchServer('/api/boards', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id, label: label || id }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            alert(data.error || 'Failed to add board');
+            return;
+          }
+          document.getElementById('addBoardForm').style.display = 'none';
+          document.getElementById('newBoardId').value = '';
+          document.getElementById('newBoardLabel').value = '';
+          await loadBoardList();
+          await switchBoard(id);
+        } catch (err) {
+          alert('Error adding board: ' + String((err && err.message) || err));
+        }
+      });
+
+      loadBoardList().then(function () {
+        return bootstrap(activeBoardId);
+      }).catch(function (err) {
+        console.error(err);
+        document.getElementById('boardRoot').innerHTML =
+          `<div class="alert alert-danger">Failed to start server runtime demo: ${String(err && err.message || err)}</div>`;
+      });
+
+      window.addEventListener('beforeunload', function () {
+        runtimeClient.dispose();
+      });
+    })();
+  </script>
+</body>
+</html>
