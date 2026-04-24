@@ -50,8 +50,6 @@ vocabulary:
     { "bindTo": "published-token", "src": "computed_values.result" }
   ],
 
-  "when_is_task_completed": "Optional: natural language for LLM inference",
-
   "view": {
     "elements": [ /* see Element Kinds below */ ],
     "layout": {
@@ -116,7 +114,6 @@ vocabulary:
 
 Every card is a live entity. Any of these events triggers automatic recompute of all downstream dependents in dependency order:
 - A source finishes fetching (`fetched_sources` changes)
-- An inference result arrives (`card_data.llm_task_completion_inference` set)
 - User edits `card_data` via a form/filter/todo/actions element
 - An upstream card's `provides` value changes
 - A card definition is updated via server API from the UI
@@ -125,34 +122,11 @@ Every card is a live entity. Any of these events triggers automatic recompute of
 
 ---
 
-## Task Completion (`when_is_task_completed`)
+## Task Completion
 
-| Value | Behaviour |
-|---|---|
-| *(absent or default)* | Task complete when all `sources[]` have been fetched |
-| Natural language string | Invokes the registered **LLM inference adapter** with full card context; adapter reasons about completion |
+Task completion is determined by one rule: **a card is complete when all non-optional `sources[]` have been fetched**.
 
-### When to use `when_is_task_completed` (authoring decision)
-
-**Default first.** Prefer the default (absent field) whenever task completion can be determined from computational signals — i.e. from the data already available in `fetched_sources`, `computed_values`, or `card_data`. Examples where the default is sufficient:
-- A data-fetch card: done once all sources are fetched
-- A form card: done once required `card_data` fields are non-empty (check in `compute[]`)
-- A filter/selection card: done once a selection has been made
-
-**Use LLM inference only when necessary.** Set `when_is_task_completed` to a natural language string when no deterministic signal can reliably determine completion — typically when:
-- Completion depends on the *quality* or *sufficiency* of fetched data, not just its presence
-- Completion requires interpreting unstructured content (e.g. "does the narrative indicate enough evidence?")
-- Multiple conditions interact in ways that are hard to express as a JSONata expression
-- The domain requires judgment that varies by context (e.g. "is the deployment genuinely healthy?")
-
-Do **not** hesitate to use it when genuinely needed — LLM inference exists precisely for these judgment calls. But avoid it when a `compute[]` expression would suffice.
-
-### Display pattern
-LLM result is stored in `card_data.llm_task_completion_inference`.
-```json
-{ "kind": "badge", "data": { "bind": "card_data.llm_task_completion_inference.isTaskCompleted", "colorMap": { "true": "success", "false": "secondary" } } },
-{ "kind": "text",  "style": "muted-italic", "data": { "bind": "card_data.llm_task_completion_inference.reason", "hideIfEmpty": true } }
-```
+If completion requires a judgment call — e.g. "is the data sufficient?", "does this narrative indicate done?" — model it as data using the standard source → compute → provides chain (see LLM source pattern below). The card is complete when that source has been fetched.
 
 ---
 
@@ -339,13 +313,16 @@ card-child    requires "card-ex-form"
               compute: $lookup(requires, 'card-ex-form').prefs.field
 ```
 
-### Async LLM inference card
+### LLM verdict card (completion gating via source)
 ```
 requires: ["some-data"]
-compute: derive status value
-when_is_task_completed: "Task is done when X condition is met…"
-view: badge(colorMap) + text(llm_task_completion_inference.reason, hideIfEmpty)
+sources: [{ bindTo: "verdict", outputFile: "...", copilot: { prompt_template: "..." } }]
+compute: [{ bindTo: "isReady", expr: "fetched_sources.verdict.isTaskCompleted" }]
+provides: [{ bindTo: "readiness-verdict", src: "fetched_sources.verdict" }]
+view: badge(computed_values.isReady, colorMap) + text(fetched_sources.verdict.reason)
 ```
+The task executor calls the LLM, writes `{ isTaskCompleted: bool, reason: string }` to `--out`.
+The card is complete when the source is fetched. Downstream cards `requires: ["readiness-verdict"]`.
 
 ---
 
@@ -378,21 +355,32 @@ Sources can reference upstream data in their customFields (e.g. `"url": "https:/
 ### Optional source field
 - `optionalForCompletionGating: true` — marks this source as optional for default task-completion gating. If set, the card can complete even if this source hasn't been fetched yet.
 
-## `when_is_task_completed` and the Inference Adapter
+## LLM Calls — Use a Source
 
-This optional card field controls the task-completion mechanism:
+**All LLM calls belong in sources[], handled by the task executor.** There is one mechanism for external calls — sources.
 
-- **Absent or omitted**: task is complete when all non-optional `sources[]` have been fetched (default, no LLM needed).
-- **Set to a natural language string**: the registered inference adapter is invoked with the full card context (requires, sourcesData, computed_values, card_data, provides) and the string as `completionRule`. The adapter reasons about whether the task is complete and returns `isTaskCompleted: boolean`.
+To incorporate LLM reasoning into a card:
 
-> **Key principle:** The inference adapter must be capable of evaluating every `when_is_task_completed` string used across your board's cards. If a card asks "Has the deployment been validated?" but the adapter only knows about revenue thresholds, the adapter must handle the unknown case gracefully (return `isTaskCompleted: false` with a reason).
+1. Add a source entry with a `copilot` (or equivalent) customField and an `outputFile`.
+2. The task executor calls the LLM and writes the result JSON to `--out`.
+3. Card compute reads `fetched_sources.<bindTo>` and derives tokens from it.
+4. The card provides those tokens downstream like any other.
 
-The `completionRule` string is passed verbatim to the adapter. Write it as a clear, self-contained question or condition the LLM can answer from the provided context. Examples:
-- `"All required form fields are filled and the total is above zero"`
-- `"The deployment status indicates success"`
-- `"Revenue data is sufficient to draw conclusions"`
+```json
+"sources": [
+  {
+    "bindTo": "verdict",
+    "outputFile": "my-card-verdict.json",
+    "copilot": {
+      "prompt_template": "Given this data: {{positions}} — is the portfolio sufficiently diversified? Return JSON: { \"isTaskCompleted\": bool, \"reason\": string }"
+    }
+  }
+]
+```
 
-See [Inference Adapter Protocol](#inference-adapter-protocol) for the full `--in` / `--out` contract.
+If the LLM needs computed values (which compute first), chain two cards: Card A computes → Card B `requires` Card A's provides → Card B's source calls the LLM with those values.
+
+> **One mechanism for everything.** Sources → compute → provides is the complete model. Every card an agent authors follows this shape regardless of whether the data comes from a database, an API, or an LLM.
 
 ---
 
@@ -538,76 +526,7 @@ node board-live-cards-cli.js probe-source \
 
 ---
 
-## Inference Adapter Protocol
 
-The inference adapter is a **board-wide generic LLM reasoner** — one adapter serves all cards on the board. It does not depend on any card's source definitions. Its job is to receive the card context and the `completionRule` question (the card's `when_is_task_completed` string), call an LLM directly (e.g. Copilot via CLI), and return a boolean decision with a reason. The card context is passed in `--in`; the adapter uses it as grounding for the LLM prompt.
-
-The demo adapter (`demo-inference-adapter.js`) shows this pattern: builds a prompt from card context + completionRule, calls Copilot, parses `isTaskCompleted` from the JSON response. Rule-based fallback is acceptable only as a degraded mode when the LLM is unavailable.
-
-The adapter is invoked only when a card has a custom `when_is_task_completed` string. Register once per board:
-
-```bash
-node board-live-cards-cli.js init ./my-board --inference-adapter ./my-adapter.js
-# stores path in <boardDir>/.inference-adapter
-```
-
-### How inference is triggered (two-phase async)
-
-1. The runtime CLI spawns an internal subprocess: `board-live-cards-cli run-inference-internal --in <input.json> --token <inferenceToken>` (internal token encodes callback context)
-2. That internal subprocess calls your adapter: `node <adapter.js> run-inference --in <input.json> --out <result.json> --err <error.txt>`
-3. Adapter writes result to `--out` and exits.
-4. Internal subprocess reads result and calls `inference-done` back to the runtime.
-
-As an adapter author, you only implement step 2 — your adapter receives `--in`, `--out`, `--err`.
-
-### Invocation
-
-```bash
-node <adapter.js> run-inference --in <input.json> --out <result.json> [--err <error.txt>]
-```
-
-- **`--in`** — path to a JSON file with:
-
-```json
-{
-  "cardId": "my-card",
-  "taskName": "my-card",
-  "completionRule": "All required fields are filled and validated",
-  "context": {
-    "requires":        { "token-a": { ... } },
-    "sourcesData":     { "raw": { ... } },
-    "computed_values": { "result": "..." },
-    "provides":        [{ "bindTo": "published-token", "src": "computed_values.result" }],
-    "card_data":       { ... }
-  }
-}
-```
-
-- **`--out`** — path to write your result JSON (see shape below)
-- **`--err`** — optional path to write a plain-text error message on failure
-
-### Output (`--out`)
-
-```json
-{
-  "isTaskCompleted": true,
-  "reason": "All required fields are present and valid.",
-  "evidence": "Optional supporting detail string"
-}
-```
-
-- `isTaskCompleted` — **boolean** (required); `true` = task is done
-- `reason` — human-readable explanation (required)
-- `evidence` — optional detail string
-
-> **Important:** `isTaskCompleted` must be a boolean, not a string. Never use `"status": "task-completed"` — the runtime does not recognise that field.
-
-### Result storage
-The inference result is stored in `card_data.llm_task_completion_inference` and is typically rendered using:
-```json
-{ "kind": "badge", "data": { "bind": "card_data.llm_task_completion_inference.isTaskCompleted", "colorMap": { "true": "success", "false": "secondary" } } },
-{ "kind": "text",  "data": { "bind": "card_data.llm_task_completion_inference.reason", "hideIfEmpty": true } }
-```
 
 ---
 
