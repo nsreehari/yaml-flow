@@ -387,7 +387,7 @@ describe('CardCompute.validate', () => {
   });
 
   it('rejects sources entry missing bindTo', () => {
-    const r = CardCompute.validate({ id: 'x', card_data: {}, sources: [{ script: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
+    const r = CardCompute.validate({ id: 'x', card_data: {}, sources: [{ script: 'fetch.sh', outputFile: 'raw.json' }] });
     expect(r.ok).toBe(false);
     expect(r.errors.some(e => e.includes('sources[0]'))).toBe(true);
   });

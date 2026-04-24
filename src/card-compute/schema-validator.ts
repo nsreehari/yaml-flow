@@ -125,14 +125,39 @@ export function validateLiveCardSchema(
   const validate = getValidator();
   const valid = validate(node);
 
-  if (valid) return { ok: true, errors: [] };
-
   const errors = (validate.errors ?? []).map(e => {
     const path = e.instancePath || '/';
     return `${path}: ${e.message ?? 'unknown error'}`;
   });
 
-  return { ok: false, errors };
+  // JSON Schema draft-07 cannot enforce per-property uniqueness across array items.
+  // Check bindTo and outputFile uniqueness here after the AJV structural pass.
+  if (node && typeof node === 'object' && !Array.isArray(node)) {
+    const sources = (node as Record<string, unknown>).sources;
+    if (Array.isArray(sources)) {
+      const bindTos = new Set<string>();
+      const outputFiles = new Set<string>();
+      sources.forEach((src, i) => {
+        if (!src || typeof src !== 'object' || Array.isArray(src)) return;
+        const s = src as Record<string, unknown>;
+        if (typeof s.bindTo === 'string' && s.bindTo) {
+          if (bindTos.has(s.bindTo)) {
+            errors.push(`/sources/${i}/bindTo: bindTo "${s.bindTo}" must be unique across all sources`);
+          }
+          bindTos.add(s.bindTo);
+        }
+        if (typeof s.outputFile === 'string' && s.outputFile) {
+          if (outputFiles.has(s.outputFile)) {
+            errors.push(`/sources/${i}/outputFile: outputFile "${s.outputFile}" must be unique across all sources`);
+          }
+          outputFiles.add(s.outputFile);
+        }
+      });
+    }
+  }
+
+  if (!valid || errors.length > 0) return { ok: false, errors };
+  return { ok: true, errors: [] };
 }
 
 /**
