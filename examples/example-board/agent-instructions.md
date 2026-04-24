@@ -352,25 +352,19 @@ view: badge(colorMap) + text(llm_task_completion_inference.reason, hideIfEmpty)
 ## Card Design Principles
 
 ### Single responsibility
-Each card should answer one question. If a card title would need "and" in it, split it.
-
-- **Bad**: "Market Prices & Portfolio Value" — two distinct concerns in one card
-- **Good**: "Market Prices" (what is the market doing?) + "Portfolio Value" (what is my portfolio worth?)
+Each card should answer one question. If a card title would need "and" in it, split it into two cards.
 
 ### Information density
-Keep table column counts to ≤5 for cards in standard `col: 4` width. Wide tables (7+ columns) overflow and become unreadable. Split or omit columns rather than cramming everything in.
+Keep table column counts to ≤5 for standard-width cards. Wide tables overflow and become unreadable on typical card widths. Omit or split rather than cramming.
 
 ### Separate input from derived output
-Cards that hold **editable state** (`editable-table`, `form`, `filter`) should not also display heavy derived computations. Keep them lean — just a count or summary metric alongside the editable element. Put computed results in a separate downstream card.
-
-- **Bad**: editable-table card that also runs a 4-step `compute[]` chain and shows a full data table
-- **Good**: editable-table card provides a token → downstream card does all the heavy compute and display
+Cards that hold editable state (`editable-table`, `form`, `filter`) should stay lean — a summary metric alongside the editable element at most. Put all heavy compute and display in a separate downstream card that `requires` the published token.
 
 ### Propagate data, not display
 Use `provides` to pass data between cards. The consuming card decides how to display it. Never duplicate a `sources[]` fetch just to get data that another card already provides.
 
-### Stale computed_values are a session artifact
-`computed_values` are written to disk by the CLI. If the server is restarted without `--reset`, a card may show stale metrics alongside live `card_data`. Use `node demo-server.js --reset` to wipe the runtime state and start clean. This is normal and expected — not a bug in the card definition.
+### Stale state after restart
+`computed_values` are persisted to disk. After a server restart without wiping runtime state, a card may show stale metrics alongside live `card_data`. This is expected — wipe the runtime directory on restart if a clean slate is needed.
 
 ### Layout sizing guidelines
 | Content | Recommended `col` | Typical `w` (canvas) |
