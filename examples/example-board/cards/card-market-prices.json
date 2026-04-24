@@ -11,7 +11,7 @@
       "bindTo": "quotes",
       "outputFile": "market-prices-quotes.json",
       "http": {
-        "url": "https://query1.finance.yahoo.com/v7/finance/quote?symbols={{tickers}}&interval=1d",
+        "url": "https://query1.finance.yahoo.com/v8/finance/quote?symbols={{tickers}}",
         "method": "GET",
         "headers": {
           "User-Agent": "Mozilla/5.0 (compatible; portfolio-tracker-demo/1.0)"

@@ -248,8 +248,22 @@ async function runSourceFetchSubcommand(argv) {
     const method = (httpCfg.method || 'GET').toUpperCase();
     const headers = { ...(httpCfg.headers || {}) };
 
+    // Skip fetch entirely if tickers ended up empty (guard against empty ?symbols=)
+    const httpFetchSkipped = sourceDef.tickersFrom && !httpArgs.tickers;
+
     try {
-      const resp = await fetch(url, { method, headers });
+      if (httpFetchSkipped) {
+        throw new Error('tickersFrom resolved to empty list — skipping fetch');
+      }
+      // Hard timeout: 10 s — prevents the subprocess from hanging indefinitely
+      const abort = new AbortController();
+      const timeoutId = setTimeout(() => abort.abort(), 10_000);
+      let resp;
+      try {
+        resp = await fetch(url, { method, headers, signal: abort.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status} ${resp.statusText} from ${url}`);
       }
