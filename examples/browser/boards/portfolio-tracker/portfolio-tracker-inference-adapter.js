@@ -97,7 +97,7 @@ function buildRiskAssessment(table, totalValue) {
     `risk_flag=${breadthFlag || concentrationFlag}`,
   ].join('; ');
 
-  return { status: 'task-completed', reason: statusText, evidence };
+  return { isTaskCompleted: true, reason: statusText, evidence };
 }
 
 function buildRebalancingPlan(table, totalValue, riskAssessment) {
@@ -134,7 +134,7 @@ function buildRebalancingPlan(table, totalValue, riskAssessment) {
     `risk_assessment=${typeof riskAssessment === 'string' ? riskAssessment : 'n/a'}`,
   ].join('; ');
 
-  return { status: 'task-completed', reason: summary, evidence };
+  return { isTaskCompleted: true, reason: summary, evidence };
 }
 
 async function main() {
@@ -168,7 +168,7 @@ async function main() {
       result = buildRebalancingPlan(table, totalValue, riskAssessment);
     } else {
       result = {
-        status: 'task-completed',
+        isTaskCompleted: true,
         reason: `Inference completed for ${taskName || 'unknown-task'}`,
         evidence: 'deterministic-demo-adapter',
       };
@@ -179,7 +179,7 @@ async function main() {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     fs.writeFileSync(errFile, message, 'utf-8');
-    fs.writeFileSync(outFile, JSON.stringify({ status: 'task-progress', reason: message, evidence: '' }), 'utf-8');
+    fs.writeFileSync(outFile, JSON.stringify({ isTaskCompleted: false, reason: message, evidence: '' }), 'utf-8');
     process.exit(1);
   }
 }

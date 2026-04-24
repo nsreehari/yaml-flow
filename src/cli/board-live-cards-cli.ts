@@ -1958,7 +1958,6 @@ function cmdRunInference(args: string[]): void {
   }
   const callbackToken = decodedToken.cbk;
   const boardDir = decodedToken.rg;
-  const inputChecksum = decodedToken.cs;
 
   const cbkDecoded = decodeCallbackToken(callbackToken);
   if (!cbkDecoded) {
@@ -1966,31 +1965,26 @@ function cmdRunInference(args: string[]): void {
     process.exit(1);
   }
 
-  if (!fs.existsSync(inFile)) {
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        isTaskCompleted: false,
-        inputChecksum,
-        reason: `inference input not found: ${inFile}`,
-      })
-    ]);
+  function spawnInferenceDone(tmpFile: string): void {
+    const { cmd, args: cliArgs } = getCliInvocation('inference-done', ['--tmp', tmpFile, '--token', inferenceToken!]);
     spawnDetachedCommand(cmd, cliArgs);
+  }
+
+  function spawnInferenceDoneError(reason: string): void {
+    const tmpFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify({ isTaskCompleted: false, reason }), 'utf-8');
+    spawnInferenceDone(tmpFile);
+  }
+
+  if (!fs.existsSync(inFile)) {
+    spawnInferenceDoneError(`inference input not found: ${inFile}`);
     return;
   }
 
   const adapterFile = path.join(boardDir, INFERENCE_ADAPTER_FILE);
   const inferenceAdapter = fs.existsSync(adapterFile) ? fs.readFileSync(adapterFile, 'utf-8').trim() : undefined;
   if (!inferenceAdapter) {
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        isTaskCompleted: false,
-        inputChecksum,
-        reason: `inference adapter is not configured (${INFERENCE_ADAPTER_FILE})`,
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError(`inference adapter is not configured (${INFERENCE_ADAPTER_FILE})`);
     return;
   }
 
@@ -1998,15 +1992,7 @@ function cmdRunInference(args: string[]): void {
   const errFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.txt`);
   const adapterParts = splitCommandLine(inferenceAdapter);
   if (adapterParts.length === 0) {
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        isTaskCompleted: false,
-        inputChecksum,
-        reason: 'inference adapter command is empty',
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError('inference adapter command is empty');
     return;
   }
 
@@ -2027,77 +2013,45 @@ function cmdRunInference(args: string[]): void {
     });
   } catch (err: unknown) {
     const reason = (err as Error).message ?? String(err);
-    const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-      '--rg', boardDir, '--token', callbackToken,
-      '--result', JSON.stringify({
-        isTaskCompleted: false,
-        inputChecksum,
-        reason,
-      })
-    ]);
-    spawnDetachedCommand(cmd, cliArgs);
+    spawnInferenceDoneError(reason);
     return;
   }
 
-  let decision: 'task-completed' | 'task-progress' = 'task-progress';
-  let reason: string | undefined;
-  let evidence: string | undefined;
-  let data: Record<string, unknown> | undefined;
-
   if (!fs.existsSync(outFile)) {
-    reason = fs.existsSync(errFile)
+    const errMsg = fs.existsSync(errFile)
       ? fs.readFileSync(errFile, 'utf-8').trim()
       : 'inference adapter produced no output file';
-  } else {
-    try {
-      const raw = fs.readFileSync(outFile, 'utf-8').trim();
-      const result = JSON.parse(raw) as {
-        isTaskCompleted?: boolean;
-        reason?: string;
-        evidence?: string;
-        data?: Record<string, unknown>;
-      };
-
-      decision = result.isTaskCompleted === true ? 'task-completed' : 'task-progress';
-      reason = typeof result.reason === 'string' ? result.reason : undefined;
-      evidence = typeof result.evidence === 'string' ? result.evidence : undefined;
-      data = result.data && typeof result.data === 'object' ? result.data : undefined;
-    } catch (err) {
-      reason = `failed to parse inference output: ${err instanceof Error ? err.message : String(err)}`;
-    }
+    spawnInferenceDoneError(errMsg);
+    return;
   }
 
-  const { cmd, args: cliArgs } = getCliInvocation('inference-done', [
-    '--rg', boardDir,
-    '--token', callbackToken,
-    '--result', JSON.stringify({
-      isTaskCompleted: decision === 'task-completed',
-      inputChecksum,
-      reason,
-      evidence,
-      data,
-    }),
-  ]);
-  spawnDetachedCommand(cmd, cliArgs);
+  // Adapter wrote outFile — pass it directly as --tmp; cmdInferenceDone reads and deletes it.
+  spawnInferenceDone(outFile);
 }
 
 function cmdInferenceDone(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
+  const tmpIdx = args.indexOf('--tmp');
   const tokenIdx = args.indexOf('--token');
-  const resultIdx = args.indexOf('--result');
 
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-  const resultJson = resultIdx !== -1 ? args[resultIdx + 1] : '{}';
+  const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
+  const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
 
-  if (!dir || !token) {
-    console.error('Usage: board-live-cards inference-done --rg <dir> --token <token> [--result <json>]');
+  if (!tmpFile || !inferenceToken) {
+    console.error('Usage: board-live-cards inference-done --tmp <result.json> --token <inference-token>');
     process.exit(1);
   }
 
-  const decoded = decodeCallbackToken(token);
+  const decodedToken = decodeSourceToken(inferenceToken);
+  if (!decodedToken) {
+    console.error('Invalid inference token');
+    process.exit(1);
+  }
+
+  const { cbk: callbackToken, rg: dir, cs: inputChecksum } = decodedToken;
+
+  const decoded = decodeCallbackToken(callbackToken);
   if (!decoded) {
-    console.error('Invalid callback token');
+    console.error('Invalid callback token embedded in inference token');
     process.exit(1);
   }
 
@@ -2108,15 +2062,19 @@ function cmdInferenceDone(args: string[]): void {
     process.exit(1);
   }
 
-  const result = resultJson ? JSON.parse(resultJson) as {
-    isTaskCompleted?: boolean;
-    inputChecksum?: string;
-    reason?: string;
-    evidence?: string;
-  } : {};
+  let result: { isTaskCompleted?: boolean; reason?: string; evidence?: string; data?: Record<string, unknown> } = {};
+  if (fs.existsSync(tmpFile)) {
+    try {
+      result = JSON.parse(fs.readFileSync(tmpFile, 'utf-8').trim());
+    } catch (err) {
+      result = { isTaskCompleted: false, reason: `failed to parse inference result: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    try { fs.unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
+  } else {
+    result = { isTaskCompleted: false, reason: `inference result file not found: ${tmpFile}` };
+  }
 
   const isTaskCompletedFlag = result.isTaskCompleted === true;
-  const inputChecksum = typeof result.inputChecksum === 'string' ? result.inputChecksum : undefined;
   const inferenceCompletedAt = new Date().toISOString();
 
   const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
@@ -2822,12 +2780,14 @@ INTERNAL COMMANDS
     Prints a structured report ending with a [probe-source:result] JSON line.
     Exits 0 on PROBE_PASS, 1 on PROBE_FAIL.
 
-  run-inference-internal --in <input.json> --token <callbackToken> --rg <dir>
+  run-inference-internal --in <input.json> --token <inferenceToken>
     Execute inference via registered .inference-adapter and forward result to inference-done.
+    inferenceToken encodes boardDir (rg), cardId (cid), callbackToken (cbk), checksum (cs).
     (Internal command — invoked by the card-handler when custom completion rule is used.)
 
-  inference-done --rg <dir> --token <callbackToken> [--result <json>]
+  inference-done --tmp <result.json> --token <inferenceToken>
     Persist llm_task_completion_inference on the card and append a task-progress event.
+    Reads boardDir/callbackToken/checksum from decoded inferenceToken; deletes --tmp file after reading.
     (Internal command — invoked by run-inference-internal.)
 
 RUN-SOURCE-FETCH PROTOCOL
