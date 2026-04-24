@@ -24,7 +24,7 @@ import { createBoardLiveGraphRuntime as serverCreateRuntime } from '../../src/bo
 import type { LiveCardRuntimeModel } from '../../src/board-livegraph-runtime/index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const browserBundlePath = path.join(repoRoot, 'browser', 'board-livegraph-runtime.js');
+const browserBundlePath = path.join(repoRoot, 'browser', 'board-livegraph-engine.js');
 
 type BoardLiveGraphRuntimeApi = {
   createBoardLiveGraphRuntime: typeof serverCreateRuntime;
@@ -50,7 +50,7 @@ function loadBrowserRuntime(): BoardLiveGraphRuntimeApi {
   const factory = (api as Record<string, unknown>).createBoardLiveGraphRuntime;
   if (typeof factory !== 'function') {
     throw new Error(
-      'browser/board-livegraph-runtime.js does not export createBoardLiveGraphRuntime — ' +
+      'browser/board-livegraph-engine.js does not export createBoardLiveGraphRuntime — ' +
       'bundle is out of sync with the TypeScript source.',
     );
   }

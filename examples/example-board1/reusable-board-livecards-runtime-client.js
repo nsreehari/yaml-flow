@@ -26,7 +26,7 @@
     if (typeof fetchServer !== 'function') throw new Error('options.fetchServer is required');
     if (typeof boardPaths !== 'function') throw new Error('options.boardPaths is required');
     if (typeof buildLiveCardModelsFromArtifacts !== 'function') {
-      throw new Error('options.buildLiveCardModelsFromArtifacts is required (or load board-livegraph-runtime.js first)');
+      throw new Error('options.buildLiveCardModelsFromArtifacts is required (or load board-livegraph-engine.js first)');
     }
     if (typeof getServerOrigin !== 'function') throw new Error('options.getServerOrigin is required');
 
