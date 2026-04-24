@@ -79,6 +79,7 @@ function runCopilotPrompt(prompt) {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       maxBuffer: 10 * 1024 * 1024,
+      timeout: 60000,
     });
   } catch (directErr) {
     if (process.platform === 'win32') {
@@ -88,6 +89,7 @@ function runCopilotPrompt(prompt) {
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
           maxBuffer: 10 * 1024 * 1024,
+          timeout: 60000,
         });
       } catch (cmdErr) {
         const stderrDirect = directErr && typeof directErr === 'object' && 'stderr' in directErr
