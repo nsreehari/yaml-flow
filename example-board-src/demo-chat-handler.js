@@ -36,6 +36,7 @@ try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
 catch { console.error('[demo-chat-handler] bad --extraEncJson'); process.exit(0); }
 
 const { chatDir, boardDir, lastChatFile } = extra;
+if (!chatDir || !lastChatFile) {
   console.error('[demo-chat-handler] missing chatDir/lastChatFile');
   process.exit(0);
 }
@@ -55,21 +56,6 @@ function readHistory(dir) {
         return role + ': ' + text;
       });
   } catch { return []; }
-}
-
-// ---------------------------------------------------------------------------
-// Check if card has a 'copilot' source entry
-// ---------------------------------------------------------------------------
-function hasCopilotSource(bDir, cId) {
-  try {
-    const boardGraph = JSON.parse(fs.readFileSync(path.join(bDir, 'board-graph.json'), 'utf-8'));
-    const nodes = boardGraph?.graph?.nodes ?? boardGraph?.nodes ?? {};
-    const card  = nodes[cId];
-    const sources = card.sources ?? card.card_data?.sources ?? [];
-    if (Array.isArray(sources)) return sources.some(s => s && typeof s === 'object' && 'copilot' in s);
-    if (typeof sources === 'object') return 'copilot' in sources;
-    return false;
-  } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,19 +108,15 @@ function runWrapper(prompt, sessionDir, workingDir) {
 // ---------------------------------------------------------------------------
 const history    = readHistory(chatDir);
 const sessionDir = path.join(os.tmpdir(), 'demo-chat-handler-sessions', boardId + '_' + cardId);
-const workingDir = boardDir || process.cwd();
+const workingDir = boardDir;
 const prompt     = buildPrompt(cardId, boardId, history);
 
 let response = '';
-if (hasCopilotSource(boardDir, cardId)) {
   try {
     response = runWrapper(prompt, sessionDir, workingDir);
   } catch (err) {
     response = 'Sorry, I could not reach the LLM right now. (' + String(err?.message ?? err).slice(0, 120) + ')';
     console.error('[demo-chat-handler] wrapper failed: ' + (err?.message ?? err));
-  }
-} else {
-  response = 'No copilot source configured for this card.';
 }
 
 // Write assistant response as next serial file
