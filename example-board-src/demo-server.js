@@ -3,6 +3,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -89,6 +90,11 @@ function resetRuntime() {
   if (fs.existsSync(setupDir)) {
     fs.rmSync(setupDir, { recursive: true, force: true });
     console.log(`[demo-server] reset: wiped ${setupDir}`);
+  }
+  const chatSessions = path.join(os.tmpdir(), 'demo-chat-handler-sessions');
+  if (fs.existsSync(chatSessions)) {
+    fs.rmSync(chatSessions, { recursive: true, force: true });
+    console.log(`[demo-server] reset: wiped ${chatSessions}`);
   }
 }
 
