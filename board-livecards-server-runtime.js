@@ -540,7 +540,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
     for (const sourceDef of cardDefinition.sources) {
       if (!sourceDef || !sourceDef.bindTo || !sourceDef.outputFile) continue;
-      const filePath = path.join(boardDir, sourceDef.outputFile);
+      const filePath = path.join(boardDir, cardDefinition.id, sourceDef.outputFile);
       if (!fs.existsSync(filePath)) continue;
 
       const raw = fs.readFileSync(filePath, 'utf-8').trim();
@@ -576,13 +576,15 @@ export function createExampleBoardServerRuntime(options = {}) {
   function readChatSignal(cardId) {
     const chatsDir = path.join(tmpCardsDir, cardId, 'chats');
     if (!fs.existsSync(chatsDir)) {
-      return { count: 0, latest_mtime_ms: 0 };
+      return { count: 0, latest_mtime_ms: 0, processing: false };
     }
 
     let count = 0;
     let latestMtimeMs = 0;
+    let processing = false;
     for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
+      if (entry.name === '.processing') { processing = true; continue; }
       count += 1;
       try {
         const st = fs.statSync(path.join(chatsDir, entry.name));
@@ -593,7 +595,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
     }
 
-    return { count, latest_mtime_ms: latestMtimeMs };
+    return { count, latest_mtime_ms: latestMtimeMs, processing };
   }
 
   function buildPublishedRuntimePayload() {
@@ -653,6 +655,21 @@ export function createExampleBoardServerRuntime(options = {}) {
       const src = path.join(cardsDir, entry.name);
       const dst = path.join(tmpCardsDir, entry.name);
       fs.copyFileSync(src, dst);
+    }
+
+    // Concatenate agent-instructions*.md files into copilot-instructions.md at boardSetupRoot
+    const boardSetupRoot = path.dirname(boardDir);
+    const agentInstructionFiles = ['agent-instructions.md', 'agent-instructions-cardlayout.md'];
+    const srcDir = path.dirname(cardsDir); // board source dir where agent-instructions*.md live
+    const parts = [];
+    for (const fname of agentInstructionFiles) {
+      const fpath = path.join(srcDir, fname);
+      if (fs.existsSync(fpath)) {
+        parts.push(fs.readFileSync(fpath, 'utf-8').trimEnd());
+      }
+    }
+    if (parts.length > 0) {
+      fs.writeFileSync(path.join(boardSetupRoot, 'copilot-instructions.md'), parts.join('\n\n') + '\n', 'utf-8');
     }
 
     didDemoSetup = true;
@@ -943,8 +960,9 @@ export function createExampleBoardServerRuntime(options = {}) {
       if (!entry.isFile()) continue;
       const name = entry.name;
       const parsed = String(name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
-      const serial = parsed ? parseInt(parsed[1], 10) : 0;
-      const role = parsed ? parsed[2].toLowerCase() : 'system';
+      if (!parsed) continue; // skip .processing and other non-chat files
+      const serial = parseInt(parsed[1], 10);
+      const role = parsed[2].toLowerCase();
       const filePath = path.join(chatsDir, name);
       const text = fs.readFileSync(filePath, 'utf-8');
       const stat = fs.statSync(filePath);
@@ -988,23 +1006,44 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   // Fire-and-forget invocation of .chat-handler after a user chat message is persisted.
   // boardDir/.chat-handler must contain the handler command as a single-line string.
-  // Called with: --boardId <id> --cardId <id> --extra <json>
-  // extra: { chatDir: <abs path>, boardDir: <abs path>, lastChatFile: <filename> }
+  // Called with: --boardId <id> --cardId <id> --extraEncJson <base64json>
+  // extraEncJson decodes to:
+  //   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
+  //   boardRuntimeDir — relative: 'runtime'
+  //   runtimeStatusDir— relative: 'runtime-out'
+  //   cardsDir        — relative: 'surface/tmp-cards'
+  //   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
+  //   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
   // Handler failures are logged and silently ignored — chat-send response is never affected.
   function invokeChatHandler(cardId, chatsDir, lastChatFile) {
     const handlerFile = path.join(boardDir, '.chat-handler');
     if (!fs.existsSync(handlerFile)) return;
     const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
     if (!handlerCmd) return;
-    const extra = Buffer.from(JSON.stringify({ chatDir: chatsDir, boardDir, lastChatFile })).toString('base64');
+    const boardSetupRoot = path.dirname(boardDir);
+    const processingFile = path.join(chatsDir, '.processing');
+    try { fs.mkdirSync(chatsDir, { recursive: true }); fs.writeFileSync(processingFile, '', 'utf-8'); } catch {}
+    const extra = Buffer.from(JSON.stringify({
+      boardSetupRoot,
+      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
+      runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
+      cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
+      chatDir:          path.relative(tmpCardsDir, chatsDir),
+      lastChatFile,
+    })).toString('base64');
     try {
-      const proc = spawn(handlerCmd, ['--boardId', boardId, '--cardId', String(cardId), '--extraEncJson', extra], {
+      const proc = spawn(handlerCmd, [
+        '--boardId', boardId, '--cardId', String(cardId),
+        '--extraEncJson', extra,
+        '--cleanOnExit', processingFile,
+      ], {
         shell: true,
         stdio: 'ignore',
       });
       proc.unref();
       console.log(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
     } catch (err) {
+      try { fs.unlinkSync(processingFile); } catch {}
       console.warn(`[chat-handler] spawn failed for card "${cardId}":`, (err && err.message) || String(err));
     }
   }

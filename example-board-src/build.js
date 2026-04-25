@@ -7,7 +7,7 @@
  *
  * Transformations applied:
  *   HTML  ../../browser/<file>.js  →  https://cdn.jsdelivr.net/npm/yaml-flow/browser/<file>.js
- *   HTML  ./reusable-board-livecards-runtime-client.js  →  CDN URL above
+ *   HTML  ../../browser/board-livecards-runtime-client.js  →  CDN URL above
  *
  * Files included in output (top-level; directories are included wholesale):
  *   agent-instructions.md
@@ -53,7 +53,7 @@ const REPLACEMENTS = [
   },
   // local runtime client script → CDN
   {
-    from: 'src="./reusable-board-livecards-runtime-client.js"',
+    from: 'src="../../browser/board-livecards-runtime-client.js"',
     to:   `src="${CDN_BASE}/browser/board-livecards-runtime-client.js"`,
   },
 ];
