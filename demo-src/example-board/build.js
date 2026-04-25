@@ -29,9 +29,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SRC_DIR = __dirname;
-const OUT_DIR = path.resolve(__dirname, '../examples/example-board');
+const OUT_DIR = path.resolve(__dirname, '../../examples/example-board');
 
-const _pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'));
+const _pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8'));
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/yaml-flow@${_pkg.version}`;
 
 // ---------------------------------------------------------------------------

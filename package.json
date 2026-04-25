@@ -101,7 +101,7 @@
   "scripts": {
     "build": "tsup",
     "build:browser": "tsup --config tsup.browser.config.ts",
-    "build:example": "node example-board-src/build.js",
+    "build:example": "node demo-src/example-board/build.js",
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",
