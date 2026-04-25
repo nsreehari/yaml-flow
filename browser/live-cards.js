@@ -2308,7 +2308,7 @@ var LiveCard = (function () {
         const s = document.createElement('style');
         s.id = 'lc-bp-css';
         s.textContent = [
-          '.lc-bp-trigger{position:fixed;top:14px;right:16px;z-index:9100;}',
+          '.lc-bp-trigger{position:absolute;top:10px;right:10px;z-index:10;}',
           '.lc-bp-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9200;display:none;}',
           '.lc-bp-backdrop.lc-bp-open{display:block;}',
           '.lc-bp-panel{position:fixed;top:0;right:0;bottom:0;width:360px;max-width:96vw;z-index:9201;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.15);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease;}',
@@ -2358,7 +2358,8 @@ var LiveCard = (function () {
       _bpTriggerBtn.innerHTML = '&#9881; Board';
       _bpTriggerBtn.title = 'Open Board Panel';
       _bpTriggerBtn.addEventListener('click', _bpOpenPanel);
-      document.body.appendChild(_bpTriggerBtn);
+      root.style.position = root.style.position || 'relative';
+      root.appendChild(_bpTriggerBtn);
 
       _bpBackdrop = document.createElement('div');
       _bpBackdrop.className = 'lc-bp-backdrop';
