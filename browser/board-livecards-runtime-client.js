@@ -45,7 +45,7 @@
 
       if (board) {
         for (const id of existingIds) {
-          if (!nextById[id] && !(nodesById[id] && nodesById[id].card && nodesById[id].card.virtual)) {
+          if (!nextById[id] && !(nodesById[id] && (nodesById[id].virtual || (nodesById[id].card && nodesById[id].card.virtual)))) {
             board.remove(id);
             changed = true;
           }
@@ -53,7 +53,7 @@
       }
 
       for (const nextNode of nextNodes) {
-        const isVirtual = !!(nextNode.card && nextNode.card.virtual);
+        const isVirtual = !!(nextNode.virtual || (nextNode.card && nextNode.card.virtual));
         const existing = nodesById[nextNode.id];
         if (existing) {
           const prevStr = stableNodeString(existing);

@@ -2309,6 +2309,7 @@ var LiveCard = (function () {
         s.id = 'lc-bp-css';
         s.textContent = [
           '.lc-bp-trigger{position:absolute;top:10px;right:10px;z-index:10;}',
+          '.lc-bp-toolbar{display:flex;justify-content:flex-end;padding:.25rem .5rem;flex-shrink:0;}',
           '.lc-bp-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9200;display:none;}',
           '.lc-bp-backdrop.lc-bp-open{display:block;}',
           '.lc-bp-panel{position:fixed;top:0;right:0;bottom:0;width:360px;max-width:96vw;z-index:9201;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.15);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease;}',
@@ -2353,13 +2354,15 @@ var LiveCard = (function () {
         document.head.appendChild(s);
       }
 
+      const toolbar = document.createElement('div');
+      toolbar.className = 'lc-bp-toolbar';
       _bpTriggerBtn = document.createElement('button');
       _bpTriggerBtn.className = 'lc-bp-trigger btn btn-sm btn-outline-primary';
       _bpTriggerBtn.innerHTML = '&#9881; Board';
       _bpTriggerBtn.title = 'Open Board Panel';
       _bpTriggerBtn.addEventListener('click', _bpOpenPanel);
-      root.style.position = root.style.position || 'relative';
-      root.appendChild(_bpTriggerBtn);
+      toolbar.appendChild(_bpTriggerBtn);
+      root.insertBefore(toolbar, root.firstChild);
 
       _bpBackdrop = document.createElement('div');
       _bpBackdrop.className = 'lc-bp-backdrop';
@@ -2611,7 +2614,12 @@ var LiveCard = (function () {
     }
 
     function _bpDestroy() {
-      if (_bpTriggerBtn && _bpTriggerBtn.parentNode) _bpTriggerBtn.parentNode.removeChild(_bpTriggerBtn);
+      if (_bpTriggerBtn && _bpTriggerBtn.parentNode && _bpTriggerBtn.parentNode.classList.contains('lc-bp-toolbar')) {
+        const tb = _bpTriggerBtn.parentNode;
+        if (tb.parentNode) tb.parentNode.removeChild(tb);
+      } else if (_bpTriggerBtn && _bpTriggerBtn.parentNode) {
+        _bpTriggerBtn.parentNode.removeChild(_bpTriggerBtn);
+      }
       if (_bpBackdrop && _bpBackdrop.parentNode) _bpBackdrop.parentNode.removeChild(_bpBackdrop);
       if (_bpPanel && _bpPanel.parentNode) _bpPanel.parentNode.removeChild(_bpPanel);
       _bpTriggerBtn = null; _bpBackdrop = null; _bpPanel = null;
