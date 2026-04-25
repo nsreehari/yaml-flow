@@ -179,7 +179,7 @@ function readChatFileNames(cardId: string): string[] {
   const chatsDir = getCardChatsDir(cardId);
   if (!fs.existsSync(chatsDir)) return [];
   return fs.readdirSync(chatsDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
+    .filter((entry) => entry.isFile() && /^\d+[-_][a-z0-9_-]+\.txt$/i.test(entry.name))
     .map((entry) => entry.name)
     .sort();
 }
