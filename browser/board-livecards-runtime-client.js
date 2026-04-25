@@ -45,7 +45,7 @@
 
       if (board) {
         for (const id of existingIds) {
-          if (!nextById[id]) {
+          if (!nextById[id] && !(nodesById[id] && nodesById[id].card && nodesById[id].card.virtual)) {
             board.remove(id);
             changed = true;
           }
@@ -53,18 +53,19 @@
       }
 
       for (const nextNode of nextNodes) {
+        const isVirtual = !!(nextNode.card && nextNode.card.virtual);
         const existing = nodesById[nextNode.id];
         if (existing) {
           const prevStr = stableNodeString(existing);
           const nextStr = stableNodeString(nextNode);
           if (prevStr !== nextStr) {
             replaceNodeInPlace(existing, nextNode);
-            changed = true;
+            // Virtual nodes live in nodesById (for cfg.resolve) but never on the board canvas.
+            if (!isVirtual) changed = true;
           }
         } else {
           nodesById[nextNode.id] = clone(nextNode);
-          if (board) board.add(nodesById[nextNode.id]);
-          changed = true;
+          if (board && !isVirtual) { board.add(nodesById[nextNode.id]); changed = true; }
         }
       }
 

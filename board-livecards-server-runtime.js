@@ -560,6 +560,13 @@ export function createExampleBoardServerRuntime(options = {}) {
     return out;
   }
 
+  // Virtual cards are always merged into the card definitions list.
+  // They flow through the same SSE/chat/files machinery as real cards — no special-casing needed.
+  // 'virtual: true' tells the browser engine to skip rendering them as board cards.
+  const VIRTUAL_CARDS = [
+    { id: '__board__', virtual: true, card: { meta: { title: 'Board' } } },
+  ];
+
   function readChatSignal(cardId) {
     const chatsDir = path.join(tmpCardsDir, cardId, 'chats');
     if (!fs.existsSync(chatsDir)) {
@@ -586,7 +593,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function buildPublishedRuntimePayload() {
-    const cardDefinitions = readCardDefinitions();
+    const cardDefinitions = [...readCardDefinitions(), ...VIRTUAL_CARDS];
     const rawArtifacts = readCardRuntimeArtifacts();
     const dataObjectsByToken = readDataObjectsByToken();
     const cardRuntimeById = {};
