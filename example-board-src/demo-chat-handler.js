@@ -4,9 +4,15 @@
  * Invoked by reusable-server-runtime after a user message is persisted:
  *   node demo-chat-handler.js --boardId <id> --cardId <id> --extraEncJson <base64json>
  *
- * extraEncJson decodes to: { chatDir, boardDir, lastChatFile }
+ * extraEncJson decodes to:
+ *   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
+ *   boardRuntimeDir — relative subdir: 'runtime'
+ *   runtimeStatusDir— relative subdir: 'runtime-out'
+ *   cardsDir        — relative subdir: 'surface/tmp-cards'
+ *   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
+ *   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
  *
- * If the card has a source entry containing a "copilot" key, invokes copilot_wrapper.bat.
+ * Invokes copilot_wrapper.bat with a prompt built from conversation history.
  * Session dir is per-card: os.tmpdir()/demo-chat-handler-sessions/<boardId>_<cardId>
  */
 
@@ -35,11 +41,17 @@ let extra = {};
 try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
 catch { console.error('[demo-chat-handler] bad --extraEncJson'); process.exit(0); }
 
-const { chatDir, boardDir, lastChatFile } = extra;
-if (!chatDir || !lastChatFile) {
-  console.error('[demo-chat-handler] missing chatDir/lastChatFile');
+const { boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, lastChatFile } = extra;
+if (!boardSetupRoot || !chatDir || !lastChatFile) {
+  console.error('[demo-chat-handler] missing boardSetupRoot/chatDir/lastChatFile');
   process.exit(0);
 }
+
+// Resolve absolute paths from the structured extra fields
+const boardRuntimeDirAbs  = path.join(boardSetupRoot, boardRuntimeDir  || 'runtime');
+const runtimeStatusDirAbs = path.join(boardSetupRoot, runtimeStatusDir || 'runtime-out');
+const cardsDirAbs         = path.join(boardSetupRoot, cardsDir         || path.join('surface', 'tmp-cards'));
+const chatDirAbs          = path.join(cardsDirAbs, chatDir);
 
 // ---------------------------------------------------------------------------
 // Read conversation history
@@ -106,9 +118,9 @@ function runWrapper(prompt, sessionDir, workingDir) {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-const history    = readHistory(chatDir);
+const history    = readHistory(chatDirAbs);
 const sessionDir = path.join(os.tmpdir(), 'demo-chat-handler-sessions', boardId + '_' + cardId);
-const workingDir = boardDir;
+const workingDir = boardRuntimeDirAbs;
 const prompt     = buildPrompt(cardId, boardId, history);
 
 let response = '';
@@ -123,7 +135,7 @@ let response = '';
 const serialMatch = String(lastChatFile).match(/^(\d+)/);
 const nextSerial  = serialMatch ? parseInt(serialMatch[1], 10) + 1 : 1;
 const nextName    = String(nextSerial).padStart(3, '0') + '-assistant.txt';
-const nextPath    = path.join(chatDir, nextName);
+const nextPath    = path.join(chatDirAbs, nextName);
 
 try {
   fs.writeFileSync(nextPath, response + '\n', 'utf-8');

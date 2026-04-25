@@ -975,15 +975,29 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   // Fire-and-forget invocation of .chat-handler after a user chat message is persisted.
   // boardDir/.chat-handler must contain the handler command as a single-line string.
-  // Called with: --boardId <id> --cardId <id> --extra <json>
-  // extra: { chatDir: <abs path>, boardDir: <abs path>, lastChatFile: <filename> }
+  // Called with: --boardId <id> --cardId <id> --extraEncJson <base64json>
+  // extraEncJson decodes to:
+  //   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
+  //   boardRuntimeDir — relative: 'runtime'
+  //   runtimeStatusDir— relative: 'runtime-out'
+  //   cardsDir        — relative: 'surface/tmp-cards'
+  //   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
+  //   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
   // Handler failures are logged and silently ignored — chat-send response is never affected.
   function invokeChatHandler(cardId, chatsDir, lastChatFile) {
     const handlerFile = path.join(boardDir, '.chat-handler');
     if (!fs.existsSync(handlerFile)) return;
     const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
     if (!handlerCmd) return;
-    const extra = Buffer.from(JSON.stringify({ chatDir: chatsDir, boardDir, lastChatFile })).toString('base64');
+    const boardSetupRoot = path.dirname(boardDir);
+    const extra = Buffer.from(JSON.stringify({
+      boardSetupRoot,
+      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
+      runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
+      cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
+      chatDir:          path.relative(tmpCardsDir, chatsDir),
+      lastChatFile,
+    })).toString('base64');
     try {
       const proc = spawn(handlerCmd, ['--boardId', boardId, '--cardId', String(cardId), '--extraEncJson', extra], {
         shell: true,
