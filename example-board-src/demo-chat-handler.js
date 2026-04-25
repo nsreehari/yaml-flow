@@ -9,7 +9,7 @@
  *   boardRuntimeDir — relative subdir: 'runtime'
  *   runtimeStatusDir— relative subdir: 'runtime-out'
  *   cardsDir        — relative subdir: 'surface/tmp-cards'
- *   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
+ *   chatDir         — absolute path to the card's chats directory
  *   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
  *
  * Invokes copilot_wrapper.bat with a prompt built from conversation history.
@@ -52,7 +52,7 @@ if (!boardSetupRoot || !chatDir || !lastChatFile) {
 const boardRuntimeDirAbs  = path.join(boardSetupRoot, boardRuntimeDir  || 'runtime');
 const runtimeStatusDirAbs = path.join(boardSetupRoot, runtimeStatusDir || 'runtime-out');
 const cardsDirAbs         = path.join(boardSetupRoot, cardsDir         || path.join('surface', 'tmp-cards'));
-const chatDirAbs          = path.join(cardsDirAbs, chatDir);
+const chatDirAbs          = chatDir;
 
 // ---------------------------------------------------------------------------
 // Read conversation history
@@ -78,7 +78,7 @@ function buildPrompt(cId, bId, history, responseFileRel) {
   const cardSetupDirRel  = path.join(cardsDir, cId).replace(/\\/g, '/');
   const runtimeDirRel    = boardRuntimeDir  || 'runtime';
   const statusDirRel     = runtimeStatusDir || 'runtime-out';
-  const chatDirRel       = path.join(cardsDir, chatDir).replace(/\\/g, '/');
+  const chatDirRel       = path.relative(boardSetupRoot, chatDir).replace(/\\/g, '/');
   const lastQueryFileRel = path.join(chatDirRel, lastChatFile).replace(/\\/g, '/');
 
   const contextBlock = [
@@ -139,7 +139,7 @@ function runWrapper(prompt, sessionDir, workingDir) {
 const serialMatch    = String(lastChatFile).match(/^(\d+)/);
 const nextSerial     = serialMatch ? parseInt(serialMatch[1], 10) + 1 : 1;
 const nextName       = String(nextSerial).padStart(3, '0') + '-assistant.txt';
-const responseFileRel = path.join(cardsDir, chatDir, nextName).replace(/\\/g, '/');
+const responseFileRel = path.relative(boardSetupRoot, path.join(chatDir, nextName)).replace(/\\/g, '/');
 
 const history    = readHistory(chatDirAbs);
 const sessionDir = path.join(os.tmpdir(), 'demo-chat-handler-sessions', boardId + '_' + cardId);

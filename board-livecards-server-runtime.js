@@ -1015,7 +1015,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
       runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
-      chatDir:          path.relative(tmpCardsDir, chatsDir),
+      chatDir:          chatsDir,
       lastChatFile,
     })).toString('base64');
     try {
