@@ -2178,6 +2178,12 @@ var LiveCard = (function () {
     const showNotes = opts.showNotes !== false;
     const showChat  = opts.showChat || false;
     const defaultCol = opts.defaultCol || 6;
+    const boardPanelCfg = (opts.boardPanel && typeof opts.boardPanel === 'object') ? opts.boardPanel : null;
+
+    // Board Panel state (right-side overlay drawer)
+    let _bpOpen = false, _bpTab = 'chat', _bpMessages = [], _bpPollTimer = null;
+    let _bpTriggerBtn = null, _bpBackdrop = null, _bpPanel = null;
+    let _bpChatBody = null, _bpChatInput = null, _bpGraphBody = null;
 
     // Canvas config
     const co = opts.canvas || {};
@@ -2241,6 +2247,240 @@ var LiveCard = (function () {
       `;
       document.head.appendChild(s);
     }
+
+    // ===========================================================================
+    // Board Panel (right-side overlay drawer)
+    // ===========================================================================
+    function _initBoardPanel() {
+      if (!document.getElementById('lc-bp-css')) {
+        const s = document.createElement('style');
+        s.id = 'lc-bp-css';
+        s.textContent = [
+          '.lc-bp-trigger{position:fixed;top:14px;right:16px;z-index:9100;}',
+          '.lc-bp-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9200;display:none;}',
+          '.lc-bp-backdrop.lc-bp-open{display:block;}',
+          '.lc-bp-panel{position:fixed;top:0;right:0;bottom:0;width:360px;max-width:96vw;z-index:9201;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.15);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease;}',
+          '.lc-bp-panel.lc-bp-open{transform:translateX(0);}',
+          '.lc-bp-tabs{display:flex;border-bottom:1px solid var(--bs-border-color,#dee2e6);padding:0 .75rem;flex-shrink:0;}',
+          '.lc-bp-tab-btn{background:none;border:none;border-bottom:2px solid transparent;padding:.45rem .75rem;font-size:.8rem;cursor:pointer;color:var(--bs-secondary,#6c757d);}',
+          '.lc-bp-tab-btn.lc-bp-active{border-bottom-color:var(--bs-primary,#0d6efd);color:var(--bs-primary,#0d6efd);font-weight:600;}',
+          '.lc-bp-pane{display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0;}',
+          '.lc-bp-pane.lc-bp-active{display:flex;}',
+          '.lc-bp-chat-body{flex:1;overflow-y:auto;padding:.5rem .75rem;}',
+          '.lc-bp-graph-body{flex:1;overflow-y:auto;padding:.5rem .75rem;font-size:.8rem;}',
+          '.lc-bp-input{padding:.5rem .75rem;border-top:1px solid var(--bs-border-color,#dee2e6);background:#fff;flex-shrink:0;}',
+          '.lc-bp-graph-row{padding:.3rem 0;border-bottom:1px solid var(--bs-border-color-translucent,rgba(0,0,0,.05));}',
+          '.lc-bp-graph-row:last-child{border-bottom:none;}',
+          '.lc-bp-chat-bbl{padding:.4rem .65rem;margin:.25rem 0;border-radius:.65rem;word-wrap:break-word;font-size:.82rem;line-height:1.4;}',
+          '.lc-bp-chat-user{background:var(--bs-primary-bg-subtle,#cfe2ff);margin-left:auto;max-width:85%;}',
+          '.lc-bp-chat-asst{background:var(--bs-light,#f8f9fa);max-width:85%;}',
+          '.lc-bp-chat-sys{color:var(--bs-secondary,#6c757d);font-style:italic;text-align:center;font-size:.76rem;max-width:100%;}',
+        ].join('');
+        document.head.appendChild(s);
+      }
+
+      _bpTriggerBtn = document.createElement('button');
+      _bpTriggerBtn.className = 'lc-bp-trigger btn btn-sm btn-outline-primary';
+      _bpTriggerBtn.innerHTML = '&#9881; Board';
+      _bpTriggerBtn.title = 'Open Board Panel';
+      _bpTriggerBtn.addEventListener('click', _bpOpenPanel);
+      document.body.appendChild(_bpTriggerBtn);
+
+      _bpBackdrop = document.createElement('div');
+      _bpBackdrop.className = 'lc-bp-backdrop';
+      _bpBackdrop.addEventListener('click', _bpClose);
+      document.body.appendChild(_bpBackdrop);
+
+      _bpPanel = document.createElement('div');
+      _bpPanel.className = 'lc-bp-panel';
+
+      const hdr = document.createElement('div');
+      hdr.className = 'd-flex align-items-center justify-content-between px-3 py-2 border-bottom flex-shrink-0';
+      const hdrTitle = document.createElement('strong');
+      hdrTitle.className = 'small';
+      hdrTitle.textContent = 'Board Panel';
+      const hdrClose = document.createElement('button');
+      hdrClose.className = 'btn-close';
+      hdrClose.style.cssText = 'font-size:.75rem;';
+      hdrClose.title = 'Close';
+      hdrClose.addEventListener('click', _bpClose);
+      hdr.appendChild(hdrTitle);
+      hdr.appendChild(hdrClose);
+      _bpPanel.appendChild(hdr);
+
+      const tabBar = document.createElement('div');
+      tabBar.className = 'lc-bp-tabs';
+      ['chat', 'graph'].forEach(function (tabId) {
+        const btn = document.createElement('button');
+        btn.className = 'lc-bp-tab-btn' + (tabId === _bpTab ? ' lc-bp-active' : '');
+        btn.dataset.bpTab = tabId;
+        btn.textContent = tabId === 'chat' ? 'Chat' : 'Graph';
+        btn.addEventListener('click', function () { _bpSwitchTab(tabId); });
+        tabBar.appendChild(btn);
+      });
+      _bpPanel.appendChild(tabBar);
+
+      const chatPane = document.createElement('div');
+      chatPane.className = 'lc-bp-pane' + (_bpTab === 'chat' ? ' lc-bp-active' : '');
+      chatPane.dataset.bpPane = 'chat';
+      _bpChatBody = document.createElement('div');
+      _bpChatBody.className = 'lc-bp-chat-body';
+      chatPane.appendChild(_bpChatBody);
+      _bpPanel.appendChild(chatPane);
+
+      const graphPane = document.createElement('div');
+      graphPane.className = 'lc-bp-pane' + (_bpTab === 'graph' ? ' lc-bp-active' : '');
+      graphPane.dataset.bpPane = 'graph';
+      _bpGraphBody = document.createElement('div');
+      _bpGraphBody.className = 'lc-bp-graph-body';
+      graphPane.appendChild(_bpGraphBody);
+      _bpPanel.appendChild(graphPane);
+
+      _bpChatInput = document.createElement('div');
+      _bpChatInput.className = 'lc-bp-input';
+      _bpChatInput.style.display = _bpTab === 'chat' ? '' : 'none';
+      const inputRow = document.createElement('div');
+      inputRow.className = 'd-flex gap-1 align-items-end';
+      const textarea = document.createElement('textarea');
+      textarea.className = 'form-control form-control-sm flex-grow-1';
+      textarea.placeholder = 'Message board agent\u2026';
+      textarea.rows = 2;
+      textarea.style.cssText = 'resize:none;overflow-y:hidden;';
+      const sendBtn = document.createElement('button');
+      sendBtn.className = 'btn btn-sm btn-primary';
+      sendBtn.textContent = 'Send';
+      sendBtn.addEventListener('click', function () { _bpSend(textarea); });
+      textarea.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _bpSend(textarea); }
+      });
+      inputRow.appendChild(textarea);
+      inputRow.appendChild(sendBtn);
+      _bpChatInput.appendChild(inputRow);
+      _bpPanel.appendChild(_bpChatInput);
+
+      document.body.appendChild(_bpPanel);
+    }
+
+    function _bpOpenPanel() {
+      if (!_bpPanel) return;
+      _bpOpen = true;
+      _bpBackdrop.classList.add('lc-bp-open');
+      _bpPanel.classList.add('lc-bp-open');
+      if (_bpTab === 'chat') _bpLoadMessages();
+      else _bpRenderGraph();
+      _bpStartPoll();
+    }
+
+    function _bpClose() {
+      if (!_bpPanel) return;
+      _bpOpen = false;
+      _bpBackdrop.classList.remove('lc-bp-open');
+      _bpPanel.classList.remove('lc-bp-open');
+      _bpStopPoll();
+    }
+
+    function _bpSwitchTab(tab) {
+      _bpTab = tab;
+      if (_bpPanel) {
+        _bpPanel.querySelectorAll('[data-bp-tab]').forEach(function (b) {
+          b.classList.toggle('lc-bp-active', b.dataset.bpTab === tab);
+        });
+        _bpPanel.querySelectorAll('[data-bp-pane]').forEach(function (p) {
+          p.classList.toggle('lc-bp-active', p.dataset.bpPane === tab);
+        });
+        if (_bpChatInput) _bpChatInput.style.display = tab === 'chat' ? '' : 'none';
+      }
+      if (tab === 'chat') _bpLoadMessages();
+      else _bpRenderGraph();
+    }
+
+    async function _bpLoadMessages() {
+      if (!boardPanelCfg || typeof boardPanelCfg.getBoardChatMessages !== 'function') return;
+      try {
+        const msgs = await boardPanelCfg.getBoardChatMessages();
+        if (Array.isArray(msgs)) { _bpMessages = msgs; _bpRenderChat(); }
+      } catch (e) {
+        console.warn('[board-panel] load messages failed', e);
+      }
+    }
+
+    function _bpRenderChat() {
+      if (!_bpChatBody) return;
+      if (!_bpMessages.length) {
+        _bpChatBody.innerHTML = '<p class="text-muted text-center mt-4" style="font-size:.78rem">No messages yet.<br>Ask the board agent something.</p>';
+        return;
+      }
+      const atBottom = _bpChatBody.scrollHeight - _bpChatBody.scrollTop - _bpChatBody.clientHeight < 60;
+      _bpChatBody.innerHTML = _bpMessages.map(function (m) {
+        const role = String((m && m.role) || 'system');
+        const cls = role === 'user' ? 'lc-bp-chat-user' : role === 'assistant' ? 'lc-bp-chat-asst' : 'lc-bp-chat-sys';
+        return '<div class="lc-bp-chat-bbl ' + cls + '">' + _esc(String((m && m.text) || '')) + '</div>';
+      }).join('');
+      if (atBottom) _bpChatBody.scrollTop = _bpChatBody.scrollHeight;
+    }
+
+    function _bpRenderGraph() {
+      if (!_bpGraphBody) return;
+      if (!nodeList.length) {
+        _bpGraphBody.innerHTML = '<p class="text-muted text-center mt-4" style="font-size:.78rem">No cards on this board.</p>';
+        return;
+      }
+      _bpGraphBody.innerHTML = nodeList.map(function (node) {
+        const card = node.card || {};
+        const title = (card.meta && card.meta.title) || node.id;
+        const status = (node.card_data && node.card_data.status) || '';
+        const requires = Array.isArray(card.requires) && card.requires.length ? card.requires.join(', ') : '';
+        const provides = Array.isArray(card.provides) && card.provides.length
+          ? card.provides.map(function (p) { return p && p.bindTo; }).filter(Boolean).join(', ')
+          : '';
+        return '<div class="lc-bp-graph-row">'
+          + '<div class="d-flex align-items-center gap-1 flex-wrap">'
+          + (status ? _statusDot(status) : '')
+          + '<strong style="font-size:.8rem">' + _esc(title) + '</strong>'
+          + '<code class="text-muted ms-1" style="font-size:.72rem">' + _esc(node.id) + '</code>'
+          + '</div>'
+          + (requires ? '<div class="text-muted" style="font-size:.75rem">\u2190 ' + _esc(requires) + '</div>' : '')
+          + (provides ? '<div class="text-muted" style="font-size:.75rem">\u2192 ' + _esc(provides) + '</div>' : '')
+          + '</div>';
+      }).join('');
+    }
+
+    async function _bpSend(textarea) {
+      const text = (textarea && textarea.value || '').trim();
+      if (!text || !boardPanelCfg || typeof boardPanelCfg.onBoardChatSend !== 'function') return;
+      textarea.value = '';
+      _bpMessages = _bpMessages.concat([{ role: 'user', text }]);
+      _bpRenderChat();
+      try {
+        await boardPanelCfg.onBoardChatSend(text);
+        await _bpLoadMessages();
+      } catch (e) {
+        console.warn('[board-panel] send failed', e);
+      }
+    }
+
+    function _bpStartPoll() {
+      _bpStopPoll();
+      if (!boardPanelCfg) return;
+      _bpPollTimer = setInterval(function () {
+        if (!_bpOpen || _bpTab !== 'chat') return;
+        _bpLoadMessages();
+      }, 2000);
+    }
+
+    function _bpStopPoll() {
+      if (_bpPollTimer) { clearInterval(_bpPollTimer); _bpPollTimer = null; }
+    }
+
+    function _bpDestroy() {
+      _bpStopPoll();
+      if (_bpTriggerBtn && _bpTriggerBtn.parentNode) _bpTriggerBtn.parentNode.removeChild(_bpTriggerBtn);
+      if (_bpBackdrop && _bpBackdrop.parentNode) _bpBackdrop.parentNode.removeChild(_bpBackdrop);
+      if (_bpPanel && _bpPanel.parentNode) _bpPanel.parentNode.removeChild(_bpPanel);
+      _bpTriggerBtn = null; _bpBackdrop = null; _bpPanel = null;
+    }
+
+    if (boardPanelCfg) _initBoardPanel();
 
     // ---- Helpers ----
 
@@ -2628,6 +2868,7 @@ var LiveCard = (function () {
     function _render() {
       if (mode.current === 'canvas') _renderCanvas();
       else _renderBoard();
+      if (_bpOpen && _bpTab === 'graph') _bpRenderGraph();
     }
 
     // ---- Auto-layout (topological L → R) ----
@@ -2722,6 +2963,7 @@ var LiveCard = (function () {
     }
 
     function destroy() {
+      _bpDestroy();
       ac.abort();
       engine.destroyAll();
       nodeList.length = 0;

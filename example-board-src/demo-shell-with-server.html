@@ -86,6 +86,7 @@
           cardAction: function (id) { return `${base}/cards/${encodeURIComponent(id)}/actions`; },
           cardFile: function (id) { return `${base}/cards/${encodeURIComponent(id)}/files`; },
           cardChats: function (id) { return `${base}/cards/${encodeURIComponent(id)}/chats`; },
+          boardChats: `${base}/board-chats`,
         };
       }
 
@@ -141,6 +142,7 @@
         getServerOrigin: function () { return activeServerOrigin; },
         initialMode: currentMode,
         canvas: { height: '72vh', overflow: 'auto' },
+        boardPanel: true,
       });
 
       function resolveTaskExecutorPathParam() {
