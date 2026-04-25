@@ -563,13 +563,15 @@ export function createExampleBoardServerRuntime(options = {}) {
   function readChatSignal(cardId) {
     const chatsDir = path.join(tmpCardsDir, cardId, 'chats');
     if (!fs.existsSync(chatsDir)) {
-      return { count: 0, latest_mtime_ms: 0 };
+      return { count: 0, latest_mtime_ms: 0, processing: false };
     }
 
     let count = 0;
     let latestMtimeMs = 0;
+    let processing = false;
     for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
+      if (entry.name === '.processing') { processing = true; continue; }
       count += 1;
       try {
         const st = fs.statSync(path.join(chatsDir, entry.name));
@@ -580,7 +582,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
     }
 
-    return { count, latest_mtime_ms: latestMtimeMs };
+    return { count, latest_mtime_ms: latestMtimeMs, processing };
   }
 
   function buildPublishedRuntimePayload() {
@@ -1005,6 +1007,8 @@ export function createExampleBoardServerRuntime(options = {}) {
     const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
     if (!handlerCmd) return;
     const boardSetupRoot = path.dirname(boardDir);
+    const processingFile = path.join(chatsDir, '.processing');
+    try { fs.mkdirSync(chatsDir, { recursive: true }); fs.writeFileSync(processingFile, '', 'utf-8'); } catch {}
     const extra = Buffer.from(JSON.stringify({
       boardSetupRoot,
       boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
@@ -1014,13 +1018,18 @@ export function createExampleBoardServerRuntime(options = {}) {
       lastChatFile,
     })).toString('base64');
     try {
-      const proc = spawn(handlerCmd, ['--boardId', boardId, '--cardId', String(cardId), '--extraEncJson', extra], {
+      const proc = spawn(handlerCmd, [
+        '--boardId', boardId, '--cardId', String(cardId),
+        '--extraEncJson', extra,
+        '--cleanOnExit', processingFile,
+      ], {
         shell: true,
         stdio: 'ignore',
       });
       proc.unref();
       console.log(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
     } catch (err) {
+      try { fs.unlinkSync(processingFile); } catch {}
       console.warn(`[chat-handler] spawn failed for card "${cardId}":`, (err && err.message) || String(err));
     }
   }

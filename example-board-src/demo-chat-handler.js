@@ -33,9 +33,10 @@ function getArg(name) {
   return idx !== -1 && args[idx + 1] !== undefined ? args[idx + 1] : null;
 }
 
-const boardId  = getArg('--boardId') || '';
-const cardId   = getArg('--cardId') || '';
-const extraStr = getArg('--extraEncJson') || '';
+const boardId     = getArg('--boardId') || '';
+const cardId      = getArg('--cardId') || '';
+const extraStr    = getArg('--extraEncJson') || '';
+const cleanOnExit = getArg('--cleanOnExit') || '';
 
 let extra = {};
 try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
@@ -150,4 +151,8 @@ try {
   console.log('[demo-chat-handler] cardId="' + cardId + '" copilot invoked, response expected at ' + responseFileRel);
 } catch (err) {
   console.error('[demo-chat-handler] wrapper failed: ' + (err?.message ?? err));
+} finally {
+  if (cleanOnExit) {
+    try { fs.unlinkSync(cleanOnExit); } catch {}
+  }
 }

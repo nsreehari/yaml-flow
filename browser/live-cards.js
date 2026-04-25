@@ -64,12 +64,16 @@ var LiveCard = (function () {
       .lc-staged-file { display:flex; align-items:center; gap:.5rem; padding:.125rem 0; }
       .lc-chat-el { display:flex; flex-direction:column; }
       .lc-chat-body { flex:1; overflow-y:auto; max-height:300px; padding:.25rem; }
-      .lc-chat-bubble { padding:.5rem .75rem; margin:.375rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; line-height:1.4; }
-      .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; }
-      .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); }
-      .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; }
+      .lc-chat-bubble { padding:.5rem .75rem; margin:.375rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; line-height:1.4; display:flex; gap:.5rem; align-items:flex-start; }
+      .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; flex-direction:row-reverse; }
+      .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); border:1px solid var(--bs-border-color,#dee2e6); }
+      .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; align-self:center; gap:.35rem; }
+      .lc-chat-icon { flex-shrink:0; font-size:1rem; line-height:1.4; }
+      .lc-chat-bubble-content { flex:1; min-width:0; }
+      .lc-chat-bubble-content p:last-child { margin-bottom:0; }
       .lc-chat-bubble-pending { opacity:.85; }
       .lc-chat-bubble-pending .spinner-border { width:.75rem; height:.75rem; margin-left:.4rem; border-width:.12em; vertical-align:middle; }
+      .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.375rem .75rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; font-style:italic; }
       .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
       .lc-chat-modal-input-row { display:flex; align-items:center; gap:.375rem; }
       .lc-chat-modal-input-row .form-control { min-width:0; }
@@ -404,24 +408,40 @@ var LiveCard = (function () {
       _ensureChatModal();
       if (!_chatModal.body) return;
 
-      const bubble = document.createElement('div');
       const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
       const roleClass = normalizedRole === 'user'
         ? 'lc-chat-bubble-user'
         : (normalizedRole === 'assistant' ? 'lc-chat-bubble-assistant' : 'lc-chat-bubble-system');
+      const icon = normalizedRole === 'user' ? '\uD83E\uDDD1' : (normalizedRole === 'assistant' ? '\uD83E\uDD16' : '\u2139\uFE0F');
+
+      const bubble = document.createElement('div');
       bubble.className = 'lc-chat-bubble ' + roleClass;
-      bubble.textContent = text || '';
+
+      const iconEl = document.createElement('span');
+      iconEl.className = 'lc-chat-icon';
+      iconEl.setAttribute('aria-hidden', 'true');
+      iconEl.textContent = icon;
+      bubble.appendChild(iconEl);
+
+      const content = document.createElement('div');
+      content.className = 'lc-chat-bubble-content';
+      if (normalizedRole === 'assistant') {
+        content.innerHTML = _renderMd(text || '');
+      } else {
+        content.textContent = text || '';
+      }
 
       if (Array.isArray(files) && files.length) {
         const meta = document.createElement('div');
-        meta.className = 'lc-chat-inline-meta';
-        meta.textContent = files.map(function (f) {
+        meta.className = 'small mt-1 text-muted';
+        meta.textContent = '\uD83D\uDCCE ' + files.map(function (f) {
           if (!f) return 'file';
           return typeof f === 'string' ? f : (f.name || 'file');
         }).join(', ');
-        bubble.appendChild(meta);
+        content.appendChild(meta);
       }
 
+      bubble.appendChild(content);
       _chatModal.body.appendChild(bubble);
       _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
     }
@@ -471,9 +491,29 @@ var LiveCard = (function () {
       _chatModal.body.innerHTML = '';
       if (!normalized.length) {
         _chatModal.body.innerHTML = '<div class="text-muted small">No messages yet.</div>';
+        _syncProcessingBar(nodeId);
         return;
       }
       normalized.forEach(function (m) { _appendModalChatMessage(m.role, m.text, m.files); });
+      _syncProcessingBar(nodeId);
+    }
+
+    function _syncProcessingBar(nodeId) {
+      if (!_chatModal.body) return;
+      const node = nodeId ? cfg.resolve(nodeId) : null;
+      const isProcessing = !!(node && node.card_data && node.card_data.__chat_signal && node.card_data.__chat_signal.processing);
+      let ind = _chatModal.body.querySelector('.lc-chat-processing');
+      if (isProcessing) {
+        if (!ind) {
+          ind = document.createElement('div');
+          ind.className = 'lc-chat-processing';
+          ind.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span><span>\u2728 AI working\u2026</span>';
+          _chatModal.body.appendChild(ind);
+        }
+        _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
+      } else {
+        if (ind) ind.remove();
+      }
     }
 
     async function openChatModal(nodeId) {
@@ -2130,6 +2170,7 @@ var LiveCard = (function () {
       const nodeId = _chatModal.currentNodeId;
       if (!nodeId || !_chatModal.backdrop || !_chatModal.backdrop.classList.contains('lc-open')) return;
       _clearPendingModalChatMessages();
+      _syncProcessingBar(nodeId);
       _refreshModalChatHistory(nodeId).catch(function () {});
     }
 
