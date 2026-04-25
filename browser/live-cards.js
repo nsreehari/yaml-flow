@@ -2363,19 +2363,6 @@ var LiveCard = (function () {
       const chatPane = document.createElement('div');
       chatPane.className = 'lc-bp-pane';
       chatPane.dataset.bpPane = 'chat';
-      const chatPlaceholder = document.createElement('div');
-      chatPlaceholder.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6rem;padding:1.5rem;';
-      const chatPrompt = document.createElement('p');
-      chatPrompt.className = 'text-muted text-center';
-      chatPrompt.style.fontSize = '.8rem';
-      chatPrompt.textContent = 'Board chat uses the full card chat interface — with file attachments and the same chat-handler.';
-      const chatOpenBtn = document.createElement('button');
-      chatOpenBtn.className = 'btn btn-sm btn-primary';
-      chatOpenBtn.textContent = 'Open Board Chat';
-      chatOpenBtn.addEventListener('click', function () { _bpClose(); openChatModal('__board__'); });
-      chatPlaceholder.appendChild(chatPrompt);
-      chatPlaceholder.appendChild(chatOpenBtn);
-      chatPane.appendChild(chatPlaceholder);
       _bpPanel.appendChild(chatPane);
 
       const graphPane = document.createElement('div');
@@ -2394,7 +2381,8 @@ var LiveCard = (function () {
       _bpOpen = true;
       _bpBackdrop.classList.add('lc-bp-open');
       _bpPanel.classList.add('lc-bp-open');
-      _bpRenderGraph();
+      if (_bpTab === 'chat') _bpRenderChatPane();
+      else _bpRenderGraph();
     }
 
     function _bpClose() {
@@ -2405,12 +2393,6 @@ var LiveCard = (function () {
     }
 
     function _bpSwitchTab(tab) {
-      // 'chat' delegates to the standard card chat modal — same component, cardId='__board__'
-      if (tab === 'chat') {
-        _bpClose();
-        openChatModal('__board__');
-        return;
-      }
       _bpTab = tab;
       if (_bpPanel) {
         _bpPanel.querySelectorAll('[data-bp-tab]').forEach(function (b) {
@@ -2420,7 +2402,43 @@ var LiveCard = (function () {
           p.classList.toggle('lc-bp-active', p.dataset.bpPane === tab);
         });
       }
-      _bpRenderGraph();
+      if (tab === 'chat') _bpRenderChatPane();
+      else _bpRenderGraph();
+    }
+
+    // Render one "Open <Title> Chat" button per virtual node — driven entirely by nodeList.
+    // Adding a new virtual card to VIRTUAL_CARDS on the server shows a new button here automatically.
+    function _bpRenderChatPane() {
+      if (!_bpPanel) return;
+      const pane = _bpPanel.querySelector('[data-bp-pane="chat"]');
+      if (!pane) return;
+      const virtuals = nodeList.filter(function (n) { return n.card && n.card.virtual; });
+      pane.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6rem;padding:1.5rem;';
+      if (!virtuals.length) {
+        const msg = document.createElement('p');
+        msg.className = 'text-muted text-center';
+        msg.style.fontSize = '.8rem';
+        msg.textContent = 'No board-scoped chats available.';
+        wrap.appendChild(msg);
+      } else {
+        const hint = document.createElement('p');
+        hint.className = 'text-muted text-center';
+        hint.style.fontSize = '.8rem';
+        hint.textContent = 'Opens the full chat interface — file attachments included.';
+        wrap.appendChild(hint);
+        virtuals.forEach(function (node) {
+          const title = (node.card.meta && node.card.meta.title) || node.id;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-sm btn-primary';
+          btn.style.minWidth = '160px';
+          btn.textContent = 'Open ' + title + ' Chat';
+          btn.addEventListener('click', function () { _bpClose(); openChatModal(node.id); });
+          wrap.appendChild(btn);
+        });
+      }
+      pane.appendChild(wrap);
     }
 
     function _bpRenderGraph() {
