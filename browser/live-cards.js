@@ -67,8 +67,8 @@ var LiveCard = (function () {
       .lc-chat-bubble { padding:.5rem .75rem; margin:.375rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; line-height:1.4; display:flex; gap:.5rem; align-items:flex-start; }
       .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; flex-direction:row-reverse; }
       .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); border:1px solid var(--bs-border-color,#dee2e6); }
-      .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; align-self:center; gap:.35rem; }
-      .lc-chat-icon { flex-shrink:0; font-size:1rem; line-height:1.4; }
+      .lc-chat-bubble-system { background:transparent; color:var(--bs-secondary,#6c757d); font-style:italic; text-align:center; max-width:100%; font-size:.8rem; align-self:center; gap:0; padding:.125rem .5rem; }
+      .lc-chat-icon { flex-shrink:0; line-height:1.4; opacity:.6; display:flex; align-items:center; margin-top:.15rem; }
       .lc-chat-bubble-content { flex:1; min-width:0; }
       .lc-chat-bubble-content p:last-child { margin-bottom:0; }
       .lc-chat-bubble-pending { opacity:.85; }
@@ -407,21 +407,26 @@ var LiveCard = (function () {
     function _appendModalChatMessage(role, text, files) {
       _ensureChatModal();
       if (!_chatModal.body) return;
+      if (!text && !files) return; // skip empty messages
 
       const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
       const roleClass = normalizedRole === 'user'
         ? 'lc-chat-bubble-user'
         : (normalizedRole === 'assistant' ? 'lc-chat-bubble-assistant' : 'lc-chat-bubble-system');
-      const icon = normalizedRole === 'user' ? '\uD83E\uDDD1' : (normalizedRole === 'assistant' ? '\uD83E\uDD16' : '\u2139\uFE0F');
 
       const bubble = document.createElement('div');
       bubble.className = 'lc-chat-bubble ' + roleClass;
 
-      const iconEl = document.createElement('span');
-      iconEl.className = 'lc-chat-icon';
-      iconEl.setAttribute('aria-hidden', 'true');
-      iconEl.textContent = icon;
-      bubble.appendChild(iconEl);
+      if (normalizedRole !== 'system') {
+        // SVG icons: person for user, sparkle-star for assistant
+        const userSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+        const asstSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+        const iconEl = document.createElement('span');
+        iconEl.className = 'lc-chat-icon';
+        iconEl.setAttribute('aria-hidden', 'true');
+        iconEl.innerHTML = normalizedRole === 'user' ? userSvg : asstSvg;
+        bubble.appendChild(iconEl);
+      }
 
       const content = document.createElement('div');
       content.className = 'lc-chat-bubble-content';

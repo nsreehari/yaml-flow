@@ -947,8 +947,9 @@ export function createExampleBoardServerRuntime(options = {}) {
       if (!entry.isFile()) continue;
       const name = entry.name;
       const parsed = String(name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
-      const serial = parsed ? parseInt(parsed[1], 10) : 0;
-      const role = parsed ? parsed[2].toLowerCase() : 'system';
+      if (!parsed) continue; // skip .processing and other non-chat files
+      const serial = parseInt(parsed[1], 10);
+      const role = parsed[2].toLowerCase();
       const filePath = path.join(chatsDir, name);
       const text = fs.readFileSync(filePath, 'utf-8');
       const stat = fs.statSync(filePath);
