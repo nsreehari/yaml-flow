@@ -527,7 +527,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
     for (const sourceDef of cardDefinition.sources) {
       if (!sourceDef || !sourceDef.bindTo || !sourceDef.outputFile) continue;
-      const filePath = path.join(boardDir, sourceDef.outputFile);
+      const filePath = path.join(boardDir, cardDefinition.id, sourceDef.outputFile);
       if (!fs.existsSync(filePath)) continue;
 
       const raw = fs.readFileSync(filePath, 'utf-8').trim();

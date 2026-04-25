@@ -447,7 +447,7 @@ export interface CardRuntimeState {
 }
 
 function runtimePath(boardDir: string, cardId: string): string {
-  return path.join(boardDir, `${cardId}.runtime.json`);
+  return path.join(boardDir, cardId, 'runtime.json');
 }
 
 function readRuntimeState(boardDir: string, cardId: string): CardRuntimeState {
@@ -458,7 +458,9 @@ function readRuntimeState(boardDir: string, cardId: string): CardRuntimeState {
 }
 
 function writeRuntimeState(boardDir: string, cardId: string, state: CardRuntimeState): void {
-  fs.writeFileSync(runtimePath(boardDir, cardId), JSON.stringify(state, null, 2));
+  const p = runtimePath(boardDir, cardId);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(state, null, 2));
 }
 
 /**
@@ -952,7 +954,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       const sourcesData: Record<string, unknown> = {};
       for (const src of allSources) {
         if (src.outputFile) {
-          const filePath = path.join(boardDir, src.outputFile);
+          const filePath = path.join(boardDir, cardId, src.outputFile);
           if (fs.existsSync(filePath)) {
             const raw = fs.readFileSync(filePath, 'utf-8').trim();
             try { sourcesData[src.bindTo] = JSON.parse(raw); }
@@ -1687,12 +1689,12 @@ function cmdSourceDataFetched(args: string[]): void {
   }
 
   const { cbk, rg, cid, b, d, cs } = payload;
-  const destPath = path.join(rg, d);
+  const destPath = path.join(rg, cid, d);
 
-  // Atomic move: rename from tmp into boardDir destination
+  // Atomic move: rename from tmp into boardDir/<cardId>/ destination
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   fs.renameSync(tmpFile, destPath);
-  console.log(`[source-data-fetched] ${cid}.${b} → ${d}`);
+  console.log(`[source-data-fetched] ${cid}.${b} → ${cid}/${d}`);
 
   const fetchedAt = new Date().toISOString();
   const cbkDecoded = decodeCallbackToken(cbk);
@@ -2093,7 +2095,7 @@ function cmdInferenceDone(args: string[]): void {
   fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
 
   // Update inference runtime entry to reflect completion
-  const runtimePath = path.join(dir, `${taskName}.runtime.json`);
+  const runtimePath = path.join(dir, taskName, 'runtime.json');
   let runtime: CardRuntimeState = { _sources: {} };
   if (fs.existsSync(runtimePath)) {
     try {
@@ -2104,6 +2106,7 @@ function cmdInferenceDone(args: string[]): void {
   const inferenceEntry = runtime._inferenceEntry ?? {};
   runtime._inferenceEntry = nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt);
 
+  fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
   fs.writeFileSync(runtimePath, JSON.stringify(runtime, null, 2), 'utf-8');
 
   appendEventToJournal(dir, {
