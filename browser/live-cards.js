@@ -239,6 +239,12 @@ var LiveCard = (function () {
       loading: false,
     };
 
+    // Board panel side-panel chat state (built in init scope so cfg is accessible)
+    let _bpSidePanelBody = null;
+    let _bpSidePanelInput = null;
+    let _bpSidePanelSendBtn = null;
+    let _bpSidePanelLoading = false;
+
     // ---- Helpers ----
 
     function _renderMd(text) {
@@ -521,7 +527,11 @@ var LiveCard = (function () {
       }
     }
 
-    async function openChatModal(nodeId) {
+    async function openChatModal(nodeId, mode) {
+      if (mode === 'sidepanel') {
+        if (_bpSidePanelBody) _bpRefreshSidePanelChat(nodeId).catch(function () {});
+        return;
+      }
       _ensureChatModal();
       const node = cfg.resolve(nodeId);
       // node may be null for virtual card IDs (e.g. '__board__') — that is fine
@@ -2178,9 +2188,133 @@ var LiveCard = (function () {
         _syncProcessingBar(nodeId);
         _refreshModalChatHistory(nodeId).catch(function () {});
       }
-      if (boardPanelEnabled && _bpOpen && _bpTab === 'chat') {
-        _bpChatBody && _bpChatBody.querySelectorAll('[data-bp-pending="1"]').forEach(function (el) { el.remove(); });
-        _bpRefreshInlineChat();
+      if (_bpSidePanelBody) {
+        _bpSidePanelBody.querySelectorAll('[data-bp-pending="1"]').forEach(function (el) { el.remove(); });
+        _bpRefreshSidePanelChat('__board__').catch(function () {});
+      }
+    }
+
+    function registerBoardPanelChatPane(paneEl) {
+      if (!paneEl) return;
+      _bpSidePanelBody = document.createElement('div');
+      _bpSidePanelBody.className = 'lc-bp-chat-body';
+      paneEl.appendChild(_bpSidePanelBody);
+
+      const footer = document.createElement('div');
+      footer.className = 'lc-bp-chat-footer';
+
+      _bpSidePanelInput = document.createElement('textarea');
+      _bpSidePanelInput.className = 'lc-bp-chat-input';
+      _bpSidePanelInput.placeholder = 'Message the board agent…';
+      _bpSidePanelInput.rows = 1;
+      _bpSidePanelInput.addEventListener('input', function () {
+        _bpSidePanelInput.style.height = 'auto';
+        _bpSidePanelInput.style.height = Math.min(_bpSidePanelInput.scrollHeight, 100) + 'px';
+      });
+      _bpSidePanelInput.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Enter' && !evt.shiftKey) { evt.preventDefault(); _bpSendSidePanelChat(); }
+      });
+
+      _bpSidePanelSendBtn = document.createElement('button');
+      _bpSidePanelSendBtn.className = 'btn btn-sm btn-primary flex-shrink-0';
+      _bpSidePanelSendBtn.setAttribute('aria-label', 'Send');
+      _bpSidePanelSendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+      _bpSidePanelSendBtn.addEventListener('click', _bpSendSidePanelChat);
+
+      footer.appendChild(_bpSidePanelInput);
+      footer.appendChild(_bpSidePanelSendBtn);
+      paneEl.appendChild(footer);
+    }
+
+    async function _bpRefreshSidePanelChat(nodeId) {
+      if (!_bpSidePanelBody) return;
+      const node = cfg.resolve(nodeId);
+      let messages = [];
+      if (typeof cfg.getChatMessages === 'function') {
+        try { messages = await Promise.resolve(cfg.getChatMessages(nodeId)); } catch { messages = []; }
+      } else if (node && node.card_data && Array.isArray(node.card_data.messages)) {
+        messages = node.card_data.messages;
+      }
+      const normalized = _normalizeChatMessages(messages);
+      _bpSidePanelBody.innerHTML = '';
+      if (!normalized.length) {
+        _bpSidePanelBody.innerHTML = '<div class="lc-bp-chat-empty">No messages yet. Start the conversation!</div>';
+      } else {
+        normalized.forEach(function (m) { _bpAppendSidePanelBubble(m.role, m.text, m.files); });
+      }
+      const isProcessing = node && node.card_data && node.card_data.__chat_signal && node.card_data.__chat_signal.processing;
+      if (isProcessing && !_bpSidePanelBody.querySelector('.lc-bp-chat-processing')) {
+        const ind = document.createElement('div');
+        ind.className = 'lc-bp-chat-processing';
+        ind.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span><span>\u2728 AI working\u2026</span>';
+        _bpSidePanelBody.appendChild(ind);
+      }
+      _bpSidePanelBody.scrollTop = _bpSidePanelBody.scrollHeight;
+    }
+
+    function _bpAppendSidePanelBubble(role, text, files) {
+      if (!_bpSidePanelBody) return;
+      const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
+      const bubble = document.createElement('div');
+      bubble.className = 'lc-bp-chat-bubble lc-bp-chat-bubble-' + normalizedRole;
+      if (normalizedRole !== 'system') {
+        const userSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+        const asstSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+        const icon = document.createElement('span');
+        icon.className = 'lc-bp-chat-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = normalizedRole === 'user' ? userSvg : asstSvg;
+        bubble.appendChild(icon);
+      }
+      const content = document.createElement('div');
+      content.className = 'lc-bp-chat-bubble-content' + (normalizedRole === 'assistant' ? ' lc-bp-chat-md' : '');
+      if (normalizedRole === 'assistant') {
+        content.innerHTML = _renderMd(text || '');
+      } else {
+        content.textContent = text || '';
+      }
+      if (Array.isArray(files) && files.length) {
+        const meta = document.createElement('div');
+        meta.style.cssText = 'font-size:.72rem;opacity:.7;margin-top:.15rem;';
+        meta.textContent = '\uD83D\uDCCE ' + files.map(function (f) { return typeof f === 'string' ? f : (f && f.name) || 'file'; }).join(', ');
+        content.appendChild(meta);
+      }
+      bubble.appendChild(content);
+      _bpSidePanelBody.appendChild(bubble);
+    }
+
+    async function _bpSendSidePanelChat() {
+      if (_bpSidePanelLoading || !_bpSidePanelInput) return;
+      const text = (_bpSidePanelInput.value || '').trim();
+      if (!text) return;
+      _bpSidePanelLoading = true;
+      _bpSidePanelSendBtn.disabled = true;
+      _bpSidePanelInput.disabled = true;
+      const pending = document.createElement('div');
+      pending.className = 'lc-bp-chat-bubble lc-bp-chat-bubble-user lc-bp-chat-pending';
+      pending.setAttribute('data-bp-pending', '1');
+      const pendingContent = document.createElement('div');
+      pendingContent.className = 'lc-bp-chat-bubble-content';
+      pendingContent.textContent = text;
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner-border spinner-border-sm ms-1';
+      spinner.setAttribute('role', 'status');
+      pendingContent.appendChild(spinner);
+      pending.appendChild(pendingContent);
+      _bpSidePanelBody.appendChild(pending);
+      _bpSidePanelBody.scrollTop = _bpSidePanelBody.scrollHeight;
+      _bpSidePanelInput.value = '';
+      _bpSidePanelInput.style.height = 'auto';
+      try {
+        await Promise.resolve(cfg.onAction('__board__', 'chat-send', { text, files: [] }));
+      } catch (err) {
+        _bpSidePanelBody.querySelectorAll('[data-bp-pending="1"]').forEach(function (el) { el.remove(); });
+        _bpAppendSidePanelBubble('system', 'Failed to send: ' + String((err && err.message) || err), []);
+      } finally {
+        _bpSidePanelLoading = false;
+        _bpSidePanelSendBtn.disabled = false;
+        _bpSidePanelInput.disabled = false;
+        _bpSidePanelInput.focus();
       }
     }
 
@@ -2210,6 +2344,7 @@ var LiveCard = (function () {
       openChatModal,
       openFilesModal,
       getElement,
+      registerBoardPanelChatPane,
       registerRenderer(name, fn) { _renderers[name] = fn; },
       renderers: _renderers,
     };
@@ -2235,7 +2370,6 @@ var LiveCard = (function () {
     let _bpOpen = false, _bpTab = 'chat';
     let _bpTriggerBtn = null, _bpBackdrop = null, _bpPanel = null;
     let _bpGraphBody = null;
-    let _bpChatBody = null, _bpChatInput = null, _bpChatSendBtn = null, _bpChatLoading = false;
 
     // Canvas config
     const co = opts.canvas || {};
@@ -2401,7 +2535,7 @@ var LiveCard = (function () {
       const chatPane = document.createElement('div');
       chatPane.className = 'lc-bp-pane lc-bp-active';
       chatPane.dataset.bpPane = 'chat';
-      _bpInitChatPane(chatPane);
+      if (typeof engine.registerBoardPanelChatPane === 'function') engine.registerBoardPanelChatPane(chatPane);
       _bpPanel.appendChild(chatPane);
 
       const graphPane = document.createElement('div');
@@ -2420,7 +2554,7 @@ var LiveCard = (function () {
       _bpOpen = true;
       _bpBackdrop.classList.add('lc-bp-open');
       _bpPanel.classList.add('lc-bp-open');
-      if (_bpTab === 'chat') _bpRefreshInlineChat();
+      if (_bpTab === 'chat') engine.openChatModal('__board__', 'sidepanel');
       else _bpRenderGraph();
     }
 
@@ -2441,150 +2575,8 @@ var LiveCard = (function () {
           p.classList.toggle('lc-bp-active', p.dataset.bpPane === tab);
         });
       }
-      if (tab === 'chat') _bpRefreshInlineChat();
+      if (tab === 'chat') engine.openChatModal('__board__', 'sidepanel');
       else _bpRenderGraph();
-    }
-
-    function _bpInitChatPane(pane) {
-      _bpChatBody = document.createElement('div');
-      _bpChatBody.className = 'lc-bp-chat-body';
-      pane.appendChild(_bpChatBody);
-
-      const footer = document.createElement('div');
-      footer.className = 'lc-bp-chat-footer';
-
-      _bpChatInput = document.createElement('textarea');
-      _bpChatInput.className = 'lc-bp-chat-input';
-      _bpChatInput.placeholder = 'Message the board agent…';
-      _bpChatInput.rows = 1;
-      _bpChatInput.addEventListener('input', _bpResizeChatInput);
-      _bpChatInput.addEventListener('keydown', function (evt) {
-        if (evt.key === 'Enter' && !evt.shiftKey) { evt.preventDefault(); _bpSendChat(); }
-      });
-
-      _bpChatSendBtn = document.createElement('button');
-      _bpChatSendBtn.className = 'btn btn-sm btn-primary flex-shrink-0';
-      _bpChatSendBtn.setAttribute('aria-label', 'Send');
-      _bpChatSendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
-      _bpChatSendBtn.addEventListener('click', _bpSendChat);
-
-      footer.appendChild(_bpChatInput);
-      footer.appendChild(_bpChatSendBtn);
-      pane.appendChild(footer);
-    }
-
-    function _bpResizeChatInput() {
-      if (!_bpChatInput) return;
-      _bpChatInput.style.height = 'auto';
-      _bpChatInput.style.height = Math.min(_bpChatInput.scrollHeight, 100) + 'px';
-    }
-
-    function _bpRefreshInlineChat() {
-      if (!_bpChatBody) return;
-      const boardNode = nodeList.find(function (n) { return n.id === '__board__'; })
-                     || cfg.resolve('__board__')
-                     || null;
-
-      let messages = [];
-      if (boardNode && boardNode.card_data && Array.isArray(boardNode.card_data.messages)) {
-        messages = boardNode.card_data.messages;
-      }
-      const normalized = _normalizeChatMessages(messages);
-
-      _bpChatBody.innerHTML = '';
-      if (!normalized.length) {
-        const empty = document.createElement('div');
-        empty.className = 'lc-bp-chat-empty';
-        empty.textContent = 'No messages yet. Start the conversation!';
-        _bpChatBody.appendChild(empty);
-      } else {
-        normalized.forEach(function (m) { _bpAppendChatBubble(m.role, m.text, m.files); });
-      }
-
-      // Processing indicator
-      const isProcessing = boardNode && boardNode.card_data && boardNode.card_data.__chat_signal && boardNode.card_data.__chat_signal.processing;
-      let ind = _bpChatBody.querySelector('.lc-bp-chat-processing');
-      if (isProcessing) {
-        if (!ind) {
-          ind = document.createElement('div');
-          ind.className = 'lc-bp-chat-processing';
-          ind.innerHTML = '<span class="spinner-border spinner-border-sm lc-bp-chat-pending-spinner" role="status"></span><span>\u2728 AI working\u2026</span>';
-          _bpChatBody.appendChild(ind);
-        }
-      }
-      _bpChatBody.scrollTop = _bpChatBody.scrollHeight;
-    }
-
-    function _bpAppendChatBubble(role, text, files) {
-      if (!_bpChatBody) return;
-      const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
-      const bubble = document.createElement('div');
-      bubble.className = 'lc-bp-chat-bubble lc-bp-chat-bubble-' + normalizedRole;
-
-      if (normalizedRole !== 'system') {
-        const userSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
-        const asstSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
-        const icon = document.createElement('span');
-        icon.className = 'lc-bp-chat-icon';
-        icon.setAttribute('aria-hidden', 'true');
-        icon.innerHTML = normalizedRole === 'user' ? userSvg : asstSvg;
-        bubble.appendChild(icon);
-      }
-
-      const content = document.createElement('div');
-      content.className = 'lc-bp-chat-bubble-content' + (normalizedRole === 'assistant' ? ' lc-bp-chat-md' : '');
-      if (normalizedRole === 'assistant') {
-        content.innerHTML = _renderMd(text || '');
-      } else {
-        content.textContent = text || '';
-      }
-      if (Array.isArray(files) && files.length) {
-        const meta = document.createElement('div');
-        meta.style.cssText = 'font-size:.72rem;opacity:.7;margin-top:.15rem;';
-        meta.textContent = '\uD83D\uDCCE ' + files.map(function (f) { return typeof f === 'string' ? f : (f && f.name) || 'file'; }).join(', ');
-        content.appendChild(meta);
-      }
-      bubble.appendChild(content);
-      _bpChatBody.appendChild(bubble);
-    }
-
-    async function _bpSendChat() {
-      if (_bpChatLoading || !_bpChatInput) return;
-      const text = (_bpChatInput.value || '').trim();
-      if (!text) return;
-      _bpChatLoading = true;
-      _bpChatSendBtn.disabled = true;
-      _bpChatInput.disabled = true;
-
-      // Optimistic pending bubble
-      const pending = document.createElement('div');
-      pending.className = 'lc-bp-chat-bubble lc-bp-chat-bubble-user lc-bp-chat-pending';
-      pending.setAttribute('data-bp-pending', '1');
-      const pendingContent = document.createElement('div');
-      pendingContent.className = 'lc-bp-chat-bubble-content';
-      pendingContent.textContent = text;
-      const spinner = document.createElement('span');
-      spinner.className = 'spinner-border lc-bp-chat-pending-spinner ms-1';
-      spinner.setAttribute('role', 'status');
-      pendingContent.appendChild(spinner);
-      pending.appendChild(pendingContent);
-      _bpChatBody.appendChild(pending);
-      _bpChatBody.scrollTop = _bpChatBody.scrollHeight;
-
-      _bpChatInput.value = '';
-      _bpResizeChatInput();
-
-      try {
-        await Promise.resolve(cfg.onAction('__board__', 'chat-send', { text, files: [] }));
-      } catch (err) {
-        _bpChatBody.querySelectorAll('[data-bp-pending="1"]').forEach(function (el) { el.remove(); });
-        _bpAppendChatBubble('system', 'Failed to send: ' + String((err && err.message) || err), []);
-      } finally {
-        _bpChatLoading = false;
-        _bpChatSendBtn.disabled = false;
-        _bpChatInput.disabled = false;
-        _bpChatInput.focus();
-      }
     }
 
     function _bpRenderGraph() {

@@ -38,6 +38,10 @@
       ? options.canvas
       : { height: '72vh', overflow: 'auto' };
 
+    function isVirtualNode(n) {
+      return !!(n && n.card && n.card.virtual);
+    }
+
     function syncBoardNodes(nextNodes) {
       const existingIds = new Set(board ? board.nodes.map((n) => n.id) : []);
       const nextById = Object.fromEntries(nextNodes.map((n) => [n.id, n]));
@@ -45,7 +49,7 @@
 
       if (board) {
         for (const id of existingIds) {
-          if (!nextById[id] && !(nodesById[id] && (nodesById[id].virtual || (nodesById[id].card && nodesById[id].card.virtual)))) {
+          if (!nextById[id] && !isVirtualNode(nodesById[id])) {
             board.remove(id);
             changed = true;
           }
@@ -53,7 +57,7 @@
       }
 
       for (const nextNode of nextNodes) {
-        const isVirtual = !!(nextNode.virtual || (nextNode.card && nextNode.card.virtual));
+        const isVirtual = isVirtualNode(nextNode);
         const existing = nodesById[nextNode.id];
         if (existing) {
           const prevStr = stableNodeString(existing);
@@ -199,7 +203,7 @@
 
       rootEl.innerHTML = '';
       board = LiveCard.Board(engine, rootEl, {
-        nodes: Object.values(nodesById),
+        nodes: Object.values(nodesById).filter(function (n) { return !isVirtualNode(n); }),
         mode,
         canvas,
         boardPanel: boardPanelOpts,
