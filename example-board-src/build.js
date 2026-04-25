@@ -20,6 +20,7 @@
  *   demo-shell-browser.html
  *   demo-shell-with-server.html
  *   demo-task-executor.js
+ *   scripts/
  */
 
 import fs from 'node:fs';
@@ -71,6 +72,7 @@ const INCLUDE = new Set([
   'demo-shell-browser.html',
   'demo-shell-with-server.html',
   'demo-task-executor.js',
+  'scripts',
 ]);
 
 // Binary-safe file extensions — copied verbatim without UTF-8 decode
