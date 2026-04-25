@@ -28,7 +28,6 @@ export const RUNTIME_ROUTE_PATTERNS = [
   /\/cards\/[^/]+\/actions$/,
   /\/cards\/[^/]+\/chats$/,
   /\/cards\/[^/]+\/files$/,
-  /\/board-chats$/,
 ];
 
 export function isRuntimeRoute(pathname) {
@@ -145,9 +144,6 @@ export function createMultiBoardServerRuntime(options = {}) {
     const defaultChatHandlerPath = typeof entry.chatHandlerPath === 'string'
       ? entry.chatHandlerPath
       : options.defaultChatHandlerPath;
-    const defaultBoardAgentPath = typeof entry.boardAgentPath === 'string'
-      ? entry.boardAgentPath
-      : options.defaultBoardAgentPath;
     const defaultInferenceAdapterPath = typeof entry.inferenceAdapterPath === 'string'
       ? entry.inferenceAdapterPath
       : options.defaultInferenceAdapterPath;
@@ -163,7 +159,6 @@ export function createMultiBoardServerRuntime(options = {}) {
       defaultTaskExecutorPath,
       defaultStepMachineCliPath,
       defaultChatHandlerPath,
-      defaultBoardAgentPath,
       defaultInferenceAdapterPath,
       boardLiveCardsCliJs: options.boardLiveCardsCliJs,
     });
@@ -218,7 +213,6 @@ export function createMultiBoardServerRuntime(options = {}) {
       if (typeof body.stepMachineCliPath === 'string') entry.stepMachineCliPath = body.stepMachineCliPath;
       if (typeof body.taskExecutorPath === 'string') entry.taskExecutorPath = body.taskExecutorPath;
       if (typeof body.chatHandlerPath === 'string') entry.chatHandlerPath = body.chatHandlerPath;
-      if (typeof body.boardAgentPath === 'string') entry.boardAgentPath = body.boardAgentPath;
       if (typeof body.inferenceAdapterPath === 'string') entry.inferenceAdapterPath = body.inferenceAdapterPath;
       config.boards.push(entry);
       writeBoardsConfig(config);
@@ -341,12 +335,6 @@ export function createExampleBoardServerRuntime(options = {}) {
       ? options.defaultChatHandlerPath
       : path.resolve(process.cwd(), options.defaultChatHandlerPath))
     : null;
-  const configuredBoardAgentPath = typeof options.defaultBoardAgentPath === 'string'
-    && options.defaultBoardAgentPath.trim()
-    ? (path.isAbsolute(options.defaultBoardAgentPath)
-      ? options.defaultBoardAgentPath
-      : path.resolve(process.cwd(), options.defaultBoardAgentPath))
-    : null;
   const configuredInferenceAdapterPath = typeof options.defaultInferenceAdapterPath === 'string'
     && options.defaultInferenceAdapterPath.trim()
     ? (path.isAbsolute(options.defaultInferenceAdapterPath)
@@ -357,7 +345,6 @@ export function createExampleBoardServerRuntime(options = {}) {
   const statusSnapshotFile = path.join(runtimeOutDir, 'board-livegraph-status.json');
   const boardFile = path.join(boardDir, 'board-graph.json');
   const inventoryFile = path.join(boardDir, 'cards-inventory.jsonl');
-  const boardChatDir = path.join(boardDir, 'board-chats');
 
   let didDemoSetup = false;
 
@@ -1048,58 +1035,6 @@ export function createExampleBoardServerRuntime(options = {}) {
     }
   }
 
-  // Board-level chat helpers — messages stored in boardDir/board-chats/<serial>-<role>.txt
-  function readBoardChatMessages() {
-    if (!fs.existsSync(boardChatDir)) return [];
-    const out = [];
-    for (const entry of fs.readdirSync(boardChatDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const parsed = String(entry.name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
-      if (!parsed) continue;
-      const serial = parseInt(parsed[1], 10);
-      const role = parsed[2].toLowerCase();
-      const text = fs.readFileSync(path.join(boardChatDir, entry.name), 'utf-8').trim();
-      out.push({ serial, role, text, stored_name: entry.name });
-    }
-    out.sort((a, b) => a.serial - b.serial || a.stored_name.localeCompare(b.stored_name));
-    return out.map((m) => ({ role: m.role, text: m.text }));
-  }
-
-  function writeBoardChatRecord(role, text) {
-    fs.mkdirSync(boardChatDir, { recursive: true });
-    const existingNames = fs.readdirSync(boardChatDir, { withFileTypes: true })
-      .filter((e) => e.isFile()).map((e) => e.name);
-    const serial = nextSerialFromNames(existingNames);
-    const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
-    const fileName = `${String(serial).padStart(3, '0')}-${safeRole}.txt`;
-    const filePath = path.join(boardChatDir, fileName);
-    fs.writeFileSync(filePath, typeof text === 'string' ? text : '', 'utf-8');
-    return { serial, path: filePath };
-  }
-
-  // Fire-and-forget invocation of the board agent after a user board-chat message.
-  // Agent receives: --boardId <id> --extraEncJson <base64 json>
-  // extra: { chatDir, boardDir, cardsDir, lastChatFile }
-  function invokeBoardAgent(lastChatFile) {
-    if (!configuredBoardAgentPath) return;
-    const extra = Buffer.from(JSON.stringify({
-      chatDir: boardChatDir,
-      boardDir,
-      cardsDir,
-      lastChatFile,
-    })).toString('base64');
-    try {
-      const proc = spawn(configuredBoardAgentPath, ['--boardId', boardId, '--extraEncJson', extra], {
-        shell: true,
-        stdio: 'ignore',
-      });
-      proc.unref();
-      console.log(`[board-agent] invoked for boardId "${boardId}"`);
-    } catch (err) {
-      console.warn(`[board-agent] spawn failed for boardId "${boardId}":`, (err && err.message) || String(err));
-    }
-  }
-
   function applyCardAction(cardId, actionType, payload) {
     const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
     let chatHandlerArgs = null;
@@ -1436,22 +1371,6 @@ export function createExampleBoardServerRuntime(options = {}) {
           'Content-Length': buffer.length,
         });
         res.end(buffer);
-        return true;
-      }
-
-      if (method === 'GET' && p === `${apiBasePath}/board-chats`) {
-        json(res, 200, { ok: true, messages: readBoardChatMessages() });
-        return true;
-      }
-
-      if (method === 'POST' && p === `${apiBasePath}/board-chats`) {
-        const body = await readJsonBody(req);
-        const text = typeof body.text === 'string' ? body.text.trim() : '';
-        if (text) {
-          const record = writeBoardChatRecord('user', text);
-          invokeBoardAgent(path.basename(record.path));
-        }
-        json(res, 200, { ok: true });
         return true;
       }
 

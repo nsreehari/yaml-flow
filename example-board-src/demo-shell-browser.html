@@ -302,20 +302,6 @@
         writeMockDir(cardId, 'chats', chatsDir);
       }
 
-      // Board-level chat mock backed by localStorage
-      const BOARD_CHAT_KEY = 'yf:demo-surface:board:board-chats';
-      function readBoardChatMessages() {
-        try {
-          const raw = localStorage.getItem(BOARD_CHAT_KEY);
-          return raw ? JSON.parse(raw) : [];
-        } catch { return []; }
-      }
-      function appendBoardChatRecord(role, text) {
-        const msgs = readBoardChatMessages();
-        msgs.push({ role: String(role || 'user'), text: String(text || ''), at: new Date().toISOString() });
-        localStorage.setItem(BOARD_CHAT_KEY, JSON.stringify(msgs));
-      }
-
       function renderDebugPanel(runtimeState, artifacts) {
         const el = document.getElementById('debugPanelBody');
         if (!el) return;
@@ -603,16 +589,7 @@
           nodes: Object.values(nodesById),
           mode: currentMode,
           canvas: { height: '72vh', overflow: 'auto' },
-          boardPanel: {
-            getBoardChatMessages: function () {
-              return readBoardChatMessages().map(function (m) {
-                return { role: m.role || 'user', text: m.text || '' };
-              });
-            },
-            onBoardChatSend: function (text) {
-              appendBoardChatRecord('user', text);
-            },
-          },
+          boardPanel: true,
         });
 
         runtimeUnsub = runtime.subscribe(function () {

@@ -131,21 +131,7 @@
 
       const paths = boardPaths(boardId);
 
-      const boardPanelOpts = options.boardPanel && paths.boardChats ? {
-        getBoardChatMessages: async function () {
-          const res = await fetchServer(paths.boardChats);
-          if (!res.ok) return [];
-          const data = await res.json();
-          return Array.isArray(data && data.messages) ? data.messages : [];
-        },
-        onBoardChatSend: async function (text) {
-          await fetchServer(paths.boardChats, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ text }),
-          });
-        },
-      } : null;
+      const boardPanelOpts = options.boardPanel || false;
 
       if (runDemoSetup) {
         const setup = await fetchServer(paths.demoSetup);
