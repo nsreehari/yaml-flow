@@ -73,11 +73,28 @@ function readHistory(dir) {
 // ---------------------------------------------------------------------------
 // Build prompt
 // ---------------------------------------------------------------------------
-function buildPrompt(cId, bId, history) {
+function buildPrompt(cId, bId, history, responseFileRel) {
+  const cardSetupDirRel  = path.join(cardsDir, cId).replace(/\\/g, '/');
+  const runtimeDirRel    = boardRuntimeDir  || 'runtime';
+  const statusDirRel     = runtimeStatusDir || 'runtime-out';
+  const chatDirRel       = path.join(cardsDir, chatDir).replace(/\\/g, '/');
+  const lastQueryFileRel = path.join(chatDirRel, lastChatFile).replace(/\\/g, '/');
+
+  const contextBlock = [
+    'We are currently doing a three way orchestration.',
+    'You are the responder who has context of the cards in ' + cardSetupDirRel + ',',
+    'card runtime statuses in ' + runtimeDirRel + ',',
+    'and computed outputs in ' + statusDirRel + '.',
+    'I am just a mediator passing on the query.',
+    'The user sees the data available in cards which is rendered, and the status from ' + statusDirRel + '.',
+    'Everything else is internal detail not to be exposed to the user.',
+    'The conversation history can be found in ' + chatDirRel + ' and the last query is in ' + lastQueryFileRel + '.',
+    'Write your response to the user in ' + responseFileRel + ' (relative to your working directory).',
+    'Give me only a bare minimum log line on what you did — the response in ' + responseFileRel + ' is what the user will see.',
+  ].join(' ');
+
   return [
-    'You are a helpful assistant embedded in a live card (card: "' + cId + '", board: "' + bId + '").',
-    'Help the user understand and act on the data shown in this card.',
-    'Be concise.',
+    contextBlock,
     '',
     ...history,
     'Assistant:',
@@ -118,28 +135,19 @@ function runWrapper(prompt, sessionDir, workingDir) {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+const serialMatch    = String(lastChatFile).match(/^(\d+)/);
+const nextSerial     = serialMatch ? parseInt(serialMatch[1], 10) + 1 : 1;
+const nextName       = String(nextSerial).padStart(3, '0') + '-assistant.txt';
+const responseFileRel = path.join(cardsDir, chatDir, nextName).replace(/\\/g, '/');
+
 const history    = readHistory(chatDirAbs);
 const sessionDir = path.join(os.tmpdir(), 'demo-chat-handler-sessions', boardId + '_' + cardId);
-const workingDir = boardRuntimeDirAbs;
-const prompt     = buildPrompt(cardId, boardId, history);
-
-let response = '';
-  try {
-    response = runWrapper(prompt, sessionDir, workingDir);
-  } catch (err) {
-    response = 'Sorry, I could not reach the LLM right now. (' + String(err?.message ?? err).slice(0, 120) + ')';
-    console.error('[demo-chat-handler] wrapper failed: ' + (err?.message ?? err));
-}
-
-// Write assistant response as next serial file
-const serialMatch = String(lastChatFile).match(/^(\d+)/);
-const nextSerial  = serialMatch ? parseInt(serialMatch[1], 10) + 1 : 1;
-const nextName    = String(nextSerial).padStart(3, '0') + '-assistant.txt';
-const nextPath    = path.join(chatDirAbs, nextName);
+const workingDir = boardSetupRoot;
+const prompt     = buildPrompt(cardId, boardId, history, responseFileRel);
 
 try {
-  fs.writeFileSync(nextPath, response + '\n', 'utf-8');
-  console.log('[demo-chat-handler] cardId="' + cardId + '" wrote response -> ' + nextPath);
+  runWrapper(prompt, sessionDir, workingDir);
+  console.log('[demo-chat-handler] cardId="' + cardId + '" copilot invoked, response expected at ' + responseFileRel);
 } catch (err) {
-  console.error('[demo-chat-handler] write failed: ' + err.message);
+  console.error('[demo-chat-handler] wrapper failed: ' + (err?.message ?? err));
 }

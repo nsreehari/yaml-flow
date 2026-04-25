@@ -642,6 +642,21 @@ export function createExampleBoardServerRuntime(options = {}) {
       fs.copyFileSync(src, dst);
     }
 
+    // Concatenate agent-instructions*.md files into copilot-instructions.md at boardSetupRoot
+    const boardSetupRoot = path.dirname(boardDir);
+    const agentInstructionFiles = ['agent-instructions.md', 'agent-instructions-cardlayout.md'];
+    const srcDir = path.dirname(cardsDir); // board source dir where agent-instructions*.md live
+    const parts = [];
+    for (const fname of agentInstructionFiles) {
+      const fpath = path.join(srcDir, fname);
+      if (fs.existsSync(fpath)) {
+        parts.push(fs.readFileSync(fpath, 'utf-8').trimEnd());
+      }
+    }
+    if (parts.length > 0) {
+      fs.writeFileSync(path.join(boardSetupRoot, 'copilot-instructions.md'), parts.join('\n\n') + '\n', 'utf-8');
+    }
+
     didDemoSetup = true;
   }
 
