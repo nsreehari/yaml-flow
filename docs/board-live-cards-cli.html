@@ -99,8 +99,8 @@
         <tbody>
           <tr><td><code>init &lt;dir&gt; [--task-executor &lt;script&gt;] [--chat-handler &lt;script&gt;] [--inference-adapter &lt;script&gt;] [--runtime-out &lt;dir&gt;]</code></td><td>Create or reinitialize a board runtime directory. Re-running on an existing board is safe; handler registrations are updated.</td><td><code>board-live-cards-cli init ./my-board --task-executor ./executor.js</code></td></tr>
           <tr><td><code>status --rg &lt;dir&gt; [--json]</code></td><td>Print human status or machine-readable status object.</td><td><code>board-live-cards-cli status --rg ./my-board --json</code></td></tr>
-          <tr><td><code>add-cards --rg &lt;dir&gt; (--card &lt;file&gt; | --card-glob &lt;glob&gt;)</code></td><td>Add one or many card JSON files to the board.</td><td><code>board-live-cards-cli add-cards --rg ./my-board --card-glob "cards/*.json"</code></td></tr>
-          <tr><td><code>update-card --rg &lt;dir&gt; --card-id &lt;id&gt; [--restart]</code></td><td>Reload card JSON from disk and update task config.</td><td><code>board-live-cards-cli update-card --rg ./my-board --card-id portfolio-form --restart</code></td></tr>
+          <tr><td><code>upsert-card --rg &lt;dir&gt; (--card &lt;file&gt; | --card-glob &lt;glob&gt;)</code></td><td>Add or update one or many card JSON files on the board.</td><td><code>board-live-cards-cli upsert-card --rg ./my-board --card-glob "cards/*.json"</code></td></tr>
+          <tr><td><code>upsert-card --rg &lt;dir&gt; (--card &lt;file&gt; | --card-glob &lt;glob&gt;) [--card-id &lt;id&gt;] [--restart]</code></td><td>Add or update a card on the board. Use <code>--restart</code> to also restart the card task.</td><td><code>board-live-cards-cli upsert-card --rg ./my-board --card cards/portfolio-form.json --restart</code></td></tr>
           <tr><td><code>upsert-card --rg &lt;dir&gt; (--card &lt;file&gt; | --card-glob &lt;glob&gt;) [--card-id &lt;id&gt;] [--restart]</code></td><td>Insert or update one or many cards. Enforces strict id↔filepath mapping — id remap or file remap is rejected.</td><td><code>board-live-cards-cli upsert-card --rg ./my-board --card cards/prices.json</code></td></tr>
           <tr><td><code>remove-card --rg &lt;dir&gt; --id &lt;id&gt;</code></td><td>Remove a card/task from the board.</td><td><code>board-live-cards-cli remove-card --rg ./my-board --id portfolio-form</code></td></tr>
           <tr><td><code>retrigger --rg &lt;dir&gt; --task &lt;name&gt;</code></td><td>Mark task as not-started and drain to re-trigger it.</td><td><code>board-live-cards-cli retrigger --rg ./my-board --task price-fetch</code></td></tr>
@@ -299,7 +299,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
         </tbody>
       </table>
       <p><strong>Output:</strong> human-readable report ending with a machine-readable <code>[probe-source:result] {...}</code> JSON line. Exit <code>0</code> = <code>PROBE_PASS</code>, exit <code>1</code> = <code>PROBE_FAIL</code>.</p>
-      <p><strong>Agent workflow:</strong> author card → <code>probe-source</code> each source → fix until <code>PROBE_PASS</code> → <code>add-cards</code> / <code>upsert-card</code>.</p>
+      <p><strong>Agent workflow:</strong> author card → <code>probe-source</code> each source → fix until <code>PROBE_PASS</code> → <code>upsert-card</code>.</p>
     </section>
 
     <section class="card">

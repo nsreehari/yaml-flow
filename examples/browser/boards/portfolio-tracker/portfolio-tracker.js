@@ -201,9 +201,9 @@ function printTaskExecutorLog() {
   } else {
     cli('init', BOARD, '--inference-adapter', INFERENCE_ADAPTER);
   }
-  cli('add-cards', '--rg', BOARD, '--card-glob', path.join(CARDS, '*.json'));
+  cli('upsert-card', '--rg', BOARD, '--card-glob', path.join(CARDS, '*.json'));
 
-  console.log('\n--- T0 Status (after add-cards) ---');
+  console.log('\n--- T0 Status (after upsert-card) ---');
   process.stdout.write(statusText());
 
   console.log('\n=== T1: Writing market prices ===');
@@ -235,7 +235,7 @@ function printTaskExecutorLog() {
   };
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV2, null, 2));
 
-  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
   await sleep(500);
   writePrices({ AAPL: 198.50, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
   releaseInferenceAdapters('T2');
@@ -316,15 +316,15 @@ function printTaskExecutorLog() {
 
   // First update starts a source fetch request.
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV3, null, 2));
-  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
 
   // Immediate second update should queue a newer checksum while the first request is in-flight.
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV4, null, 2));
-  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
 
   // Immediate third update should overwrite queued checksum (latest-state wins).
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV5, null, 2));
-  cli('update-card', '--rg', BOARD, '--card-id', 'portfolio-form', '--restart');
+  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
 
   // 7) wait for first request, then 8) write response prices for update #1 tickers.
   // await readFetchRequest('T4 first fetch', ['AAPL', 'MSFT', 'GOOG', 'AMZN']);

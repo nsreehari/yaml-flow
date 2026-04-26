@@ -12,7 +12,7 @@ try {
     process.exit(0);
   }
 
-  runBoardCli(['add-cards', '--rg', boardDir, '--card-glob', cardsGlob]);
+  runBoardCli(['upsert-card', '--rg', boardDir, '--card-glob', cardsGlob]);
 
   writeResult({
     result: 'success',

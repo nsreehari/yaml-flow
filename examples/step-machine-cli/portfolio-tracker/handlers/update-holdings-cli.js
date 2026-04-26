@@ -22,7 +22,7 @@ try {
   card.state.holdings = holdings;
   fs.writeFileSync(cardPath, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
 
-  runBoardCli(['update-card', '--rg', boardDir, '--card-id', 'portfolio-form', '--restart']);
+  runBoardCli(['upsert-card', '--rg', boardDir, '--card', cardPath, '--restart']);
 
   writeResult({
     result: 'success',

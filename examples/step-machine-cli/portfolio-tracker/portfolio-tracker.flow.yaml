@@ -44,7 +44,7 @@ steps:
     expects_data: [board_dir, cards_template_dir]
     produces_data: [cards_dir]
     handler:
-      cli: node %%BOARDCLI_CMD%% add-cards --rg "%%BOARD_DIR%%" --card-glob "%%CARDS_GLOB%%"
+      cli: node %%BOARDCLI_CMD%% upsert-card --rg "%%BOARD_DIR%%" --card-glob "%%CARDS_GLOB%%"
       result-mode: exit-code
       input-transforms:
         BOARD_DIR: board_dir
