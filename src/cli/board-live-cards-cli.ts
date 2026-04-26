@@ -1613,11 +1613,22 @@ function cmdTaskFailed(args: string[]): void {
 function cmdValidateCard(args: string[]): void {
   const cardIdx = args.indexOf('--card');
   const globIdx = args.indexOf('--card-glob');
+  const rgIdx = args.indexOf('--rg');
   const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
   const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+  const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
 
   if ((!cardFile && !cardGlob) || (cardFile && cardGlob)) {
-    throw new Error('Usage: board-live-cards validate-card (--card <card.json> | --card-glob <glob>)');
+    throw new Error('Usage: board-live-cards validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]');
+  }
+
+  // When --rg is provided, resolve the task executor for source-def validation.
+  let teConfig: TaskExecutorConfig | undefined;
+  if (boardDir) {
+    teConfig = readTaskExecutorConfig(boardDir);
+    if (!teConfig) {
+      throw new Error(`--rg specified but no .task-executor found in ${boardDir}`);
+    }
   }
 
   const files = cardFile ? [path.resolve(cardFile)] : resolveCardGlobMatches(cardGlob!);
@@ -1633,7 +1644,7 @@ function cmdValidateCard(args: string[]): void {
       failures++;
       continue;
     }
-    let card: unknown;
+    let card: Record<string, unknown>;
     try {
       card = JSON.parse(fs.readFileSync(f, 'utf-8'));
     } catch (err) {
@@ -1642,11 +1653,48 @@ function cmdValidateCard(args: string[]): void {
       continue;
     }
     const result = validateLiveCardDefinition(card);
-    if (result.ok) {
+
+    // Source-def validation via the task executor (only when --rg provided).
+    const sourceErrors: string[] = [];
+    if (teConfig && Array.isArray(card.sources)) {
+      for (const src of card.sources as Array<Record<string, unknown>>) {
+        const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
+        const tmpFile = path.join(os.tmpdir(), `validate-src-${bindTo}-${Date.now()}.json`);
+        try {
+          fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
+          let stdout: string;
+          try {
+            stdout = execCommandSync(teConfig.command, ['validate-source-def', '--in', tmpFile], { shell: true, timeout: 10_000 });
+          } catch (execErr: any) {
+            // Executor exits non-zero on validation failure; stdout is on the error object.
+            stdout = typeof execErr?.stdout === 'string' ? execErr.stdout
+              : Buffer.isBuffer(execErr?.stdout) ? execErr.stdout.toString('utf-8')
+              : '';
+            if (!stdout.trim()) {
+              sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${execErr instanceof Error ? execErr.message : String(execErr)}`);
+              continue;
+            }
+          }
+          const parsed = JSON.parse(stdout.trim());
+          if (!parsed.ok && Array.isArray(parsed.errors)) {
+            for (const e of parsed.errors) {
+              sourceErrors.push(`source "${bindTo}": ${e}`);
+            }
+          }
+        } catch (err) {
+          sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+        }
+      }
+    }
+
+    const allErrors = [...result.errors, ...sourceErrors];
+    if (allErrors.length === 0) {
       console.log(`OK    ${label}`);
     } else {
       console.error(`FAIL  ${label}:`);
-      for (const e of result.errors) {
+      for (const e of allErrors) {
         console.error(`        ${e}`);
       }
       failures++;
@@ -2707,9 +2755,11 @@ CARD MANAGEMENT
     --card-id is valid only with --card (single file), not with --card-glob.
     --restart clears the task so it re-triggers from scratch.
 
-  validate-card (--card <card.json> | --card-glob <glob>)
+  validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]
     Validate one or many card JSON files without adding them to a board.
     Checks JSON Schema structure, runtime expression syntax, and provides.src namespaces.
+    When --rg is provided, also invokes the board's task executor validate-source-def
+    subcommand to structurally validate each source definition against supported kinds.
     Exits with code 1 if any card fails validation.
 
   remove-card --rg <dir> --id <card-id>

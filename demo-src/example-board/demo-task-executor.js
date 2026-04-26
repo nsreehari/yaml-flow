@@ -478,12 +478,103 @@ function runSourceFetchSubcommand(argv) {
 }
 
 // ---------------------------------------------------------------------------
+// validate-source-def — structural validation of a source definition
+// ---------------------------------------------------------------------------
+function validateSourceDefSubcommand(argv) {
+  const inIdx = argv.indexOf('--in');
+  const inFile = inIdx !== -1 ? argv[inIdx + 1] : undefined;
+
+  if (!inFile) {
+    console.error('[demo-task-executor] Usage: validate-source-def --in <source.json>');
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(inFile)) {
+    console.log(JSON.stringify({ ok: false, errors: [`Input file not found: ${inFile}`] }));
+    process.exit(1);
+  }
+
+  let sourceDef;
+  try {
+    sourceDef = readJson(inFile);
+  } catch (err) {
+    console.log(JSON.stringify({ ok: false, errors: [`Cannot parse source file: ${err && err.message || err}`] }));
+    process.exit(1);
+  }
+
+  const errors = [];
+
+  // Determine source kind and validate required fields
+  const hasChartApi = !!sourceDef.chartApi;
+  const hasHttp = !!sourceDef.http;
+  const hasCopilot = !!sourceDef.copilot;
+  const hasPromptTemplate = typeof sourceDef.prompt_template === 'string';
+  const hasMock = sourceDef.mock !== undefined;
+
+  const kindCount = [hasChartApi, hasHttp, hasCopilot || hasPromptTemplate, hasMock].filter(Boolean).length;
+
+  if (kindCount === 0) {
+    errors.push('No recognised source kind (copilot, http, chartApi, mock). Add one of these fields.');
+  } else if (kindCount > 1) {
+    const kinds = [];
+    if (hasChartApi) kinds.push('chartApi');
+    if (hasHttp) kinds.push('http');
+    if (hasCopilot || hasPromptTemplate) kinds.push('copilot');
+    if (hasMock) kinds.push('mock');
+    errors.push(`Multiple source kinds specified: [${kinds.join(', ')}]. Use exactly one.`);
+  }
+
+  if (hasChartApi) {
+    if (typeof sourceDef.chartApi !== 'object') {
+      errors.push('chartApi must be an object.');
+    } else {
+      if (!sourceDef.chartApi.url || typeof sourceDef.chartApi.url !== 'string') {
+        errors.push('chartApi.url is required and must be a string.');
+      }
+    }
+    if (!sourceDef.tickersFrom || typeof sourceDef.tickersFrom !== 'string') {
+      errors.push('chartApi requires tickersFrom (string, e.g. "holdings.ticker").');
+    }
+  }
+
+  if (hasHttp) {
+    if (typeof sourceDef.http !== 'object') {
+      errors.push('http must be an object.');
+    } else {
+      if (!sourceDef.http.url || typeof sourceDef.http.url !== 'string') {
+        errors.push('http.url is required and must be a string.');
+      }
+    }
+  }
+
+  if (hasCopilot) {
+    if (typeof sourceDef.copilot !== 'object') {
+      errors.push('copilot must be an object.');
+    } else {
+      if (!sourceDef.copilot.prompt_template && !hasPromptTemplate) {
+        errors.push('copilot.prompt_template is required (or use top-level prompt_template).');
+      }
+    }
+  }
+
+  if (hasMock) {
+    if (typeof sourceDef.mock !== 'string') {
+      errors.push('mock must be a string key.');
+    }
+  }
+
+  const result = { ok: errors.length === 0, errors };
+  console.log(JSON.stringify(result));
+  process.exit(errors.length === 0 ? 0 : 1);
+}
+
+// ---------------------------------------------------------------------------
 // describe-capabilities — introspection metadata for this executor
 // ---------------------------------------------------------------------------
 const CAPABILITIES = {
   version: '1.0',
   executor: 'demo-task-executor',
-  subcommands: ['run-source-fetch', 'describe-capabilities'],
+  subcommands: ['run-source-fetch', 'describe-capabilities', 'validate-source-def'],
   sourceKinds: {
     mock: {
       description: 'Look up a key in a hardcoded MOCK_DB dictionary.',
@@ -570,6 +661,10 @@ async function main() {
   }
   if (sub === 'describe-capabilities') {
     describeCapabilities();
+    return;
+  }
+  if (sub === 'validate-source-def') {
+    validateSourceDefSubcommand(process.argv.slice(3));
     return;
   }
 
