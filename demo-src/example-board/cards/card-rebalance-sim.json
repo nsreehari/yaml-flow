@@ -11,6 +11,13 @@
     {
       "bindTo": "rebalance",
       "outputFile": "card-rebalance-proposal.json",
+      "refs": {
+        "holdings": "requires.holdings",
+        "positions": "requires.positions",
+        "portfolio_mix": "requires.portfolio_mix",
+        "portfolio_risks": "requires.portfolio_risks",
+        "portfolio_action": "requires.portfolio_action"
+      },
       "copilot": {
         "prompt_template": "You are a portfolio rebalance advisor. Using the intelligence analysis and current holdings below, propose specific trades.\n\nCurrent holdings:\n{{holdings}}\nFields: ticker, quantity, cost_basis ($).\n\nPositions (with live prices):\n{{positions}}\nFields: ticker, quantity, cost_basis, price ($), value ($), gain_$, gain_%, chg_$, chg_pct.\n\nPortfolio intelligence:\n- Mix: {{portfolio_mix}}\n- Risks: {{portfolio_risks}}\n- Action signal: {{portfolio_action}}\n\nIMPORTANT OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown, no preamble, no trailing text.\n- Start with { and end with }.\n- proposed_trades must be an array of objects with EXACTLY these fields per entry:\n  ticker (string), direction (\"reduce\" or \"increase\"), current_qty (number, current shares held), change (number, shares to trade), proposed_qty (number, resulting shares after trade), price (number, current price per share), trade_value (number, change * price rounded to 2 decimals), reason (string, one short sentence).\n- Include one entry per ticker you recommend changing. Do not include tickers with no change.\n\n{\n  \"proposed_trades\": [\n    {\"ticker\": \"AAPL\", \"direction\": \"reduce\", \"current_qty\": 15, \"change\": 5, \"proposed_qty\": 10, \"price\": 210.50, \"trade_value\": 1052.50, \"reason\": \"overweight at 41%, trim before earnings\"}\n  ]\n}"
       }

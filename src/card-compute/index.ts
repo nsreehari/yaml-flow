@@ -39,6 +39,9 @@ export interface ComputeSource {
   // Deprecated alias retained for compatibility with older cards.
   script?: string;
   optionalForCompletionGating?: boolean;
+  /** Named data projections: each key maps to a JSONata expression rooted at card_data or requires.
+   *  The engine evaluates these before spawning the executor and passes results as _refs. */
+  refs?: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -310,24 +313,42 @@ function validateNode(node: unknown): ValidationResult {
  * 
  * @param source_defs - Array of source definitions
  * @param context - Execution context containing requires, sourcesData, computed_values
- * @returns New array of source_defs with _requires, _sourcesData, _computed_values attached
+ * @returns Promise resolving to a new array of source_defs with _refs attached.
+ *          Each _refs entry is the evaluated result of the corresponding refs expression.
  */
-function enrichSources(
+async function enrichSources(
   source_defs: any[] | undefined,
   context: {
+    card_data?: Record<string, any>;
     requires?: Record<string, any>;
-    sourcesData?: Record<string, any>;
-    computed_values?: Record<string, any>;
+    sourcesData?: Record<string, any>;      // unused post-refs, kept for call-site compat
+    computed_values?: Record<string, any>;  // unused post-refs, kept for call-site compat
   }
-): any[] {
+): Promise<any[]> {
   if (!source_defs || source_defs.length === 0) return [];
-  
-  return source_defs.map((src: any) => ({
-    ...src,
-    _requires: context.requires ?? {},
-    _sourcesData: context.sourcesData ?? {},
-    _computed_values: context.computed_values ?? {},
-  }));
+
+  const evalCtx = {
+    card_data: context.card_data ?? {},
+    requires: context.requires ?? {},
+  };
+
+  return Promise.all(
+    source_defs.map(async (src: any) => {
+      const _refs: Record<string, unknown> = {};
+      if (src.refs && typeof src.refs === 'object' && !Array.isArray(src.refs)) {
+        for (const [key, expr] of Object.entries(src.refs as Record<string, string>)) {
+          if (typeof expr === 'string' && expr.trim().length > 0) {
+            try {
+              _refs[key] = await jsonata(expr).evaluate(evalCtx);
+            } catch {
+              _refs[key] = undefined;
+            }
+          }
+        }
+      }
+      return { ...src, _refs };
+    })
+  );
 }
 
 export const CardCompute = {

@@ -1027,9 +1027,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       // Build enriched source payloads and checksums up-front so dispatch gating
       // can react to input changes, not only timestamp delivery state.
       const enrichedCard = { ...card };
-      const enrichedSources = CardCompute.enrichSources(
+      const enrichedSources = await CardCompute.enrichSources(
         (Array.isArray(card.source_defs) ? card.source_defs : undefined),
         {
+          card_data: card.card_data as Record<string, unknown>,
           requires,
           sourcesData,
           computed_values: computeNode.computed_values,
@@ -2509,19 +2510,19 @@ async function cmdProbeSource(args: string[]): Promise<void> {
   const cardIdx = args.indexOf('--card');
   const sourceIdxArg = args.indexOf('--source-idx');
   const sourceBindArg = args.indexOf('--source-bind');
-  const mockReqIdx = args.indexOf('--mock-requires');
+  const mockRefsIdx = args.indexOf('--mock-refs');
   const rgIdx = args.indexOf('--rg');
   const outIdx = args.indexOf('--out');
 
   const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
   const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
   const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
-  const mockReqRaw = mockReqIdx !== -1 ? args[mockReqIdx + 1] : undefined;
+  const mockRefsRaw = mockRefsIdx !== -1 ? args[mockRefsIdx + 1] : undefined;
   const boardDirArg = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
 
   if (!cardFilePath) {
-    console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]');
+    console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-refs <json>] [--rg <boardDir>] [--out <result.json>]');
     process.exit(1);
   }
 
@@ -2560,16 +2561,16 @@ async function cmdProbeSource(args: string[]): Promise<void> {
   const cardDir = path.resolve(path.dirname(cardFilePath));
   const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
 
-  // Parse --mock-requires (JSON string or @file.json)
-  let mockRequires: Record<string, unknown> = {};
-  if (mockReqRaw) {
-    const raw = mockReqRaw.startsWith('@')
-      ? fs.readFileSync(path.resolve(mockReqRaw.slice(1)), 'utf-8')
-      : mockReqRaw;
+  // Parse --mock-refs (JSON string or @file.json) — pre-resolved _refs values for testing
+  let mockRefs: Record<string, unknown> = {};
+  if (mockRefsRaw) {
+    const raw = mockRefsRaw.startsWith('@')
+      ? fs.readFileSync(path.resolve(mockRefsRaw.slice(1)), 'utf-8')
+      : mockRefsRaw;
     try {
-      mockRequires = JSON.parse(raw);
+      mockRefs = JSON.parse(raw);
     } catch (e) {
-      console.error(`[probe-source] --mock-requires is not valid JSON: ${(e as Error).message}`);
+      console.error(`[probe-source] --mock-refs is not valid JSON: ${(e as Error).message}`);
       process.exit(1);
     }
   }
@@ -2586,9 +2587,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     ...sourceDef,
     cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
     boardDir: typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : boardDir,
-    _requires: mockRequires,
-    _sourcesData: {},
-    _computed_values: {},
+    _refs: mockRefs,
   };
 
   const sourceKind: string = sourceDef.chartApi ? 'chartApi'
@@ -2599,7 +2598,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
 
   console.log(`[probe-source] card:        ${card.id}`);
   console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
-  console.log(`[probe-source] _requires:   ${JSON.stringify(mockRequires)}`);
+  console.log(`[probe-source] _refs:       ${JSON.stringify(mockRefs)}`);
   console.log(`[probe-source] executor:    ${taskExecutor ?? 'built-in (source.cli only)'}`);
   console.log(`[probe-source] running fetch...`);
 
@@ -2683,7 +2682,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     sourceIdx,
     bindTo: sourceDef.bindTo as string,
     sourceKind,
-    mockRequiresKeys: Object.keys(mockRequires),
+    mockRefsKeys: Object.keys(mockRefs),
     resultSizeBytes: resultRaw !== undefined ? resultRaw.length : 0,
     error: errorMsg ?? undefined,
   };
@@ -2817,15 +2816,15 @@ INTERNAL COMMANDS
     print its capabilities JSON to stdout.  Requires a .task-executor file in <dir>.
 
   probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
-               [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]
+               [--mock-refs <json>] [--rg <boardDir>] [--out <result.json>]
     Validate that a card source can be fetched successfully.
     Reads the card file, extracts the chosen source (default: index 0), builds the
-    run-source-fetch --in payload with the supplied _requires data, invokes the
+    run-source-fetch --in payload with the supplied _refs data, invokes the
     registered task-executor (or built-in executor for source.cli), and reports pass/fail.
-    --mock-requires: JSON string (or @file.json) providing the _requires token values
+    --mock-refs:     JSON string (or @file.json) providing pre-resolved _refs values
                      the source needs.  Craft the minimal payload that exercises the
                      source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
-                     If omitted, _requires is passed as empty ({}).
+                     If omitted, _refs is passed as empty ({}).
     --source-idx:    0-based index into card.source_defs[]. Default: 0.
     --source-bind:   Select source by its bindTo name instead of index.
     --rg:            Board directory used to find .task-executor. Defaults to the
@@ -2880,7 +2879,7 @@ EXAMPLES
   board-live-cards-cli upsert-card --rg ./my-board --card cards/prices.json
   board-live-cards-cli status --rg ./my-board
   board-live-cards-cli retrigger --rg ./my-board --task price-fetch
-  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
+  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-refs '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
 `.trimStart());
 }
 

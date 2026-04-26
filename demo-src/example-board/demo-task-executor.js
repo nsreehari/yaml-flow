@@ -20,10 +20,10 @@
  *     "outputFile": "relative/path.json",
  *     "cwd":     "<card directory>",           // injected by CLI
  *     "boardDir":"<board runtime directory>",   // injected by CLI
- *     "_requires":        { ... },             // upstream token data (from card requires[])
- *     "_sourcesData":     { ... },             // already-fetched source_defs on this card
- *     "_computed_values":  { ... },            // computed_values from the card's compute stage
- *     // ...plus any custom fields authored on the source entry
+ *     "_refs":   { "refKey": <resolvedValue> }, // named projections from card_data/requires,
+ *                                               // declared in source_defs[].refs and resolved
+ *                                               // by the engine before invoking the executor
+ *     // ...plus any custom fields authored on the source entry (bindTo, outputFile, refs, etc.)
  *   }
  *
  * --extra (decoded):
@@ -46,7 +46,7 @@
  *
  * http / chartApi source notes:
  *   - URL supports {{key}} interpolation (http) or {{ticker}} (chartApi)
- *   - tickersFrom: "tokenName.fieldName" extracts tickers from a _requires array
+ *   - tickersFrom: "refKey.fieldName" extracts tickers from a _refs array
  *   - http and chartApi results are cached in os.tmpdir()/demo-executor-cache/ for 1 hour
  *     so Yahoo Finance is not hammered on every card refresh during demos
  */
@@ -178,14 +178,12 @@ function resolveCopilotPrompt(sourceDef) {
   const template = cfg.prompt_template ?? sourceDef.prompt_template;
   const args = cfg.args ?? cfg.prompt_args ?? sourceDef.prompt_args ?? sourceDef.args ?? {};
   
-  // Merge all injected context for template interpolation.
-  // _requires = upstream token data, _computed_values = card compute stage outputs,
-  // _sourcesData = already-fetched source_defs on this card.
+  // Merge _refs into template interpolation context.
+  // _refs contains the named data projections declared in source_defs[].refs,
+  // evaluated by the engine from card_data/requires before invoking this executor.
   // Explicit args defined on the source take highest precedence.
   const interpolationContext = {
-    ...sourceDef._requires,
-    ...sourceDef._sourcesData,
-    ...sourceDef._computed_values,
+    ...sourceDef._refs,
     ...args,
   };
   
@@ -327,14 +325,14 @@ function runSourceFetchSubcommand(argv) {
     const chartCfg = sourceDef.chartApi;
     const headers = { ...(chartCfg.headers || {}) };
 
-    // Extract tickers array from _requires via tickersFrom
+    // Extract tickers array from _refs via tickersFrom
     let tickers = [];
     if (sourceDef.tickersFrom) {
       const dotIdx = sourceDef.tickersFrom.indexOf('.');
       if (dotIdx > 0) {
-        const tokenName = sourceDef.tickersFrom.slice(0, dotIdx);
+        const refKey = sourceDef.tickersFrom.slice(0, dotIdx);
         const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
-        const arr = sourceDef._requires?.[tokenName];
+        const arr = sourceDef._refs?.[refKey];
         if (Array.isArray(arr)) {
           tickers = arr.map(h => h[fieldName]).filter(Boolean);
         }
@@ -389,14 +387,14 @@ function runSourceFetchSubcommand(argv) {
     const httpCfg = sourceDef.http;
 
     // Build tickers string if tickersFrom is specified on the source
-    // e.g. tickersFrom: "holdings.ticker" → joins _requires.holdings[*].ticker with ','
+    // e.g. tickersFrom: "holdings.ticker" → joins _refs.holdings[*].ticker with ','
     const httpArgs = { ...(httpCfg.args || {}) };
     if (sourceDef.tickersFrom) {
       const dotIdx = sourceDef.tickersFrom.indexOf('.');
       if (dotIdx > 0) {
-        const tokenName = sourceDef.tickersFrom.slice(0, dotIdx);
+        const refKey = sourceDef.tickersFrom.slice(0, dotIdx);
         const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
-        const arr = sourceDef._requires?.[tokenName];
+        const arr = sourceDef._refs?.[refKey];
         if (Array.isArray(arr)) {
           httpArgs.tickers = arr.map(h => h[fieldName]).filter(Boolean).join(',');
         }
@@ -405,8 +403,7 @@ function runSourceFetchSubcommand(argv) {
 
     // Interpolate URL template with all available context
     const urlContext = {
-      ...(sourceDef._requires || {}),
-      ...(sourceDef._computed_values || {}),
+      ...(sourceDef._refs || {}),
       ...httpArgs,
     };
     const url = interpolatePrompt(httpCfg.url, urlContext);
@@ -614,7 +611,7 @@ const CAPABILITIES = {
             args:    { type: 'object', required: false, description: 'Extra interpolation args for URL template.' },
           },
         },
-        tickersFrom: { type: 'string', required: false, description: '"tokenName.fieldName" — extract tickers from _requires for URL interpolation.' },
+        tickersFrom: { type: 'string', required: false, description: '"refKey.fieldName" — extract tickers from _refs for URL interpolation.' },
       },
       outputShape: 'Arbitrary JSON — the parsed response body from the URL.',
     },
@@ -628,7 +625,7 @@ const CAPABILITIES = {
             headers: { type: 'object', required: false, description: 'Request headers.' },
           },
         },
-        tickersFrom: { type: 'string', required: true, description: '"tokenName.fieldName" — extract ticker symbols from _requires.' },
+        tickersFrom: { type: 'string', required: true, description: '"refKey.fieldName" — extract ticker symbols from _refs.' },
       },
       outputShape: '{ quoteResponse: { result: [{ symbol, shortName, regularMarketPrice, regularMarketChange, regularMarketChangePercent }], error } }',
       example: {

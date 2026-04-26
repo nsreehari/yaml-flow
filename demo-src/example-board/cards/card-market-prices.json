@@ -10,6 +10,9 @@
     {
       "bindTo": "quotes",
       "outputFile": "market-prices-quotes.json",
+      "refs": {
+        "holdings": "requires.holdings"
+      },
       "chartApi": {
         "url": "https://query1.finance.yahoo.com/v8/finance/chart/{{ticker}}?interval=1d&range=1d",
         "headers": {

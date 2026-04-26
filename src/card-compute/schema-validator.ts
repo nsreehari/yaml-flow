@@ -213,6 +213,28 @@ export function validateLiveCardRuntimeExpressions(
     walkViewPathReferences(view, '/view', errors);
   }
 
+  // Validate source_defs[i].refs values: each must be a JSONata expression rooted at
+  // card_data or requires only. fetched_sources/computed_values/source_defs are not
+  // valid here because sources run before those namespaces exist.
+  const VALID_REFS_NAMESPACES = new Set<KnownNamespace>(['card_data', 'requires']);
+  const source_defs = asRecord.source_defs;
+  if (Array.isArray(source_defs)) {
+    source_defs.forEach((srcDef, i) => {
+      if (!srcDef || typeof srcDef !== 'object' || Array.isArray(srcDef)) return;
+      const refs = (srcDef as Record<string, unknown>).refs;
+      if (!refs || typeof refs !== 'object' || Array.isArray(refs)) return;
+      for (const [key, exprVal] of Object.entries(refs as Record<string, unknown>)) {
+        if (typeof exprVal !== 'string' || exprVal.trim().length === 0) continue;
+        validateJsonataExprWithNamespaces(
+          exprVal,
+          `/source_defs/${i}/refs/${key}`,
+          VALID_REFS_NAMESPACES,
+          errors,
+        );
+      }
+    });
+  }
+
   return { ok: errors.length === 0, errors };
 }
 

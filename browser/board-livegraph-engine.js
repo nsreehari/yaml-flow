@@ -199,14 +199,29 @@ var BoardLiveGraph = (function (exports) {
     }
     return { ok: errors.length === 0, errors };
   }
-  function enrichSources(source_defs, context) {
+  async function enrichSources(source_defs, context) {
     if (!source_defs || source_defs.length === 0) return [];
-    return source_defs.map((src) => ({
-      ...src,
-      _requires: context.requires ?? {},
-      _sourcesData: context.sourcesData ?? {},
-      _computed_values: context.computed_values ?? {}
-    }));
+    const evalCtx = {
+      card_data: context.card_data ?? {},
+      requires: context.requires ?? {}
+    };
+    return Promise.all(
+      source_defs.map(async (src) => {
+        const _refs = {};
+        if (src.refs && typeof src.refs === "object" && !Array.isArray(src.refs)) {
+          for (const [key, expr] of Object.entries(src.refs)) {
+            if (typeof expr === "string" && expr.trim().length > 0) {
+              try {
+                _refs[key] = await jsonata_shim_default(expr).evaluate(evalCtx);
+              } catch {
+                _refs[key] = void 0;
+              }
+            }
+          }
+        }
+        return { ...src, _refs };
+      })
+    );
   }
   var CardCompute = {
     run,

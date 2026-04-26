@@ -107,6 +107,11 @@
       "properties": {
         "bindTo":     { "type": "string",  "description": "Key under fetched_sources.* available in compute expressions" },
         "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
+        "refs": {
+          "type": "object",
+          "description": "Named data projections from card_data or requires, evaluated before the executor is called. Each key is a ref name; each value is a JSONata expression rooted at card_data or requires. The resolved values are passed to the executor as _refs. fetched_sources, computed_values, and source_defs are not accessible here — sources run before those exist.",
+          "additionalProperties": { "type": "string" }
+        },
         "optionalForCompletionGating":   { "type": "boolean", "default": false, "description": "When true this source does not gate card completion. Default false when absent, so source_defs are completion-gating by default." },
         "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
         "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }

@@ -344,14 +344,42 @@ Common customField conventions (demo executor supports `mock` and `copilot`):
 | Field | Meaning |
 |---|---|
 | `"mock": "key"` | Reads from `mock.db` by key — local dev only |
-| `"copilot": { "prompt_template": "...", "args": {} }` | LLM call; `{{key}}` interpolated from `_requires`, `_sourcesData`, `_computed_values`, then explicit `args` |
+| `"copilot": { "prompt_template": "...", "args": {} }` | LLM call; `{{key}}` interpolated from `_refs` (named data projections declared in `refs`), then explicit `args` |
 | `"prompt_template": "..."` | Shorthand top-level LLM call (equivalent to `copilot.prompt_template`) |
 | `"http": { "url": "...", "method": "GET" }` | HTTP/REST — implement in your executor |
 | `"graphapi": { "query": "..." }` | Microsoft Graph API — implement in your executor |
 | `"script": { "path": "...", "args": {} }` | Local script — implement in your executor |
 | `"teams"`, `"mail"`, `"incidentdb"` | Any domain integration — define in your executor |
 
-Sources can reference upstream data in their customFields (e.g. `"url": "https://api.example.com/{{orderId}}"`) — the executor receives `_requires`, `_sourcesData`, `_computed_values` to resolve such references. See [Task Executor Protocol](#task-executor-protocol) for the full `--in` payload shape.
+Sources can access upstream data via the `refs` property — named JSONata projections from `card_data` or `requires` that the engine evaluates before invoking the executor. The executor receives `_refs` containing the resolved values. See [source_defs refs](#source_defs-refs) and [Task Executor Protocol](#task-executor-protocol) for details.
+
+### source_defs refs
+
+The optional `refs` map lets a source definition declare which upstream data it needs. Each key maps to a JSONata expression rooted at `card_data` or `requires`. The engine evaluates these before invoking the executor and attaches the results as `_refs` on the source payload.
+
+```json
+"source_defs": [
+  {
+    "bindTo": "quotes",
+    "outputFile": "quotes.json",
+    "refs": {
+      "holdings": "requires.holdings",
+      "topHoldings": "requires.holdings[weight > 0.05]",
+      "threshold": "card_data.threshold"
+    },
+    "chartApi": {
+      "tickersFrom": "holdings.ticker"
+    }
+  }
+]
+```
+
+**Rules:**
+- Only `card_data` and `requires` are valid namespaces in `refs` expressions
+- `fetched_sources`, `computed_values`, and `source_defs` are **forbidden** in refs
+- Full JSONata syntax is supported (same as `compute[].expr`)
+- Sources without `refs` receive `_refs: {}` — executor must handle empty refs gracefully
+- `tickersFrom: "refKey.fieldName"` reads from `_refs[refKey]` — the `refs` key must exist
 
 ### Optional source field
 - `optionalForCompletionGating: true` — marks this source as optional for default task-completion gating. If set, the card can complete even if this source hasn't been fetched yet.
@@ -501,16 +529,12 @@ node <executor.js> run-source-fetch --in <source.json> --out <result.json> [--er
   "outputFile": "my-card-raw.json",
   "cwd": "/absolute/path/to/board",
   "boardDir": "/absolute/path/to/board",
-  "_requires": { "token-a": { ... }, "token-b": { ... } },
-  "_sourcesData": { "previously-fetched-source-key": { ... } },
-  "_computed_values": { "result": "..." },
+  "_refs": { "holdings": [ ... ], "threshold": 0.05 },
   /* ...any other customFields from the card source definition */
 }
 ```
 
-- `_requires` — resolved values for all card `requires` tokens
-- `_sourcesData` — already-fetched source_defs for this card (earlier in source_defs[] order)
-- `_computed_values` — current computed_values for the card
+- `_refs` — resolved values for all entries declared in the source's `refs` map (evaluated from `card_data`/`requires` before executor invocation). Empty object `{}` if `refs` was not declared.
 
 - **`--out`** — path to write the fetched value as raw JSON (any shape; stored under `fetched_sources.<bindTo>`)
 - **`--err`** — optional path to write a plain-text error message on failure
@@ -520,7 +544,7 @@ node <executor.js> run-source-fetch --in <source.json> --out <result.json> [--er
 | `customField` | Meaning |
 |---|---|
 | `"mock": "key"` | Lookup `key` in `mock.db` — local dev |
-| `"copilot": { "prompt_template": "..." }` | LLM call; supports `{{key}}` interpolation against `_requires`, `_sourcesData`, `_computed_values` |
+| `"copilot": { "prompt_template": "..." }` | LLM call; supports `{{key}}` interpolation against `_refs` |
 | `"http": { "url": "...", "method": "GET" }` | HTTP/REST fetch |
 | `"graphapi": { "query": "..." }` | Microsoft Graph API query |
 | `"script": { "path": "...", "args": {} }` | Run a local script |
@@ -541,7 +565,7 @@ node board-live-cards-cli.js probe-source \
   --card cards/card-market-prices.json \
   --source-idx 0 \
   --rg <boardRuntimeDir> \
-  --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'
+  --mock-refs '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'
 ```
 
 | Flag | Required | Description |
@@ -549,17 +573,17 @@ node board-live-cards-cli.js probe-source \
 | `--card <card.json>` | yes | Path to the card file to probe |
 | `--source-idx <n>` | no (default 0) | 0-based index into `source_defs[]` |
 | `--source-bind <name>` | no | Select source by `bindTo` name instead of index |
-| `--mock-requires <json>` | no | JSON string (or `@file.json`) providing the `_requires` token values the source needs. If omitted, `_requires` is `{}`. |
+| `--mock-refs <json>` | no | JSON string (or `@file.json`) providing the `_refs` values the source needs. If omitted, `_refs` is `{}`. |
 | `--rg <boardDir>` | no | Board runtime directory used to locate `.task-executor`. Defaults to the card file's directory. |
 | `--out <result.json>` | no | Write the raw fetch result to this path |
 
 **Output:** the command prints a human-readable report ending with a machine-readable `[probe-source:result]` JSON line. Exit `0` = `PROBE_PASS`, exit `1` = `PROBE_FAIL`.
 
-**`--mock-requires` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card `requires: ["holdings"]` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
+**`--mock-refs` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card declares `"refs": { "holdings": "requires.holdings" }` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
 
 **Workflow for agents authoring a new card:**
 1. Author the card JSON with `source_defs[]`.
-2. For each source, run `probe-source` with representative `--mock-requires` data.
+2. For each source, run `probe-source` with representative `--mock-refs` data.
 3. If `PROBE_PASS` → proceed with `upsert-card`.
 4. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry.
 
