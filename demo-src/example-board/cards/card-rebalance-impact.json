@@ -1,0 +1,65 @@
+{
+  "id": "card-rebalance-impact",
+  "meta": {
+    "title": "Rebalance Impact",
+    "tags": ["portfolio", "simulation"],
+    "mode": "simulation",
+    "desc": "Before/after impact summary of the proposed rebalance scenario."
+  },
+  "requires": ["positions", "proposed_trades"],
+  "compute": [
+    {
+      "bindTo": "total_current_value",
+      "expr": "$round($sum(requires.positions.value), 2)"
+    },
+    {
+      "bindTo": "trade_count",
+      "expr": "$count(requires.proposed_trades)"
+    },
+    {
+      "bindTo": "total_trade_value",
+      "expr": "$round($sum(requires.proposed_trades.trade_value), 2)"
+    },
+    {
+      "bindTo": "buys",
+      "expr": "$count($filter(requires.proposed_trades, function($t){ $t.direction = 'increase' }))"
+    },
+    {
+      "bindTo": "sells",
+      "expr": "$count($filter(requires.proposed_trades, function($t){ $t.direction = 'reduce' }))"
+    },
+    {
+      "bindTo": "max_weight_before",
+      "expr": "($tv := $sum(requires.positions.value); $round($max(requires.positions.value) / $tv * 100, 1))"
+    },
+    {
+      "bindTo": "post_positions",
+      "expr": "($tMap := $merge(requires.proposed_trades.{ticker: $}); $map(requires.positions, function($p) { ($t := $lookup($tMap, $p.ticker); $newQty := $t ? $t.proposed_qty : $p.quantity; {\"ticker\": $p.ticker, \"value\": $round($newQty * $p.price, 2)}) }))"
+    },
+    {
+      "bindTo": "max_weight_after",
+      "expr": "($tv := $sum(computed_values.post_positions.value); $round($max(computed_values.post_positions.value) / $tv * 100, 1))"
+    },
+    {
+      "bindTo": "est_tax_impact",
+      "expr": "$round($sum($filter(requires.proposed_trades, function($t){ $t.direction = 'reduce' }).trade_value) * 0.15, 2)"
+    },
+    {
+      "bindTo": "summary_md",
+      "expr": "'| Metric | Before | After |\\n|---|---|---|\\n| Top holding weight | ' & $string(computed_values.max_weight_before) & '% | ' & $string(computed_values.max_weight_after) & '% |\\n| Portfolio value | $' & $string(computed_values.total_current_value) & ' | ~$' & $string($round(computed_values.total_current_value - computed_values.est_tax_impact, 2)) & ' |\\n\\n**Trades:** ' & $string(computed_values.trade_count) & ' (' & $string(computed_values.buys) & ' buys, ' & $string(computed_values.sells) & ' sells)  \\n**Total trade value:** $' & $string(computed_values.total_trade_value) & '  \\n**Est. tax impact:** ~$' & $string(computed_values.est_tax_impact)"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "markdown",
+        "data": { "bind": "computed_values.summary_md" }
+      }
+    ],
+    "layout": {
+      "board": { "col": 6, "order": 8 },
+      "canvas": { "x": 1360, "y": 480, "w": 400, "h": 280 }
+    }
+  },
+  "card_data": {}
+}
