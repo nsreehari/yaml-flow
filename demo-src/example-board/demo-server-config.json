@@ -1,7 +1,10 @@
 {
   "port": 7799,
+  "cardsDir": "./cards",
   "taskExecutorPath": "./demo-task-executor.js",
   "chatHandlerPath": "./demo-chat-handler.js",
-  "gandalfTaskExecutorPath": "",
-  "gandalfChatHandlerPath": ""
+  "chatSessionsDir": "",
+  "gandalfCardsDir": "./gandalf-cards",
+  "gandalfTaskExecutorPath": "./demo-task-executor.js",
+  "gandalfChatHandlerPath": "./demo-chat-handler.js"
 }

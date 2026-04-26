@@ -48,10 +48,12 @@ function resolveFromConfig(configValue) {
 
 const serverConfig = loadServerConfig();
 const configuredCliJs = resolveFromConfig(serverConfig.boardLiveCardsCliJs) || _pkgCliJs;
+const configuredCardsDir = resolveFromConfig(serverConfig.cardsDir);
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
 const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath) || _pkgStepMachineCli;
 const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
 const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
+const configuredGandalfCardsDir = resolveFromConfig(serverConfig.gandalfCardsDir);
 const configuredGandalfTaskExecutorPath = resolveFromConfig(serverConfig.gandalfTaskExecutorPath);
 const configuredGandalfChatHandlerPath = resolveFromConfig(serverConfig.gandalfChatHandlerPath);
 const configuredGandalfInferenceAdapterPath = resolveFromConfig(serverConfig.gandalfInferenceAdapterPath);
@@ -80,11 +82,12 @@ const CORS_HEADERS = {
 
 const runtime = createMultiBoardServerRuntime({
   apiBasePath: '/api/boards',
-  defaultCardsDir: path.join(__dirname, 'cards'),
-  defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || path.join(__dirname, 'demo-task-executor.js'),
+  defaultCardsDir: process.env.DEMO_CARDS_DIR || configuredCardsDir || null,
+  defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || null,
   defaultStepMachineCliPath: process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath,
-  defaultChatHandlerPath: process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || path.join(__dirname, 'demo-chat-handler.js'),
+  defaultChatHandlerPath: process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || null,
   defaultInferenceAdapterPath: process.env.DEMO_INFERENCE_ADAPTER_PATH || configuredInferenceAdapterPath || null,
+  defaultGandalfCardsDir: process.env.DEMO_GANDALF_CARDS_DIR || configuredGandalfCardsDir || null,
   defaultGandalfTaskExecutorPath: process.env.DEMO_GANDALF_TASK_EXECUTOR_PATH || configuredGandalfTaskExecutorPath || null,
   defaultGandalfChatHandlerPath: process.env.DEMO_GANDALF_CHAT_HANDLER_PATH || configuredGandalfChatHandlerPath || null,
   defaultGandalfInferenceAdapterPath: process.env.DEMO_GANDALF_INFERENCE_ADAPTER_PATH || configuredGandalfInferenceAdapterPath || null,
@@ -97,10 +100,12 @@ function resetRuntime() {
     fs.rmSync(setupDir, { recursive: true, force: true });
     console.log(`[demo-server] reset: wiped ${setupDir}`);
   }
-  const chatSessions = path.join(os.tmpdir(), 'demo-chat-handler-sessions');
-  if (fs.existsSync(chatSessions)) {
-    fs.rmSync(chatSessions, { recursive: true, force: true });
-    console.log(`[demo-server] reset: wiped ${chatSessions}`);
+  const chatSessionsDir = serverConfig.chatSessionsDir
+    ? path.resolve(__dirname, serverConfig.chatSessionsDir)
+    : path.join(os.tmpdir(), 'demo-chat-handler-sessions');
+  if (fs.existsSync(chatSessionsDir)) {
+    fs.rmSync(chatSessionsDir, { recursive: true, force: true });
+    console.log(`[demo-server] reset: wiped ${chatSessionsDir}`);
   }
 }
 
@@ -124,7 +129,7 @@ async function handleDemoSetup(req, res, boardId) {
     const { service, boardRoot } = runtime.requireBoardService(boardId);
     let setupPerformed = false;
 
-    if (!fs.existsSync(path.join(boardRoot, 'surface', 'tmp-cards'))) {
+    if (!service.isDemoSetupDone()) {
       service.ensureDemoSetup();
       setupPerformed = true;
     }

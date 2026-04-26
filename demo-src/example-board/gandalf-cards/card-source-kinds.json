@@ -1,0 +1,35 @@
+{
+  "id": "card-source-kinds",
+  "meta": {
+    "title": "Source Connection Types",
+    "tags": ["admin"],
+    "desc": "Reference card listing the source def kinds supported by the demo task executor.",
+    "_gandalfCard": true
+  },
+  "provides": [],
+  "compute": [],
+  "view": {
+    "elements": [
+      {
+        "kind": "table",
+        "label": "Supported connection types",
+        "data": {
+          "bind": "card_data.kinds",
+          "columns": ["kind", "description"]
+        }
+      }
+    ],
+    "layout": {
+      "board": { "col": 4, "order": 99 },
+      "canvas": { "x": 900, "y": 50, "w": 480, "h": 220 }
+    }
+  },
+  "card_data": {
+    "kinds": [
+      { "kind": "mock",     "description": "Look up a key in the hardcoded MOCK_DB dictionary." },
+      { "kind": "copilot",  "description": "Invoke GitHub Copilot CLI with an interpolated prompt template." },
+      { "kind": "http",     "description": "Fetch a URL via curl; supports {{key}} interpolation and tickersFrom." },
+      { "kind": "chartApi", "description": "Yahoo Finance chart API — one request per ticker, quote-compatible shape." }
+    ]
+  }
+}

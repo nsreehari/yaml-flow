@@ -748,8 +748,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     didDemoSetup = true;
   }
 
+  function isDemoSetupDone() {
+    return didDemoSetup && fs.existsSync(tmpCardsDir);
+  }
+
   function ensureDemoSetup() {
-    if (didDemoSetup && fs.existsSync(tmpCardsDir)) return;
+    if (isDemoSetupDone()) return;
     demoPrepSetup();
   }
 
@@ -928,6 +932,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function bootstrapGandalfCards() {
     if (!fs.existsSync(tmpGandalfCardsDir)) return;
+    if (!fs.existsSync(gandalfBoardFile)) return; // runtime not initialized; initBoardAndSetup handles it
     const jsonFiles = (fs.readdirSync(tmpGandalfCardsDir)).filter(f => f.endsWith('.json'));
     if (!jsonFiles.length) return;
     runCli(['upsert-card', '--rg', gandalfRuntimeDir, '--card-glob', path.join(tmpGandalfCardsDir, '*.json')]);
@@ -1577,6 +1582,7 @@ export function createExampleBoardServerRuntime(options = {}) {
     runCli,
     demoPrepSetup,
     ensureDemoSetup,
+    isDemoSetupDone,
     buildPublishedRuntimePayload,
     handleRuntimeApi,
     clearChatRecords,
