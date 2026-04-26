@@ -74,6 +74,7 @@ vocabulary:
   - `outputFile` → where the fetched result is cached
   - `customFields` → interpreted by the registered **task-executor** (examples: `mock`, `copilot`, `http`, `script`)
 - Produces: `fetched_sources.*`
+- **`sources` is NOT a valid data namespace** — it is the config array of source definitions. Use `fetched_sources.*` to reference fetched data.
 
 ### Stage 2 — Compute
 - **Runs after sources.** Reads `requires.*`, `fetched_sources.*`, `card_data.*`.
@@ -355,6 +356,43 @@ Sources can reference upstream data in their customFields (e.g. `"url": "https:/
 ### Optional source field
 - `optionalForCompletionGating: true` — marks this source as optional for default task-completion gating. If set, the card can complete even if this source hasn't been fetched yet.
 
+### Discovering supported source kinds
+
+Rather than guessing which source `customFields` the registered executor supports, query it directly:
+
+```bash
+node board-live-cards-cli.js describe-task-executor-capabilities --rg <boardDir>
+```
+
+This invokes the executor's `describe-capabilities` subcommand and prints its capabilities JSON to stdout. The output includes:
+- **`sourceKinds`** — every source kind the executor handles (e.g. `mock`, `copilot`, `http`, `chartApi`), each with:
+  - `description` — what the kind does
+  - `inputSchema` — the exact `customFields` the executor expects on the source entry
+  - `outputShape` — the shape of the JSON written to `--out`
+  - `example` — sample input/output pair
+- **`extraSchema`** — fields available via `--extra` (board topology context)
+- **`subcommands`** — supported subcommands (typically `run-source-fetch` + `describe-capabilities`)
+
+**Use this before authoring a card** to confirm the executor handles your intended source kind and to discover the correct field names and types. If the kind is missing from the output, the executor needs extending before the card will work.
+
+Example output (excerpt):
+```json
+{
+  "sourceKinds": {
+    "mock": {
+      "description": "Look up a key in a hardcoded MOCK_DB dictionary.",
+      "inputSchema": { "mock": { "type": "string", "required": true } }
+    },
+    "copilot": {
+      "description": "Invoke GitHub Copilot CLI with an interpolated prompt template.",
+      "inputSchema": {
+        "copilot": { "type": "object", "properties": { "prompt_template": { "type": "string" } } }
+      }
+    }
+  }
+}
+```
+
 ## LLM Calls — Use a Source
 
 **All LLM calls belong in sources[], handled by the task executor.** There is one mechanism for external calls — sources.
@@ -388,13 +426,13 @@ If the LLM needs computed values (which compute first), chain two cards: Card A 
 
 ### CLI (recommended for authoring)
 ```bash
-# Validate all cards in example-board
-npm run validate:cards -- "examples/example-board/cards/*.json"
+# Validate a single card
+node board-live-cards-cli.js validate-card --card cards/my-card.json
 
-# Validate any glob pattern
-npm run validate:cards -- "path/to/cards/*.json"
+# Validate all cards matching a glob
+node board-live-cards-cli.js validate-card --card-glob "cards/*.json"
 ```
-Uses `validateLiveCardDefinition` — structural + schema checks, reports all errors per file.
+Checks JSON Schema structure, JSONata expression syntax in `compute[].expr`, and `provides[].src` namespace validity. Reports per-file OK/FAIL with detailed errors. Exits with code 1 if any card fails.
 
 ### Programmatic
 ```typescript
@@ -425,7 +463,8 @@ When in doubt about allowed fields, consult:
 - `card_data` required, must be an object
 - `requires` must be array of strings (if present)
 - `provides` must be array of `{ bindTo: string, src: string }` (if present)
-- `compute[]` each entry must have `bindTo` + `expr` strings
+- `provides[].src` must start with a valid namespace: `card_data`, `requires`, `fetched_sources`, or `computed_values`
+- `compute[]` each entry must have `bindTo` + `expr` strings; `expr` must be valid JSONata
 - `sources[]` each entry must have `bindTo` + `outputFile` strings; both must be unique across the array
 - `view.elements` required, non-empty; each element must have a valid `kind`
 - Top-level unknown keys are flagged as errors
@@ -521,7 +560,7 @@ node board-live-cards-cli.js probe-source \
 **Workflow for agents authoring a new card:**
 1. Author the card JSON with `sources[]`.
 2. For each source, run `probe-source` with representative `--mock-requires` data.
-3. If `PROBE_PASS` → proceed with `add-cards` or `upsert-card`.
+3. If `PROBE_PASS` → proceed with `upsert-card`.
 4. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry.
 
 ---
