@@ -89,6 +89,8 @@ var LiveCard = (function () {
       .lc-files-modal-backdrop .modal-dialog { max-height:90vh; }
       .lc-files-modal-backdrop .modal-content { display:flex; flex-direction:column; max-height:90vh; }
       .lc-files-modal-backdrop .modal-body { overflow-y:auto; flex:1; min-height:200px; padding:1rem; }
+      .lc-simulation-card { background:#fdf6ec; border-color:#e0c97f !important; }
+      .lc-simulation-card .card-header { background:#faecc8; border-bottom-color:#e0c97f; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -2453,10 +2455,11 @@ var LiveCard = (function () {
 
     function _buildCardWrapper(node) {
       const wrap = document.createElement('div');
-      wrap.className = 'card shadow-sm h-100';
+      const card = node && node.card ? node.card : {};
+      const isSimulation = card.meta && card.meta.mode === 'simulation';
+      wrap.className = 'card shadow-sm h-100' + (isSimulation ? ' lc-simulation-card' : '');
       const header = document.createElement('div');
       header.className = 'card-header d-flex align-items-center gap-2 py-2';
-      const card = node && node.card ? node.card : {};
       const title = (card.meta && card.meta.title) || node.id;
       const tags = (card.meta && card.meta.tags) || [];
       let badgeHtml = '';
@@ -2468,11 +2471,35 @@ var LiveCard = (function () {
       }
       header.innerHTML = '<strong class="small">' + _esc(title) + '</strong>' + badgeHtml;
       
+      // Simulation mode: pin & discard buttons
+      if (isSimulation) {
+        const simBtns = document.createElement('span');
+        simBtns.className = 'd-inline-flex align-items-center gap-1 ms-auto';
+
+        const pinBtn = document.createElement('button');
+        pinBtn.className = 'btn btn-sm btn-outline-success lc-sim-pin';
+        pinBtn.style.cssText = 'padding: 2px 6px;';
+        pinBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 2h6l-1 7h-4L9 2z"/><path d="M6 17h12l-2-4H8L6 17z"/></svg>';
+        pinBtn.title = 'Pin this simulation card';
+        pinBtn.dataset.nodeId = node.id;
+
+        const discardBtn = document.createElement('button');
+        discardBtn.className = 'btn btn-sm btn-outline-danger lc-sim-discard';
+        discardBtn.style.cssText = 'padding: 2px 6px;';
+        discardBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        discardBtn.title = 'Discard this simulation card';
+        discardBtn.dataset.nodeId = node.id;
+
+        simBtns.appendChild(pinBtn);
+        simBtns.appendChild(discardBtn);
+        header.appendChild(simBtns);
+      }
+
       // Add dev mode code icon button if devMode is enabled
       if (devMode.current) {
         const codeBtn = document.createElement('button');
         codeBtn.className = 'btn btn-sm btn-outline-secondary';
-        codeBtn.style.cssText = 'padding: 2px 6px; margin-left: auto;';
+        codeBtn.style.cssText = 'padding: 2px 6px;' + (isSimulation ? '' : ' margin-left: auto;');
         codeBtn.innerHTML = '&lt;/&gt;';
         codeBtn.title = 'Inspect card data';
         codeBtn.addEventListener('click', function(e) {
@@ -2625,7 +2652,8 @@ var LiveCard = (function () {
           _makeDraggable(el, node);
         } else {
           const el = document.createElement('div');
-          el.className = 'lc-canvas-card card shadow-sm';
+          const isSimCanvas = node.card && node.card.meta && node.card.meta.mode === 'simulation';
+          el.className = 'lc-canvas-card card shadow-sm' + (isSimCanvas ? ' lc-simulation-card' : '');
           el.dataset.nodeId = node.id;
           el.style.left = pos.x + 'px';
           el.style.top  = pos.y + 'px';
