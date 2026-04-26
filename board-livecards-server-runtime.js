@@ -842,7 +842,7 @@ export function createExampleBoardServerRuntime(options = {}) {
     const taskExecutorExtra = JSON.stringify({
       boardSetupRoot,
       boardId,
-      gandalfRuntimeDir:  path.relative(boardSetupRoot, gandalfRuntimeDir),
+      boardRuntimeDir:  path.relative(boardSetupRoot, gandalfRuntimeDir),
       runtimeStatusDir: path.relative(boardSetupRoot, gandalfRuntimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpGandalfCardsDir),
     });
@@ -879,15 +879,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     const taskExecutorExtra = JSON.stringify({
       boardSetupRoot,
       boardId,
-      gandalfRuntimeDir:  path.relative(boardSetupRoot, boardDir),
+      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
       runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
     });
 
     const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
-    if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
-    if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
-    initArgs.push('--runtime-out', runtimeOutDir);
     if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
     if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
     initArgs.push('--runtime-out', runtimeOutDir);
@@ -1171,18 +1168,20 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   // Fire-and-forget invocation of .chat-handler after a user chat message is persisted.
-  // boardDir/.chat-handler must contain the handler command as a single-line string.
+  // The handler file lives in the appropriate runtime dir (.chat-handler).
   // Called with: --boardId <id> --cardId <id> --extraEncJson <base64json>
   // extraEncJson decodes to:
   //   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
-  //   gandalfRuntimeDir — relative: 'runtime'
+  //   boardRuntimeDir — relative: 'runtime' (or 'gandalf-runtime' for gandalf cards)
   //   runtimeStatusDir— relative: 'runtime-out'
-  //   cardsDir        — relative: 'surface/tmp-cards'
+  //   cardsDir        — relative: 'surface/tmp-cards' (or 'surface/tmp-gandalf-cards')
   //   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
   //   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
   // Handler failures are logged and silently ignored — chat-send response is never affected.
   function invokeChatHandler(cardId, chatsDir, lastChatFile) {
-    const handlerFile = path.join(boardDir, '.chat-handler');
+    const isGandalf = isGandalfCard(cardId);
+    const runtimeDir = isGandalf ? gandalfRuntimeDir : boardDir;
+    const handlerFile = path.join(runtimeDir, '.chat-handler');
     if (!fs.existsSync(handlerFile)) return;
     const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
     if (!handlerCmd) return;
@@ -1191,9 +1190,9 @@ export function createExampleBoardServerRuntime(options = {}) {
     try { fs.mkdirSync(chatsDir, { recursive: true }); fs.writeFileSync(processingFile, '', 'utf-8'); } catch {}
     const extra = Buffer.from(JSON.stringify({
       boardSetupRoot,
-      gandalfRuntimeDir:  path.relative(boardSetupRoot, boardDir),
-      runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
-      cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
+      boardRuntimeDir:  path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeDir : boardDir),
+      runtimeStatusDir: path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeOutDir : runtimeOutDir),
+      cardsDir:         path.relative(boardSetupRoot, isGandalf ? tmpGandalfCardsDir : tmpCardsDir),
       chatDir:          chatsDir,
       lastChatFile,
     })).toString('base64');
