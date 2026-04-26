@@ -582,10 +582,28 @@ node board-live-cards-cli.js probe-source \
 **`--mock-refs` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card declares `"refs": { "holdings": "requires.holdings" }` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
 
 **Workflow for agents authoring a new card:**
-1. Author the card JSON with `source_defs[]`.
-2. For each source, run `probe-source` with representative `--mock-refs` data.
-3. If `PROBE_PASS` → proceed with `upsert-card`.
-4. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry.
+1. **Discover available source kinds** — run `describe-task-executor-capabilities` to see exactly which source kinds the registered executor supports, their required `customFields`, and expected output shapes. Only use source kinds present in this output.
+   ```bash
+   node board-live-cards-cli.js describe-task-executor-capabilities --rg <boardDir>
+   ```
+2. **Author the card JSON** with `source_defs[]`, `compute[]`, `provides[]`, and `view` using only the source kinds confirmed in step 1.
+3. **Validate the card structure** — run `validate-card` to catch schema errors, invalid JSONata expressions, and namespace violations before attempting any live fetch.
+   ```bash
+   node board-live-cards-cli.js validate-card --card cards/my-card.json
+   ```
+   Fix any reported errors and re-run until validation passes.
+4. **Probe each source** — run `probe-source` with representative `--mock-refs` data to confirm the executor can successfully fetch each source.
+5. If `PROBE_PASS` → proceed with `upsert-card`.
+6. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry from step 3.
+
+**Workflow for agents editing an existing card:**
+1. Make the change to the card JSON.
+2. **Validate immediately** — run `validate-card` after every edit.
+   ```bash
+   node board-live-cards-cli.js validate-card --card cards/my-card.json
+   ```
+3. If validation fails, fix the reported errors and re-run — repeat until the card is clean.
+4. If the change touches a `source_defs[]` entry, also run `probe-source` to confirm the source still fetches correctly before deploying.
 
 ---
 
