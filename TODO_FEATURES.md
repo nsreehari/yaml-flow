@@ -65,7 +65,7 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
 - [ ] 12. Support for mail access via graph-api queries
 - [ ] 13. Support for Foundry Models / Agency in demo-tool-executor
 - [ ] 14. Support for MCP tools
-
+- [ ] 15. Simulation mode wiring for the cards
 
 ## Completed Recently
 

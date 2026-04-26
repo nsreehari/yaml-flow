@@ -3,7 +3,7 @@
   "meta": {
     "title": "Rebalance Proposal",
     "tags": ["portfolio", "simulation"],
-    "mode": "simulation",
+    "simulation": true,
     "desc": "AI-proposed rebalance trades based on portfolio intelligence. Edit quantities before pinning."
   },
   "requires": ["holdings", "portfolio_mix", "portfolio_risks", "portfolio_action", "positions"],
