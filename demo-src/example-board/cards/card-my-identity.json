@@ -10,7 +10,7 @@
       "bindTo": "identity",
       "outputFile": "card-my-identity.txt",
       "workiq": {
-        "query_template": "what is my full display name"
+        "query_template": "what is my full display name. No Fluff. No Commentary. No Descriptions. Just Answer the Question"
       }
     }
   ],
