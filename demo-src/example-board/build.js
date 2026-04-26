@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Build: example-board-src → examples/example-board
+ * Build: demo-src/example-board → examples/example-board
  *
  * This script is the authoritative source-to-distribution transform.
- * Run it whenever you change example-board-src/ to regenerate the npm-facing output.
+ * Run it whenever you change demo-src/example-board/ to regenerate the npm-facing output.
  *
  * Transformations applied:
  *   HTML  ../../browser/<file>.js  →  https://cdn.jsdelivr.net/npm/yaml-flow/browser/<file>.js
@@ -30,9 +30,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SRC_DIR = __dirname;
-const OUT_DIR = path.resolve(__dirname, '../examples/example-board');
+const OUT_DIR = path.resolve(__dirname, '../../examples/example-board');
 
-const _pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'));
+const _pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8'));
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/yaml-flow@${_pkg.version}`;
 
 // ---------------------------------------------------------------------------

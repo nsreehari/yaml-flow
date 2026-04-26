@@ -748,9 +748,11 @@ describe('createCliAdapter', () => {
   });
 
   it('executes a CLI command and returns stdout', async () => {
+    // Use `node -e` instead of `echo` — echo is a shell built-in on Windows and
+    // cannot be spawned via execFile directly.
     const adapter = createCliAdapter({
-      command: 'echo',
-      args: () => ['[{"taskName":"test","confidence":0.9,"reasoning":"echo works"}]'],
+      command: 'node',
+      args: () => ['-e', 'console.log(\'[{"taskName":"test","confidence":0.9,"reasoning":"echo works"}]\')'],
     });
 
     const result = await adapter.analyze('anything');
