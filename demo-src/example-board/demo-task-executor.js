@@ -44,7 +44,7 @@
  *   - { "url-list": { method?, headers?, cacheTimeout? } }
  *       → fan-out over _projections.url_list (string[]); returns array of responses.
  *         Build url_list in projections: e.g. `requires.holdings.ticker.('https://host/' & $ & '?q=1')`
- *   - { chartApi: { url, headers? }, tickersFrom }  → [Legacy] Yahoo Finance per-ticker;
+ *   - { chartApi: { url, headers? }, tickersFrom }  → removed; use url-list instead
  *     prefer url-list for new sources
  *   A real executor can also handle: graphapi, teams, mail, incidentdb, script, etc.
  *
@@ -80,7 +80,7 @@ const MOCK_DB = {
 };
 
 // ---------------------------------------------------------------------------
-// Simple 1-hour file cache for HTTP / chartApi results.
+// Simple file cache for url / url-list results.
 // Stored in os.tmpdir()/demo-executor-cache/<hash>.json
 // ---------------------------------------------------------------------------
 const CACHE_DIR = path.join(os.tmpdir(), 'demo-executor-cache');
@@ -276,70 +276,7 @@ function runSourceFetchSubcommand(argv) {
 
   let resultValue;
 
-  if (sourceDef.chartApi) {
-    // ---------------------------------------------------------------------------
-    // chartApi source kind — Yahoo Finance v8/finance/chart (free, per-ticker)
-    // Uses curl (synchronous subprocess) to avoid Node.js libuv handle issues.
-    // ---------------------------------------------------------------------------
-    const chartCfg = sourceDef.chartApi;
-    const headers = { ...(chartCfg.headers || {}) };
-
-    // Extract tickers array from _projections via tickersFrom
-    let tickers = [];
-    if (sourceDef.tickersFrom) {
-      const dotIdx = sourceDef.tickersFrom.indexOf('.');
-      if (dotIdx > 0) {
-        const refKey = sourceDef.tickersFrom.slice(0, dotIdx);
-        const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
-        const arr = sourceDef._projections?.[refKey];
-        if (Array.isArray(arr)) {
-          tickers = arr.map(h => h[fieldName]).filter(Boolean);
-        }
-      }
-    }
-
-    if (tickers.length === 0) {
-      console.warn('[demo-task-executor] chartApi: tickersFrom resolved to empty list — falling back to mock');
-    } else {
-      const chartCacheKey = cacheKey('chartApi:' + tickers.sort().join(',') + chartCfg.url);
-      const cached = readCache(chartCacheKey);
-      if (cached) {
-        console.warn(`[demo-task-executor] chartApi: cache hit for [${tickers.join(', ')}]`);
-        resultValue = cached;
-      } else {
-        try {
-          const results = [];
-          for (const ticker of tickers) {
-            const url = interpolatePrompt(chartCfg.url, { ticker });
-            const data = curlFetchJson(url, 'GET', headers);
-            const meta = data?.chart?.result?.[0]?.meta;
-            if (!meta) throw new Error(`No chart meta for ${ticker}`);
-            // Map to quote-compatible shape; compute change from chartPreviousClose
-            const price = meta.regularMarketPrice ?? 0;
-            const prevClose = meta.chartPreviousClose ?? price;
-            const change = price - prevClose;
-            const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
-            results.push({
-              symbol: meta.symbol ?? ticker,
-              shortName: meta.shortName ?? meta.longName ?? ticker,
-              regularMarketPrice: price,
-              regularMarketChange: change,
-              regularMarketChangePercent: changePct,
-            });
-          }
-          resultValue = { quoteResponse: { result: results, error: null } };
-          writeCache(chartCacheKey, resultValue);
-        } catch (chartErr) {
-          fail(`chartApi fetch failed: ${chartErr.message}`, errFile);
-        }
-      }
-    }
-
-    if (resultValue === undefined) {
-      fail('chartApi: no tickers resolved — cannot fetch', errFile);
-    }
-
-  } else if (sourceDef['url']) {
+  if (sourceDef['url']) {
     // ---------------------------------------------------------------------------
     // url — single URL fetch via curl
     // {{key}} interpolation applied to url from _projections and optional args.
@@ -470,7 +407,7 @@ function runSourceFetchSubcommand(argv) {
       fail(`Key "${sourceDef.mock}" not found in MOCK_DB`, errFile);
     }
   } else {
-    fail('Source definition has no recognised kind (copilot, url, url-list, chartApi, mock)', errFile);
+    fail('Source definition has no recognised kind (url, url-list, copilot, mock)', errFile);
   }
 
   // Write result to --out as JSON payload, same contract as current mock mode.
@@ -510,38 +447,23 @@ function validateSourceDefSubcommand(argv) {
   const errors = [];
 
   // Determine source kind and validate required fields
-  const hasChartApi   = !!sourceDef.chartApi;
   const hasUrl   = !!sourceDef['url'];
   const hasUrlList  = !!sourceDef['url-list'];
   const hasCopilot    = !!sourceDef.copilot;
   const hasPromptTemplate = typeof sourceDef.prompt_template === 'string';
   const hasMock       = sourceDef.mock !== undefined;
 
-  const kindCount = [hasChartApi, hasUrl, hasUrlList, hasCopilot || hasPromptTemplate, hasMock].filter(Boolean).length;
+  const kindCount = [hasUrl, hasUrlList, hasCopilot || hasPromptTemplate, hasMock].filter(Boolean).length;
 
   if (kindCount === 0) {
-    errors.push('No recognised source kind (url, url-list, copilot, chartApi, mock). Add one of these fields.');
+    errors.push('No recognised source kind (url, url-list, copilot, mock). Add one of these fields.');
   } else if (kindCount > 1) {
     const kinds = [];
-    if (hasChartApi)  kinds.push('chartApi');
     if (hasUrl)  kinds.push('url');
     if (hasUrlList) kinds.push('url-list');
     if (hasCopilot || hasPromptTemplate) kinds.push('copilot');
     if (hasMock)      kinds.push('mock');
     errors.push(`Multiple source kinds specified: [${kinds.join(', ')}]. Use exactly one.`);
-  }
-
-  if (hasChartApi) {
-    if (typeof sourceDef.chartApi !== 'object') {
-      errors.push('chartApi must be an object.');
-    } else {
-      if (!sourceDef.chartApi.url || typeof sourceDef.chartApi.url !== 'string') {
-        errors.push('chartApi.url is required and must be a string.');
-      }
-    }
-    if (!sourceDef.tickersFrom || typeof sourceDef.tickersFrom !== 'string') {
-      errors.push('chartApi requires tickersFrom (string, e.g. "holdings.ticker").');
-    }
   }
 
   if (hasUrl) {
@@ -645,20 +567,6 @@ const CAPABILITIES = {
       },
       outputShape: 'Array of raw JSON responses, one per URL in _projections.url_list.',
       urlListNote: 'Declare `"projections": { "url_list": "<JSONata producing string[]>" }` on the source def. Example: `requires.holdings.ticker.(\'https://api.example.com/\' & $ & \'?q=1\')`',
-    },
-    chartApi: {
-      description: '[Legacy] Yahoo Finance chart API — one request per ticker, mapped to quote-compatible shape. Prefer url-list for new sources.',
-      inputSchema: {
-        chartApi: {
-          type: 'object', required: true,
-          properties: {
-            url:     { type: 'string', required: true,  description: 'Chart API URL with {{ticker}} placeholder.' },
-            headers: { type: 'object', required: false, description: 'Request headers.' },
-          },
-        },
-        tickersFrom: { type: 'string', required: true, description: '"refKey.fieldName" — extract ticker symbols from _projections.' },
-      },
-      outputShape: '{ quoteResponse: { result: [{ symbol, shortName, regularMarketPrice, regularMarketChange, regularMarketChangePercent }], error } }',
     },
   },
   extraSchema: {

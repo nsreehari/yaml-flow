@@ -29,8 +29,7 @@
       { "kind": "mock",           "description": "Look up a key in the hardcoded MOCK_DB dictionary." },
       { "kind": "copilot",        "description": "Invoke GitHub Copilot CLI with an interpolated prompt template." },
       { "kind": "url",      "description": "Single URL fetch via curl with {{key}} interpolation from _projections. Optional cacheTimeout (seconds)." },
-      { "kind": "url-list", "description": "Fan-out over _projections.url_list (string[]); returns array of raw JSON responses. Build url_list in projections JSONata." },
-      { "kind": "chartApi",       "description": "[Legacy] Yahoo Finance chart API — per-ticker requests mapped to quoteResponse shape. Prefer url-list for new sources." }
+      { "kind": "url-list", "description": "Fan-out over _projections.url_list (string[]); returns array of raw JSON responses. Build url_list in projections JSONata." }
     ]
   }
 }
