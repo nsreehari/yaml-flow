@@ -1851,6 +1851,68 @@ var LiveCard = (function () {
       };
     }
 
+    // ---- ref ----
+    // Indirection element: resolves a bind path to get the view definition,
+    // then dispatches to the real renderer. The resolved value may be:
+    //   - a string  → treated directly as the element kind ("table", "chart", etc.)
+    //   - an object → { kind, label, data: { columns, chartType, chartOptions, writeTo } }
+    //                 merged with static elemDef (static fields win for protection)
+    //   - null/undefined → falls back to elemDef.data.fallbackKind or shape-inferred kind
+    //
+    // Allowed kinds from resolved value (whitelist, unknown → "table"):
+    //   table, editable-table, chart, metric, list, badge, text, narrative, markdown
+    //
+    // Usage:
+    //   { "kind": "ref",
+    //     "data": { "bind": "fetched_sources.rebalance.proposed_trades",
+    //               "viewBind": "card_data.display_mode",
+    //               "fallbackKind": "table" } }
+    //
+    // viewBind can point to any namespace: card_data, fetched_sources, requires, computed_values.
+    // If the resolved view object contains a "bind" sub-path, that overrides data.bind.
+    const _REF_KIND_WHITELIST = new Set([
+      'table','editable-table','chart','metric','list','badge',
+      'text','narrative','markdown','form','filter','todo','alert',
+    ]);
+    function _renderRef(data, el, elemDef, node) {
+      const ed = elemDef.data || {};
+
+      // Resolve the view hint
+      const viewRaw = ed.viewBind ? _resolveBind(node, ed.viewBind) : undefined;
+
+      let resolvedKind, resolvedExtra;
+      if (typeof viewRaw === 'string' && viewRaw) {
+        resolvedKind  = viewRaw;
+        resolvedExtra = {};
+      } else if (viewRaw && typeof viewRaw === 'object' && !Array.isArray(viewRaw)) {
+        resolvedKind  = typeof viewRaw.kind === 'string' ? viewRaw.kind : undefined;
+        resolvedExtra = viewRaw.data && typeof viewRaw.data === 'object' ? viewRaw.data : {};
+      }
+
+      // Validate kind against whitelist; fall back to shape inference
+      if (!resolvedKind || !_REF_KIND_WHITELIST.has(resolvedKind)) {
+        resolvedKind = ed.fallbackKind && _REF_KIND_WHITELIST.has(ed.fallbackKind)
+          ? ed.fallbackKind
+          : (Array.isArray(data) ? 'table' : typeof data === 'string' ? 'text' : 'narrative');
+      }
+
+      // Build effective elemDef: resolved hints first, static elemDef fields override (card author wins)
+      const mergedData = Object.assign({}, resolvedExtra, ed);
+      delete mergedData.viewBind;
+      delete mergedData.fallbackKind;
+
+      // If the resolved hint provided its own bind path, honour it (but static ed.bind still wins)
+      if (!mergedData.bind && resolvedExtra.bind) mergedData.bind = resolvedExtra.bind;
+
+      const effectiveElemDef = Object.assign({}, elemDef, { kind: resolvedKind }, { data: mergedData });
+
+      // Re-resolve data using effective bind (may have changed)
+      const effectiveData = mergedData.bind ? _resolveBind(node, mergedData.bind) : data;
+
+      const renderer = _renderers[resolvedKind] || _renderers.table;
+      renderer(effectiveData, el, effectiveElemDef, node);
+    }
+
     // ---- Register built-in renderers ----
 
     _renderers.table          = _renderTable;
@@ -1871,6 +1933,7 @@ var LiveCard = (function () {
     _renderers['file-upload'] = _renderFileUpload;
     _renderers['chat']        = _renderChatEl;
     _renderers.actions        = _renderActions;
+    _renderers.ref            = _renderRef;
 
     // ===========================================================================
     // _renderElements — render all view.elements for a card node

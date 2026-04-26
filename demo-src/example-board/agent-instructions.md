@@ -273,6 +273,123 @@ Alert/callout display element.
 ### `custom`
 Custom element kind — behaviour defined by the host application.
 
+### `ref`
+Indirection element that resolves its rendered kind at runtime from any namespace variable. The card author declares the data source (`bind`) and where to look up the view definition (`viewBind`). The resolved view definition can come from `card_data` (user-selectable UI), `fetched_sources` (LLM-suggested), `requires` (cross-card), or `computed_values`.
+
+**Resolved value shape:**
+- A **string** — used directly as the element kind: `"table"`, `"chart"`, `"editable-table"`, etc.
+- An **object** — `{ kind, label, data: { columns, chartType, chartOptions, writeTo, ... } }` — merged with the static elemDef (static fields always win, so card authors can fence LLM suggestions).
+- `null`/`undefined` — falls back to `fallbackKind` or shape inference (`array→table`, `string→text`, `object→narrative`).
+
+**Allowed kind values** (whitelist; unknown values fall to `table`):
+`table`, `editable-table`, `chart`, `metric`, `list`, `badge`, `text`, `narrative`, `markdown`, `form`, `filter`, `todo`, `alert`
+
+```json
+{ "kind": "ref",
+  "label": "Trade Data",
+  "data": {
+    "bind": "fetched_sources.rebalance.proposed_trades",
+    "viewBind": "card_data.display_mode",
+    "fallbackKind": "table"
+  }
+}
+```
+
+**Pattern 1 — User-selectable view (selector pattern)**
+
+Pair a `form` element with a `ref` element. The form writes the chosen kind into `card_data`; the `ref` reads it back. The user can switch between table, chart, etc. with no card JSON changes:
+
+```json
+{ "kind": "form",
+  "data": {
+    "writeTo": "card_data.display_mode",
+    "fields": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "title": "Display as",
+                  "enum": ["table", "chart", "editable-table"] }
+      }
+    }
+  }
+},
+{ "kind": "ref",
+  "data": {
+    "bind": "fetched_sources.rebalance.proposed_trades",
+    "viewBind": "card_data.display_mode",
+    "fallbackKind": "table"
+  }
+}
+```
+
+Note: `card_data.display_mode` can be a plain string (`"chart"`) or an object (`{ "kind": "chart", ... }`). Both are handled.
+
+**Pattern 2 — LLM-suggested view (source carries `_view`)**
+
+The LLM source response includes a `_view` key alongside the data. The `ref` element reads `_view` from the source namespace. The LLM decides chart vs table vs editable-table at runtime based on what the data looks like:
+
+```json
+// LLM returns:
+{ "proposed_trades": [ {"ticker": "AAPL", "trade_value": 1084} ],
+  "_view": { "kind": "chart", "data": { "chartType": "bar", "columns": ["ticker","trade_value"] } }
+}
+
+// Card element:
+{ "kind": "ref",
+  "data": {
+    "bind": "fetched_sources.rebalance.proposed_trades",
+    "viewBind": "fetched_sources.rebalance._view",
+    "fallbackKind": "table"
+  }
+}
+```
+
+Add this to the `copilot` prompt template to instruct the LLM:
+```
+Return JSON with shape:
+{
+  "<data_key>": [ ... ],
+  "_view": {
+    "kind": "editable-table" | "table" | "chart",
+    "data": {
+      // for editable-table: { "writeTo": "card_data.<key>", "columns": ["field1","field2"] }
+      // for chart:          { "chartType": "bar" | "line" | "pie", "columns": ["labelField","valueField"] }
+      // for table:          { "columns": ["field1","field2"] }
+    }
+  }
+}
+Choose kind based on data shape and user intent.
+```
+
+The `_view` key is ignored by any card that reads only `<data_key>` — it is inert to downstream cards.
+
+**Pattern 3 — Cross-card view hint (view definition flows as a token)**
+
+Card A provides both its data and the view hint as separate tokens. Card B requires both and uses `ref` to render whatever Card A’s LLM suggested:
+
+```json
+// Card A provides:
+"provides": [
+  { "bindTo": "trade_data", "ref": "fetched_sources.rebalance.proposed_trades" },
+  { "bindTo": "trade_view", "ref": "fetched_sources.rebalance._view" }
+]
+
+// Card B requires and renders:
+"requires": ["trade_data", "trade_view"],
+"view": {
+  "elements": [
+    { "kind": "ref",
+      "data": {
+        "bind": "requires.trade_data",
+        "viewBind": "requires.trade_view",
+        "fallbackKind": "table"
+      }
+    }
+  ]
+}
+```
+
+Card B’s author does not need to know what kind Card A’s LLM will choose. The view decision propagates through the token graph.
+
 ---
 
 ## Common Card Patterns
@@ -324,6 +441,34 @@ view: badge(computed_values.isReady, colorMap) + text(fetched_sources.verdict.re
 ```
 The task executor calls the LLM, writes `{ isTaskCompleted: bool, reason: string }` to `--out`.
 The card is complete when the source is fetched. Downstream cards `requires: ["readiness-verdict"]`.
+
+### User-selectable view (selector + ref)
+```
+source_defs: fetch data into fetched_sources.raw
+view:
+  form writeTo:card_data.display_mode  (enum: table, chart, editable-table)
+  ref  bind:fetched_sources.raw  viewBind:card_data.display_mode  fallbackKind:table
+```
+User picks the display kind from a dropdown; the `ref` element re-renders immediately.
+No card JSON changes needed — the form + ref pair handles all switching.
+
+### LLM-suggested view
+```
+source_defs: copilot source returns { data: [...], _view: { kind, data: {...} } }
+view:
+  ref  bind:fetched_sources.raw.data  viewBind:fetched_sources.raw._view  fallbackKind:table
+```
+LLM decides chart vs table vs editable-table at runtime. `_view` is ignored by downstream
+cards that only read `data`. Card author can fence with static `columns` in the ref element data.
+
+### Cross-card view propagation
+```
+Card A provides: trade_data (fetched_sources.rebalance.proposed_trades)
+               + trade_view (fetched_sources.rebalance._view)
+Card B requires: trade_data, trade_view
+       view: ref bind:requires.trade_data  viewBind:requires.trade_view
+```
+Card B author writes no view knowledge — Card A's LLM drives the rendering decision for both cards.
 
 ---
 
@@ -496,7 +641,7 @@ When in doubt about allowed fields, consult:
 - `source_defs[]` each entry must have `bindTo` + `outputFile` strings; both must be unique across the array
 - `view.elements` required, non-empty; each element must have a valid `kind`
 - Top-level unknown keys are flagged as errors
-- Valid element `kind` values: `metric`, `table`, `editable-table`, `chart`, `form`, `filter`, `list`, `notes`, `todo`, `alert`, `narrative`, `badge`, `text`, `markdown`, `custom`
+- Valid element `kind` values: `metric`, `table`, `editable-table`, `chart`, `form`, `filter`, `list`, `notes`, `todo`, `alert`, `narrative`, `badge`, `text`, `markdown`, `ref`, `custom`
 
 ---
 
