@@ -839,7 +839,7 @@ function invokeRunSources(
   callback: (err: Error | null) => void,
 ): void {
   const args = ['--card', cardPath, '--token', callbackToken, '--rg', boardDir];
-  const { cmd, args: cmdArgs } = getCliInvocation('run-sources-internal', args);
+  const { cmd, args: cmdArgs } = getCliInvocation('run-sourcedefs-internal', args);
   try {
     spawnDetachedCommand(cmd, cmdArgs);
     callback(null);
@@ -911,7 +911,7 @@ function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callb
  *
  * Single handler:
  *   card-handler — reads card.json, loads sourcesData from outputFiles, runs CardCompute,
- *                  checks undelivered sources, emits task-completed or spawns run-sources-internal.
+ *                  checks undelivered sources, emits task-completed or spawns run-sourcedefs-internal.
  *                  Fire & forget — returns 'task-initiated' immediately.
  */
 export interface BoardReactiveGraph {
@@ -1816,7 +1816,7 @@ function cmdRunSources(args: string[]): void {
   const sourceChecksumsJson = sourceChecksumsIdx !== -1 ? args[sourceChecksumsIdx + 1] : undefined;
   const sourceChecksums = sourceChecksumsJson ? JSON.parse(sourceChecksumsJson) as Record<string, string> : undefined;
   if (!cardFilePath || !callbackToken || !boardDir) {
-    console.error('Usage: board-live-cards run-sources-internal --card <path> --token <token> --rg <dir> [--source-checksums <json>]');
+    console.error('Usage: board-live-cards run-sourcedefs-internal --card <path> --token <token> --rg <dir> [--source-checksums <json>]');
     process.exit(1);
   }
 
@@ -1824,7 +1824,7 @@ function cmdRunSources(args: string[]): void {
   if (path.basename(cardFilePath).startsWith('card-enriched-')) {
     try { fs.unlinkSync(cardFilePath); } catch { /* best-effort */ }
   }
-  console.log(`[run-sources-internal] Processing card "${card.id as string}"`);
+  console.log(`[run-sourcedefs-internal] Processing card "${card.id as string}"`);
 
   // Load registered task-executor (if any)
   const teConfig = readTaskExecutorConfig(boardDir!);
@@ -1856,7 +1856,7 @@ function cmdRunSources(args: string[]): void {
 
     function reportFailure(reason: string): void {
       invokeSourceDataFetchFailure(sourceToken, reason, (err) => {
-        if (err) console.error(`[run-sources-internal] source-data-fetch-failure call failed:`, err.message);
+        if (err) console.error(`[run-sourcedefs-internal] source-data-fetch-failure call failed:`, err.message);
       });
     }
 
@@ -1869,7 +1869,7 @@ function cmdRunSources(args: string[]): void {
     if (taskExecutor) {
       // External task-executor registered: invoke run-source-fetch subcommand
       if (!src.outputFile) {
-        console.warn(`[run-sources-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
         reportFailure('no outputFile configured');
         return;
       }
@@ -1885,7 +1885,7 @@ function cmdRunSources(args: string[]): void {
       fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
       const executorArgs = ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile];
       if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-      console.log(`[run-sources-internal] task-executor: ${taskExecutor} ${executorArgs.join(' ')}`);
+      console.log(`[run-sourcedefs-internal] task-executor: ${taskExecutor} ${executorArgs.join(' ')}`);
       try {
         execCommandSync(taskExecutor, executorArgs, {
           shell: true,
@@ -1893,7 +1893,7 @@ function cmdRunSources(args: string[]): void {
         });
       } catch (err: unknown) {
         const reason = (err as Error).message ?? String(err);
-        console.error(`[run-sources-internal] task-executor failed for source "${src.bindTo}":`, reason);
+        console.error(`[run-sourcedefs-internal] task-executor failed for source "${src.bindTo}":`, reason);
         reportFailure(reason);
         return;
       }
@@ -1901,7 +1901,7 @@ function cmdRunSources(args: string[]): void {
         reportFetched(outFile);
       } else {
         const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
-        console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
+        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
         reportFailure(errMsg);
       }
       return;
@@ -1909,14 +1909,14 @@ function cmdRunSources(args: string[]): void {
 
     // No external executor: execute source.cli directly in this process.
     if (!src.outputFile) {
-      console.warn(`[run-sources-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+      console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
       reportFailure('no outputFile configured');
       return;
     }
     const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
     if (!src.cli) {
       const errMsg = 'source.cli is required for built-in source execution';
-      console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
+      console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
       reportFailure(errMsg);
       return;
     }
@@ -1933,7 +1933,7 @@ function cmdRunSources(args: string[]): void {
     const cmdParts = splitCommandLine(src.cli);
     if (cmdParts.length === 0) {
       const errMsg = 'source.cli command is empty';
-      console.warn(`[run-sources-internal] source "${src.bindTo}": ${errMsg}`);
+      console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
       reportFailure(errMsg);
       return;
     }
@@ -1955,7 +1955,7 @@ function cmdRunSources(args: string[]): void {
       });
     } catch (err: unknown) {
       const reason = (err as Error).message ?? String(err);
-      console.error(`[run-sources-internal] source fetch failed for source "${src.bindTo}":`, reason);
+      console.error(`[run-sourcedefs-internal] source fetch failed for source "${src.bindTo}":`, reason);
       reportFailure(reason);
       return;
     }
@@ -2493,7 +2493,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'task-progress':             return cmdTaskProgress(rest);
     case 'source-data-fetched':       return cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return cmdSourceDataFetchFailure(rest);
-    case 'run-sources-internal':      return cmdRunSources(rest);
+    case 'run-sourcedefs-internal':      return cmdRunSources(rest);
     case 'run-inference-internal':    return cmdRunInference(rest);
     case 'inference-done':            return cmdInferenceDone(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
@@ -2581,7 +2581,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
     : undefined;
 
-  // Build --in payload — mirrors exactly what run-sources-internal passes to the executor
+  // Build --in payload — mirrors exactly what run-sourcedefs-internal passes to the executor
   const inPayload: Record<string, unknown> = {
     ...sourceDef,
     cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
@@ -2778,7 +2778,7 @@ TASK CALLBACKS  (called by task executor scripts)
   task-progress --rg <dir> --token <callbackToken> [--update <json>]
     Signal task progress with optional update payload (for waiting on more evidence, etc.).
 
-SOURCE CALLBACKS  (called internally by run-sources-internal)
+SOURCE CALLBACKS  (called internally by run-sourcedefs-internal)
   source-data-fetched --tmp <file> --token <sourceToken>
     Atomically rename <file> into the outputFile destination and record delivery
     via journal events. Appends a task-progress event to re-invoke the card handler.
@@ -2799,7 +2799,7 @@ INTERNAL COMMANDS
     3) lock stays healthy,
     4) event production eventually quiesces.
 
-  run-sources-internal --card <card.json> --token <callbackToken> --rg <dir>
+  run-sourcedefs-internal --card <card.json> --token <callbackToken> --rg <dir>
     Execute all source[] entries for a card, then report delivery or failure.
     (Internal command — invoked by the card-handler. Not intended for direct use.)
 
