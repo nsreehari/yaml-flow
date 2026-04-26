@@ -21,15 +21,15 @@
     ],
     "layout": {
       "board": { "col": 4, "order": 99 },
-      "canvas": { "x": 900, "y": 50, "w": 480, "h": 220 }
+      "canvas": { "x": 900, "y": 50, "w": 480, "h": 240 }
     }
   },
   "card_data": {
     "kinds": [
       { "kind": "mock",     "description": "Look up a key in the hardcoded MOCK_DB dictionary." },
       { "kind": "copilot",  "description": "Invoke GitHub Copilot CLI with an interpolated prompt template." },
-      { "kind": "http",     "description": "Fetch a URL via curl; supports {{key}} interpolation and tickersFrom." },
-      { "kind": "chartApi", "description": "Yahoo Finance chart API — one request per ticker, quote-compatible shape." }
+      { "kind": "http",     "description": "Single URL fetch with {{key}} interpolation, or multi-URL fan-out via _projections.url_list (JSONata array)." },
+      { "kind": "chartApi", "description": "Yahoo Finance chart API — per-ticker requests mapped to quote shape. Prefer http+url_list for new sources." }
     ]
   }
 }
