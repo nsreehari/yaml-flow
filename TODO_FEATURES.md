@@ -61,6 +61,12 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
   - Goal: stable status schema for runtime, UI, and integration contracts
   - Notes: added `status --json` output contract and schema/board-status.schema.json (v1)
 
+- [ ] 11. Support for graph-api teams chat queries in demo-task-executor and a card for teams queries
+- [ ] 12. Support for mail access via graph-api queries
+- [ ] 13. Support for Foundry Models / Agency in demo-tool-executor
+- [ ] 14. Support for MCP tools
+
+
 ## Completed Recently
 
 - [x] Canonical npm CLI runner path established
