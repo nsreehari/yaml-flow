@@ -2590,11 +2590,23 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     _projections: mockProjections,
   };
 
-  const sourceKind: string = sourceDef.chartApi ? 'chartApi'
-    : sourceDef.http ? 'http'
-    : (sourceDef.copilot || sourceDef.prompt_template) ? 'copilot'
-    : sourceDef.cli ? 'cli'
-    : 'mock';
+  // Derive sourceKind from executor's describe-capabilities rather than hardcoding.
+  // Call describe-capabilities, get sourceKinds keys, find which one appears in sourceDef.
+  // Falls back to 'unknown' if executor is unavailable or call fails.
+  let sourceKind = 'unknown';
+  if (taskExecutor) {
+    try {
+      const capRaw = execCommandSync(taskExecutor, ['describe-capabilities'], {
+        shell: true, timeout: 8_000, encoding: 'utf-8',
+      });
+      const caps = JSON.parse(String(capRaw));
+      const knownKinds: string[] = caps?.sourceKinds ? Object.keys(caps.sourceKinds) : [];
+      const defKeys = new Set(Object.keys(sourceDef));
+      sourceKind = knownKinds.find(k => defKeys.has(k)) ?? 'unknown';
+    } catch {
+      // describe-capabilities failed — fall back to 'unknown'; probe execution still proceeds
+    }
+  }
 
   console.log(`[probe-source] card:        ${card.id}`);
   console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);

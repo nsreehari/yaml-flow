@@ -39,16 +39,17 @@
  *   - { mock: "key" }              → look up key in MOCK_DB (hardcoded below)
  *   - { copilot: { prompt_template, args? } }  → call Copilot CLI with interpolated prompt
  *   - { prompt_template: "..." }   → shorthand copilot call (top-level template)
- *   - { http: { url, method?, headers?, args? }, tickersFrom? }  → HTTP fetch (Node 18+ fetch)
- *   - { chartApi: { url, headers? }, tickersFrom }  → Yahoo Finance chart API, one request per ticker;
- *     returns { quoteResponse: { result: [...] } } compatible with the quote API shape
+ *   - { "url": { url, method?, headers?, args?, cacheTimeout? }, tickersFrom? }
+ *       → single URL fetch via curl with {{key}} interpolation from _projections
+ *   - { "url-list": { method?, headers?, cacheTimeout? } }
+ *       → fan-out over _projections.url_list (string[]); returns array of responses.
+ *         Build url_list in projections: e.g. `requires.holdings.ticker.('https://host/' & $ & '?q=1')`
+ *   - { chartApi: { url, headers? }, tickersFrom }  → [Legacy] Yahoo Finance per-ticker;
+ *     prefer url-list for new sources
  *   A real executor can also handle: graphapi, teams, mail, incidentdb, script, etc.
  *
- * http / chartApi source notes:
- *   - URL supports {{key}} interpolation (http) or {{ticker}} (chartApi)
- *   - tickersFrom: "refKey.fieldName" extracts tickers from a _projections array
- *   - http and chartApi results are cached in os.tmpdir()/demo-executor-cache/ for 1 hour
- *     so Yahoo Finance is not hammered on every card refresh during demos
+ * url / url-list notes:
+ *   - Results cached in os.tmpdir()/demo-executor-cache/ per URL (default 1 hour, override via cacheTimeout)
  */
 
 import fs from 'node:fs';
@@ -89,15 +90,30 @@ function cacheKey(str) {
   return crypto.createHash('sha1').update(str).digest('hex');
 }
 
-function readCache(key) {
+function readCache(key, ttlMs = CACHE_TTL_MS) {
   const file = path.join(CACHE_DIR, `${key}.json`);
   try {
     const stat = fs.statSync(file);
-    if (Date.now() - stat.mtimeMs < CACHE_TTL_MS) {
+    if (Date.now() - stat.mtimeMs < ttlMs) {
       return JSON.parse(fs.readFileSync(file, 'utf-8'));
     }
   } catch {}
   return null;
+}
+
+// Shared single-URL fetch helper used by both url and url-list.
+// cacheTimeoutSec: override TTL in seconds (null → use CACHE_TTL_MS default).
+function doFetchApi(url, method, headers, cacheTimeoutSec, errFile) {
+  const ttlMs = cacheTimeoutSec != null ? cacheTimeoutSec * 1000 : CACHE_TTL_MS;
+  const k = cacheKey(`url:${method}:${url}`);
+  const cached = readCache(k, ttlMs);
+  if (cached) {
+    console.warn(`[demo-task-executor] url: cache hit for ${url}`);
+    return cached;
+  }
+  const data = curlFetchJson(url, method, headers);
+  writeCache(k, data);
+  return data;
 }
 
 function writeCache(key, value) {
@@ -323,76 +339,67 @@ function runSourceFetchSubcommand(argv) {
       fail('chartApi: no tickers resolved — cannot fetch', errFile);
     }
 
-  } else if (sourceDef.http) {
+  } else if (sourceDef['url']) {
     // ---------------------------------------------------------------------------
-    // HTTP source kind — uses curl (synchronous subprocess)
-    // Two modes:
-    //   url_list  — array of URLs already resolved in _projections; fetch each,
-    //               return array of raw responses.
-    //   url       — single URL template with {{key}} interpolation; return one response.
+    // url — single URL fetch via curl
+    // {{key}} interpolation applied to url from _projections and optional args.
+    // cacheTimeout: seconds to cache the response (default: CACHE_TTL_MS / 1000).
     // ---------------------------------------------------------------------------
-    const httpCfg = sourceDef.http;
-    const method  = (httpCfg.method || 'GET').toUpperCase();
-    const headers = { ...(httpCfg.headers || {}) };
+    const cfg     = sourceDef['url'];
+    const method  = (cfg.method || 'GET').toUpperCase();
+    const headers = { ...(cfg.headers || {}) };
+    const cacheTimeoutSec = cfg.cacheTimeout != null ? Number(cfg.cacheTimeout) : null;
 
-    const urlList = sourceDef._projections && Array.isArray(sourceDef._projections.url_list)
-      ? sourceDef._projections.url_list
-      : null;
-
-    if (urlList) {
-      // url_list mode — one curl+cache per URL, collect into array
-      if (urlList.length === 0) fail('http url_list resolved to empty array', errFile);
-      const results = [];
-      for (const u of urlList) {
-        const k = cacheKey(`http:${method}:${u}`);
-        const cached = readCache(k);
-        if (cached) {
-          console.warn(`[demo-task-executor] http url_list: cache hit for ${u}`);
-          results.push(cached);
-        } else {
-          try {
-            const data = curlFetchJson(u, method, headers);
-            writeCache(k, data);
-            results.push(data);
-          } catch (err) {
-            fail(`HTTP url_list fetch failed for ${u}: ${err.message}`, errFile);
-          }
-        }
-      }
-      resultValue = results;
-
-    } else {
-      // Single-URL mode — {{key}} interpolation from _projections
-      const httpArgs = { ...(httpCfg.args || {}) };
-      if (sourceDef.tickersFrom) {
-        const dotIdx = sourceDef.tickersFrom.indexOf('.');
-        if (dotIdx > 0) {
-          const refKey    = sourceDef.tickersFrom.slice(0, dotIdx);
-          const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
-          const arr = sourceDef._projections?.[refKey];
-          if (Array.isArray(arr)) {
-            httpArgs.tickers = arr.map(h => h[fieldName]).filter(Boolean).join(',');
-          }
-        }
-      }
-      const urlContext = { ...(sourceDef._projections || {}), ...httpArgs };
-      const url = interpolatePrompt(httpCfg.url, urlContext);
-      const httpFetchSkipped = sourceDef.tickersFrom && !httpArgs.tickers;
-      const k = cacheKey(`http:${method}:${url}`);
-      const httpCached = readCache(k);
-      if (httpCached && !httpFetchSkipped) {
-        console.warn(`[demo-task-executor] http: cache hit for ${url}`);
-        resultValue = httpCached;
-      } else {
-        try {
-          if (httpFetchSkipped) throw new Error('tickersFrom resolved to empty list — skipping fetch');
-          resultValue = curlFetchJson(url, method, headers);
-          writeCache(k, resultValue);
-        } catch (httpErr) {
-          fail(`HTTP fetch failed: ${httpErr.message}`, errFile);
+    const fetchArgs = { ...(cfg.args || {}) };
+    if (sourceDef.tickersFrom) {
+      const dotIdx = sourceDef.tickersFrom.indexOf('.');
+      if (dotIdx > 0) {
+        const refKey    = sourceDef.tickersFrom.slice(0, dotIdx);
+        const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
+        const arr = sourceDef._projections?.[refKey];
+        if (Array.isArray(arr)) {
+          fetchArgs.tickers = arr.map(h => h[fieldName]).filter(Boolean).join(',');
         }
       }
     }
+    if (sourceDef.tickersFrom && !fetchArgs.tickers) {
+      fail('url: tickersFrom resolved to empty list — skipping fetch', errFile);
+    }
+    const urlContext = { ...(sourceDef._projections || {}), ...fetchArgs };
+    const url = interpolatePrompt(cfg.url, urlContext);
+    try {
+      resultValue = doFetchApi(url, method, headers, cacheTimeoutSec, errFile);
+    } catch (err) {
+      fail(`url failed: ${err.message}`, errFile);
+    }
+
+  } else if (sourceDef['url-list']) {
+    // ---------------------------------------------------------------------------
+    // url-list — fan-out over a URL list, calling url logic per URL.
+    // url_list must be a string[] pre-resolved in _projections.url_list.
+    // cacheTimeout: seconds to cache each individual response.
+    // ---------------------------------------------------------------------------
+    const cfg     = sourceDef['url-list'];
+    const method  = (cfg.method || 'GET').toUpperCase();
+    const headers = { ...(cfg.headers || {}) };
+    const cacheTimeoutSec = cfg.cacheTimeout != null ? Number(cfg.cacheTimeout) : null;
+
+    const urlList = Array.isArray(sourceDef._projections?.url_list)
+      ? sourceDef._projections.url_list : null;
+
+    if (!urlList || urlList.length === 0) {
+      fail('url-list: _projections.url_list must be a non-empty string array', errFile);
+    }
+
+    const results = [];
+    for (const u of urlList) {
+      try {
+        results.push(doFetchApi(u, method, headers, cacheTimeoutSec, errFile));
+      } catch (err) {
+        fail(`url-list fetch failed for ${u}: ${err.message}`, errFile);
+      }
+    }
+    resultValue = results;
 
   } else if (sourceDef.copilot || sourceDef.prompt_template) {
     const prompt = resolveCopilotPrompt(sourceDef);
@@ -463,7 +470,7 @@ function runSourceFetchSubcommand(argv) {
       fail(`Key "${sourceDef.mock}" not found in MOCK_DB`, errFile);
     }
   } else {
-    fail('Source definition has no recognised kind (copilot, http, chartApi, mock)', errFile);
+    fail('Source definition has no recognised kind (copilot, url, url-list, chartApi, mock)', errFile);
   }
 
   // Write result to --out as JSON payload, same contract as current mock mode.
@@ -503,22 +510,24 @@ function validateSourceDefSubcommand(argv) {
   const errors = [];
 
   // Determine source kind and validate required fields
-  const hasChartApi = !!sourceDef.chartApi;
-  const hasHttp = !!sourceDef.http;
-  const hasCopilot = !!sourceDef.copilot;
+  const hasChartApi   = !!sourceDef.chartApi;
+  const hasUrl   = !!sourceDef['url'];
+  const hasUrlList  = !!sourceDef['url-list'];
+  const hasCopilot    = !!sourceDef.copilot;
   const hasPromptTemplate = typeof sourceDef.prompt_template === 'string';
-  const hasMock = sourceDef.mock !== undefined;
+  const hasMock       = sourceDef.mock !== undefined;
 
-  const kindCount = [hasChartApi, hasHttp, hasCopilot || hasPromptTemplate, hasMock].filter(Boolean).length;
+  const kindCount = [hasChartApi, hasUrl, hasUrlList, hasCopilot || hasPromptTemplate, hasMock].filter(Boolean).length;
 
   if (kindCount === 0) {
-    errors.push('No recognised source kind (copilot, http, chartApi, mock). Add one of these fields.');
+    errors.push('No recognised source kind (url, url-list, copilot, chartApi, mock). Add one of these fields.');
   } else if (kindCount > 1) {
     const kinds = [];
-    if (hasChartApi) kinds.push('chartApi');
-    if (hasHttp) kinds.push('http');
+    if (hasChartApi)  kinds.push('chartApi');
+    if (hasUrl)  kinds.push('url');
+    if (hasUrlList) kinds.push('url-list');
     if (hasCopilot || hasPromptTemplate) kinds.push('copilot');
-    if (hasMock) kinds.push('mock');
+    if (hasMock)      kinds.push('mock');
     errors.push(`Multiple source kinds specified: [${kinds.join(', ')}]. Use exactly one.`);
   }
 
@@ -535,14 +544,19 @@ function validateSourceDefSubcommand(argv) {
     }
   }
 
-  if (hasHttp) {
-    if (typeof sourceDef.http !== 'object') {
-      errors.push('http must be an object.');
-    } else {
-      if (!sourceDef.http.url || typeof sourceDef.http.url !== 'string') {
-        errors.push('http.url is required and must be a string.');
-      }
+  if (hasUrl) {
+    if (typeof sourceDef['url'] !== 'object') {
+      errors.push('url must be an object.');
+    } else if (!sourceDef['url'].url || typeof sourceDef['url'].url !== 'string') {
+      errors.push('url.url is required and must be a string.');
     }
+  }
+
+  if (hasUrlList) {
+    if (typeof sourceDef['url-list'] !== 'object') {
+      errors.push('url-list must be an object.');
+    }
+    // url_list is supplied via _projections at runtime — no static validation needed.
   }
 
   if (hasCopilot) {
@@ -600,25 +614,40 @@ const CAPABILITIES = {
       },
       outputShape: 'string | object — raw Copilot text, or parsed JSON if the response is valid JSON.',
     },
-    http: {
-      description: 'Fetch one URL or a list of URLs via curl. Single-URL mode uses {{key}} interpolation; url_list mode reads a pre-resolved string[] from _projections.url_list and returns an array of responses.',
+    'url': {
+      description: 'Single URL fetch via curl with {{key}} interpolation from _projections. Supports cacheTimeout.',
       inputSchema: {
-        http: {
+        'url': {
           type: 'object', required: true,
           properties: {
-            url:     { type: 'string', required: false, description: 'Single URL template with {{key}} placeholders (single-URL mode).' },
-            method:  { type: 'string', required: false, description: 'HTTP method (default: GET).' },
-            headers: { type: 'object', required: false, description: 'Request headers.' },
-            args:    { type: 'object', required: false, description: 'Extra interpolation args for URL template (single-URL mode).' },
+            url:          { type: 'string', required: true,  description: 'URL template with {{key}} placeholders.' },
+            method:       { type: 'string', required: false, description: 'HTTP method (default: GET).' },
+            headers:      { type: 'object', required: false, description: 'Request headers.' },
+            args:         { type: 'object', required: false, description: 'Extra interpolation args (highest precedence).' },
+            cacheTimeout: { type: 'number', required: false, description: 'Cache TTL in seconds (default: 3600).' },
           },
         },
-        tickersFrom: { type: 'string', required: false, description: 'Single-URL mode: "refKey.fieldName" — join tickers from _projections into {{tickers}}.' },
+        tickersFrom: { type: 'string', required: false, description: '"refKey.fieldName" — join tickers from _projections into {{tickers}}.' },
       },
-      outputShape: 'Single-URL: arbitrary JSON. url_list: array of raw JSON responses, one per URL.',
-      urlListNote: 'For url_list mode: declare `"projections": { "url_list": "<JSONata that produces string[]>" }` on the source def. The executor reads _projections.url_list directly — no http.url field needed.',
+      outputShape: 'Arbitrary JSON from the fetched URL.',
+    },
+    'url-list': {
+      description: 'Fan-out over a pre-resolved URL list — calls url logic per URL and returns an array of responses. url_list must be a string[] in _projections.url_list (built via projections JSONata).',
+      inputSchema: {
+        'url-list': {
+          type: 'object', required: true,
+          properties: {
+            method:       { type: 'string', required: false, description: 'HTTP method (default: GET).' },
+            headers:      { type: 'object', required: false, description: 'Request headers.' },
+            cacheTimeout: { type: 'number', required: false, description: 'Cache TTL per URL in seconds (default: 3600).' },
+          },
+        },
+      },
+      outputShape: 'Array of raw JSON responses, one per URL in _projections.url_list.',
+      urlListNote: 'Declare `"projections": { "url_list": "<JSONata producing string[]>" }` on the source def. Example: `requires.holdings.ticker.(\'https://api.example.com/\' & $ & \'?q=1\')`',
     },
     chartApi: {
-      description: 'Yahoo Finance chart API — one request per ticker, mapped to quote-compatible shape. Prefer http url_list mode for new sources.',
+      description: '[Legacy] Yahoo Finance chart API — one request per ticker, mapped to quote-compatible shape. Prefer url-list for new sources.',
       inputSchema: {
         chartApi: {
           type: 'object', required: true,
@@ -630,10 +659,6 @@ const CAPABILITIES = {
         tickersFrom: { type: 'string', required: true, description: '"refKey.fieldName" — extract ticker symbols from _projections.' },
       },
       outputShape: '{ quoteResponse: { result: [{ symbol, shortName, regularMarketPrice, regularMarketChange, regularMarketChangePercent }], error } }',
-      example: {
-        input:  { chartApi: { url: 'https://query2.finance.yahoo.com/v8/finance/chart/{{ticker}}?range=1d&interval=1d' }, tickersFrom: 'holdings.ticker' },
-        output: { quoteResponse: { result: [{ symbol: 'AAPL', shortName: 'Apple Inc.', regularMarketPrice: 198.15, regularMarketChange: 2.15, regularMarketChangePercent: 1.10 }], error: null } },
-      },
     },
   },
   extraSchema: {
