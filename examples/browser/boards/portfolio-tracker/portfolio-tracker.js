@@ -219,7 +219,7 @@ function printTaskExecutorLog() {
   const portfolioFormV2 = {
     id: 'portfolio-form',
     meta: { title: 'Portfolio Holdings Form' },
-    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    provides: [{ bindTo: 'holdings', ref: 'card_data.holdings' }],
     card_data: {
       holdings: [
         { symbol: 'AAPL', qty: 50 },
@@ -260,7 +260,7 @@ function printTaskExecutorLog() {
   const portfolioFormV3 = {
     id: 'portfolio-form',
     meta: { title: 'Portfolio Holdings Form' },
-    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    provides: [{ bindTo: 'holdings', ref: 'card_data.holdings' }],
     card_data: {
       holdings: [
         { symbol: 'AAPL', qty: 50 },
@@ -279,7 +279,7 @@ function printTaskExecutorLog() {
   const portfolioFormV4 = {
     id: 'portfolio-form',
     meta: { title: 'Portfolio Holdings Form' },
-    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    provides: [{ bindTo: 'holdings', ref: 'card_data.holdings' }],
     card_data: {
       holdings: [
         { symbol: 'AAPL', qty: 45 },
@@ -298,7 +298,7 @@ function printTaskExecutorLog() {
   const portfolioFormV5 = {
     id: 'portfolio-form',
     meta: { title: 'Portfolio Holdings Form' },
-    provides: [{ bindTo: 'holdings', src: 'card_data.holdings' }],
+    provides: [{ bindTo: 'holdings', ref: 'card_data.holdings' }],
     card_data: {
       holdings: [
         { symbol: 'AAPL', qty: 40 },
