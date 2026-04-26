@@ -909,6 +909,7 @@ var BoardLiveGraph = (function (exports) {
     const inputQueue = new MemoryJournal();
     let live = "state" in configOrLive && "config" in configOrLive ? configOrLive : createLiveGraph(configOrLive, executionId);
     let disposed = false;
+    const pendingHandlers = /* @__PURE__ */ new Set();
     const handlers = new Map(Object.entries(initialHandlers));
     const internalJournal = new MemoryJournal();
     let draining = false;
@@ -951,7 +952,7 @@ var BoardLiveGraph = (function (exports) {
           const taskState = live.state.tasks[taskName];
           if (!taskState || taskState.status !== "running") continue;
           const callbackToken = encodeCallbackToken(taskName);
-          runPipeline(taskName, callbackToken, update).catch((error) => {
+          const p = runPipeline(taskName, callbackToken, update).catch((error) => {
             if (disposed) return;
             internalJournal.append({
               type: "task-failed",
@@ -960,7 +961,10 @@ var BoardLiveGraph = (function (exports) {
               timestamp: (/* @__PURE__ */ new Date()).toISOString()
             });
             drain();
+          }).finally(() => {
+            pendingHandlers.delete(p);
           });
+          pendingHandlers.add(p);
         }
       }
     }
@@ -1020,7 +1024,7 @@ var BoardLiveGraph = (function (exports) {
       });
       drain();
       const callbackToken = encodeCallbackToken(taskName);
-      runPipeline(taskName, callbackToken).catch((error) => {
+      const p = runPipeline(taskName, callbackToken).catch((error) => {
         if (disposed) return;
         internalJournal.append({
           type: "task-failed",
@@ -1029,7 +1033,10 @@ var BoardLiveGraph = (function (exports) {
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
         drain();
+      }).finally(() => {
+        pendingHandlers.delete(p);
       });
+      pendingHandlers.add(p);
     }
     return {
       push(event) {
@@ -1143,7 +1150,10 @@ var BoardLiveGraph = (function (exports) {
       getSchedule() {
         return schedule(live);
       },
-      dispose() {
+      async dispose(options2) {
+        if (options2?.wait && pendingHandlers.size > 0) {
+          await Promise.allSettled([...pendingHandlers]);
+        }
         disposed = true;
       }
     };
