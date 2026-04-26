@@ -727,7 +727,19 @@ export function createExampleBoardServerRuntime(options = {}) {
       ? `${shellQuote(process.execPath)} ${shellQuote(inferenceAdapterPath)}`
       : null;
 
-    const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd];
+    const boardSetupRoot = path.dirname(boardDir);
+    const taskExecutorExtra = JSON.stringify({
+      boardSetupRoot,
+      boardId,
+      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
+      runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
+      cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
+    });
+
+    const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
+    if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
+    if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
+    initArgs.push('--runtime-out', runtimeOutDir);
     if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
     if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
     initArgs.push('--runtime-out', runtimeOutDir);

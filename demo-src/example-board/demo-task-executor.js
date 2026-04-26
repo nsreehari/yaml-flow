@@ -3,22 +3,39 @@
 /**
  * demo-task-executor.js — Simple mock source executor for example-board.
  *
- * Protocol (invoked by board-live-cards-cli):
- *   node demo-task-executor.js run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
+ * Subcommands:
+ *   run-source-fetch        — fetch data for one source entry
+ *   describe-capabilities   — print supported source kinds + schemas to stdout (JSON)
  *
- * Expected source definition (--in payload):
+ * CLI args:
+ *   --in    <source.json>   Required. Path to a temp JSON file containing the source definition.
+ *   --out   <result.json>   Required. Path where this executor must write its JSON result.
+ *   --err   <error.txt>     Optional. Path where this executor writes an error message on failure.
+ *   --extra <base64json>    Optional. Base64-encoded JSON with board topology context
+ *                           (baked into .task-executor at board init time, passed blindly by the CLI).
+ *
+ * --in payload (source definition):
  *   {
- *     "bindTo": "...",
- *     "outputFile": "...",
- *     // custom fields authored on the source entry (e.g. mock, copilot, http, prompt_template, etc.)
- *     "cwd": "<card directory>",
- *     "boardDir": "<board runtime directory>",
- *     "_requires": { },            // upstream token data (from card requires[])
- *     "_sourcesData": { },         // already-fetched sources on this card
- *     "_computed_values": { }      // computed_values from the card's compute stage
+ *     "bindTo":  "token_name",
+ *     "outputFile": "relative/path.json",
+ *     "cwd":     "<card directory>",           // injected by CLI
+ *     "boardDir":"<board runtime directory>",   // injected by CLI
+ *     "_requires":        { ... },             // upstream token data (from card requires[])
+ *     "_sourcesData":     { ... },             // already-fetched sources on this card
+ *     "_computed_values":  { ... },            // computed_values from the card's compute stage
+ *     // ...plus any custom fields authored on the source entry
  *   }
  *
- * Supported source kinds (based on custom fields):
+ * --extra (decoded):
+ *   {
+ *     "boardSetupRoot":   "<abs path>",        // board root (parent of runtime/, surface/, runtime-out/)
+ *     "boardId":          "<board id>",        // e.g. "default"
+ *     "boardRuntimeDir":  "<relative>",        // e.g. "runtime"
+ *     "runtimeStatusDir": "<relative>",        // e.g. "runtime-out"
+ *     "cardsDir":         "<relative>"         // e.g. "surface/tmp-cards"
+ *   }
+ *
+ * Supported source kinds (based on custom fields in --in):
  *   - { mock: "key" }              → look up key in MOCK_DB (hardcoded below)
  *   - { copilot: { prompt_template, args? } }  → call Copilot CLI with interpolated prompt
  *   - { prompt_template: "..." }   → shorthand copilot call (top-level template)
@@ -204,18 +221,20 @@ function resolveCopilotExecutable() {
   return 'copilot';
 }
 
-function runCopilotPrompt(prompt) {
+function runCopilotPrompt(prompt, cwd) {
   const copilotBin = resolveCopilotExecutable();
   const copilotArgs = ['--allow-all'];
+  const execOpts = {
+    input: String(prompt),
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: 10 * 1024 * 1024,
+    ...(cwd ? { cwd } : {}),
+  };
 
   try {
     // Prefer stdin prompt delivery to avoid shell/path quoting issues.
-    return execFileSync(copilotBin, copilotArgs, {
-      input: String(prompt),
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    return execFileSync(copilotBin, copilotArgs, execOpts);
   } catch (directErr) {
     // Fallback for Git Bash / Windows wrapper path quoting issues.
     if (process.platform === 'win32') {
@@ -224,10 +243,7 @@ function runCopilotPrompt(prompt) {
       if (isCmdShim) {
         try {
           return execFileSync(copilotBin, copilotArgs, {
-            input: String(prompt),
-            encoding: 'utf-8',
-            stdio: ['pipe', 'pipe', 'pipe'],
-            maxBuffer: 10 * 1024 * 1024,
+            ...execOpts,
             shell: true,
           });
         } catch {}
@@ -235,12 +251,7 @@ function runCopilotPrompt(prompt) {
 
       try {
         // Final fallback: resolve through cmd PATH lookup, still piping prompt on stdin.
-        return execFileSync('cmd.exe', ['/d', '/c', 'copilot --allow-all'], {
-          input: String(prompt),
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-          maxBuffer: 10 * 1024 * 1024,
-        });
+        return execFileSync('cmd.exe', ['/d', '/c', 'copilot --allow-all'], execOpts);
       } catch (cmdErr) {
         const stderrDirect = directErr && typeof directErr === 'object' && 'stderr' in directErr
           ? String(directErr.stderr || '')
@@ -279,9 +290,17 @@ function runSourceFetchSubcommand(argv) {
   const inIdx = argv.indexOf('--in');
   const outIdx = argv.indexOf('--out');
   const errIdx = argv.indexOf('--err');
+  const extraIdx = argv.indexOf('--extra');
   const inFile = inIdx !== -1 ? argv[inIdx + 1] : undefined;
   const outFile = outIdx !== -1 ? argv[outIdx + 1] : undefined;
   const errFile = errIdx !== -1 ? argv[errIdx + 1] : undefined;
+  const extraB64 = extraIdx !== -1 ? argv[extraIdx + 1] : undefined;
+
+  let extra = {};
+  if (extraB64) {
+    try { extra = JSON.parse(Buffer.from(extraB64, 'base64').toString('utf-8')); }
+    catch { console.warn('[demo-task-executor] bad --extra base64, ignoring'); }
+  }
 
   if (!inFile || !outFile) {
     fail('Usage: run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]', errFile);
@@ -420,9 +439,11 @@ function runSourceFetchSubcommand(argv) {
       fail('Source definition missing copilot.prompt_template (or prompt_template)', errFile);
     }
 
+    // Use boardSetupRoot (from --extra) as copilot working directory
+    const copilotCwd = extra.boardSetupRoot || undefined;
     let rawOutput = '';
     try {
-      rawOutput = runCopilotPrompt(prompt);
+      rawOutput = runCopilotPrompt(prompt, copilotCwd);
     } catch (err) {
       const msg = String(err && err.message || err);
       fail(`copilot invocation failed: ${msg}`, errFile);
@@ -456,10 +477,99 @@ function runSourceFetchSubcommand(argv) {
 
 }
 
+// ---------------------------------------------------------------------------
+// describe-capabilities — introspection metadata for this executor
+// ---------------------------------------------------------------------------
+const CAPABILITIES = {
+  version: '1.0',
+  executor: 'demo-task-executor',
+  subcommands: ['run-source-fetch', 'describe-capabilities'],
+  sourceKinds: {
+    mock: {
+      description: 'Look up a key in a hardcoded MOCK_DB dictionary.',
+      inputSchema: {
+        mock: { type: 'string', required: true, description: 'Key in MOCK_DB (e.g. "quotes").' },
+      },
+      outputShape: 'Arbitrary JSON — depends on the mock key.',
+      example: {
+        input:  { mock: 'quotes' },
+        output: { quoteResponse: { result: [{ symbol: 'AAPL', regularMarketPrice: 198.15 }], error: null } },
+      },
+    },
+    copilot: {
+      description: 'Invoke GitHub Copilot CLI with an interpolated prompt template.',
+      inputSchema: {
+        copilot: {
+          type: 'object', required: false,
+          description: 'Object with prompt_template (string) and optional args (object).',
+          properties: {
+            prompt_template: { type: 'string', required: true, description: 'Prompt with {{key}} placeholders.' },
+            args:            { type: 'object', required: false, description: 'Extra interpolation args (highest precedence).' },
+          },
+        },
+        prompt_template: { type: 'string', required: false, description: 'Shorthand — top-level prompt template (alternative to copilot.prompt_template).' },
+      },
+      outputShape: 'string | object — raw Copilot text, or parsed JSON if the response is valid JSON.',
+    },
+    http: {
+      description: 'Fetch a URL via curl. Supports {{key}} interpolation and tickersFrom extraction.',
+      inputSchema: {
+        http: {
+          type: 'object', required: true,
+          properties: {
+            url:     { type: 'string', required: true,  description: 'URL template with {{key}} placeholders.' },
+            method:  { type: 'string', required: false, description: 'HTTP method (default: GET).' },
+            headers: { type: 'object', required: false, description: 'Request headers.' },
+            args:    { type: 'object', required: false, description: 'Extra interpolation args for URL template.' },
+          },
+        },
+        tickersFrom: { type: 'string', required: false, description: '"tokenName.fieldName" — extract tickers from _requires for URL interpolation.' },
+      },
+      outputShape: 'Arbitrary JSON — the parsed response body from the URL.',
+    },
+    chartApi: {
+      description: 'Yahoo Finance chart API — one request per ticker, mapped to quote-compatible shape.',
+      inputSchema: {
+        chartApi: {
+          type: 'object', required: true,
+          properties: {
+            url:     { type: 'string', required: true,  description: 'Chart API URL with {{ticker}} placeholder.' },
+            headers: { type: 'object', required: false, description: 'Request headers.' },
+          },
+        },
+        tickersFrom: { type: 'string', required: true, description: '"tokenName.fieldName" — extract ticker symbols from _requires.' },
+      },
+      outputShape: '{ quoteResponse: { result: [{ symbol, shortName, regularMarketPrice, regularMarketChange, regularMarketChangePercent }], error } }',
+      example: {
+        input:  { chartApi: { url: 'https://query2.finance.yahoo.com/v8/finance/chart/{{ticker}}?range=1d&interval=1d' }, tickersFrom: 'holdings.ticker' },
+        output: { quoteResponse: { result: [{ symbol: 'AAPL', shortName: 'Apple Inc.', regularMarketPrice: 198.15, regularMarketChange: 2.15, regularMarketChangePercent: 1.10 }], error: null } },
+      },
+    },
+  },
+  extraSchema: {
+    description: 'Board topology context passed via --extra (base64-encoded JSON, baked at init).',
+    properties: {
+      boardSetupRoot:   { type: 'string', description: 'Absolute path to board root.' },
+      boardId:          { type: 'string', description: 'Board identifier.' },
+      boardRuntimeDir:  { type: 'string', description: 'Relative path to runtime dir.' },
+      runtimeStatusDir: { type: 'string', description: 'Relative path to runtime-out dir.' },
+      cardsDir:         { type: 'string', description: 'Relative path to cards dir.' },
+    },
+  },
+};
+
+function describeCapabilities() {
+  console.log(JSON.stringify(CAPABILITIES, null, 2));
+}
+
 async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {
     runSourceFetchSubcommand(process.argv.slice(3));
+    return;
+  }
+  if (sub === 'describe-capabilities') {
+    describeCapabilities();
     return;
   }
 

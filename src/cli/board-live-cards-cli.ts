@@ -33,7 +33,34 @@ const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
 const RUNTIME_CARDS_DIR = 'cards';
 const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
 const INFERENCE_ADAPTER_FILE = '.inference-adapter';
+const TASK_EXECUTOR_FILE = '.task-executor';
 const DEFAULT_TASK_COMPLETION_RULE = 'all_required_sources_fetched';
+
+/** Parsed content of a .task-executor file (JSON or plain-text fallback). */
+interface TaskExecutorConfig {
+  command: string;
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Read and parse a .task-executor file.
+ * Supports JSON format: { "command": "...", "extra": { ... } }
+ * Falls back to treating the entire content as a plain command string (backward compat).
+ * The `extra` bag is merged blindly into each source payload before invoking the executor.
+ */
+function readTaskExecutorConfig(boardDir: string): TaskExecutorConfig | undefined {
+  const executorFile = path.join(boardDir, TASK_EXECUTOR_FILE);
+  if (!fs.existsSync(executorFile)) return undefined;
+  const raw = fs.readFileSync(executorFile, 'utf-8').trim();
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.command === 'string') {
+      return parsed as TaskExecutorConfig;
+    }
+  } catch { /* not JSON — treat as plain command */ }
+  return { command: raw };
+}
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
 /** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
@@ -1336,7 +1363,13 @@ function cmdInit(args: string[]): void {
   const result = initBoard(dir);
 
   if (taskExecutor) {
-    fs.writeFileSync(path.join(dir, '.task-executor'), taskExecutor, 'utf-8');
+    const teExtraIdx = args.indexOf('--task-executor-extra');
+    let teExtra: Record<string, unknown> | undefined;
+    if (teExtraIdx !== -1 && args[teExtraIdx + 1]) {
+      try { teExtra = JSON.parse(args[teExtraIdx + 1]); } catch { /* ignore bad JSON */ }
+    }
+    const teConfig: TaskExecutorConfig = { command: taskExecutor, ...(teExtra ? { extra: teExtra } : {}) };
+    fs.writeFileSync(path.join(dir, TASK_EXECUTOR_FILE), JSON.stringify(teConfig, null, 2), 'utf-8');
   }
   if (chatHandler) {
     fs.writeFileSync(path.join(dir, '.chat-handler'), chatHandler, 'utf-8');
@@ -1771,8 +1804,11 @@ function cmdRunSources(args: string[]): void {
   console.log(`[run-sources-internal] Processing card "${card.id as string}"`);
 
   // Load registered task-executor (if any)
-  const executorFile = path.join(boardDir!, '.task-executor');
-  const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
+  const teConfig = readTaskExecutorConfig(boardDir!);
+  const taskExecutor = teConfig?.command;
+  const taskExecutorExtraB64 = teConfig?.extra
+    ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
+    : undefined;
 
   type SourceDef = {
     cli?: string;
@@ -1824,9 +1860,11 @@ function cmdRunSources(args: string[]): void {
       };
       appendTaskExecutorLog(boardDir!, sourceForExecutor, 'external-task-executor');
       fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
-      console.log(`[run-sources-internal] task-executor: ${taskExecutor} run-source-fetch --in ${inFile} --out ${outFile} --err ${errFile}`);
+      const executorArgs = ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile];
+      if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
+      console.log(`[run-sources-internal] task-executor: ${taskExecutor} ${executorArgs.join(' ')}`);
       try {
-        execCommandSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile], {
+        execCommandSync(taskExecutor, executorArgs, {
           shell: true,
           timeout: src.timeout ?? 120_000,
         });
@@ -2483,6 +2521,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'inference-done':            return cmdInferenceDone(rest);
     case 'run-source-fetch':          return cmdRunSourceFetch(rest);
     case 'probe-source':               return await cmdProbeSource(rest);
+    case 'describe-task-executor-capabilities': return cmdDescribeTaskExecutorCapabilities(rest);
     case 'process-accumulated-events': return await cmdTryDrain(rest);
     default:
       throw new Error(`Unknown command: ${cmd ?? '(none)'}`);
@@ -2559,8 +2598,11 @@ async function cmdProbeSource(args: string[]): Promise<void> {
   }
 
   // Detect registered task-executor
-  const executorFile = path.join(boardDir, '.task-executor');
-  const taskExecutor = fs.existsSync(executorFile) ? fs.readFileSync(executorFile, 'utf-8').trim() : undefined;
+  const teConfig = readTaskExecutorConfig(boardDir);
+  const taskExecutor = teConfig?.command;
+  const taskExecutorExtraB64 = teConfig?.extra
+    ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
+    : undefined;
 
   // Build --in payload — mirrors exactly what run-sources-internal passes to the executor
   const inPayload: Record<string, unknown> = {
@@ -2597,7 +2639,9 @@ async function cmdProbeSource(args: string[]): Promise<void> {
 
   try {
     if (taskExecutor) {
-      execCommandSync(taskExecutor, ['run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile], {
+      const executorArgs = ['run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile];
+      if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
+      execCommandSync(taskExecutor, executorArgs, {
         shell: true,
         timeout: (sourceDef.timeout as number) ?? 30_000,
       });
@@ -2669,6 +2713,35 @@ async function cmdProbeSource(args: string[]): Promise<void> {
   console.log(`[probe-source:result] ${JSON.stringify(summary)}`);
 
   process.exit(passed ? 0 : 1);
+}
+
+function cmdDescribeTaskExecutorCapabilities(args: string[]): void {
+  const rgIdx = args.indexOf('--rg');
+  const boardDir = rgIdx !== -1 ? path.resolve(args[rgIdx + 1]) : undefined;
+  if (!boardDir) {
+    console.error('Usage: board-live-cards describe-task-executor-capabilities --rg <dir>');
+    process.exit(1);
+  }
+
+  const teConfig = readTaskExecutorConfig(boardDir);
+  if (!teConfig) {
+    console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${boardDir}`);
+    process.exit(1);
+  }
+
+  try {
+    const stdout = execCommandSync(teConfig.command, ['describe-capabilities'], {
+      shell: true,
+      timeout: 10_000,
+      encoding: 'utf-8',
+    });
+    // Pass through the executor's JSON output directly
+    process.stdout.write(String(stdout));
+    if (!String(stdout).endsWith('\n')) process.stdout.write('\n');
+  } catch (e) {
+    console.error(`[describe-task-executor-capabilities] Executor failed: ${(e as Error).message ?? e}`);
+    process.exit(1);
+  }
 }
 
 function cmdHelp(): void {
@@ -2764,6 +2837,10 @@ INTERNAL COMMANDS
   run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
     Execute a source definition. Board-live-cards reads source.cli and executes it.
     Writes result to --out. Presence of --out after exit indicates success.
+
+  describe-task-executor-capabilities --rg <dir>
+    Invoke the registered task-executor's describe-capabilities subcommand and
+    print its capabilities JSON to stdout.  Requires a .task-executor file in <dir>.
 
   probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
                [--mock-requires <json>] [--rg <boardDir>] [--out <result.json>]
