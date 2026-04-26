@@ -1,10 +1,10 @@
 // live-cards.js — LiveCards v3: Node-based Board/Canvas engine
 //
 // Schema: Each node has { id } required; all else optional.
-//   id, meta, card_data, requires, provides, sources, compute, view
-//   Nodes with view render as cards; nodes with sources but no view render as source pills in canvas.
+//   id, meta, card_data, requires, provides, source_defs, compute, view
+//   Nodes with view render as cards; nodes with source_defs but no view render as source pills in canvas.
 //   compute[] — ordered array of { bindTo, expr } JSONata steps → writes to node.computed_values (ephemeral)
-//   sources[] — open objects: only bindTo + outputFile matter to the engine; all other fields are
+//   source_defs[] — open objects: only bindTo + outputFile matter to the engine; all other fields are
 //               passed verbatim to the board's task-executor (--in JSON). Users define their own
 //               shape (kind, url, mailbox, channel, model, ...) per executor.
 //   requires[] — upstream node IDs; engine subscribes automatically
@@ -2463,8 +2463,8 @@ var LiveCard = (function () {
       const title = (card.meta && card.meta.title) || node.id;
       const tags = (card.meta && card.meta.tags) || [];
       let badgeHtml = '';
-      if ((card.sources && card.sources.length) && !card.view) {
-        var src = card.sources[0] || {};
+      if ((card.source_defs && card.source_defs.length) && !card.view) {
+        var src = card.source_defs[0] || {};
         badgeHtml = '<span class="badge bg-info text-dark ms-auto">' + _esc(src.kind || 'source') + '</span>';
       } else if (tags.length) {
         badgeHtml = tags.map(t => '<span class="badge bg-secondary ms-1">' + _esc(t) + '</span>').join('');
@@ -2522,7 +2522,7 @@ var LiveCard = (function () {
       const status = (node.card_data && node.card_data.status) || 'fresh';
       const card = node && node.card ? node.card : {};
       const title = (card.meta && card.meta.title) || node.id;
-      const kind = (card.sources && card.sources[0] && card.sources[0].kind) || 'source';
+      const kind = (card.source_defs && card.source_defs[0] && card.source_defs[0].kind) || 'source';
       el.innerHTML = `<div class="lc-source-pill shadow-sm">
         ${_statusDot(status)}
         <span class="fw-medium">${_esc(title)}</span>
@@ -2642,7 +2642,7 @@ var LiveCard = (function () {
       nodeList.forEach(node => {
         const pos = _positions[node.id] || { x: 0, y: 0 };
 
-        if ((!node.card || !node.card.view) && (node.card && node.card.sources && node.card.sources.length)) {
+        if ((!node.card || !node.card.view) && (node.card && node.card.source_defs && node.card.source_defs.length)) {
           const el = _buildSourcePill(node);
           el.dataset.nodeId = node.id;
           el.style.left = pos.x + 'px';

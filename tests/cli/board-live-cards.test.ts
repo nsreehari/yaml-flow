@@ -327,11 +327,11 @@ describe('board-live-cards CLI', () => {
 // ============================================================================
 
 describe('liveCardToTaskConfig', () => {
-  it('card with sources → [card-handler]', () => {
+  it('card with source_defs → [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'prices',
       provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
-      sources: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }],
+      source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }],
       card_data: { prices: {} },
     };
     const tc = liveCardToTaskConfig(card);
@@ -358,17 +358,17 @@ describe('liveCardToTaskConfig', () => {
       id: 'enriched',
       requires: ['raw'],
       compute: [{ bindTo: 'x', expr: '$sum(card_data.raw.v)' }],
-      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true }],
+      source_defs: [{ bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true }],
       card_data: {},
     };
     const tc = liveCardToTaskConfig(card);
     expect(tc.taskHandlers).toEqual(['card-handler']);
   });
 
-  it('card with required + non-gating sources → still just [card-handler]', () => {
+  it('card with required + non-gating source_defs → still just [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'live-feed',
-      sources: [
+      source_defs: [
         { cli: 'feed.sh', bindTo: 'data', outputFile: 'data.json' },
         { cli: 'enrich.sh', bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true },
       ],
@@ -699,7 +699,7 @@ describe('cli validate-card', () => {
     const cardFile = path.join(tmpDir, 'bad-ns.json');
     fs.writeFileSync(cardFile, JSON.stringify({
       id: 'bad-ns',
-      provides: [{ bindTo: 'data', src: 'sources.foo.bar' }],
+      provides: [{ bindTo: 'data', src: 'source_defs.foo.bar' }],
       card_data: {},
     }));
 
@@ -744,7 +744,7 @@ describe('cli validate-card', () => {
     }));
     fs.writeFileSync(path.join(cardsDir, 'bad.json'), JSON.stringify({
       id: 'bad',
-      provides: [{ bindTo: 'x', src: 'sources.x' }],
+      provides: [{ bindTo: 'x', src: 'source_defs.x' }],
       card_data: {},
     }));
 

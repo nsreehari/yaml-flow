@@ -384,7 +384,7 @@ When multiple eligible tasks produce the same output token, only one should run 
 
 ### Pattern: AI Agent Tool Orchestration (Event Graph)
 
-An agent needs to gather evidence from multiple sources, then synthesize.
+An agent needs to gather evidence from multiple source_defs, then synthesize.
 
 ```yaml
 settings:
@@ -971,7 +971,7 @@ const r3 = validateLiveCardSchema(config);
 |---|---|---|
 | `validateGraphSchema` | `schema/event-graph.schema.json` | Tasks, settings, refreshStrategy, retry, circuit_breaker, inference hints |
 | `validateFlowSchema` | `schema/flow.schema.json` | Steps, transitions, retry, terminal states |
-| `validateLiveCardSchema` | `schema/live-cards.schema.json` | Cards, sources, elements, compute, data bindings |
+| `validateLiveCardSchema` | `schema/live-cards.schema.json` | Cards, source_defs, elements, compute, data bindings |
 
 All validators are synchronous, pure functions. They return `{ ok: boolean, errors?: ErrorObject[] }`.
 

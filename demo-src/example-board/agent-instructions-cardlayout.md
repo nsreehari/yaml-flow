@@ -9,7 +9,7 @@
 - **No redundancy across cards** — each column on a board should appear on exactly one card. If a value is already visible elsewhere, omit it; the user's eye can join cards mentally.
 - **Aggregations are distinct** — a metric that summarises data from another card (total, count, average) is not redundant — it is new information. Keep it.
 - **Separate input from output** — cards with editable elements (`editable-table`, `form`, `filter`) should stay lean; put heavy compute and display in a separate downstream card that `requires` the published token.
-- **Propagate data, not display** — use `provides` to pass data between cards; never duplicate a `sources[]` fetch for data another card already provides.
+- **Propagate data, not display** — use `provides` to pass data between cards; never duplicate a `source_defs[]` fetch for data another card already provides.
 - **KISS** — if you are unsure whether a field adds value, leave it out. A sparse card that is immediately readable is better than a dense card that requires study.
 
 ---

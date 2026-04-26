@@ -21,7 +21,7 @@
  *     "cwd":     "<card directory>",           // injected by CLI
  *     "boardDir":"<board runtime directory>",   // injected by CLI
  *     "_requires":        { ... },             // upstream token data (from card requires[])
- *     "_sourcesData":     { ... },             // already-fetched sources on this card
+ *     "_sourcesData":     { ... },             // already-fetched source_defs on this card
  *     "_computed_values":  { ... },            // computed_values from the card's compute stage
  *     // ...plus any custom fields authored on the source entry
  *   }
@@ -180,7 +180,7 @@ function resolveCopilotPrompt(sourceDef) {
   
   // Merge all injected context for template interpolation.
   // _requires = upstream token data, _computed_values = card compute stage outputs,
-  // _sourcesData = already-fetched sources on this card.
+  // _sourcesData = already-fetched source_defs on this card.
   // Explicit args defined on the source take highest precedence.
   const interpolationContext = {
     ...sourceDef._requires,

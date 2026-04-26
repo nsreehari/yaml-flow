@@ -286,16 +286,16 @@ export function createBoardLiveGraphRuntime(
       }
 
       const sourcesData: Record<string, unknown> = {};
-      if (card.sources && card.sources.length > 0) {
+      if (card.source_defs && card.source_defs.length > 0) {
         const adapter = sourceAdapters[cardId] ?? defaultSourceAdapter;
         const fetched = taskExecutor
           ? await taskExecutor({ card, input: inputArgs })
           : (adapter ? await adapter({ card, input: inputArgs }) : undefined);
         if (fetched && typeof fetched === 'object') {
-          for (const src of card.sources) {
+          for (const src of card.source_defs) {
             if (Object.prototype.hasOwnProperty.call(fetched, src.bindTo)) {
               sourcesData[src.bindTo] = fetched[src.bindTo];
-            } else if (card.sources.length === 1) {
+            } else if (card.source_defs.length === 1) {
               sourcesData[src.bindTo] = fetched;
             }
           }
@@ -306,7 +306,7 @@ export function createBoardLiveGraphRuntime(
         id: card.id,
         card_data: deepClone(card.card_data ?? {}),
         requires: requiresData,
-        sources: card.sources,
+        source_defs: card.source_defs,
         compute: card.compute as ComputeNode['compute'] | undefined,
       };
       computeNode._sourcesData = sourcesData;

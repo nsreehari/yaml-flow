@@ -126,7 +126,7 @@
 
   var VALID_ELEMENT_KINDS = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
   var VALID_STATUSES = ['fresh','stale','loading','error'];
-  var ALLOWED_KEYS = ['id','meta','requires','provides','view','card_data','compute','sources'];
+  var ALLOWED_KEYS = ['id','meta','requires','provides','view','card_data','compute','source_defs'];
 
   function validateNode(node) {
     var errors = [];
@@ -191,17 +191,17 @@
       }
     }
 
-    // sources
-    if (node.sources != null) {
-      if (!Array.isArray(node.sources)) {
-        errors.push('sources: must be an array');
+    // source_defs
+    if (node.source_defs != null) {
+      if (!Array.isArray(node.source_defs)) {
+        errors.push('source_defs: must be an array');
       } else {
-        node.sources.forEach(function (src, i) {
-          if (!src || typeof src !== 'object' || Array.isArray(src)) errors.push('sources[' + i + ']: must be an object');
-          else if (typeof src.bindTo !== 'string' || !src.bindTo) errors.push('sources[' + i + ']: missing required "bindTo" property');
+        node.source_defs.forEach(function (src, i) {
+          if (!src || typeof src !== 'object' || Array.isArray(src)) errors.push('source_defs[' + i + ']: must be an object');
+          else if (typeof src.bindTo !== 'string' || !src.bindTo) errors.push('source_defs[' + i + ']: missing required "bindTo" property');
           else {
-            if (src.outputFile != null && typeof src.outputFile !== 'string') errors.push('sources[' + i + ']: outputFile must be a string');
-            if (src.optional != null && typeof src.optional !== 'boolean') errors.push('sources[' + i + ']: optional must be a boolean');
+            if (src.outputFile != null && typeof src.outputFile !== 'string') errors.push('source_defs[' + i + ']: outputFile must be a string');
+            if (src.optional != null && typeof src.optional !== 'boolean') errors.push('source_defs[' + i + ']: optional must be a boolean');
           }
         });
       }
@@ -231,18 +231,18 @@
   }
 
   /**
-   * Enrich sources with execution context for template interpolation and prompt rendering.
-   * Pure function: no side effects, returns new enriched sources array.
+   * Enrich source_defs with execution context for template interpolation and prompt rendering.
+   * Pure function: no side effects, returns new enriched source_defs array.
    * 
-   * @param {Array} sources - Array of source definitions
+   * @param {Array} source_defs - Array of source definitions
    * @param {Object} context - Execution context containing requires, sourcesData, computed_values
-   * @returns {Array} New array of sources with _requires, _sourcesData, _computed_values attached
+   * @returns {Array} New array of source_defs with _requires, _sourcesData, _computed_values attached
    */
-  function enrichSources(sources, context) {
-    if (!sources || sources.length === 0) return [];
+  function enrichSources(source_defs, context) {
+    if (!source_defs || source_defs.length === 0) return [];
     context = context || {};
     
-    return sources.map(function (src) {
+    return source_defs.map(function (src) {
       return Object.assign({}, src, {
         _requires: context.requires || {},
         _sourcesData: context.sourcesData || {},

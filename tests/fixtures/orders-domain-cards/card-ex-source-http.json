@@ -7,7 +7,7 @@
   },
   "requires": ["orders"],
   "provides": [{ "bindTo": "prices", "src": "fetched_sources.raw" }],
-  "sources": [{
+  "source_defs": [{
     "bindTo": "raw",
     "outputFile": "card-ex-source-http-raw.json",
     "mock": "prices"

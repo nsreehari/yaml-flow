@@ -6,7 +6,7 @@
     "desc": "Root data source — fetches order records via a script"
   },
   "provides": [{ "bindTo": "orders", "src": "fetched_sources.raw" }],
-  "sources": [{
+  "source_defs": [{
     "bindTo": "raw",
     "outputFile": "card-ex-source-raw.json",
     "mock": "orders"

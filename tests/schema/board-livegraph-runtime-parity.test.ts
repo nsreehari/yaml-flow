@@ -4,7 +4,7 @@
  *
  * Specifically checks that:
  *  - createBoardLiveGraphRuntime is exported from the IIFE bundle
- *  - A card executes end-to-end (sources → compute → provides)
+ *  - A card executes end-to-end (source_defs → compute → provides)
  *  - getNodes() returns nodes with the correct shape:
  *      { id, fetched_sources, computed_values, requires, card_data, runtime_state }
  *  - fetched_sources, computed_values and requires are populated correctly
@@ -94,7 +94,7 @@ const CARDS = [
   {
     id: 'src-card',
     provides: [{ bindTo: 'orders', src: 'fetched_sources.raw' }],
-    sources: [{ bindTo: 'raw', mock: 'orders', outputFile: 'orders.json' }],
+    source_defs: [{ bindTo: 'raw', mock: 'orders', outputFile: 'orders.json' }],
     card_data: {},
   },
   {
@@ -115,7 +115,7 @@ const ORDER_DATA = [
 
 const mockExecutor: Parameters<typeof serverCreateRuntime>[1]['taskExecutor'] = async ({ card }) => {
   const out: Record<string, unknown> = {};
-  for (const src of card.sources ?? []) {
+  for (const src of card.source_defs ?? []) {
     if (src.mock === 'orders') out[src.bindTo] = ORDER_DATA;
   }
   return out;

@@ -31,13 +31,13 @@ const KNOWN_NAMESPACES = [
   'requires',
   'fetched_sources',
   'computed_values',
-  'sources',
+  'source_defs',
 ] as const;
 
 type KnownNamespace = typeof KNOWN_NAMESPACES[number];
 
-const NAMESPACE_REFERENCE_RE = /\b(card_data|requires|fetched_sources|computed_values|sources)\b/g;
-const ROOT_PATH_NAMESPACE_RE = /^\s*(card_data|requires|fetched_sources|computed_values|sources)(\.|$)/;
+const NAMESPACE_REFERENCE_RE = /\b(card_data|requires|fetched_sources|computed_values|source_defs)\b/g;
+const ROOT_PATH_NAMESPACE_RE = /^\s*(card_data|requires|fetched_sources|computed_values|source_defs)(\.|$)/;
 
 function referencedNamespaces(expression: string): Set<KnownNamespace> {
   const namespaces = new Set<KnownNamespace>();
@@ -133,22 +133,22 @@ export function validateLiveCardSchema(
   // JSON Schema draft-07 cannot enforce per-property uniqueness across array items.
   // Check bindTo and outputFile uniqueness here after the AJV structural pass.
   if (node && typeof node === 'object' && !Array.isArray(node)) {
-    const sources = (node as Record<string, unknown>).sources;
-    if (Array.isArray(sources)) {
+    const source_defs = (node as Record<string, unknown>).source_defs;
+    if (Array.isArray(source_defs)) {
       const bindTos = new Set<string>();
       const outputFiles = new Set<string>();
-      sources.forEach((src, i) => {
+      source_defs.forEach((src, i) => {
         if (!src || typeof src !== 'object' || Array.isArray(src)) return;
         const s = src as Record<string, unknown>;
         if (typeof s.bindTo === 'string' && s.bindTo) {
           if (bindTos.has(s.bindTo)) {
-            errors.push(`/sources/${i}/bindTo: bindTo "${s.bindTo}" must be unique across all sources`);
+            errors.push(`/source_defs/${i}/bindTo: bindTo "${s.bindTo}" must be unique across all source_defs`);
           }
           bindTos.add(s.bindTo);
         }
         if (typeof s.outputFile === 'string' && s.outputFile) {
           if (outputFiles.has(s.outputFile)) {
-            errors.push(`/sources/${i}/outputFile: outputFile "${s.outputFile}" must be unique across all sources`);
+            errors.push(`/source_defs/${i}/outputFile: outputFile "${s.outputFile}" must be unique across all source_defs`);
           }
           outputFiles.add(s.outputFile);
         }

@@ -46,9 +46,9 @@ const cards: LiveCard[] = [
     card_data: {},
     data: { requires: ['market-feed'] },
     compute: {
-      total: { fn: 'sum', input: 'sources.market-feed.prices' },
-      avg: { fn: 'avg', input: 'sources.market-feed.prices' },
-      count: { fn: 'count', input: 'sources.market-feed.prices' },
+      total: { fn: 'sum', input: 'source_defs.market-feed.prices' },
+      avg: { fn: 'avg', input: 'source_defs.market-feed.prices' },
+      count: { fn: 'count', input: 'source_defs.market-feed.prices' },
     },
   },
   {
@@ -132,8 +132,8 @@ const board: LiveBoard = {
       card_data: {},
       data: { requires: ['equity-feed', 'bond-feed'] },
       compute: {
-        equity_total: { fn: 'sum', input: 'sources.equity-feed.prices' },
-        bond_total: { fn: 'sum', input: 'sources.bond-feed.yields' },
+        equity_total: { fn: 'sum', input: 'source_defs.equity-feed.prices' },
+        bond_total: { fn: 'sum', input: 'source_defs.bond-feed.yields' },
       },
     },
     {

@@ -30,11 +30,11 @@ describe('validateLiveCardSchema', () => {
       expect(r.ok).toBe(true);
     });
 
-    it('card with sources', () => {
+    it('card with source_defs', () => {
       const r = validateLiveCardSchema({
         id: 'src1',
         card_data: { status: 'fresh' },
-        sources: [{ bindTo: 'raw', outputFile: 'raw.json', kind: 'api' }],
+        source_defs: [{ bindTo: 'raw', outputFile: 'raw.json', kind: 'api' }],
       });
       expect(r.ok).toBe(true);
     });
@@ -57,7 +57,7 @@ describe('validateLiveCardSchema', () => {
         compute: [
           { bindTo: 'total', expr: '$sum(card_data.data.revenue)' },
         ],
-        sources: [{ bindTo: 'data', outputFile: 'data.json', kind: 'api' }, { bindTo: 'news', outputFile: 'news.json', optionalForCompletionGating: true }],
+        source_defs: [{ bindTo: 'data', outputFile: 'data.json', kind: 'api' }, { bindTo: 'news', outputFile: 'news.json', optionalForCompletionGating: true }],
       });
       expect(r.ok).toBe(true);
     });
@@ -66,7 +66,7 @@ describe('validateLiveCardSchema', () => {
       const r = validateLiveCardSchema({
         id: 'src-full',
         card_data: {},
-        sources: [{
+        source_defs: [{
           kind: 'api',
           bindTo: 'quotes',
           outputFile: 'quotes.json',
@@ -97,11 +97,11 @@ describe('validateLiveCardSchema', () => {
       }
     });
 
-    it('all source kinds accepted in sources array', () => {
+    it('all source kinds accepted in source_defs array', () => {
       for (const kind of ['api', 'websocket', 'static', 'llm']) {
         const r = validateLiveCardSchema({
           id: `s-${kind}`, card_data: {},
-          sources: [{ kind, bindTo: 'x', outputFile: 'output.json' }],
+          source_defs: [{ kind, bindTo: 'x', outputFile: 'output.json' }],
         });
         expect(r.ok, `source kind "${kind}" should be valid`).toBe(true);
       }
@@ -193,26 +193,26 @@ describe('validateLiveCardSchema', () => {
       expect(r.ok).toBe(false);
     });
 
-    it('sources entry missing bindTo', () => {
+    it('source_defs entry missing bindTo', () => {
       const r = validateLiveCardSchema({
         id: 'x', card_data: {},
-        sources: [{ kind: 'api', outputFile: 'data.json' }],
+        source_defs: [{ kind: 'api', outputFile: 'data.json' }],
       });
       expect(r.ok).toBe(false);
     });
 
-    it('sources entry missing outputFile', () => {
+    it('source_defs entry missing outputFile', () => {
       const r = validateLiveCardSchema({
         id: 'x', card_data: {},
-        sources: [{ kind: 'api', bindTo: 'raw' }],
+        source_defs: [{ kind: 'api', bindTo: 'raw' }],
       });
       expect(r.ok).toBe(false);
     });
 
-    it('sources with duplicate bindTo', () => {
+    it('source_defs with duplicate bindTo', () => {
       const r = validateLiveCardSchema({
         id: 'x', card_data: {},
-        sources: [
+        source_defs: [
           { bindTo: 'data', outputFile: 'data1.json', kind: 'api' },
           { bindTo: 'data', outputFile: 'data2.json', kind: 'api' },
         ],
@@ -221,10 +221,10 @@ describe('validateLiveCardSchema', () => {
       expect(r.errors.some(e => e.includes('bindTo'))).toBe(true);
     });
 
-    it('sources with duplicate outputFile', () => {
+    it('source_defs with duplicate outputFile', () => {
       const r = validateLiveCardSchema({
         id: 'x', card_data: {},
-        sources: [
+        source_defs: [
           { bindTo: 'raw1', outputFile: 'data.json', kind: 'api' },
           { bindTo: 'raw2', outputFile: 'data.json', kind: 'api' },
         ],
@@ -293,15 +293,15 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.errors.some(e => e.includes('/compute/0/expr'))).toBe(true);
   });
 
-  it('rejects compute expressions that use legacy sources namespace', () => {
+  it('rejects compute expressions that use legacy source_defs namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad-compute-ns',
       card_data: {},
-      compute: [{ bindTo: 'x', expr: '$count(sources.raw)' }],
+      compute: [{ bindTo: 'x', expr: '$count(source_defs.raw)' }],
     });
 
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/compute/0/expr') && e.includes('disallowed namespace "sources"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/compute/0/expr') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
   it('accepts view references to fetched_sources/requires/card_data/computed_values', () => {
@@ -319,17 +319,17 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.ok).toBe(true);
   });
 
-  it('rejects view references using legacy sources namespace', () => {
+  it('rejects view references using legacy source_defs namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad-view-refs',
       card_data: {},
       view: {
-        elements: [{ kind: 'table', data: { bind: 'sources.raw' } }],
+        elements: [{ kind: 'table', data: { bind: 'source_defs.raw' } }],
       },
     });
 
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/view/elements/0/data/bind') && e.includes('disallowed namespace "sources"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/view/elements/0/data/bind') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
   it('accepts provides.src with all four valid namespaces', () => {
@@ -347,14 +347,14 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it('rejects provides.src using legacy sources namespace', () => {
+  it('rejects provides.src using legacy source_defs namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad-provides-bsources',
       card_data: {},
-      provides: [{ bindTo: 'trades', src: 'sources.rebalance.proposed_trades' }],
+      provides: [{ bindTo: 'trades', src: 'source_defs.rebalance.proposed_trades' }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/provides/0/src') && e.includes('disallowed namespace "sources"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/provides/0/src') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
   it('rejects provides.src with unrecognised namespace', () => {
@@ -394,7 +394,7 @@ describe('validateLiveCardDefinition', () => {
     const r = validateLiveCard({
       id: 'bad-alias',
       card_data: {},
-      compute: [{ bindTo: 'x', expr: '$count(sources.raw)' }],
+      compute: [{ bindTo: 'x', expr: '$count(source_defs.raw)' }],
       view: { elements: [{ kind: 'metric', data: { bind: 'computed_values.total' } }] },
     });
 

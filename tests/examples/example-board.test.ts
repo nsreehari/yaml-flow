@@ -41,7 +41,7 @@ const POSITIONS_SEED = [
 ];
 
 // Mock fetched_sources injected as node._sourcesData for cards that have external
-// sources (copilot / chartApi / http) which are not executed in unit tests.
+// source_defs (copilot / chartApi / http) which are not executed in unit tests.
 const CARD_SOURCE_MOCKS: Record<string, Record<string, unknown>> = {
   'card-market-prices': {
     quotes: QUOTES_SEED,
@@ -148,7 +148,7 @@ describe('example-board', () => {
       if (!Array.isArray(node.compute) || node.compute.length === 0) continue;
 
       node.requires = buildRequires(node);
-      // Pass mock fetched_sources for cards with external sources (copilot/chartApi/http)
+      // Pass mock fetched_sources for cards with external source_defs (copilot/chartApi/http)
       // that are not executed during unit tests.
       const sourcesData = node.id ? CARD_SOURCE_MOCKS[node.id] : undefined;
       await CardCompute.run(node, sourcesData ? { sourcesData } : undefined);

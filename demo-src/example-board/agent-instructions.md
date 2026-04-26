@@ -38,7 +38,7 @@ vocabulary:
 
   "requires": ["token-a", "token-b"],
 
-  "sources": [
+  "source_defs": [
     { "bindTo": "raw", "outputFile": "my-card-raw.json", /* task-executor fields */ }
   ],
 
@@ -74,10 +74,10 @@ vocabulary:
   - `outputFile` → where the fetched result is cached
   - `customFields` → interpreted by the registered **task-executor** (examples: `mock`, `copilot`, `http`, `script`)
 - Produces: `fetched_sources.*`
-- **`sources` is NOT a valid data namespace** — it is the config array of source definitions. Use `fetched_sources.*` to reference fetched data.
+- **`source_defs` is NOT a valid data namespace** — it is the config array of source definitions. Use `fetched_sources.*` to reference fetched data.
 
 ### Stage 2 — Compute
-- **Runs after sources.** Reads `requires.*`, `fetched_sources.*`, `card_data.*`.
+- **Runs after source_defs.** Reads `requires.*`, `fetched_sources.*`, `card_data.*`.
 - Each entry: `{ "bindTo": "key", "expr": "<JSONata>" }`
 - Produces: `computed_values.*`
 
@@ -125,7 +125,7 @@ Every card is a live entity. Any of these events triggers automatic recompute of
 
 ## Task Completion
 
-Task completion is determined by one rule: **a card is complete when all non-optional `sources[]` have been fetched**.
+Task completion is determined by one rule: **a card is complete when all non-optional `source_defs[]` have been fetched**.
 
 If completion requires a judgment call — e.g. "is the data sufficient?", "does this narrative indicate done?" — model it as data using the standard source → compute → provides chain (see LLM source pattern below). The card is complete when that source has been fetched.
 
@@ -279,7 +279,7 @@ Custom element kind — behaviour defined by the host application.
 
 ### Root source card
 ```
-sources[mock/http/script] → fetched_sources.raw
+source_defs[mock/http/script] → fetched_sources.raw
 provides: [{ bindTo: "orders", src: "fetched_sources.raw" }]
 view: table showing the raw data
 ```
@@ -317,7 +317,7 @@ card-child    requires "card-ex-form"
 ### LLM verdict card (completion gating via source)
 ```
 requires: ["some-data"]
-sources: [{ bindTo: "verdict", outputFile: "...", copilot: { prompt_template: "..." } }]
+source_defs: [{ bindTo: "verdict", outputFile: "...", copilot: { prompt_template: "..." } }]
 compute: [{ bindTo: "isReady", expr: "fetched_sources.verdict.isTaskCompleted" }]
 provides: [{ bindTo: "readiness-verdict", src: "fetched_sources.verdict" }]
 view: badge(computed_values.isReady, colorMap) + text(fetched_sources.verdict.reason)
@@ -395,7 +395,7 @@ Example output (excerpt):
 
 ## LLM Calls — Use a Source
 
-**All LLM calls belong in sources[], handled by the task executor.** There is one mechanism for external calls — sources.
+**All LLM calls belong in source_defs[], handled by the task executor.** There is one mechanism for external calls — source_defs.
 
 To incorporate LLM reasoning into a card:
 
@@ -405,7 +405,7 @@ To incorporate LLM reasoning into a card:
 4. The card provides those tokens downstream like any other.
 
 ```json
-"sources": [
+"source_defs": [
   {
     "bindTo": "verdict",
     "outputFile": "my-card-verdict.json",
@@ -465,7 +465,7 @@ When in doubt about allowed fields, consult:
 - `provides` must be array of `{ bindTo: string, src: string }` (if present)
 - `provides[].src` must start with a valid namespace: `card_data`, `requires`, `fetched_sources`, or `computed_values`
 - `compute[]` each entry must have `bindTo` + `expr` strings; `expr` must be valid JSONata
-- `sources[]` each entry must have `bindTo` + `outputFile` strings; both must be unique across the array
+- `source_defs[]` each entry must have `bindTo` + `outputFile` strings; both must be unique across the array
 - `view.elements` required, non-empty; each element must have a valid `kind`
 - Top-level unknown keys are flagged as errors
 - Valid element `kind` values: `metric`, `table`, `editable-table`, `chart`, `form`, `filter`, `list`, `notes`, `todo`, `alert`, `narrative`, `badge`, `text`, `markdown`, `custom`
@@ -474,13 +474,13 @@ When in doubt about allowed fields, consult:
 
 ## mock.db
 
-A JSON file at the board root keyed by mock name. Used by `"mock": "key"` sources. Replace with real task-executor integrations in production.
+A JSON file at the board root keyed by mock name. Used by `"mock": "key"` source_defs. Replace with real task-executor integrations in production.
 
 ---
 
 ## Task Executor Protocol
 
-The task executor is a **card-source-driven** component — its behaviour is determined entirely by the `customFields` defined on each card's `sources[]` entries. One executor is registered for the whole board, but it must know how to handle every source kind (`mock`, `copilot`, `http`, `graphapi`, etc.) used by any card on the board. The executor is the only handler where the card's source definition directly drives what the handler needs to do. It is registered once per board:
+The task executor is a **card-source-driven** component — its behaviour is determined entirely by the `customFields` defined on each card's `source_defs[]` entries. One executor is registered for the whole board, but it must know how to handle every source kind (`mock`, `copilot`, `http`, `graphapi`, etc.) used by any card on the board. The executor is the only handler where the card's source definition directly drives what the handler needs to do. It is registered once per board:
 
 ```bash
 node board-live-cards-cli.js init ./my-board --task-executor ./my-executor.js
@@ -493,7 +493,7 @@ node board-live-cards-cli.js init ./my-board --task-executor ./my-executor.js
 node <executor.js> run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
 ```
 
-- **`--in`** — path to a JSON file containing a single source object (one entry from `sources[]`), enriched by the runtime with extra context fields:
+- **`--in`** — path to a JSON file containing a single source object (one entry from `source_defs[]`), enriched by the runtime with extra context fields:
 
 ```json
 {
@@ -509,7 +509,7 @@ node <executor.js> run-source-fetch --in <source.json> --out <result.json> [--er
 ```
 
 - `_requires` — resolved values for all card `requires` tokens
-- `_sourcesData` — already-fetched sources for this card (earlier in sources[] order)
+- `_sourcesData` — already-fetched source_defs for this card (earlier in source_defs[] order)
 - `_computed_values` — current computed_values for the card
 
 - **`--out`** — path to write the fetched value as raw JSON (any shape; stored under `fetched_sources.<bindTo>`)
@@ -547,7 +547,7 @@ node board-live-cards-cli.js probe-source \
 | Flag | Required | Description |
 |---|---|---|
 | `--card <card.json>` | yes | Path to the card file to probe |
-| `--source-idx <n>` | no (default 0) | 0-based index into `sources[]` |
+| `--source-idx <n>` | no (default 0) | 0-based index into `source_defs[]` |
 | `--source-bind <name>` | no | Select source by `bindTo` name instead of index |
 | `--mock-requires <json>` | no | JSON string (or `@file.json`) providing the `_requires` token values the source needs. If omitted, `_requires` is `{}`. |
 | `--rg <boardDir>` | no | Board runtime directory used to locate `.task-executor`. Defaults to the card file's directory. |
@@ -558,7 +558,7 @@ node board-live-cards-cli.js probe-source \
 **`--mock-requires` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card `requires: ["holdings"]` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
 
 **Workflow for agents authoring a new card:**
-1. Author the card JSON with `sources[]`.
+1. Author the card JSON with `source_defs[]`.
 2. For each source, run `probe-source` with representative `--mock-requires` data.
 3. If `PROBE_PASS` → proceed with `upsert-card`.
 4. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry.
@@ -571,7 +571,7 @@ node board-live-cards-cli.js probe-source \
 
 ## Chat Handler Protocol
 
-The chat handler is a **universal LLM component** — it does not depend on card sources, card model fields, or board state. Its sole job is: read the conversation, call the LLM, write the response.
+The chat handler is a **universal LLM component** — it does not depend on card source_defs, card model fields, or board state. Its sole job is: read the conversation, call the LLM, write the response.
 
 Enable chat on a card by setting `"chat": true` in the card's `view.features`:
 ```json

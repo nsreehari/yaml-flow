@@ -35,12 +35,12 @@ const graph: GraphConfig = {
     analyse_sentiment: {
       requires: ['raw-asources'],
       provides: ['sentiment-result'],
-      description: 'Run sentiment analysis on sources',
+      description: 'Run sentiment analysis on source_defs',
     },
     analyse_entities: {
       requires: ['raw-asources'],
       provides: ['entity-result'],
-      description: 'Extract named entities from sources',
+      description: 'Extract named entities from source_defs',
     },
     merge_analysis: {
       requires: ['sentiment-result', 'entity-result'],

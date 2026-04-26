@@ -361,9 +361,9 @@ export interface SourceTokenPayload {
   rg: string;
   /** Card id */
   cid: string;
-  /** sources[].bindTo */
+  /** source_defs[].bindTo */
   b: string;
-  /** sources[].outputFile (relative to boardDir) */
+  /** source_defs[].outputFile (relative to boardDir) */
   d: string;
   /** Per-source invocation checksum */
   cs?: string;
@@ -791,7 +791,7 @@ export type BoardLiveCard = LiveCard;
  *
  * Every card gets handler: 'card-handler'.
  * The handler inspects the card and decides what to do:
- * run compute, invoke sources.
+ * run compute, invoke source_defs.
  */
 export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
   const requires = card.requires;
@@ -911,7 +911,7 @@ function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callb
  *
  * Single handler:
  *   card-handler — reads card.json, loads sourcesData from outputFiles, runs CardCompute,
- *                  checks undelivered sources, emits task-completed or spawns run-sourcedefs-internal.
+ *                  checks undelivered source_defs, emits task-completed or spawns run-sourcedefs-internal.
  *                  Fire & forget — returns 'task-initiated' immediately.
  */
 export interface BoardReactiveGraph {
@@ -933,7 +933,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
       const cardId = card.id as string;
       const cardState = (card.card_data ?? {}) as Record<string, unknown>;
-      const allSources: ComputeSource[] = (card.sources ?? []) as ComputeSource[];
+      const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
       // optionalForCompletionGating defaults to false when absent.
       const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
 
@@ -1009,10 +1009,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         id: cardId,
         card_data: { ...cardState },
         requires,
-        sources: allSources,
+        source_defs: allSources,
         compute: card.compute as ComputeStep[] | undefined,
       };
-      // Always populate _sourcesData so resolve("sources.*") works even without compute steps.
+      // Always populate _sourcesData so resolve("source_defs.*") works even without compute steps.
       computeNode._sourcesData = sourcesData;
       if (card.compute) {
         await CardCompute.run(computeNode, { sourcesData });
@@ -1028,7 +1028,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       // can react to input changes, not only timestamp delivery state.
       const enrichedCard = { ...card };
       const enrichedSources = CardCompute.enrichSources(
-        (Array.isArray(card.sources) ? card.sources : undefined),
+        (Array.isArray(card.source_defs) ? card.source_defs : undefined),
         {
           requires,
           sourcesData,
@@ -1036,7 +1036,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         }
       );
       const sourceCwd = path.dirname(cardPath);
-      enrichedCard.sources = Array.isArray(enrichedSources)
+      enrichedCard.source_defs = Array.isArray(enrichedSources)
         ? enrichedSources.map((src) => ({
             ...src,
             cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
@@ -1045,14 +1045,14 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         : enrichedSources;
 
       const enrichedByOutput = new Map<string, unknown>();
-      for (const src of (Array.isArray(enrichedCard.sources) ? enrichedCard.sources : [])) {
+      for (const src of (Array.isArray(enrichedCard.source_defs) ? enrichedCard.source_defs : [])) {
         const outputFile = (src as { outputFile?: unknown }).outputFile;
         if (typeof outputFile === 'string' && outputFile) {
           enrichedByOutput.set(outputFile, src);
         }
       }
 
-        // ---- Delivery check: source fetched after queueRequestedAt for all required sources ----
+        // ---- Delivery check: source fetched after queueRequestedAt for all required source_defs ----
         // queueRequestedAt is stamped on every fresh card-handler dispatch (not-started / completed).
         // A source needs fetching when: never fetched, or lastFetchedAt < queueRequestedAt.
         // While a fetch is in-flight we just update queueRequestedAt so the next completion
@@ -1105,7 +1105,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
         return 'task-initiated';
       }
 
-      // ---- All required sources delivered — build provides payload ----
+      // ---- All required source_defs delivered — build provides payload ----
       const providesBindings = (card.provides ?? []) as { bindTo: string; src: string }[];
       const data: Record<string, unknown> = {};
       for (const { bindTo, src } of providesBindings) {
@@ -1214,7 +1214,7 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       // Persist task-completed token objects for SSE/runtime consumers.
       writeRuntimeDataObjects(boardDir, data);
 
-      // Spawn undelivered non-gating sources in background.
+      // Spawn undelivered non-gating source_defs in background.
         const undeliveredOptional = allSources.filter(s => {
           if (s.optionalForCompletionGating !== true) return false;
           const entry = runtime._sources[s.outputFile];
@@ -1656,8 +1656,8 @@ function cmdValidateCard(args: string[]): void {
 
     // Source-def validation via the task executor (only when --rg provided).
     const sourceErrors: string[] = [];
-    if (teConfig && Array.isArray(card.sources)) {
-      for (const src of card.sources as Array<Record<string, unknown>>) {
+    if (teConfig && Array.isArray(card.source_defs)) {
+      for (const src of card.source_defs as Array<Record<string, unknown>>) {
         const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
         const tmpFile = path.join(os.tmpdir(), `validate-src-${bindTo}-${Date.now()}.json`);
         try {
@@ -1964,8 +1964,8 @@ function cmdRunSources(args: string[]): void {
     reportFetched(outFile);
   }
 
-  const sources = (card.sources ?? []) as SourceDef[];
-  for (const src of sources) {
+  const source_defs = (card.source_defs ?? []) as SourceDef[];
+  for (const src of source_defs) {
     runSource(src);
   }
 }
@@ -2534,29 +2534,29 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const sources: any[] = card.sources ?? [];
-  if (sources.length === 0) {
-    console.error(`[probe-source] Card "${card.id}" has no sources`);
+  const source_defs: any[] = card.source_defs ?? [];
+  if (source_defs.length === 0) {
+    console.error(`[probe-source] Card "${card.id}" has no source_defs`);
     process.exit(1);
   }
 
   // Select source by index or bindTo name
   let sourceIdx: number;
   if (sourceBindVal) {
-    sourceIdx = sources.findIndex((s: any) => s.bindTo === sourceBindVal);
+    sourceIdx = source_defs.findIndex((s: any) => s.bindTo === sourceBindVal);
     if (sourceIdx === -1) {
       console.error(`[probe-source] No source with bindTo="${sourceBindVal}" in card "${card.id}"`);
       process.exit(1);
     }
   } else {
     sourceIdx = sourceIdxVal;
-    if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= sources.length) {
-      console.error(`[probe-source] --source-idx ${sourceIdxVal} out of range (card has ${sources.length} source(s))`);
+    if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= source_defs.length) {
+      console.error(`[probe-source] --source-idx ${sourceIdxVal} out of range (card has ${source_defs.length} source(s))`);
       process.exit(1);
     }
   }
 
-  const sourceDef = sources[sourceIdx];
+  const sourceDef = source_defs[sourceIdx];
   const cardDir = path.resolve(path.dirname(cardFilePath));
   const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
 
@@ -2826,7 +2826,7 @@ INTERNAL COMMANDS
                      the source needs.  Craft the minimal payload that exercises the
                      source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
                      If omitted, _requires is passed as empty ({}).
-    --source-idx:    0-based index into card.sources[]. Default: 0.
+    --source-idx:    0-based index into card.source_defs[]. Default: 0.
     --source-bind:   Select source by its bindTo name instead of index.
     --rg:            Board directory used to find .task-executor. Defaults to the
                      directory containing the card file.
@@ -2848,7 +2848,7 @@ RUN-SOURCE-FETCH PROTOCOL
   External task-executors implement:
     <executor> run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
 
-  INPUT:   --in file contains the full sources[x] definition object
+  INPUT:   --in file contains the full source_defs[x] definition object
   OUTPUT:  --out file is written with the result to signal success.
            --err file may be written to explain failure.
            
@@ -2858,7 +2858,7 @@ RUN-SOURCE-FETCH PROTOCOL
 
 BOARD-LIVE-CARDS BUILT-IN EXECUTOR
   Understands source.cli field only:
-    "sources": [{ "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
+    "source_defs": [{ "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
     
   The source.cli command is executed with:
     - Direct command invocation (no shell; quote-aware argument parsing)

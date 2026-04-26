@@ -20,7 +20,7 @@
  * import { liveCardsToReactiveGraph } from 'yaml-flow/continuous-event-graph';
  *
  * const cards = [
- *   { id: 'prices', sources: [{ kind: 'api', bindTo: 'raw' }], state: {} },
+ *   { id: 'prices', source_defs: [{ kind: 'api', bindTo: 'raw' }], state: {} },
  *   { id: 'dashboard', requires: ['prices'], state: {}, compute: [{ bindTo: 'total', fn: 'sum', ... }], view: { ... } },
  * ];
  *
@@ -62,7 +62,7 @@ export interface LiveCard {
   meta?: { title?: string; tags?: string[] };
   card_data?: Record<string, unknown>;
   compute?: { bindTo: string; fn: string; [key: string]: unknown }[];
-  sources?: {
+  source_defs?: {
     cli?: string;
     bindTo: string;
     outputFile: string;
@@ -259,7 +259,7 @@ export function liveCardsToReactiveGraph(
   };
 
   for (const card of cards) {
-    if (card.sources && card.sources.length > 0) {
+    if (card.source_defs && card.source_defs.length > 0) {
       handlers[card.id] = buildSourceHandler(card, sourceHandlers, defaultSourceHandler, sharedState, getResolve);
     } else {
       handlers[card.id] = buildCardHandler(card, cardHandlers, sharedState, cardMap, tokenToCardId, getResolve);
@@ -309,7 +309,7 @@ function buildSourceHandler(
     };
   }
 
-  // Default: return current card data (for static sources or pre-populated data)
+  // Default: return current card data (for static source_defs or pre-populated data)
   return async (input: TaskHandlerInput): Promise<TaskHandlerReturn> => {
     const data = { ...card.card_data };
     sharedState.set(card.id, data);

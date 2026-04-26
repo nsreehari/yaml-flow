@@ -130,10 +130,10 @@ const outerGraph: GraphConfig = {
   settings: { completion: 'all-tasks-complete' },
   tasks: {
     'discover-bsources': {
-      provides: ['sources-discovered'],
+      provides: ['source_defs-discovered'],
     },
     'extract-batch': {
-      requires: ['sources-discovered'],
+      requires: ['source_defs-discovered'],
       provides: ['extraction-complete'],
     },
     'transform-batch': {
@@ -191,7 +191,7 @@ async function runTransformFlow(record: { id: string; raw_data: string }) {
 // 4. Sample data
 // ============================================================================
 
-const sources = [
+const source_defs = [
   { id: 'src-orders', db: 'orders_db' },
   { id: 'src-users', db: 'users_db' },
   { id: 'src-products', db: 'products_db' },
@@ -212,12 +212,12 @@ const records = [
 
 const outerHandlers: Record<string, () => Promise<void>> = {
   'discover-bsources': async () => {
-    console.log(`  Found ${sources.length} data sources`);
+    console.log(`  Found ${source_defs.length} data source_defs`);
   },
 
   'extract-batch': async () => {
-    console.log(`  Extracting from ${sources.length} sources (concurrency: 2, mode: event-graph)`);
-    const result = await batch(sources, {
+    console.log(`  Extracting from ${source_defs.length} source_defs (concurrency: 2, mode: event-graph)`);
+    const result = await batch(source_defs, {
       concurrency: 2,
       processor: runExtractGraph,
       onItemComplete: (src, res) => {

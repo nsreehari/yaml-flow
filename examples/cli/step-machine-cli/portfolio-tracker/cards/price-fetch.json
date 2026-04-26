@@ -4,7 +4,7 @@
   "requires": ["holdings"],
   "provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }],
   "card_data": {},
-  "sources": [
+  "source_defs": [
     { "cli": "node ../fetch-prices.js --tmp-file-name tmp_file1", "bindTo": "prices", "outputFile": "prices.json" }
   ],
   "view": {

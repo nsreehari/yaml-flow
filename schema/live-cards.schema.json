@@ -100,14 +100,14 @@
     },
 
     "source_def": {
-      "description": "One source entry. The engine requires 'bindTo' (compute namespace key) and 'outputFile' (delivery signal path). bindTo and outputFile must be unique across all sources in a card. Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
+      "description": "One source entry. The engine requires 'bindTo' (compute namespace key) and 'outputFile' (delivery signal path). bindTo and outputFile must be unique across all source_defs in a card. Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
       "type": "object",
       "required": ["bindTo", "outputFile"],
       "additionalProperties": true,
       "properties": {
         "bindTo":     { "type": "string",  "description": "Key under fetched_sources.* available in compute expressions" },
         "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
-        "optionalForCompletionGating":   { "type": "boolean", "default": false, "description": "When true this source does not gate card completion. Default false when absent, so sources are completion-gating by default." },
+        "optionalForCompletionGating":   { "type": "boolean", "default": false, "description": "When true this source does not gate card completion. Default false when absent, so source_defs are completion-gating by default." },
         "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
         "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }
       }
@@ -215,7 +215,7 @@
   },
 
   "title": "LiveCard",
-  "description": "A unified card node. Behavior depends on which sections are present (sources, compute, view, etc.)",
+  "description": "A unified card node. Behavior depends on which sections are present (source_defs, compute, view, etc.)",
   "type": "object",
   "required": ["id"],
   "additionalProperties": false,
@@ -258,22 +258,22 @@
         },
         "llm_task_completion_inference": {
           "type": "object",
-          "description": "Runtime state written by the inference adapter (advanced/undocumented). Prefer the standard sources → compute → provides pattern for LLM-based signals.",
+          "description": "Runtime state written by the inference adapter (advanced/undocumented). Prefer the standard source_defs → compute → provides pattern for LLM-based signals.",
           "properties": {
             "inferenceRequested": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request was initiated" },
             "inferenceCompletedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request completed" },
             "isTaskCompleted": { "type": "boolean", "description": "Whether the task is considered complete by the adapter" },
             "reasoning": { "type": "string", "description": "Explanation of completion decision" },
-            "evidence": { "type": "array", "description": "Supporting evidence from sources/compute" }
+            "evidence": { "type": "array", "description": "Supporting evidence from source_defs/compute" }
           },
           "additionalProperties": true
         }
       },
       "additionalProperties": true
     },
-    "sources": {
+    "source_defs": {
       "type": "array",
-      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Sources gate completion by default. Set optionalForCompletionGating: true for enrichment-only sources that should not block task-completed.",
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Sources gate completion by default. Set optionalForCompletionGating: true for enrichment-only source_defs that should not block task-completed.",
       "items": { "$ref": "#/definitions/source_def" }
     },
     "compute": {

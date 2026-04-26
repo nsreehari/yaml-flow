@@ -82,7 +82,7 @@ var BoardLiveGraph = (function (exports) {
     "markdown",
     "custom"
   ]);
-  var ALLOWED_KEYS = /* @__PURE__ */ new Set(["id", "meta", "requires", "provides", "view", "card_data", "compute", "sources"]);
+  var ALLOWED_KEYS = /* @__PURE__ */ new Set(["id", "meta", "requires", "provides", "view", "card_data", "compute", "source_defs"]);
   function validateNode(node) {
     const errors = [];
     if (!node || typeof node !== "object" || Array.isArray(node)) {
@@ -136,35 +136,35 @@ var BoardLiveGraph = (function (exports) {
         });
       }
     }
-    if (n.sources != null) {
-      if (!Array.isArray(n.sources)) {
-        errors.push("sources: must be an array");
+    if (n.source_defs != null) {
+      if (!Array.isArray(n.source_defs)) {
+        errors.push("source_defs: must be an array");
       } else {
         const bindTos = /* @__PURE__ */ new Set();
         const outputFiles = /* @__PURE__ */ new Set();
-        n.sources.forEach((src, i) => {
+        n.source_defs.forEach((src, i) => {
           if (!src || typeof src !== "object" || Array.isArray(src)) {
-            errors.push(`sources[${i}]: must be an object`);
+            errors.push(`source_defs[${i}]: must be an object`);
           } else {
             const s = src;
             if (typeof s.bindTo !== "string" || !s.bindTo) {
-              errors.push(`sources[${i}]: missing required "bindTo" property`);
+              errors.push(`source_defs[${i}]: missing required "bindTo" property`);
             } else {
               if (bindTos.has(s.bindTo)) {
-                errors.push(`sources[${i}]: bindTo "${s.bindTo}" is not unique across sources`);
+                errors.push(`source_defs[${i}]: bindTo "${s.bindTo}" is not unique across source_defs`);
               }
               bindTos.add(s.bindTo);
             }
             if (typeof s.outputFile !== "string" || !s.outputFile) {
-              errors.push(`sources[${i}]: missing required "outputFile" property`);
+              errors.push(`source_defs[${i}]: missing required "outputFile" property`);
             } else {
               if (outputFiles.has(s.outputFile)) {
-                errors.push(`sources[${i}]: outputFile "${s.outputFile}" is not unique across sources`);
+                errors.push(`source_defs[${i}]: outputFile "${s.outputFile}" is not unique across source_defs`);
               }
               outputFiles.add(s.outputFile);
             }
             if (s.optionalForCompletionGating != null && typeof s.optionalForCompletionGating !== "boolean") {
-              errors.push(`sources[${i}]: optionalForCompletionGating must be a boolean`);
+              errors.push(`source_defs[${i}]: optionalForCompletionGating must be a boolean`);
             }
           }
         });
@@ -199,9 +199,9 @@ var BoardLiveGraph = (function (exports) {
     }
     return { ok: errors.length === 0, errors };
   }
-  function enrichSources(sources, context) {
-    if (!sources || sources.length === 0) return [];
-    return sources.map((src) => ({
+  function enrichSources(source_defs, context) {
+    if (!source_defs || source_defs.length === 0) return [];
+    return source_defs.map((src) => ({
       ...src,
       _requires: context.requires ?? {},
       _sourcesData: context.sourcesData ?? {},
@@ -1311,14 +1311,14 @@ var BoardLiveGraph = (function (exports) {
           requiresData[token] = providesData2[token];
         }
         const sourcesData = {};
-        if (card.sources && card.sources.length > 0) {
+        if (card.source_defs && card.source_defs.length > 0) {
           const adapter = sourceAdapters[cardId] ?? defaultSourceAdapter;
           const fetched = taskExecutor ? await taskExecutor({ card, input: inputArgs }) : adapter ? await adapter({ card, input: inputArgs }) : void 0;
           if (fetched && typeof fetched === "object") {
-            for (const src of card.sources) {
+            for (const src of card.source_defs) {
               if (Object.prototype.hasOwnProperty.call(fetched, src.bindTo)) {
                 sourcesData[src.bindTo] = fetched[src.bindTo];
-              } else if (card.sources.length === 1) {
+              } else if (card.source_defs.length === 1) {
                 sourcesData[src.bindTo] = fetched;
               }
             }
@@ -1328,7 +1328,7 @@ var BoardLiveGraph = (function (exports) {
           id: card.id,
           card_data: deepClone(card.card_data ?? {}),
           requires: requiresData,
-          sources: card.sources,
+          source_defs: card.source_defs,
           compute: card.compute
         };
         computeNode._sourcesData = sourcesData;

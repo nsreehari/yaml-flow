@@ -6,7 +6,7 @@
     "desc": "AI analysis of portfolio mix and P&L. Publishes structured insights as tokens for downstream risk and action cards."
   },
   "requires": ["positions"],
-  "sources": [
+  "source_defs": [
     {
       "bindTo": "analysis",
       "outputFile": "card-concentration-analysis.json",

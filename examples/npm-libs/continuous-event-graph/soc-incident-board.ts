@@ -2,7 +2,7 @@
  * SOC Incident Board — Correct Model
  *
  * A Security Operations Center dashboard demonstrating:
- *   • External data sources (alert-feed, threat-intel) — NO handlers
+ *   • External data source_defs (alert-feed, threat-intel) — NO handlers
  *   • Handler-driven compute (severity-score, blast-radius)
  *   • Fire-and-forget side effects (slack-alert, create-ticket)
  *   • Per-task refreshStrategy: 'once' on create-ticket (no duplicate tickets)
@@ -76,7 +76,7 @@ const config: GraphConfig = {
     refreshStrategy: 'data-changed',
   },
   tasks: {
-    // External sources — no handler, data pushed externally
+    // External source_defs — no handler, data pushed externally
     'alert-feed': {
       provides: ['alert-feed'],
       description: 'SIEM alert feed (external push)',
@@ -203,7 +203,7 @@ console.log(`create-ticket: refreshStrategy 'once' (no duplicate tickets)\n`);
 
 console.log(`--- T0: Initial incident (${siemAlerts.length} alerts, ${threatIntelV1.length} IOCs) ---\n`);
 
-// Push both sources simultaneously — engine stores data, auto-hash computed
+// Push both source_defs simultaneously — engine stores data, auto-hash computed
 graph.pushAll([
   {
     type: 'task-completed',

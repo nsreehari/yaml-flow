@@ -72,12 +72,12 @@
       <p>A <strong>LiveCard</strong> is a JSON entity (also called a node) that declares its data shape and visual presentation declaratively. Behavior is determined by which sections are present — there is no explicit <code>type</code> field:</p>
       <ul>
         <li><code>id</code> — unique identifier within a board</li>
-        <li><code>card_data</code> — authored seed data; the card's persistent data namespace, mutated by sources at runtime</li>
+        <li><code>card_data</code> — authored seed data; the card's persistent data namespace, mutated by source_defs at runtime</li>
         <li><code>requires</code> — upstream node IDs whose output tokens this card depends on (read-only at runtime)</li>
         <li><code>provides</code> — output tokens exposed to downstream cards</li>
-        <li><code>sources</code> — opaque data-fetch descriptors; dispatched by the task executor, not the browser engine. Only <code>bindTo</code> and <code>outputFile</code> matter to the engine; all other fields are passed verbatim.</li>
+        <li><code>source_defs</code> — opaque data-fetch descriptors; dispatched by the task executor, not the browser engine. Only <code>bindTo</code> and <code>outputFile</code> matter to the engine; all other fields are passed verbatim.</li>
         <li><code>compute</code> — ordered JSONata expressions derived from <code>card_data.*</code>, <code>requires.*</code>, and earlier compute results; writes to ephemeral <code>computed_values.*</code> (never persisted)</li>
-        <li><code>view</code> — declarative rendering spec; if present the node renders as a visual card; if absent but <code>sources</code> are present, it renders as a <strong>source pill</strong> — a compact inline indicator showing the source name and fetch status, without a full card UI</li>
+        <li><code>view</code> — declarative rendering spec; if present the node renders as a visual card; if absent but <code>source_defs</code> are present, it renders as a <strong>source pill</strong> — a compact inline indicator showing the source name and fetch status, without a full card UI</li>
       </ul>
 
       <h3>Board</h3>
@@ -132,7 +132,7 @@
         <li><strong>Compute</strong>: <code>yaml-flow/card-compute</code> (Node) / <code>browser/card-compute.js</code> (browser) — same isomorphic engine for JSONata expressions in both environments.</li>
         <li><strong>Browser side</strong>: <code>browser/live-cards.js</code> renders cards and boards, re-runs compute when upstream data changes, and delegates all data-fetch and state-persistence side-effects back to the host.</li>
       </ul>
-      <p class="muted">Note: <code>sources[]</code> on nodes are opaque to the browser engine — only <code>bindTo</code> and <code>outputFile</code> are consumed by the engine. All other fields are owned by the task executor and passed through verbatim.</p>
+      <p class="muted">Note: <code>source_defs[]</code> on nodes are opaque to the browser engine — only <code>bindTo</code> and <code>outputFile</code> are consumed by the engine. All other fields are owned by the task executor and passed through verbatim.</p>
     </section>
 
     <section class="card">
@@ -153,7 +153,7 @@ const nodesMap = Object.fromEntries(cardDefinitions.map(n => [n.id, n]));
 // 4. Create engine — host supplies resolve + side-effect callbacks
 const engine = LiveCard.init({
   resolve:      id =&gt; nodesMap[id],          // return node by id
-  onPatch:      (id, patch) =&gt; { /* persist sources/compute results */ },
+  onPatch:      (id, patch) =&gt; { /* persist source_defs/compute results */ },
   onPatchState: (id, patch) =&gt; { /* persist card_data mutations */ },
   onRefresh:    () =&gt; { /* re-fetch board state */ },
 });

@@ -31,7 +31,7 @@ import jsonata from 'jsonata';
 // Types
 // ---------------------------------------------------------------------------
 
-/** A source definition: cli writes to outputFile; bindTo names the fetched_sources.* key in compute context. Both bindTo and outputFile must be unique across sources in a card. */
+/** A source definition: cli writes to outputFile; bindTo names the fetched_sources.* key in compute context. Both bindTo and outputFile must be unique across source_defs in a card. */
 export interface ComputeSource {
   bindTo: string;
   outputFile: string;
@@ -59,7 +59,7 @@ export interface ComputeNode {
   id?: string;
   card_data?: Record<string, unknown>;
   requires?: Record<string, unknown>;
-  sources?: ComputeSource[];
+  source_defs?: ComputeSource[];
   compute?: ComputeStep[];
   computed_values?: Record<string, unknown>;
   /** Ephemeral: populated by run() from sourcesData option. Never persisted. */
@@ -175,7 +175,7 @@ const VALID_ELEMENT_KINDS = new Set([
   'markdown', 'custom',
 ]);
 
-const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'card_data', 'compute', 'sources']);
+const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'card_data', 'compute', 'source_defs']);
 
 function validateNode(node: unknown): ValidationResult {
   const errors: string[] = [];
@@ -241,35 +241,35 @@ function validateNode(node: unknown): ValidationResult {
     }
   }
 
-  if (n.sources != null) {
-    if (!Array.isArray(n.sources)) {
-      errors.push('sources: must be an array');
+  if (n.source_defs != null) {
+    if (!Array.isArray(n.source_defs)) {
+      errors.push('source_defs: must be an array');
     } else {
       const bindTos = new Set<string>();
       const outputFiles = new Set<string>();
-      (n.sources as unknown[]).forEach((src, i) => {
+      (n.source_defs as unknown[]).forEach((src, i) => {
         if (!src || typeof src !== 'object' || Array.isArray(src)) {
-          errors.push(`sources[${i}]: must be an object`);
+          errors.push(`source_defs[${i}]: must be an object`);
         } else {
           const s = src as Record<string, unknown>;
           if (typeof s.bindTo !== 'string' || !s.bindTo) {
-            errors.push(`sources[${i}]: missing required "bindTo" property`);
+            errors.push(`source_defs[${i}]: missing required "bindTo" property`);
           } else {
             if (bindTos.has(s.bindTo)) {
-              errors.push(`sources[${i}]: bindTo "${s.bindTo}" is not unique across sources`);
+              errors.push(`source_defs[${i}]: bindTo "${s.bindTo}" is not unique across source_defs`);
             }
             bindTos.add(s.bindTo);
           }
           if (typeof s.outputFile !== 'string' || !s.outputFile) {
-            errors.push(`sources[${i}]: missing required "outputFile" property`);
+            errors.push(`source_defs[${i}]: missing required "outputFile" property`);
           } else {
             if (outputFiles.has(s.outputFile)) {
-              errors.push(`sources[${i}]: outputFile "${s.outputFile}" is not unique across sources`);
+              errors.push(`source_defs[${i}]: outputFile "${s.outputFile}" is not unique across source_defs`);
             }
             outputFiles.add(s.outputFile);
           }
           if (s.optionalForCompletionGating != null && typeof s.optionalForCompletionGating !== 'boolean') {
-            errors.push(`sources[${i}]: optionalForCompletionGating must be a boolean`);
+            errors.push(`source_defs[${i}]: optionalForCompletionGating must be a boolean`);
           }
         }
       });
@@ -305,24 +305,24 @@ function validateNode(node: unknown): ValidationResult {
 }
 
 /**
- * Enrich sources with execution context for template interpolation and prompt rendering.
- * Pure function: no side effects, returns new enriched sources array.
+ * Enrich source_defs with execution context for template interpolation and prompt rendering.
+ * Pure function: no side effects, returns new enriched source_defs array.
  * 
- * @param sources - Array of source definitions
+ * @param source_defs - Array of source definitions
  * @param context - Execution context containing requires, sourcesData, computed_values
- * @returns New array of sources with _requires, _sourcesData, _computed_values attached
+ * @returns New array of source_defs with _requires, _sourcesData, _computed_values attached
  */
 function enrichSources(
-  sources: any[] | undefined,
+  source_defs: any[] | undefined,
   context: {
     requires?: Record<string, any>;
     sourcesData?: Record<string, any>;
     computed_values?: Record<string, any>;
   }
 ): any[] {
-  if (!sources || sources.length === 0) return [];
+  if (!source_defs || source_defs.length === 0) return [];
   
-  return sources.map((src: any) => ({
+  return source_defs.map((src: any) => ({
     ...src,
     _requires: context.requires ?? {},
     _sourcesData: context.sourcesData ?? {},

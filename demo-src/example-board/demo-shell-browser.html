@@ -31,7 +31,7 @@
     </div>
 
     <div class="alert alert-info small py-2 mb-3">
-      Browser runtime mode: sources are executed in-browser through an opaque task executor.
+      Browser runtime mode: source_defs are executed in-browser through an opaque task executor.
       Card source definitions are treated as task-executor-owned metadata.
     </div>
 
@@ -341,7 +341,7 @@
         return cards.every((card) => {
           const artifact = cardRuntimeById[card.id];
           if (!artifact || typeof artifact !== 'object') return false;
-          if (card.sources && card.sources.length > 0) {
+          if (card.source_defs && card.source_defs.length > 0) {
             if (!(artifact.fetched_sources && typeof artifact.fetched_sources === 'object' && !Array.isArray(artifact.fetched_sources))) return false;
           }
           if (card.requires && card.requires.length > 0) {
@@ -517,7 +517,7 @@
         runtime = createBoardLiveGraphRuntime(loaded.cards, {
           taskExecutor: async function ({ card }) {
             const out = {};
-            for (const sourceDef of (card.sources || [])) {
+            for (const sourceDef of (card.source_defs || [])) {
               const payload = await mockServer.fetchSource(card, sourceDef);
               if (payload !== null && payload !== undefined) out[sourceDef.bindTo] = payload;
             }

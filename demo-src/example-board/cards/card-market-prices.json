@@ -6,7 +6,7 @@
     "desc": "Fetches live prices for portfolio tickers. Publishes enriched quote data for downstream portfolio value calculations."
   },
   "requires": ["holdings"],
-  "sources": [
+  "source_defs": [
     {
       "bindTo": "quotes",
       "outputFile": "market-prices-quotes.json",

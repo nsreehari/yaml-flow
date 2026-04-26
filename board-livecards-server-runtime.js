@@ -523,9 +523,9 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function readSourcePayloads(cardDefinition) {
     const out = {};
-    if (!cardDefinition || !Array.isArray(cardDefinition.sources)) return out;
+    if (!cardDefinition || !Array.isArray(cardDefinition.source_defs)) return out;
 
-    for (const sourceDef of cardDefinition.sources) {
+    for (const sourceDef of cardDefinition.source_defs) {
       if (!sourceDef || !sourceDef.bindTo || !sourceDef.outputFile) continue;
       const filePath = path.join(boardDir, cardDefinition.id, sourceDef.outputFile);
       if (!fs.existsSync(filePath)) continue;

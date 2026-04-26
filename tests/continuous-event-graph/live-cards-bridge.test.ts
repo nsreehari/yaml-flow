@@ -15,7 +15,7 @@ function makeSource(id: string, overrides: Partial<LiveCard> = {}): LiveCard {
   return {
     id,
     card_data: {},
-    sources: [{ kind: 'static', bindTo: 'raw', outputFile: 'raw.json' }],
+    source_defs: [{ kind: 'static', bindTo: 'raw', outputFile: 'raw.json' }],
     ...overrides,
   };
 }

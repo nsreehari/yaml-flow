@@ -9,7 +9,7 @@
 #                       if result_shape_file is absent, accepts any valid JSON object
 #   result_shape_file - (json result_type only) JSON file whose top-level keys are required in output
 #
-# raw  result_type: right for chat responses and task executor sources.
+# raw  result_type: right for chat responses and task executor source_defs.
 # json result_type: right for structured calls where the input contained {prompt, result_shape}.
 
 param(

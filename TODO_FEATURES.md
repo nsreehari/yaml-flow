@@ -44,7 +44,7 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
 - [x] 7. inference adapter support for live-cards
   - Status: DONE
   - Goal: map inference adapters into live-card workflows with clear boundaries
-  - Notes: resolved by directing all LLM calls through sources → compute → provides. Inference adapter retained as undocumented/advanced mechanism (portfolio-tracker is the reference). agent-instructions and schema updated to reflect one-mechanism model.
+  - Notes: resolved by directing all LLM calls through source_defs → compute → provides. Inference adapter retained as undocumented/advanced mechanism (portfolio-tracker is the reference). agent-instructions and schema updated to reflect one-mechanism model.
 
 - [x] 8. richer rendering for files/chats/etc. in live-cards
   - Status: DONE

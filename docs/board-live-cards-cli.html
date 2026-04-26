@@ -109,7 +109,7 @@
           <tr><td><code>task-progress --rg &lt;dir&gt; --token &lt;callbackToken&gt; [--update &lt;json&gt;]</code></td><td>Signal task progress with an optional update payload (e.g. waiting on more evidence).</td><td><code>board-live-cards-cli task-progress --rg ./my-board --token TOKEN</code></td></tr>
           <tr><td><code>source-data-fetched --tmp &lt;file&gt; --token &lt;sourceToken&gt;</code></td><td>Source callback: atomically move tmp file to output destination and record delivery.</td><td><code>board-live-cards-cli source-data-fetched --tmp /tmp/out.json --token TOKEN</code></td></tr>
           <tr><td><code>source-data-fetch-failure --token &lt;sourceToken&gt; [--reason &lt;msg&gt;]</code></td><td>Source callback: record a source fetch failure.</td><td><code>board-live-cards-cli source-data-fetch-failure --token TOKEN --reason "timeout"</code></td></tr>
-          <tr><td><code>run-sourcedefs-internal --card &lt;card.json&gt; --token &lt;token&gt; --rg &lt;dir&gt;</code></td><td><em>Internal.</em> Execute all <code>sources[]</code> for a card. Invokes <code>.task-executor</code> if registered, else built-in executor.</td><td>—</td></tr>
+          <tr><td><code>run-sourcedefs-internal --card &lt;card.json&gt; --token &lt;token&gt; --rg &lt;dir&gt;</code></td><td><em>Internal.</em> Execute all <code>source_defs[]</code> for a card. Invokes <code>.task-executor</code> if registered, else built-in executor.</td><td>—</td></tr>
           <tr><td><code>run-source-fetch --in &lt;file&gt; --out &lt;file&gt; [--err &lt;file&gt;]</code></td><td>Execute one source definition using <code>source.cli</code> (built-in executor). Also the protocol entry point for custom <code>.task-executor</code> scripts.</td><td><code>board-live-cards-cli run-source-fetch --in source.json --out out.json</code></td></tr>
           <tr><td><code>run-inference-internal --in &lt;input.json&gt; --token &lt;token&gt; --rg &lt;dir&gt;</code></td><td><em>Internal.</em> Execute inference via registered <code>.inference-adapter</code> and forward result to <code>inference-done</code>.</td><td>—</td></tr>
           <tr><td><code>inference-done --rg &lt;dir&gt; --token &lt;token&gt; [--result &lt;json&gt;]</code></td><td><em>Internal.</em> Persist <code>llm_task_completion_inference</code> on the card and append a task-progress event.</td><td>—</td></tr>
@@ -171,14 +171,14 @@
 
     <section class="card">
       <h2>LiveCard JSON Structure</h2>
-      <p>Each card is a JSON file that declares dependencies, data sources, and computed outputs:</p>
+      <p>Each card is a JSON file that declares dependencies, data source_defs, and computed outputs:</p>
       <pre><code>{
   "id": "portfolio-value",
   "meta": { "title": "Portfolio Valuation" },
   "requires": ["holdings", "prices"],
   "provides": [{ "bindTo": "total_value", "src": "computed_values.value" }],
   "card_data": { "initial_data": 100 },
-  "sources": [
+  "source_defs": [
     { "cli": "node fetch-market.js", "bindTo": "market", "outputFile": "market.json" }
   ],
   "compute": [
@@ -196,8 +196,8 @@
         <li><code>requires</code>: array of token names that must be available before this card runs.</li>
         <li><code>provides</code>: expressions that bind card outputs to tokens for downstream cards; uses JSONata <code>src</code>.</li>
         <li><code>card_data</code>: initial authored data object available during compute as <code>card_data.*</code>.</li>
-        <li><code>sources</code>: task executor-owned data-fetch descriptors; opaque to this CLI tool — interpreted and dispatched by the consuming system's task executor. Results are made available as <code>fetched_sources.*</code>. See <em>Source Execution Notes</em> below.</li>
-        <li><code>compute</code>: JSONata expressions that derive new values from card_data, requires, sources, and earlier compute results.</li>
+        <li><code>source_defs</code>: task executor-owned data-fetch descriptors; opaque to this CLI tool — interpreted and dispatched by the consuming system's task executor. Results are made available as <code>fetched_sources.*</code>. See <em>Source Execution Notes</em> below.</li>
+        <li><code>compute</code>: JSONata expressions that derive new values from card_data, requires, source_defs, and earlier compute results.</li>
       </ul>
     </section>
 
@@ -230,12 +230,12 @@
     2. Read card.card_data from disk
     3. Inject requires data (read-only, from upstream task-completed.data — immutable during this run)
     4. Run compute array top-to-bottom → export a per-run runtime snapshot with computed_values, card_data, and fetched_sources for file-based consumers
-        5. Check: all sources[].bindTo keys present in card_data?
+        5. Check: all source_defs[].bindTo keys present in card_data?
        YES → Build provides data (pluck paths from card_data, requires, computed_values per provides[].src)
          Persist each provided token to runtime-out/data-objects/&lt;tokenName&gt;
          Emit task-completed with provides data → unblocks downstream cards
-         Spawn any non-gating sources (optionalForCompletionGating: true) in background
-   NO  → Spawn all outstanding gating sources
+         Spawn any non-gating source_defs (optionalForCompletionGating: true) in background
+   NO  → Spawn all outstanding gating source_defs
          Emit task-initiated (card stays in-progress, downstream stays blocked)
     6. Source delivers → writes card_data[bindTo] on disk → emits source-data-fetched → card re-fires from step 1
 7. Non-gating source delivers → same write/re-fire → card re-completes with richer data</code></pre>
@@ -246,7 +246,7 @@
         <thead><tr><th>Event</th><th>Who emits</th><th>What it does</th></tr></thead>
         <tbody>
           <tr><td><code>task-completed</code></td><td>card handler</td><td>Sets task status=completed, stores provides data in board graph. Unblocks downstream cards.</td></tr>
-          <tr><td><code>task-initiated</code></td><td>card handler</td><td>Sets task status=in-progress when sources are outstanding. Card stays blocked for downstream.</td></tr>
+          <tr><td><code>task-initiated</code></td><td>card handler</td><td>Sets task status=in-progress when source_defs are outstanding. Card stays blocked for downstream.</td></tr>
           <tr><td><code>source-data-fetched</code></td><td>source subprocess</td><td>Delivers source output. Triggers card re-fire (task-restart internally).</td></tr>
           <tr><td><code>source-data-fetch-failure</code></td><td>source subprocess</td><td>Reports source failure. Card may remain in-progress or fail depending on executor policy.</td></tr>
           <tr><td><code>task-failed</code></td><td>handler / subprocess</td><td>Sets task status=failed. Downstream cards depending on this card's tokens remain blocked.</td></tr>
@@ -263,7 +263,7 @@
       <table>
         <thead><tr><th>Argument</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>--in &lt;file&gt;</code></td><td>Path to a JSON file containing one <code>sources[]</code> entry, enriched by the runtime with context fields:<br><code>bindTo</code>, <code>outputFile</code>, <code>cwd</code>, <code>boardDir</code>, plus all custom source fields (<code>mock</code>, <code>http</code>, <code>copilot</code>, etc.), and:<br><code>_requires</code> — resolved upstream token values<br><code>_sourcesData</code> — already-fetched sources on this card (earlier in sources[] order)<br><code>_computed_values</code> — current compute outputs for this card</td></tr>
+          <tr><td><code>--in &lt;file&gt;</code></td><td>Path to a JSON file containing one <code>source_defs[]</code> entry, enriched by the runtime with context fields:<br><code>bindTo</code>, <code>outputFile</code>, <code>cwd</code>, <code>boardDir</code>, plus all custom source fields (<code>mock</code>, <code>http</code>, <code>copilot</code>, etc.), and:<br><code>_requires</code> — resolved upstream token values<br><code>_sourcesData</code> — already-fetched source_defs on this card (earlier in source_defs[] order)<br><code>_computed_values</code> — current compute outputs for this card</td></tr>
           <tr><td><code>--out &lt;file&gt;</code></td><td>Path where executor must write the fetch result as JSON. Presence of this file after exit signals success; stored as <code>fetched_sources.&lt;bindTo&gt;</code>.</td></tr>
           <tr><td><code>--err &lt;file&gt;</code></td><td>Optional path where executor writes a plain-text error message on failure.</td></tr>
         </tbody>
@@ -291,7 +291,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
         <thead><tr><th>Flag</th><th>Required</th><th>Description</th></tr></thead>
         <tbody>
           <tr><td><code>--card &lt;card.json&gt;</code></td><td>yes</td><td>Path to the card file to probe.</td></tr>
-          <tr><td><code>--source-idx &lt;n&gt;</code></td><td>no (default 0)</td><td>0-based index into <code>sources[]</code>.</td></tr>
+          <tr><td><code>--source-idx &lt;n&gt;</code></td><td>no (default 0)</td><td>0-based index into <code>source_defs[]</code>.</td></tr>
           <tr><td><code>--source-bind &lt;name&gt;</code></td><td>no</td><td>Select source by <code>bindTo</code> name instead of index.</td></tr>
           <tr><td><code>--mock-requires &lt;json&gt;</code></td><td>no</td><td>JSON string (or <code>@file.json</code>) supplying <code>_requires</code> token values. The agent crafts this to match what the source expects. Omit to pass empty <code>{}</code>.</td></tr>
           <tr><td><code>--rg &lt;dir&gt;</code></td><td>no</td><td>Board runtime directory used to locate <code>.task-executor</code>. Defaults to the card file's directory.</td></tr>
@@ -422,7 +422,7 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
       <h2>Disk Layout</h2>
       <p>The board runtime maintains board state under the board directory and render/runtime artifacts under the configured runtime-out directory:</p>
       <ul>
-        <li><strong><code>cards/&lt;id&gt;.json</code></strong> — the card definition files (authored by the user). Contains <code>id</code>, <code>requires</code>, <code>provides</code>, <code>card_data</code>, <code>sources</code>, <code>compute</code>, <code>meta</code>, <code>view</code>. Sources are the only runtime writers to a card's <code>card_data</code>; the card definition file itself is not modified by the runtime.</li>
+        <li><strong><code>cards/&lt;id&gt;.json</code></strong> — the card definition files (authored by the user). Contains <code>id</code>, <code>requires</code>, <code>provides</code>, <code>card_data</code>, <code>source_defs</code>, <code>compute</code>, <code>meta</code>, <code>view</code>. Sources are the only runtime writers to a card's <code>card_data</code>; the card definition file itself is not modified by the runtime.</li>
         <li><strong><code>board-graph.json</code></strong> — runtime task graph. Stores task statuses (<code>not-started</code>, <code>in-progress</code>, <code>completed</code>, <code>failed</code>) and the data emitted by each card's <code>task-completed</code> event (the provides tokens). This is what downstream cards read as their <code>requires.*</code> namespace.</li>
         <li><strong><code>board-journal.jsonl</code></strong> — append-only event log. Every event (<code>task-completed</code>, <code>source-data-fetched</code>, <code>task-failed</code>, etc.) is appended here. Used for audit, debugging, and replay.</li>
         <li><strong><code>.runtime-out</code></strong> — pointer file storing the runtime artifact directory path. Defaults to <code>&lt;boardDir&gt;/runtime-out</code> when first resolved.</li>
@@ -441,8 +441,8 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
   { "bindTo": "tax", "expr": "computed_values.subtotal * 0.1" },
   { "bindTo": "total", "expr": "computed_values.subtotal + computed_values.tax" }
 ]</code></pre>
-      <p><strong>Source Output Binding:</strong> CLI sources write JSON or text to <code>outputFile</code>. Use <code>provides</code> to expose the result as a token:</p>
-      <pre><code>"sources": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
+      <p><strong>Source Output Binding:</strong> CLI source_defs write JSON or text to <code>outputFile</code>. Use <code>provides</code> to expose the result as a token:</p>
+      <pre><code>"source_defs": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
 "provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }]</code></pre>
     </section>
 
@@ -452,22 +452,22 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
         <li><strong>Declare requires:</strong> Name all token dependencies explicitly.</li>
         <li><strong>Use provides for outputs:</strong> Even leaf cards should declare what they provide to downstream consumers.</li>
         <li><strong>Keep compute expressions simple:</strong> Test each JSONata expression in isolation if possible.</li>
-        <li><strong>Required vs enrichment sources:</strong> By default, all sources gate card completion — the card stays <code>in-progress</code> and downstream cards remain blocked until every source is delivered. Set <code>optionalForCompletionGating: true</code> on sources that are <em>view enrichment only</em>: they run in the background and their data enhances the card's display (e.g. an LLM sentiment indicator, a secondary metric, a sparkline), but the card completes and unblocks downstream cards without waiting for them.</li>
-        <li><strong>Timeout sources:</strong> Set <code>timeout</code> (ms) for long-running CLIs.</li>
+        <li><strong>Required vs enrichment source_defs:</strong> By default, all source_defs gate card completion — the card stays <code>in-progress</code> and downstream cards remain blocked until every source is delivered. Set <code>optionalForCompletionGating: true</code> on source_defs that are <em>view enrichment only</em>: they run in the background and their data enhances the card's display (e.g. an LLM sentiment indicator, a secondary metric, a sparkline), but the card completes and unblocks downstream cards without waiting for them.</li>
+        <li><strong>Timeout source_defs:</strong> Set <code>timeout</code> (ms) for long-running CLIs.</li>
         <li><strong>Test with status --json:</strong> Verify card state and topology before running the full board.</li>
       </ul>
     </section>
 
     <section class="card">
       <h2>Source Execution Notes</h2>
-      <p>The <code>sources</code> array on a card is <strong>opaque to this CLI tool</strong>. It is passed through as-is to whatever task executor the consuming system provides. Systems integrating this tool are expected to bring their own task executor that understands the <code>sources</code> shape and handles dispatch, retries, and output delivery.</p>
+      <p>The <code>source_defs</code> array on a card is <strong>opaque to this CLI tool</strong>. It is passed through as-is to whatever task executor the consuming system provides. Systems integrating this tool are expected to bring their own task executor that understands the <code>source_defs</code> shape and handles dispatch, retries, and output delivery.</p>
       <p>The notes below apply only to the <strong>built-in local executor</strong>, which is used as a fallback when no external task executor is configured (e.g. in standalone or development use):</p>
       <ul>
         <li><code>source.cli</code> is parsed with quote-aware argument splitting and executed without shell wrapping.</li>
         <li>Stdout is captured and written to source output artifacts (filepath: boardDir/cardId/bindTo.json or .txt).</li>
         <li>Timeout defaults to 120s unless overridden by <code>source.timeout</code>.</li>
       </ul>
-      <p><strong>Completion gating</strong> (regardless of executor): Sources gate completion by default (including when <code>optionalForCompletionGating</code> is omitted or set to <code>false</code>). Set <code>optionalForCompletionGating: true</code> for view-enrichment-only sources: they run in the background and never block <code>task-completed</code> or downstream cards.</p>
+      <p><strong>Completion gating</strong> (regardless of executor): Sources gate completion by default (including when <code>optionalForCompletionGating</code> is omitted or set to <code>false</code>). Set <code>optionalForCompletionGating: true</code> for view-enrichment-only source_defs: they run in the background and never block <code>task-completed</code> or downstream cards.</p>
     </section>
 
     <section class="card">
@@ -483,7 +483,7 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
 {
   "id": "price-fetch",
   "requires": ["holdings"],
-  "sources": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
+  "source_defs": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
   "provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }]
 }
 

@@ -626,10 +626,10 @@ describe('live cards → disk roundtrip integration (15+ cards)', () => {
   });
 
   // ==========================================================================
-  // Test 7: retriggerAll + pushAll — refresh multiple sources at once
+  // Test 7: retriggerAll + pushAll — refresh multiple source_defs at once
   // ==========================================================================
 
-  it('pushAll refreshes sources, full cascade re-computes', async () => {
+  it('pushAll refreshes source_defs, full cascade re-computes', async () => {
     const cards = makePortfolioCards();
     const { graph: rg } = buildGraph(cards);
 

@@ -386,17 +386,17 @@ describe('CardCompute.validate', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('rejects sources entry missing bindTo', () => {
-    const r = CardCompute.validate({ id: 'x', card_data: {}, sources: [{ script: 'fetch.sh', outputFile: 'raw.json' }] });
+  it('rejects source_defs entry missing bindTo', () => {
+    const r = CardCompute.validate({ id: 'x', card_data: {}, source_defs: [{ script: 'fetch.sh', outputFile: 'raw.json' }] });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('sources[0]'))).toBe(true);
+    expect(r.errors.some(e => e.includes('source_defs[0]'))).toBe(true);
   });
 
-  it('rejects sources with duplicate bindTo', () => {
+  it('rejects source_defs with duplicate bindTo', () => {
     const r = CardCompute.validate({
       id: 'x',
       card_data: {},
-      sources: [
+      source_defs: [
         { bindTo: 'data', outputFile: 'data1.json', kind: 'api' },
         { bindTo: 'data', outputFile: 'data2.json', kind: 'api' },
       ],
@@ -405,11 +405,11 @@ describe('CardCompute.validate', () => {
     expect(r.errors.some(e => e.includes('unique') || e.includes('bindTo'))).toBe(true);
   });
 
-  it('rejects sources with duplicate outputFile', () => {
+  it('rejects source_defs with duplicate outputFile', () => {
     const r = CardCompute.validate({
       id: 'x',
       card_data: {},
-      sources: [
+      source_defs: [
         { bindTo: 'raw1', outputFile: 'data.json', kind: 'api' },
         { bindTo: 'raw2', outputFile: 'data.json', kind: 'api' },
       ],
@@ -418,8 +418,8 @@ describe('CardCompute.validate', () => {
     expect(r.errors.some(e => e.includes('unique') || e.includes('outputFile'))).toBe(true);
   });
 
-  it('rejects sources entry missing outputFile', () => {
-    const r = CardCompute.validate({ id: 'x', card_data: {}, sources: [{ bindTo: 'raw', kind: 'api' }] });
+  it('rejects source_defs entry missing outputFile', () => {
+    const r = CardCompute.validate({ id: 'x', card_data: {}, source_defs: [{ bindTo: 'raw', kind: 'api' }] });
     expect(r.ok).toBe(false);
     expect(r.errors.some(e => e.includes('outputFile'))).toBe(true);
   });

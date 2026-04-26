@@ -21,7 +21,7 @@
   },
   "card_data": {
     "items": [
-      { "text": "Set up task-executor for your data sources", "done": false },
+      { "text": "Set up task-executor for your data source_defs", "done": false },
       { "text": "Configure board.yaml connections", "done": false },
       { "text": "Run board-live-cards-cli init", "done": false }
     ]

@@ -180,12 +180,12 @@ describe('Inference Invocation (Timestamp-Only Idempotency)', () => {
       // Handler returns 'task-initiated' without re-invoking.
     });
 
-    it('does not request inference when no required sources have been fetched', () => {
+    it('does not request inference when no required source_defs have been fetched', () => {
       const llmCompletion = {
         inferenceRequested: '2026-04-23T10:00:00Z',
         inferenceCompletedAt: '2026-04-23T10:01:00Z',
       };
-      const latestRequiredSourceFetchedAt = undefined; // no sources fetched
+      const latestRequiredSourceFetchedAt = undefined; // no source_defs fetched
 
       const inferenceRequestedAt = typeof llmCompletion.inferenceRequested === 'string'
         ? llmCompletion.inferenceRequested
@@ -294,7 +294,7 @@ describe('Inference Invocation (Timestamp-Only Idempotency)', () => {
       expect(secondCall).toBe(true); // Second call sees pending and skips
     });
 
-    it('fresh sources trigger re-inference after completion', () => {
+    it('fresh source_defs trigger re-inference after completion', () => {
       // Scenario: First inference completes with false, then new source data arrives
       const llmCompletion = {
         inferenceRequested: '2026-04-23T10:00:00Z',

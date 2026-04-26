@@ -7,7 +7,7 @@
     "desc": "AI-proposed rebalance trades based on portfolio intelligence. Edit quantities before pinning."
   },
   "requires": ["holdings", "portfolio_mix", "portfolio_risks", "portfolio_action", "positions"],
-  "sources": [
+  "source_defs": [
     {
       "bindTo": "rebalance",
       "outputFile": "card-rebalance-proposal.json",

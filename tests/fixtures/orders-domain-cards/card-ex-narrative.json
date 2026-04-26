@@ -16,7 +16,7 @@
       "expr": "$sum(requires.orders.amount)"
     }
   ],
-  "sources": [
+  "source_defs": [
     {
       "bindTo": "raw",
       "outputFile": "card-ex-narrative-raw.json",
