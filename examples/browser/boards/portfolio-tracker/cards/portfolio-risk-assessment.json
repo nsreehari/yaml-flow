@@ -3,7 +3,7 @@
   "meta": { "title": "Portfolio Risk Assessment" },
   "requires": ["table", "totalValue"],
   "provides": [
-    { "bindTo": "riskAssessment", "src": "card_data.llm_task_completion_inference.reason" }
+    { "bindTo": "riskAssessment", "ref": "card_data.llm_task_completion_inference.reason" }
   ],
   "card_data": {
     "llm_task_completion_inference": {

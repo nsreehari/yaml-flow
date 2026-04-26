@@ -24,7 +24,7 @@
     }
   ],
   "provides": [
-    { "bindTo": "proposed_trades", "src": "fetched_sources.rebalance.proposed_trades" }
+    { "bindTo": "proposed_trades", "ref": "fetched_sources.rebalance.proposed_trades" }
   ],
   "view": {
     "elements": [

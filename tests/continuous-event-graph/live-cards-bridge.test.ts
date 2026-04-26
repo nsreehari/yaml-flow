@@ -166,8 +166,8 @@ describe('liveCardsToReactiveGraph', () => {
             { bindTo: 'avg', expr: '$average(card_data.data.v)' },
           ],
           provides: [
-            { bindTo: 'total', src: 'computed_values.total' },
-            { bindTo: 'avg', src: 'computed_values.avg' },
+            { bindTo: 'total', ref: 'computed_values.total' },
+            { bindTo: 'avg', ref: 'computed_values.avg' },
           ],
         }),
       ];
@@ -216,7 +216,7 @@ describe('liveCardsToReactiveGraph', () => {
             { bindTo: 'total', expr: '$sum(requires.prices.raw)' },
           ],
           provides: [
-            { bindTo: 'total', src: 'computed_values.total' },
+            { bindTo: 'total', ref: 'computed_values.total' },
           ],
         }),
       ];
@@ -237,7 +237,7 @@ describe('liveCardsToReactiveGraph', () => {
       const cards: LiveCard[] = [
         makeSource('prices', {
           card_data: { quotes: [100, 200] },
-          provides: [{ bindTo: 'quotes', src: 'card_data.quotes' }],
+          provides: [{ bindTo: 'quotes', ref: 'card_data.quotes' }],
         }),
         makeCard('dash', {
           requires: ['quotes'],
@@ -245,7 +245,7 @@ describe('liveCardsToReactiveGraph', () => {
             { bindTo: 'total', expr: '$sum(requires.quotes)' },
           ],
           provides: [
-            { bindTo: 'total', src: 'computed_values.total' },
+            { bindTo: 'total', ref: 'computed_values.total' },
           ],
         }),
       ];

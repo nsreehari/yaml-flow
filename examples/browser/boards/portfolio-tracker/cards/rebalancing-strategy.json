@@ -3,7 +3,7 @@
   "meta": { "title": "Rebalancing Strategy" },
   "requires": ["table", "totalValue", "riskAssessment"],
   "provides": [
-    { "bindTo": "rebalancingPlan", "src": "card_data.llm_task_completion_inference.reason" }
+    { "bindTo": "rebalancingPlan", "ref": "card_data.llm_task_completion_inference.reason" }
   ],
   "card_data": {
     "llm_task_completion_inference": {

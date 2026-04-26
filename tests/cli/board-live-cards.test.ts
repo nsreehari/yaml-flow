@@ -294,7 +294,7 @@ describe('board-live-cards CLI', () => {
     const card: BoardLiveCard = {
       id: 'totals',
       compute: [{ bindTo: 'total', expr: '$sum(card_data.data.v)' }],
-      provides: [{ bindTo: 'totals', src: 'computed_values.total' }],
+      provides: [{ bindTo: 'totals', ref: 'computed_values.total' }],
       card_data: {
         data: [{ v: 10 }, { v: 20 }, { v: 5 }],
       },
@@ -330,7 +330,7 @@ describe('liveCardToTaskConfig', () => {
   it('card with source_defs → [card-handler]', () => {
     const card: BoardLiveCard = {
       id: 'prices',
-      provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
+      provides: [{ bindTo: 'prices', ref: 'card_data.prices' }],
       source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }],
       card_data: { prices: {} },
     };
@@ -390,7 +390,7 @@ describe('liveCardToTaskConfig', () => {
   it('provides keys from card.provides', () => {
     const card: BoardLiveCard = {
       id: 'multi',
-      provides: [{ bindTo: 'alpha', src: 'card_data.alpha' }, { bindTo: 'beta', src: 'card_data.beta' }],
+      provides: [{ bindTo: 'alpha', ref: 'card_data.alpha' }, { bindTo: 'beta', ref: 'card_data.beta' }],
       card_data: {},
     };
     const tc = liveCardToTaskConfig(card);
@@ -685,7 +685,7 @@ describe('cli validate-card', () => {
     const cardFile = path.join(tmpDir, 'good.json');
     fs.writeFileSync(cardFile, JSON.stringify({
       id: 'ok-card',
-      provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
+      provides: [{ bindTo: 'prices', ref: 'card_data.prices' }],
       card_data: { prices: {} },
     }));
 
@@ -694,12 +694,12 @@ describe('cli validate-card', () => {
     spy.mockRestore();
   });
 
-  it('rejects a card with invalid provides.src namespace', async () => {
+  it('rejects a card with invalid provides.ref namespace', async () => {
     freshDir();
     const cardFile = path.join(tmpDir, 'bad-ns.json');
     fs.writeFileSync(cardFile, JSON.stringify({
       id: 'bad-ns',
-      provides: [{ bindTo: 'data', src: 'source_defs.foo.bar' }],
+      provides: [{ bindTo: 'data', ref: 'source_defs.foo.bar' }],
       card_data: {},
     }));
 
@@ -744,7 +744,7 @@ describe('cli validate-card', () => {
     }));
     fs.writeFileSync(path.join(cardsDir, 'bad.json'), JSON.stringify({
       id: 'bad',
-      provides: [{ bindTo: 'x', src: 'source_defs.x' }],
+      provides: [{ bindTo: 'x', ref: 'source_defs.x' }],
       card_data: {},
     }));
 
@@ -894,8 +894,8 @@ describe('data-objects persistence', () => {
     const card: BoardLiveCard = {
       id: 'source-data',
       provides: [
-        { bindTo: 'orders', src: 'card_data.orders' },
-        { bindTo: 'metadata', src: 'card_data.meta' },
+        { bindTo: 'orders', ref: 'card_data.orders' },
+        { bindTo: 'metadata', ref: 'card_data.meta' },
       ],
       card_data: {
         orders: [
@@ -941,7 +941,7 @@ describe('data-objects persistence', () => {
     // First card — provides 'prices'
     const pricesCard: BoardLiveCard = {
       id: 'prices-source',
-      provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
+      provides: [{ bindTo: 'prices', ref: 'card_data.prices' }],
       card_data: {
         prices: [
           { product: 'A', price: 100 },
@@ -965,7 +965,7 @@ describe('data-objects persistence', () => {
     // Second card — provides 'discount-rules'
     const discountCard: BoardLiveCard = {
       id: 'discount-source',
-      provides: [{ bindTo: 'discount-rules', src: 'card_data.rules' }],
+      provides: [{ bindTo: 'discount-rules', ref: 'card_data.rules' }],
       card_data: {
         rules: [
           { minAmount: 1000, discount: 0.1 },
@@ -1002,8 +1002,8 @@ describe('data-objects persistence', () => {
     const card: BoardLiveCard = {
       id: 'special-tokens',
       provides: [
-        { bindTo: 'data/users', src: 'card_data.users' },
-        { bindTo: 'data\\products', src: 'card_data.products' },
+        { bindTo: 'data/users', ref: 'card_data.users' },
+        { bindTo: 'data\\products', ref: 'card_data.products' },
       ],
       card_data: {
         users: [{ id: 1, name: 'Alice' }],

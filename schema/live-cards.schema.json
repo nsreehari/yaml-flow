@@ -80,10 +80,10 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["bindTo", "src"],
+        "required": ["bindTo", "ref"],
         "properties": {
           "bindTo": { "type": "string", "description": "Token name published downstream" },
-          "src":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, fetched_sources.*, computed_values.*)" }
+          "ref":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, fetched_sources.*, computed_values.*)" }
         }
       },
       "description": "Explicit bindings exposing computed or card_data values downstream as named tokens"

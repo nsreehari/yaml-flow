@@ -6,7 +6,7 @@
     "desc": "Manage your stock holdings — edit tickers and quantities inline, add or delete rows. Changes propagate downstream immediately."
   },
   "provides": [
-    { "bindTo": "holdings", "src": "card_data.holdings" }
+    { "bindTo": "holdings", "ref": "card_data.holdings" }
   ],
   "compute": [],
   "view": {

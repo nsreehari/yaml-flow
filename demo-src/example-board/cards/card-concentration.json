@@ -25,10 +25,10 @@
     { "bindTo": "action", "expr": "fetched_sources.analysis.action" }
   ],
   "provides": [
-    { "bindTo": "portfolio_mix",    "src": "computed_values.mix" },
-    { "bindTo": "portfolio_pnl",    "src": "computed_values.pnl" },
-    { "bindTo": "portfolio_risks",  "src": "computed_values.risks" },
-    { "bindTo": "portfolio_action", "src": "computed_values.action" }
+    { "bindTo": "portfolio_mix",    "ref": "computed_values.mix" },
+    { "bindTo": "portfolio_pnl",    "ref": "computed_values.pnl" },
+    { "bindTo": "portfolio_risks",  "ref": "computed_values.risks" },
+    { "bindTo": "portfolio_action", "ref": "computed_values.action" }
   ],
   "view": {
     "elements": [

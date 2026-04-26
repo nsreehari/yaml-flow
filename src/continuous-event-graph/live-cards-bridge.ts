@@ -52,7 +52,7 @@ import type { ComputeNode } from '../card-compute/index.js';
 /** A provides binding: maps a token name to a source path in the card's data namespace. */
 export interface ProvidesBinding {
   bindTo: string;
-  src: string;
+  ref: string;
 }
 
 export interface LiveCard {
@@ -214,7 +214,7 @@ export function liveCardsToReactiveGraph(
   const allTokens = new Set<string>();
   const tokenToCardId = new Map<string, string>();
   for (const card of cards) {
-    for (const binding of (card.provides ?? [{ bindTo: card.id, src: 'card_data' }])) {
+    for (const binding of (card.provides ?? [{ bindTo: card.id, ref: 'card_data' }])) {
       allTokens.add(binding.bindTo);
       tokenToCardId.set(binding.bindTo, card.id);
     }
@@ -232,7 +232,7 @@ export function liveCardsToReactiveGraph(
 
     tasks[card.id] = {
       requires: requires.length > 0 ? requires : undefined,
-      provides: (card.provides ?? [{ bindTo: card.id, src: 'card_data' }]).map(p => p.bindTo),
+      provides: (card.provides ?? [{ bindTo: card.id, ref: 'card_data' }]).map(p => p.bindTo),
       taskHandlers: [card.id],
       description: card.meta?.title ?? card.id,
     };
@@ -363,8 +363,8 @@ function buildCardHandler(
     let resultData: Record<string, unknown>;
     if (card.provides && card.provides.length > 0) {
       resultData = {};
-      for (const { bindTo, src } of card.provides) {
-        resultData[bindTo] = CardCompute.resolve(computeNode, src);
+      for (const { bindTo, ref } of card.provides) {
+        resultData[bindTo] = CardCompute.resolve(computeNode, ref);
       }
     } else {
       resultData = { ...computeNode.card_data, ...computeNode.computed_values };

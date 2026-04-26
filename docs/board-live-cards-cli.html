@@ -176,7 +176,7 @@
   "id": "portfolio-value",
   "meta": { "title": "Portfolio Valuation" },
   "requires": ["holdings", "prices"],
-  "provides": [{ "bindTo": "total_value", "src": "computed_values.value" }],
+  "provides": [{ "bindTo": "total_value", "ref": "computed_values.value" }],
   "card_data": { "initial_data": 100 },
   "source_defs": [
     { "cli": "node fetch-market.js", "bindTo": "market", "outputFile": "market.json" }
@@ -194,7 +194,7 @@
       <ul style="margin: 8px 0 0 18px;">
         <li><code>id</code>: unique card identifier (becomes a task in the board graph).</li>
         <li><code>requires</code>: array of token names that must be available before this card runs.</li>
-        <li><code>provides</code>: expressions that bind card outputs to tokens for downstream cards; uses JSONata <code>src</code>.</li>
+        <li><code>provides</code>: expressions that bind card outputs to tokens for downstream cards; uses JSONata <code>ref</code>.</li>
         <li><code>card_data</code>: initial authored data object available during compute as <code>card_data.*</code>.</li>
         <li><code>source_defs</code>: task executor-owned data-fetch descriptors; opaque to this CLI tool — interpreted and dispatched by the consuming system's task executor. Results are made available as <code>fetched_sources.*</code>. See <em>Source Execution Notes</em> below.</li>
         <li><code>compute</code>: JSONata expressions that derive new values from card_data, requires, source_defs, and earlier compute results.</li>
@@ -203,7 +203,7 @@
 
     <section class="card">
       <h2>Understanding JSONata in LiveCards</h2>
-      <p><strong>JSONata</strong> is a lightweight query and transformation language for JSON. In card <code>compute</code> steps and <code>provides[].src</code>, you write JSONata expressions that transform data:</p>
+      <p><strong>JSONata</strong> is a lightweight query and transformation language for JSON. In card <code>compute</code> steps and <code>provides[].ref</code>, you write JSONata expressions that transform data:</p>
       <pre><code>// Access authored card data
     "card_data.price"
 
@@ -231,7 +231,7 @@
     3. Inject requires data (read-only, from upstream task-completed.data — immutable during this run)
     4. Run compute array top-to-bottom → export a per-run runtime snapshot with computed_values, card_data, and fetched_sources for file-based consumers
         5. Check: all source_defs[].bindTo keys present in card_data?
-       YES → Build provides data (pluck paths from card_data, requires, computed_values per provides[].src)
+       YES → Build provides data (pluck paths from card_data, requires, computed_values per provides[].ref)
          Persist each provided token to runtime-out/data-objects/&lt;tokenName&gt;
          Emit task-completed with provides data → unblocks downstream cards
          Spawn any non-gating source_defs (optionalForCompletionGating: true) in background
@@ -319,7 +319,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
     "requires":        { "token-a": { ... } },
     "sourcesData":     { "raw": { ... } },
     "computed_values": { "result": "..." },
-    "provides":        [{ "bindTo": "published-token", "src": "computed_values.result" }],
+    "provides":        [{ "bindTo": "published-token", "ref": "computed_values.result" }],
     "card_data":       { ... }
   }
 }</code></pre>
@@ -443,7 +443,7 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
 ]</code></pre>
       <p><strong>Source Output Binding:</strong> CLI source_defs write JSON or text to <code>outputFile</code>. Use <code>provides</code> to expose the result as a token:</p>
       <pre><code>"source_defs": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
-"provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }]</code></pre>
+"provides": [{ "bindTo": "prices", "ref": "fetched_sources.prices" }]</code></pre>
     </section>
 
     <section class="card">
@@ -476,7 +476,7 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
 {
   "id": "holdings",
   "card_data": { "portfolio": [{ "symbol": "AAPL", "qty": 10 }] },
-  "provides": [{ "bindTo": "holdings", "src": "card_data.portfolio" }]
+  "provides": [{ "bindTo": "holdings", "ref": "card_data.portfolio" }]
 }
 
 // cards/price-fetch.json
@@ -484,7 +484,7 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
   "id": "price-fetch",
   "requires": ["holdings"],
   "source_defs": [{ "cli": "node fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }],
-  "provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }]
+  "provides": [{ "bindTo": "prices", "ref": "fetched_sources.prices" }]
 }
 
 // cards/portfolio-value.json
@@ -494,7 +494,7 @@ echo "node ./my-chat-handler.js" &gt; ./my-board/.chat-handler</code></pre>
   "compute": [
     { "bindTo": "total", "expr": "$sum(requires.holdings.(qty * requires.prices[symbol].price))" }
   ],
-  "provides": [{ "bindTo": "portfolio_value", "src": "computed_values.total" }]
+  "provides": [{ "bindTo": "portfolio_value", "ref": "computed_values.total" }]
 }</code></pre>
     </section>
   </div>

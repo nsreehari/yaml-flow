@@ -93,7 +93,7 @@ async function getNodeSnapshot(
 const CARDS = [
   {
     id: 'src-card',
-    provides: [{ bindTo: 'orders', src: 'fetched_sources.raw' }],
+    provides: [{ bindTo: 'orders', ref: 'fetched_sources.raw' }],
     source_defs: [{ bindTo: 'raw', mock: 'orders', outputFile: 'orders.json' }],
     card_data: {},
   },

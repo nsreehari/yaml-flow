@@ -108,15 +108,15 @@ var BoardLiveGraph = (function (exports) {
     if (n.requires != null && !Array.isArray(n.requires)) errors.push("requires: must be an array of strings");
     if (n.provides != null) {
       if (!Array.isArray(n.provides)) {
-        errors.push("provides: must be an array of { bindTo, src } bindings");
+        errors.push("provides: must be an array of { bindTo, ref } bindings");
       } else {
         n.provides.forEach((p, i) => {
           if (!p || typeof p !== "object" || Array.isArray(p)) {
-            errors.push(`provides[${i}]: must be an object with bindTo and src`);
+            errors.push(`provides[${i}]: must be an object with bindTo and ref`);
           } else {
             const b = p;
             if (typeof b.bindTo !== "string" || !b.bindTo) errors.push(`provides[${i}]: missing required "bindTo" string`);
-            if (typeof b.src !== "string" || !b.src) errors.push(`provides[${i}]: missing required "src" string`);
+            if (typeof b.ref !== "string" || !b.ref) errors.push(`provides[${i}]: missing required "ref" string`);
           }
         });
       }
@@ -1190,7 +1190,7 @@ var BoardLiveGraph = (function (exports) {
   function buildTokenProviders(cards) {
     const tokenToCardId = /* @__PURE__ */ new Map();
     for (const [cardId, card] of cards.entries()) {
-      const bindings = card.provides && card.provides.length > 0 ? card.provides : [{ bindTo: cardId, src: "card_data" }];
+      const bindings = card.provides && card.provides.length > 0 ? card.provides : [{ bindTo: cardId, ref: "card_data" }];
       for (const binding of bindings) tokenToCardId.set(binding.bindTo, cardId);
     }
     return tokenToCardId;
@@ -1362,8 +1362,8 @@ var BoardLiveGraph = (function (exports) {
         }
         const providesData = {};
         if (card.provides && card.provides.length > 0) {
-          for (const { bindTo, src } of card.provides) {
-            providesData[bindTo] = CardCompute.resolve(computeNode, src);
+          for (const { bindTo, ref } of card.provides) {
+            providesData[bindTo] = CardCompute.resolve(computeNode, ref);
           }
         } else {
           providesData[card.id] = {

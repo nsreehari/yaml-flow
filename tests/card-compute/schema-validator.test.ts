@@ -44,7 +44,7 @@ describe('validateLiveCardSchema', () => {
         id: 'full-card',
         meta: { title: 'Dashboard', tags: ['finance'] },
         requires: ['src1'],
-        provides: [{ bindTo: 'total', src: 'card_data.total' }],
+        provides: [{ bindTo: 'total', ref: 'card_data.total' }],
         card_data: { status: 'fresh' },
         view: {
           elements: [
@@ -348,39 +348,39 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.errors.some(e => e.includes('/view/elements/0/data/bind') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
-  it('accepts provides.src with all four valid namespaces', () => {
+  it('accepts provides.ref with all four valid namespaces', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'ok-provides',
       card_data: {},
       provides: [
-        { bindTo: 'a', src: 'fetched_sources.raw' },
-        { bindTo: 'b', src: 'computed_values.total' },
-        { bindTo: 'c', src: 'card_data.status' },
-        { bindTo: 'd', src: 'requires.upstream' },
+        { bindTo: 'a', ref: 'fetched_sources.raw' },
+        { bindTo: 'b', ref: 'computed_values.total' },
+        { bindTo: 'c', ref: 'card_data.status' },
+        { bindTo: 'd', ref: 'requires.upstream' },
       ],
     });
     expect(r.ok).toBe(true);
     expect(r.errors).toHaveLength(0);
   });
 
-  it('rejects provides.src using legacy source_defs namespace', () => {
+  it('rejects provides.ref using legacy source_defs namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad-provides-bsources',
       card_data: {},
-      provides: [{ bindTo: 'trades', src: 'source_defs.rebalance.proposed_trades' }],
+      provides: [{ bindTo: 'trades', ref: 'source_defs.rebalance.proposed_trades' }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/provides/0/src') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/provides/0/ref') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
-  it('rejects provides.src with unrecognised namespace', () => {
+  it('rejects provides.ref with unrecognised namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad-provides-unknown',
       card_data: {},
-      provides: [{ bindTo: 'x', src: 'foobar.value' }],
+      provides: [{ bindTo: 'x', ref: 'foobar.value' }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/provides/0/src') && e.includes('must start with a valid namespace'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/provides/0/ref') && e.includes('must start with a valid namespace'))).toBe(true);
   });
 });
 

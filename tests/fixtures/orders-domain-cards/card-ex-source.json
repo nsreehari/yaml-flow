@@ -5,7 +5,7 @@
     "tags": ["data"],
     "desc": "Root data source — fetches order records via a script"
   },
-  "provides": [{ "bindTo": "orders", "src": "fetched_sources.raw" }],
+  "provides": [{ "bindTo": "orders", "ref": "fetched_sources.raw" }],
   "source_defs": [{
     "bindTo": "raw",
     "outputFile": "card-ex-source-raw.json",

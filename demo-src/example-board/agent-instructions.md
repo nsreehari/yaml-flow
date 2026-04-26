@@ -47,7 +47,7 @@ vocabulary:
   ],
 
   "provides": [
-    { "bindTo": "published-token", "src": "computed_values.result" }
+    { "bindTo": "published-token", "ref": "computed_values.result" }
   ],
 
   "view": {
@@ -85,7 +85,7 @@ vocabulary:
 - **Resolved last.** Can reference all four namespaces:
   `requires.*`, `fetched_sources.*`, `card_data.*`, `computed_values.*`
 - `view.elements[].data.bind` paths are resolved here.
-- `provides[].src` paths are resolved here and published to the graph.
+- `provides[].ref` paths are resolved here and published to the graph.
 
 ---
 
@@ -94,9 +94,9 @@ vocabulary:
 ```json
 // Publishing a token:
 "provides": [
-  { "bindTo": "orders",      "src": "fetched_sources.raw" },
-  { "bindTo": "regionTotals","src": "computed_values.byRegion" },
-  { "bindTo": "my-card",     "src": "card_data" }
+  { "bindTo": "orders",      "ref": "fetched_sources.raw" },
+  { "bindTo": "regionTotals","ref": "computed_values.byRegion" },
+  { "bindTo": "my-card",     "ref": "card_data" }
 ]
 
 // Consuming tokens:
@@ -280,7 +280,7 @@ Custom element kind — behaviour defined by the host application.
 ### Root source card
 ```
 source_defs[mock/http/script] → fetched_sources.raw
-provides: [{ bindTo: "orders", src: "fetched_sources.raw" }]
+provides: [{ bindTo: "orders", ref: "fetched_sources.raw" }]
 view: table showing the raw data
 ```
 
@@ -288,7 +288,7 @@ view: table showing the raw data
 ```
 requires: ["orders"]
 compute: JSONata aggregation → computed_values.result
-provides: [{ bindTo: "regionTotals", src: "computed_values.result" }]
+provides: [{ bindTo: "regionTotals", ref: "computed_values.result" }]
 view: table or metric
 ```
 
@@ -319,7 +319,7 @@ card-child    requires "card-ex-form"
 requires: ["some-data"]
 source_defs: [{ bindTo: "verdict", outputFile: "...", copilot: { prompt_template: "..." } }]
 compute: [{ bindTo: "isReady", expr: "fetched_sources.verdict.isTaskCompleted" }]
-provides: [{ bindTo: "readiness-verdict", src: "fetched_sources.verdict" }]
+provides: [{ bindTo: "readiness-verdict", ref: "fetched_sources.verdict" }]
 view: badge(computed_values.isReady, colorMap) + text(fetched_sources.verdict.reason)
 ```
 The task executor calls the LLM, writes `{ isTaskCompleted: bool, reason: string }` to `--out`.
@@ -460,7 +460,7 @@ node board-live-cards-cli.js validate-card --card cards/my-card.json
 # Validate all cards matching a glob
 node board-live-cards-cli.js validate-card --card-glob "cards/*.json"
 ```
-Checks JSON Schema structure, JSONata expression syntax in `compute[].expr`, and `provides[].src` namespace validity. Reports per-file OK/FAIL with detailed errors. Exits with code 1 if any card fails.
+Checks JSON Schema structure, JSONata expression syntax in `compute[].expr`, and `provides[].ref` namespace validity. Reports per-file OK/FAIL with detailed errors. Exits with code 1 if any card fails.
 
 ### Programmatic
 ```typescript
@@ -490,8 +490,8 @@ When in doubt about allowed fields, consult:
 - `id` required, non-empty string
 - `card_data` required, must be an object
 - `requires` must be array of strings (if present)
-- `provides` must be array of `{ bindTo: string, src: string }` (if present)
-- `provides[].src` must start with a valid namespace: `card_data`, `requires`, `fetched_sources`, or `computed_values`
+- `provides` must be array of `{ bindTo: string, ref: string }` (if present)
+- `provides[].ref` must start with a valid namespace: `card_data`, `requires`, `fetched_sources`, or `computed_values`
 - `compute[]` each entry must have `bindTo` + `expr` strings; `expr` must be valid JSONata
 - `source_defs[]` each entry must have `bindTo` + `outputFile` strings; both must be unique across the array
 - `view.elements` required, non-empty; each element must have a valid `kind`

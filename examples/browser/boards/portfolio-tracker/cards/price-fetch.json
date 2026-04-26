@@ -2,7 +2,7 @@
   "id": "price-fetch",
   "meta": { "title": "Fetch Market Prices" },
   "requires": ["holdings"],
-  "provides": [{ "bindTo": "prices", "src": "fetched_sources.prices" }],
+  "provides": [{ "bindTo": "prices", "ref": "fetched_sources.prices" }],
   "card_data": {},
   "source_defs": [
     { "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }

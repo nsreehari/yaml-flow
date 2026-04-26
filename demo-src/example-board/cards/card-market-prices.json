@@ -30,7 +30,7 @@
     }
   ],
   "provides": [
-    { "bindTo": "quotes", "src": "fetched_sources.quotes" }
+    { "bindTo": "quotes", "ref": "fetched_sources.quotes" }
   ],
   "view": {
     "elements": [

@@ -1107,10 +1107,10 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
       }
 
       // ---- All required source_defs delivered — build provides payload ----
-      const providesBindings = (card.provides ?? []) as { bindTo: string; src: string }[];
+      const providesBindings = (card.provides ?? []) as { bindTo: string; ref: string }[];
       const data: Record<string, unknown> = {};
-      for (const { bindTo, src } of providesBindings) {
-        data[bindTo] = CardCompute.resolve(computeNode, src);
+      for (const { bindTo, ref } of providesBindings) {
+        data[bindTo] = CardCompute.resolve(computeNode, ref);
       }
 
       const completionRule = typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
@@ -2756,7 +2756,7 @@ CARD MANAGEMENT
 
   validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]
     Validate one or many card JSON files without adding them to a board.
-    Checks JSON Schema structure, runtime expression syntax, and provides.src namespaces.
+    Checks JSON Schema structure, runtime expression syntax, and provides.ref namespaces.
     When --rg is provided, also invokes the board's task executor validate-source-def
     subcommand to structurally validate each source definition against supported kinds.
     Exits with code 1 if any card fails validation.

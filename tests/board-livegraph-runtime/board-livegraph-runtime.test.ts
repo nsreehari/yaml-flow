@@ -13,14 +13,14 @@ describe('createBoardLiveGraphRuntime', () => {
         id: 'prices',
         card_data: {},
         source_defs: [{ kind: 'api', bindTo: 'raw', outputFile: 'raw.json' }],
-        provides: [{ bindTo: 'prices', src: 'fetched_sources.raw' }],
+        provides: [{ bindTo: 'prices', ref: 'fetched_sources.raw' }],
       },
       {
         id: 'stats',
         card_data: {},
         requires: ['prices'],
         compute: [{ bindTo: 'sum', expr: '$sum(requires.prices)' }] as any,
-        provides: [{ bindTo: 'sum', src: 'computed_values.sum' }],
+        provides: [{ bindTo: 'sum', ref: 'computed_values.sum' }],
       },
     ];
 
@@ -57,7 +57,7 @@ describe('createBoardLiveGraphRuntime', () => {
       card_data: {},
       requires: ['seed'],
       compute: [{ bindTo: 'value', expr: '$number(requires.seed.value) + 1' }] as any,
-      provides: [{ bindTo: 'value', src: 'computed_values.value' }],
+      provides: [{ bindTo: 'value', ref: 'computed_values.value' }],
     });
 
     runtime.push({ type: 'inject-tokens', tokens: [], timestamp: new Date().toISOString() });
@@ -69,7 +69,7 @@ describe('createBoardLiveGraphRuntime', () => {
       card_data: {},
       requires: ['seed'],
       compute: [{ bindTo: 'value', expr: '$number(requires.seed.value) + 2' }] as any,
-      provides: [{ bindTo: 'value', src: 'computed_values.value' }],
+      provides: [{ bindTo: 'value', ref: 'computed_values.value' }],
     });
     runtime.retrigger('plus-one');
     await sleep(200);
@@ -87,7 +87,7 @@ describe('createBoardLiveGraphRuntime', () => {
         id: 'counter',
         card_data: { n: 1 },
         compute: [{ bindTo: 'value', expr: '$number(card_data.n)' }] as any,
-        provides: [{ bindTo: 'value', src: 'computed_values.value' }],
+        provides: [{ bindTo: 'value', ref: 'computed_values.value' }],
       },
     ]);
 
@@ -118,14 +118,14 @@ describe('createBoardLiveGraphRuntime', () => {
         card_data: { note: 'seed' },
         source_defs: [{ bindTo: 'raw', outputFile: 'raw.json', kind: 'api' } as any],
         compute: [{ bindTo: 'orderCount', expr: '$count(fetched_sources.raw)' }] as any,
-        provides: [{ bindTo: 'orders_count', src: 'computed_values.orderCount' }],
+        provides: [{ bindTo: 'orders_count', ref: 'computed_values.orderCount' }],
       },
       {
         id: 'orders-summary',
         card_data: { title: 'summary' },
         requires: ['orders_count'],
         compute: [{ bindTo: 'totalQty', expr: '$number(requires.orders_count) + 3' }] as any,
-        provides: [{ bindTo: 'totalQty', src: 'computed_values.totalQty' }],
+        provides: [{ bindTo: 'totalQty', ref: 'computed_values.totalQty' }],
       },
     ];
 

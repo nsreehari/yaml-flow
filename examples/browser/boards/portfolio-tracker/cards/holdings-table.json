@@ -2,7 +2,7 @@
   "id": "holdings-table",
   "meta": { "title": "Holdings Table" },
   "requires": ["holdings", "prices"],
-  "provides": [{ "bindTo": "table", "src": "computed_values.table" }],
+  "provides": [{ "bindTo": "table", "ref": "computed_values.table" }],
   "card_data": {},
   "compute": [
     {

@@ -189,7 +189,7 @@ export function validateLiveCardRuntimeExpressions(
     });
   }
 
-  // Validate provides[].src paths use a valid root namespace.
+  // Validate provides[].ref paths use a valid root namespace.
   const VALID_PROVIDES_SRC_NAMESPACES = new Set<KnownNamespace>([
     'card_data', 'requires', 'fetched_sources', 'computed_values',
   ]);
@@ -197,13 +197,13 @@ export function validateLiveCardRuntimeExpressions(
   if (Array.isArray(provides)) {
     provides.forEach((entry, i) => {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
-      const src = (entry as Record<string, unknown>).src;
-      if (typeof src !== 'string' || src.trim().length === 0) return;
-      const rootNamespace = parseRootPathNamespace(src);
+      const ref = (entry as Record<string, unknown>).ref;
+      if (typeof ref !== 'string' || ref.trim().length === 0) return;
+      const rootNamespace = parseRootPathNamespace(ref);
       if (rootNamespace === null) {
-        errors.push(`/provides/${i}/src: path "${src}" must start with a valid namespace (${[...VALID_PROVIDES_SRC_NAMESPACES].join(', ')})`);
+        errors.push(`/provides/${i}/ref: path "${ref}" must start with a valid namespace (${[...VALID_PROVIDES_SRC_NAMESPACES].join(', ')})`);
       } else if (!VALID_PROVIDES_SRC_NAMESPACES.has(rootNamespace)) {
-        errors.push(`/provides/${i}/src: disallowed namespace "${rootNamespace}" in path "${src}" (valid: ${[...VALID_PROVIDES_SRC_NAMESPACES].join(', ')})`);
+        errors.push(`/provides/${i}/ref: disallowed namespace "${rootNamespace}" in path "${ref}" (valid: ${[...VALID_PROVIDES_SRC_NAMESPACES].join(', ')})`);
       }
     });
   }

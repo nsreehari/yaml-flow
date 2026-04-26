@@ -2,7 +2,7 @@
   "id": "portfolio-value",
   "meta": { "title": "Portfolio Total Value" },
   "requires": ["table"],
-  "provides": [{ "bindTo": "totalValue", "src": "computed_values.totalValue" }],
+  "provides": [{ "bindTo": "totalValue", "ref": "computed_values.totalValue" }],
   "card_data": {},
   "compute": [
     { "bindTo": "totalValue", "expr": "$sum(requires.table.rows.value)" }

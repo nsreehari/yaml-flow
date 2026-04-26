@@ -111,7 +111,7 @@ function buildTokenProviders(cards: Map<string, LiveCard>): Map<string, string> 
   for (const [cardId, card] of cards.entries()) {
     const bindings = card.provides && card.provides.length > 0
       ? card.provides
-      : [{ bindTo: cardId, src: 'card_data' }];
+      : [{ bindTo: cardId, ref: 'card_data' }];
     for (const binding of bindings) tokenToCardId.set(binding.bindTo, cardId);
   }
   return tokenToCardId;
@@ -317,8 +317,8 @@ export function createBoardLiveGraphRuntime(
 
       const providesData: Record<string, unknown> = {};
       if (card.provides && card.provides.length > 0) {
-        for (const { bindTo, src } of card.provides) {
-          providesData[bindTo] = CardCompute.resolve(computeNode, src);
+        for (const { bindTo, ref } of card.provides) {
+          providesData[bindTo] = CardCompute.resolve(computeNode, ref);
         }
       } else {
         providesData[card.id] = {

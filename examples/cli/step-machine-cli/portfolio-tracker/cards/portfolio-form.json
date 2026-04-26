@@ -6,7 +6,7 @@
   "provides": [
     {
       "bindTo": "holdings",
-      "src": "card_data.holdings"
+      "ref": "card_data.holdings"
     }
   ],
   "card_data": {

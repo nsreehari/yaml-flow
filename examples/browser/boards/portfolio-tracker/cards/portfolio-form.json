@@ -1,7 +1,7 @@
 {
   "id": "portfolio-form",
   "meta": { "title": "Portfolio Holdings Form" },
-  "provides": [{ "bindTo": "holdings", "src": "card_data.holdings" }],
+  "provides": [{ "bindTo": "holdings", "ref": "card_data.holdings" }],
   "card_data": {
     "holdings": [
       { "symbol": "AAPL", "qty": 50 },

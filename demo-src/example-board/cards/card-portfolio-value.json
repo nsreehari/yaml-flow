@@ -7,7 +7,7 @@
   },
   "requires": ["holdings", "quotes"],
   "provides": [
-    { "bindTo": "positions", "src": "computed_values.positions" }
+    { "bindTo": "positions", "ref": "computed_values.positions" }
   ],
   "compute": [
     {

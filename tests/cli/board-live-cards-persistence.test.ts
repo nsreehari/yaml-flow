@@ -51,8 +51,8 @@ describe('board-live-cards CLI persistence', () => {
     const card: BoardLiveCard = {
       id: 'orders-source',
       provides: [
-        { bindTo: 'orders', src: 'card_data.orders' },
-        { bindTo: 'metadata', src: 'card_data.metadata' },
+        { bindTo: 'orders', ref: 'card_data.orders' },
+        { bindTo: 'metadata', ref: 'card_data.metadata' },
       ],
       card_data: {
         orders: [

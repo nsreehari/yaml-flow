@@ -213,15 +213,15 @@ function validateNode(node: unknown): ValidationResult {
 
   if (n.provides != null) {
     if (!Array.isArray(n.provides)) {
-      errors.push('provides: must be an array of { bindTo, src } bindings');
+      errors.push('provides: must be an array of { bindTo, ref } bindings');
     } else {
       (n.provides as unknown[]).forEach((p, i) => {
         if (!p || typeof p !== 'object' || Array.isArray(p)) {
-          errors.push(`provides[${i}]: must be an object with bindTo and src`);
+          errors.push(`provides[${i}]: must be an object with bindTo and ref`);
         } else {
           const b = p as Record<string, unknown>;
           if (typeof b.bindTo !== 'string' || !b.bindTo) errors.push(`provides[${i}]: missing required "bindTo" string`);
-          if (typeof b.src !== 'string' || !b.src) errors.push(`provides[${i}]: missing required "src" string`);
+          if (typeof b.ref !== 'string' || !b.ref) errors.push(`provides[${i}]: missing required "ref" string`);
         }
       });
     }
