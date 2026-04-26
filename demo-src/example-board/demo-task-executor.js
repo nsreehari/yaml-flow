@@ -446,15 +446,49 @@ function runSourceFetchSubcommand(argv) {
       fail(`copilot invocation failed: ${msg}`, errFile);
     }
 
-    const cleaned = stripCopilotFooter(rawOutput);
-    // If the response is a JSON object/array, parse it so downstream compute
-    // can reference fields directly (e.g. fetched_sources.analysis.mix).
-    try {
-      const parsed = JSON.parse(cleaned);
-      resultValue = (parsed && typeof parsed === 'object') ? parsed : cleaned;
-    } catch {
-      resultValue = cleaned;
+    // Attempt to extract and parse JSON from the copilot response.
+    // Handles preamble text before the JSON by finding the first { or [.
+    // If the result is not a JSON object/array, retries once with a correction
+    // prompt that includes the original turn + bad response, simulating a
+    // multi-turn session with the LLM.
+    function extractJsonFromText(text) {
+      const firstBrace = text.indexOf('{');
+      const firstBracket = text.indexOf('[');
+      const jsonStart = (firstBrace === -1) ? firstBracket
+        : (firstBracket === -1) ? firstBrace
+        : Math.min(firstBrace, firstBracket);
+      if (jsonStart === -1) return null;
+      try {
+        const parsed = JSON.parse(jsonStart > 0 ? text.slice(jsonStart) : text);
+        return (parsed && typeof parsed === 'object') ? parsed : null;
+      } catch {
+        return null;
+      }
     }
+
+    const cleaned = stripCopilotFooter(rawOutput);
+    let parsed = extractJsonFromText(cleaned);
+
+    if (!parsed) {
+      // Retry: send a correction prompt to the same LLM context.
+      // Include the original prompt + the bad response so it has full context.
+      const correctionPrompt =
+        `Previous conversation:\n\nUser: ${prompt}\n\nAssistant: ${cleaned}\n\n` +
+        `Your response above was not valid JSON or contained extra text before/after the JSON object. ` +
+        `Please respond with ONLY the JSON object — no markdown, no explanation, no preamble. ` +
+        `Start your response with { and end with }.`;
+      let retryRaw = '';
+      try {
+        retryRaw = runCopilotPrompt(correctionPrompt, copilotCwd);
+      } catch (retryErr) {
+        // Retry invocation failed — fall through to use original cleaned text
+      }
+      if (retryRaw) {
+        parsed = extractJsonFromText(stripCopilotFooter(retryRaw)) ?? null;
+      }
+    }
+
+    resultValue = parsed ?? cleaned;
   } else if (sourceDef.mock) {
     // MOCK_DB lookup — data hardcoded at the top of this file
     resultValue = MOCK_DB[sourceDef.mock];
