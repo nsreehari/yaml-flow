@@ -65,7 +65,7 @@ describe('board-live-cards CLI persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     logSpy.mockRestore();
 
     await pollBoard(dir, (tasks) => !!tasks['orders-source']);
@@ -98,7 +98,7 @@ describe('board-live-cards CLI persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     logSpy.mockRestore();
 
     await pollBoard(dir, (tasks) => !!tasks['totals-card']);

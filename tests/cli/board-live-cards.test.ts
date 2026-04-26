@@ -302,7 +302,7 @@ describe('board-live-cards CLI', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['totals']);
@@ -624,145 +624,6 @@ describe('cards-inventory', () => {
 });
 
 // ============================================================================
-// CLI add-cards
-// ============================================================================
-
-describe('cli add-cards', () => {
-  let tmpDir: string;
-
-  function freshDir() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'addcard-test-'));
-    return tmpDir;
-  }
-
-  afterEach(() => {
-    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('adds a card to the board and inventory', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    const cardFile = path.join(tmpDir, 'my-source.json');
-    const card: BoardLiveCard = {
-      id: 'prices',
-      provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
-      source: { kind: 'api', bindTo: 'state.prices', url_template: 'https://example.com/prices' },
-      card_data: { prices: {} },
-    };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
-
-    const logs: string[] = [];
-    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
-    spy.mockRestore();
-
-    // Wait for background try-drain to settle the board
-    await pollBoard(dir, t => !!t['prices']);
-
-    const live = loadBoard(dir);
-    expect(live.config.tasks.prices).toBeDefined();
-    expect(live.config.tasks.prices.taskHandlers).toEqual(['card-handler']);
-    expect(live.config.tasks.prices.provides).toEqual(['prices']);
-
-    const inv = readCardInventory(dir);
-    expect(inv).toHaveLength(1);
-    expect(inv[0].cardId).toBe('prices');
-    expect(inv[0].cardFilePath).toBe(path.resolve(cardFile));
-
-    expect(logs.join('\n')).toContain('Card "prices" added');
-  });
-
-  it('adds a card with compute + non-gating source (single card-handler)', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    const cardFile = path.join(tmpDir, 'enriched.json');
-    const card: BoardLiveCard = {
-      id: 'enriched',
-      requires: ['raw'],
-      compute: [{ bindTo: 'total', expr: '$sum(card_data.raw.v)' }],
-      sources: [{ bindTo: 'extra', outputFile: 'extra.json', optionalForCompletionGating: true }],
-      card_data: {},
-    };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
-
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
-    spy.mockRestore();
-
-    await pollBoard(dir, t => !!t['enriched']);
-
-    const live = loadBoard(dir);
-    expect(live.config.tasks.enriched.taskHandlers).toEqual(['card-handler']);
-    expect(live.config.tasks.enriched.requires).toEqual(['raw']);
-  });
-
-  it('rejects duplicate card id', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    const cardFile = path.join(tmpDir, 'dup.json');
-    fs.writeFileSync(cardFile, JSON.stringify({ id: 'x', card_data: {} }));
-
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
-    spy.mockRestore();
-
-    await expect(cli(['add-cards', '--rg', dir, '--card', cardFile])).rejects.toThrow('already exists');
-  });
-});
-
-// ============================================================================
-// CLI add-cards (glob)
-// ============================================================================
-
-describe('cli add-cards with --card-glob', () => {
-  let tmpDir: string;
-
-  function freshDir() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'addmulti-test-'));
-    return tmpDir;
-  }
-
-  afterEach(() => {
-    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('adds multiple cards using a glob pattern', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    const cardsDir = path.join(tmpDir, 'cards');
-    fs.mkdirSync(cardsDir, { recursive: true });
-    fs.writeFileSync(path.join(cardsDir, 'a.json'), JSON.stringify({ id: 'a', card_data: {} }));
-    fs.writeFileSync(path.join(cardsDir, 'b.json'), JSON.stringify({ id: 'b', card_data: {} }));
-
-    const logs: string[] = [];
-    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
-    cli(['add-cards', '--rg', dir, '--card-glob', path.join(cardsDir, '*.json')]);
-    spy.mockRestore();
-
-    await pollBoard(dir, t => !!t['a'] && !!t['b']);
-
-    const live = loadBoard(dir);
-    expect(live.config.tasks.a).toBeDefined();
-    expect(live.config.tasks.b).toBeDefined();
-
-    const inv = readCardInventory(dir);
-    expect(inv.map(e => e.cardId).sort()).toEqual(['a', 'b']);
-    expect(logs.join('\n')).toContain('Added 2 cards from glob');
-  });
-
-  it('rejects when glob matches no files', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    await expect(cli(['add-cards', '--rg', dir, '--card-glob', path.join(tmpDir, 'nope', '*.json')])).rejects.toThrow('No card files matched glob');
-  });
-});
-
-// ============================================================================
 // CLI remove-card
 // ============================================================================
 
@@ -786,7 +647,7 @@ describe('cli remove-card', () => {
     fs.writeFileSync(cardFile, JSON.stringify({ id: 'temp', card_data: {} }));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['temp']);
@@ -800,94 +661,6 @@ describe('cli remove-card', () => {
 
     await pollBoard(dir, t => !t['temp']);
     expect(logs.join('\n')).toContain('removed');
-  });
-});
-
-// ============================================================================
-// CLI update-card
-// ============================================================================
-
-describe('cli update-card', () => {
-  let tmpDir: string;
-
-  function freshDir() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'updatecard-test-'));
-    return tmpDir;
-  }
-
-  afterEach(() => {
-    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('updates a card config via upsert (no restart by default)', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    const cardFile = path.join(tmpDir, 'my-card.json');
-    const card: BoardLiveCard = {
-      id: 'prices',
-      provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
-      card_data: { prices: {} },
-    };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
-
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
-    spy.mockRestore();
-
-    await pollBoard(dir, t => !!t['prices']);
-
-    const updatedCard: BoardLiveCard = {
-      id: 'prices',
-      provides: [{ bindTo: 'prices', src: 'card_data.prices' }, { bindTo: 'rates', src: 'card_data.rates' }],
-      card_data: { prices: {}, rates: {} },
-    };
-    fs.writeFileSync(cardFile, JSON.stringify(updatedCard));
-
-    const logs: string[] = [];
-    const spy2 = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
-    cli(['update-card', '--rg', dir, '--card-id', 'prices']);
-    spy2.mockRestore();
-
-    await cli(['process-accumulated-events', '--rg', dir, '--inline-loop']);
-
-    await pollBoard(dir, t => (t['prices'] as any)?.provides?.length === 2);
-
-    const live = loadBoard(dir);
-    expect(live.config.tasks.prices.provides).toEqual(['prices', 'rates']);
-    expect(logs.join('\n')).toContain('updated');
-    expect(logs.join('\n')).not.toContain('restarted');
-  });
-
-  it('updates a card config and restarts with --restart flag', () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    const cardFile = path.join(tmpDir, 'my-card.json');
-    fs.writeFileSync(cardFile, JSON.stringify({
-      id: 'src',
-      provides: [{ bindTo: 'src', src: 'card_data.src' }],
-      card_data: {},
-    }));
-
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
-    spy.mockRestore();
-
-    // Run update-card with --restart
-    const logs: string[] = [];
-    const spy2 = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
-    cli(['update-card', '--rg', dir, '--card-id', 'src', '--restart']);
-    spy2.mockRestore();
-
-    expect(logs.join('\n')).toContain('restarted');
-  });
-
-  it('rejects unknown card-id', async () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
-
-    await expect(cli(['update-card', '--rg', dir, '--card-id', 'nope'])).rejects.toThrow('not found');
   });
 });
 
@@ -986,7 +759,7 @@ describe('cli retrigger', () => {
     const cardFile = path.join(tmpDir, 'src.json');
     fs.writeFileSync(cardFile, JSON.stringify({ id: 'src', card_data: {} }));
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     // Retrigger
@@ -1038,7 +811,7 @@ describe('data-objects persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['source-data']);
@@ -1082,7 +855,7 @@ describe('data-objects persistence', () => {
     fs.writeFileSync(path.join(tmpDir, 'prices.json'), JSON.stringify(pricesCard));
 
     let spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', path.join(tmpDir, 'prices.json')]);
+    cli(['upsert-card', '--rg', dir, '--card', path.join(tmpDir, 'prices.json')]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['prices-source']);
@@ -1106,7 +879,7 @@ describe('data-objects persistence', () => {
     fs.writeFileSync(path.join(tmpDir, 'discount.json'), JSON.stringify(discountCard));
 
     spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', path.join(tmpDir, 'discount.json')]);
+    cli(['upsert-card', '--rg', dir, '--card', path.join(tmpDir, 'discount.json')]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['discount-source']);
@@ -1143,7 +916,7 @@ describe('data-objects persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['special-tokens']);
@@ -1195,7 +968,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['sales-metrics']);
@@ -1231,7 +1004,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['counter']);
@@ -1250,7 +1023,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(updatedCard));
 
     const spy2 = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['update-card', '--rg', dir, '--card-id', 'counter', '--restart']);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile, '--restart']);
     spy2.mockRestore();
 
     await pollBoard(dir, t => {
@@ -1291,7 +1064,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['data-analysis']);
@@ -1320,7 +1093,7 @@ describe('computed-values persistence', () => {
     fs.writeFileSync(cardFile, JSON.stringify(card));
 
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['add-cards', '--rg', dir, '--card', cardFile]);
+    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
     spy.mockRestore();
 
     await pollBoard(dir, t => !!t['full-artifact']);

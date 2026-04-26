@@ -1249,53 +1249,6 @@ export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
  * Helper function to add a single card from file.
  * Throws errors instead of calling process.exit() so it can be used in tests.
  */
-function addSingleCardFromFile(dir: string, cardFile: string): void {
-  const absCardPath = path.resolve(cardFile);
-  if (!fs.existsSync(absCardPath)) {
-    throw new Error(`Card file not found: ${absCardPath}`);
-  }
-
-  let card: BoardLiveCard;
-  try {
-    card = JSON.parse(fs.readFileSync(absCardPath, 'utf-8'));
-  } catch (err) {
-    throw new Error(`Failed to parse card file: ${absCardPath} - ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (!card.id) {
-    throw new Error('Card JSON must have an "id" field');
-  }
-
-  // Check for duplicate
-  const existing = readCardInventory(dir);
-  if (existing.some(e => e.cardId === card.id)) {
-    throw new Error(`Card "${card.id}" already exists in inventory`);
-  }
-
-  // Append to inventory first — handlers need it to look up card paths
-  appendCardInventory(dir, {
-    cardId: card.id,
-    cardFilePath: absCardPath,
-    addedAt: new Date().toISOString(),
-  });
-
-  // Transform card → TaskConfig
-  const taskConfig = liveCardToTaskConfig(card);
-
-  // 1. Append task-upsert event to journal (no lock)
-  appendEventToJournal(dir, {
-    type: 'task-upsert',
-    taskName: card.id,
-    taskConfig,
-    timestamp: new Date().toISOString(),
-  });
-
-  console.log(`Card "${card.id}" added to board at ${path.resolve(dir)} (drain scheduled)`);
-  console.log(`  taskHandlers: [${taskConfig.taskHandlers?.join(', ') ?? ''}]`);
-  console.log(`  provides: [${taskConfig.provides.join(', ')}]`);
-  if (taskConfig.requires) console.log(`  requires: [${taskConfig.requires.join(', ')}]`);
-}
-
 function resolveCardGlobMatches(cardGlob: string): string[] {
   const patterns = cardGlob
     .split(',')
@@ -1312,35 +1265,6 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
   // against inventory entries (which use path.resolve → backslash on Windows) match.
   return [...matches].map(m => path.resolve(m)).sort((a, b) => a.localeCompare(b));
 }
-
-function cmdAddCards(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
-  const cardIdx = args.indexOf('--card');
-  const globIdx = args.indexOf('--card-glob');
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
-  const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
-  
-  if (!dir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
-    throw new Error('Usage: board-live-cards add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)');
-  }
-
-  if (cardFile) {
-    addSingleCardFromFile(dir, cardFile);
-  } else {
-    const matches = resolveCardGlobMatches(cardGlob!);
-    if (matches.length === 0) {
-      throw new Error(`No card files matched glob: ${cardGlob}`);
-    }
-    for (const match of matches) {
-      addSingleCardFromFile(dir, match);
-    }
-    console.log(`Added ${matches.length} cards from glob: ${cardGlob}`);
-  }
-
-  void processAccumulatedEventsInfinitePass(dir);
-}
-
 
 function cmdInit(args: string[]): void {
   const dir = args[0];
@@ -2260,51 +2184,6 @@ function cmdRunSourceFetch(args: string[]): void {
   }
 }
 
-function cmdUpdateCard(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
-  const idIdx = args.indexOf('--card-id');
-  const restart = args.includes('--restart');
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  const cardId = idIdx !== -1 ? args[idIdx + 1] : undefined;
-  if (!dir || !cardId) {
-    throw new Error('Usage: board-live-cards update-card --rg <dir> --card-id <card-id> [--restart]');
-  }
-
-  // 1. Look up card in inventory
-  const cardPath = lookupCardPath(dir, cardId);
-  if (!cardPath) {
-    throw new Error(`Card "${cardId}" not found in inventory`);
-  }
-
-  // 2. Validate card file exists on disk
-  if (!fs.existsSync(cardPath)) {
-    throw new Error(`Card file not found: ${cardPath}`);
-  }
-
-  // 3. Read updated card, transform to TaskConfig, upsert
-  const card: BoardLiveCard = JSON.parse(fs.readFileSync(cardPath, 'utf-8'));
-  const taskConfig = liveCardToTaskConfig(card);
-
-  appendEventToJournal(dir, {
-    type: 'task-upsert',
-    taskName: cardId,
-    taskConfig,
-    timestamp: new Date().toISOString(),
-  });
-
-  // 4. Optionally restart the task so handler re-runs with updated card
-  if (restart) {
-    appendEventToJournal(dir, {
-      type: 'task-restart',
-      taskName: cardId,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  void processAccumulatedEventsInfinitePass(dir);
-  console.log(`Card "${cardId}" updated${restart ? ' (restarted)' : ''}.`);
-}
-
 function cmdUpsertCard(args: string[]): void {
   const rgIdx = args.indexOf('--rg');
   const cardIdx = args.indexOf('--card');
@@ -2506,8 +2385,6 @@ export async function cli(argv: string[]): Promise<void> {
     case '-h':            return cmdHelp();
     case 'init':           return cmdInit(rest);
     case 'status':         return cmdStatus(rest);
-    case 'add-cards':      return cmdAddCards(rest);
-    case 'update-card':    return cmdUpdateCard(rest);
     case 'upsert-card':    return cmdUpsertCard(rest);
     case 'remove-card':              return cmdRemoveCard(rest);
     case 'retrigger':                 return cmdRetrigger(rest);
@@ -2768,16 +2645,6 @@ BOARD MANAGEMENT
     --json emits the stable machine-readable status object.
 
 CARD MANAGEMENT
-  add-cards --rg <dir> (--card <card.json> | --card-glob <glob>)
-    Add one card or many cards from a glob and trigger processing.
-    --card adds one JSON file.
-    --card-glob adds all matching files in deterministic order.
-    Example glob: "examples/browser/boards/portfolio-tracker/cards/*.json"
-
-  update-card --rg <dir> --card-id <card-id> [--restart]
-    Re-read the card JSON from disk and patch the board.
-    --restart clears the task so it re-triggers from scratch.
-
   upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]
     Insert or update one or many cards.
     Enforces strict one-to-one mapping between card id and file path:
@@ -2903,7 +2770,7 @@ BOARD-LIVE-CARDS BUILT-IN EXECUTOR
 EXAMPLES
   board-live-cards-cli init ./my-board
   board-live-cards-cli init ./my-board --task-executor ./executors/my-runner.py
-  board-live-cards-cli add-cards --rg ./my-board --card cards/prices.json
+  board-live-cards-cli upsert-card --rg ./my-board --card cards/prices.json
   board-live-cards-cli status --rg ./my-board
   board-live-cards-cli retrigger --rg ./my-board --task price-fetch
   board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-requires '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
