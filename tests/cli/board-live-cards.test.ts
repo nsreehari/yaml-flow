@@ -665,6 +665,103 @@ describe('cli remove-card', () => {
 });
 
 // ============================================================================
+// CLI validate-card
+// ============================================================================
+
+describe('cli validate-card', () => {
+  let tmpDir: string;
+
+  function freshDir() {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-card-test-'));
+    return tmpDir;
+  }
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts a valid card', () => {
+    freshDir();
+    const cardFile = path.join(tmpDir, 'good.json');
+    fs.writeFileSync(cardFile, JSON.stringify({
+      id: 'ok-card',
+      provides: [{ bindTo: 'prices', src: 'card_data.prices' }],
+      card_data: { prices: {} },
+    }));
+
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    cli(['validate-card', '--card', cardFile]);
+    spy.mockRestore();
+  });
+
+  it('rejects a card with invalid provides.src namespace', async () => {
+    freshDir();
+    const cardFile = path.join(tmpDir, 'bad-ns.json');
+    fs.writeFileSync(cardFile, JSON.stringify({
+      id: 'bad-ns',
+      provides: [{ bindTo: 'data', src: 'sources.foo.bar' }],
+      card_data: {},
+    }));
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(cli(['validate-card', '--card', cardFile])).rejects.toThrow('failed validation');
+    spy.mockRestore();
+  });
+
+  it('rejects a card with an unparseable compute expression', async () => {
+    freshDir();
+    const cardFile = path.join(tmpDir, 'bad-expr.json');
+    fs.writeFileSync(cardFile, JSON.stringify({
+      id: 'bad-expr',
+      compute: [{ bindTo: 'total', expr: '$$$broken(' }],
+      card_data: {},
+    }));
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(cli(['validate-card', '--card', cardFile])).rejects.toThrow('failed validation');
+    spy.mockRestore();
+  });
+
+  it('rejects a card missing the id field', async () => {
+    freshDir();
+    const cardFile = path.join(tmpDir, 'no-id.json');
+    fs.writeFileSync(cardFile, JSON.stringify({
+      card_data: { x: 1 },
+    }));
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(cli(['validate-card', '--card', cardFile])).rejects.toThrow('failed validation');
+    spy.mockRestore();
+  });
+
+  it('validates multiple cards via --card-glob and reports mixed results', async () => {
+    freshDir();
+    const cardsDir = path.join(tmpDir, 'cards');
+    fs.mkdirSync(cardsDir, { recursive: true });
+
+    fs.writeFileSync(path.join(cardsDir, 'good.json'), JSON.stringify({
+      id: 'good', card_data: {},
+    }));
+    fs.writeFileSync(path.join(cardsDir, 'bad.json'), JSON.stringify({
+      id: 'bad',
+      provides: [{ bindTo: 'x', src: 'sources.x' }],
+      card_data: {},
+    }));
+
+    const errors: string[] = [];
+    const logs: string[] = [];
+    const spyErr = vi.spyOn(console, 'error').mockImplementation((...a) => errors.push(a.join(' ')));
+    const spyLog = vi.spyOn(console, 'log').mockImplementation((...a) => logs.push(a.join(' ')));
+    await expect(cli(['validate-card', '--card-glob', path.join(cardsDir, '*.json')])).rejects.toThrow('1 of 2');
+    spyErr.mockRestore();
+    spyLog.mockRestore();
+
+    expect(logs.some(l => l.includes('OK'))).toBe(true);
+    expect(errors.some(l => l.includes('FAIL'))).toBe(true);
+  });
+});
+
+// ============================================================================
 // CLI upsert-card (atomic glob behavior)
 // ============================================================================
 

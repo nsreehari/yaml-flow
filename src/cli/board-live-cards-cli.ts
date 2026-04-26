@@ -21,6 +21,7 @@ import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { CardCompute } from '../card-compute/index.js';
 import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/index.js';
+import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
@@ -1609,6 +1610,56 @@ function cmdTaskFailed(args: string[]): void {
   console.log('Task failed.');
 }
 
+function cmdValidateCard(args: string[]): void {
+  const cardIdx = args.indexOf('--card');
+  const globIdx = args.indexOf('--card-glob');
+  const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+  const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+
+  if ((!cardFile && !cardGlob) || (cardFile && cardGlob)) {
+    throw new Error('Usage: board-live-cards validate-card (--card <card.json> | --card-glob <glob>)');
+  }
+
+  const files = cardFile ? [path.resolve(cardFile)] : resolveCardGlobMatches(cardGlob!);
+  if (files.length === 0) {
+    throw new Error(`No card files matched glob: ${cardGlob}`);
+  }
+
+  let failures = 0;
+  for (const f of files) {
+    const label = path.relative(process.cwd(), f) || f;
+    if (!fs.existsSync(f)) {
+      console.error(`FAIL  ${label}: file not found`);
+      failures++;
+      continue;
+    }
+    let card: unknown;
+    try {
+      card = JSON.parse(fs.readFileSync(f, 'utf-8'));
+    } catch (err) {
+      console.error(`FAIL  ${label}: invalid JSON — ${err instanceof Error ? err.message : String(err)}`);
+      failures++;
+      continue;
+    }
+    const result = validateLiveCardDefinition(card);
+    if (result.ok) {
+      console.log(`OK    ${label}`);
+    } else {
+      console.error(`FAIL  ${label}:`);
+      for (const e of result.errors) {
+        console.error(`        ${e}`);
+      }
+      failures++;
+    }
+  }
+
+  if (failures > 0) {
+    throw new Error(`${failures} of ${files.length} card(s) failed validation.`);
+  } else {
+    console.log(`\n${files.length} card(s) passed validation.`);
+  }
+}
+
 function cmdRemoveCard(args: string[]): void {
   const rgIdx = args.indexOf('--rg');
   const idIdx = args.indexOf('--id');
@@ -2386,6 +2437,7 @@ export async function cli(argv: string[]): Promise<void> {
     case 'init':           return cmdInit(rest);
     case 'status':         return cmdStatus(rest);
     case 'upsert-card':    return cmdUpsertCard(rest);
+    case 'validate-card':  return cmdValidateCard(rest);
     case 'remove-card':              return cmdRemoveCard(rest);
     case 'retrigger':                 return cmdRetrigger(rest);
     case 'task-completed':            return cmdTaskCompleted(rest);
@@ -2655,6 +2707,11 @@ CARD MANAGEMENT
     --card-id is valid only with --card (single file), not with --card-glob.
     --restart clears the task so it re-triggers from scratch.
 
+  validate-card (--card <card.json> | --card-glob <glob>)
+    Validate one or many card JSON files without adding them to a board.
+    Checks JSON Schema structure, runtime expression syntax, and provides.src namespaces.
+    Exits with code 1 if any card fails validation.
+
   remove-card --rg <dir> --id <card-id>
     Remove a card and its task from the board.
 
@@ -2781,7 +2838,7 @@ EXAMPLES
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 if (isMain) {
   cli(process.argv.slice(2)).catch((err) => {
-    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    const msg = err instanceof Error ? err.message : String(err);
     console.error(msg);
     process.exit(1);
   });
