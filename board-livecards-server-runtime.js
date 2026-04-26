@@ -147,6 +147,18 @@ export function createMultiBoardServerRuntime(options = {}) {
     const defaultInferenceAdapterPath = typeof entry.inferenceAdapterPath === 'string'
       ? entry.inferenceAdapterPath
       : options.defaultInferenceAdapterPath;
+    const gandalfCardsDir = typeof entry.gandalfCardsDir === 'string'
+      ? entry.gandalfCardsDir
+      : (options.defaultGandalfCardsDir || null);
+    const gandalfTaskExecutorPath = typeof entry.gandalfTaskExecutorPath === 'string'
+      ? entry.gandalfTaskExecutorPath
+      : (options.defaultGandalfTaskExecutorPath || null);
+    const gandalfChatHandlerPath = typeof entry.gandalfChatHandlerPath === 'string'
+      ? entry.gandalfChatHandlerPath
+      : (options.defaultGandalfChatHandlerPath || null);
+    const gandalfInferenceAdapterPath = typeof entry.gandalfInferenceAdapterPath === 'string'
+      ? entry.gandalfInferenceAdapterPath
+      : (options.defaultGandalfInferenceAdapterPath || null);
 
     const service = createExampleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
@@ -160,6 +172,12 @@ export function createMultiBoardServerRuntime(options = {}) {
       defaultStepMachineCliPath,
       defaultChatHandlerPath,
       defaultInferenceAdapterPath,
+      gandalfCardsDir,
+      gandalfRuntimeDir: path.join(boardRoot, 'gandalf-runtime'),
+      gandalfRuntimeOutDir: path.join(boardRoot, 'gandalf-runtime-out'),
+      gandalfTaskExecutorPath,
+      gandalfChatHandlerPath,
+      gandalfInferenceAdapterPath,
       boardLiveCardsCliJs: options.boardLiveCardsCliJs,
     });
 
@@ -346,6 +364,43 @@ export function createExampleBoardServerRuntime(options = {}) {
   const boardFile = path.join(boardDir, 'board-graph.json');
   const inventoryFile = path.join(boardDir, 'cards-inventory.jsonl');
 
+  // Board-cards: parallel runtime dirs for the board-manager board.
+  const gandalfCardsDir = options.gandalfCardsDir ? path.resolve(options.gandalfCardsDir) : null;
+  const gandalfRuntimeDir = path.resolve(options.gandalfRuntimeDir || path.join(path.dirname(boardDir), 'gandalf-runtime'));
+  const gandalfRuntimeOutDir = path.resolve(options.gandalfRuntimeOutDir || path.join(path.dirname(boardDir), 'gandalf-runtime-out'));
+  const tmpGandalfCardsDir = path.join(tmpSurfaceDir, 'tmp-gandalf-cards');
+  const gandalfInventoryFile = path.join(gandalfRuntimeDir, 'cards-inventory.jsonl');
+  const gandalfBoardFile = path.join(gandalfRuntimeDir, 'board-graph.json');
+  const gandalfStatusSnapshotFile = path.join(gandalfRuntimeOutDir, 'board-livegraph-status.json');
+
+  // Explicit gandalf-card executor paths — no fallback to regular-card paths.
+  const configuredGandalfTaskExecutorPath = typeof options.gandalfTaskExecutorPath === 'string' && options.gandalfTaskExecutorPath.trim()
+    ? (path.isAbsolute(options.gandalfTaskExecutorPath) ? options.gandalfTaskExecutorPath : path.resolve(process.cwd(), options.gandalfTaskExecutorPath))
+    : null;
+  const configuredGandalfChatHandlerPath = typeof options.gandalfChatHandlerPath === 'string' && options.gandalfChatHandlerPath.trim()
+    ? (path.isAbsolute(options.gandalfChatHandlerPath) ? options.gandalfChatHandlerPath : path.resolve(process.cwd(), options.gandalfChatHandlerPath))
+    : null;
+  const configuredGandalfInferenceAdapterPath = typeof options.gandalfInferenceAdapterPath === 'string' && options.gandalfInferenceAdapterPath.trim()
+    ? (path.isAbsolute(options.gandalfInferenceAdapterPath) ? options.gandalfInferenceAdapterPath : path.resolve(process.cwd(), options.gandalfInferenceAdapterPath))
+    : null;
+
+  // Board-card ID cache: O(1) lookup, mtime-refreshed each SSE tick.
+  let _gandalfCardIds = new Set();
+  let _gandalfInventoryMtime = 0;
+  function _refreshGandalfCardCache() {
+    if (!fs.existsSync(gandalfInventoryFile)) { _gandalfCardIds = new Set(); return; }
+    const mtime = fs.statSync(gandalfInventoryFile).mtimeMs;
+    if (mtime === _gandalfInventoryMtime) return;
+    _gandalfInventoryMtime = mtime;
+    _gandalfCardIds = new Set(
+      fs.readFileSync(gandalfInventoryFile, 'utf-8')
+        .split('\n').filter(Boolean)
+        .map(l => { try { return JSON.parse(l).cardId; } catch { return null; } })
+        .filter(Boolean)
+    );
+  }
+  function isGandalfCard(cardId) { return _gandalfCardIds.has(cardId); }
+
   let didDemoSetup = false;
 
   function resolveCliJsPath() {
@@ -380,7 +435,8 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function ensureCardStorageDirs(cardId) {
     const safeCardId = String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
-    const cardDir = path.join(tmpCardsDir, safeCardId);
+    const baseDir = isGandalfCard(cardId) ? tmpGandalfCardsDir : tmpCardsDir;
+    const cardDir = path.join(baseDir, safeCardId);
     const filesDir = path.join(cardDir, 'files');
     const chatsDir = path.join(cardDir, 'chats');
     fs.mkdirSync(filesDir, { recursive: true });
@@ -491,34 +547,53 @@ export function createExampleBoardServerRuntime(options = {}) {
       .map((l) => JSON.parse(l));
   }
 
+  function readGandalfInventory() {
+    if (!fs.existsSync(gandalfInventoryFile)) return [];
+    return fs
+      .readFileSync(gandalfInventoryFile, 'utf-8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+  }
+
   function readStatusSnapshot() {
-    if (!fs.existsSync(statusSnapshotFile)) return null;
-    return readJson(statusSnapshotFile);
+    const base = fs.existsSync(statusSnapshotFile) ? readJson(statusSnapshotFile) : null;
+    const boardSnap = fs.existsSync(gandalfStatusSnapshotFile) ? readJson(gandalfStatusSnapshotFile) : null;
+    if (!base && !boardSnap) return null;
+    if (!boardSnap) return base;
+    if (!base) return boardSnap;
+    return { ...base, tasks: { ...(base.tasks || {}), ...(boardSnap.tasks || {}) } };
   }
 
   function readCardDefinitions() {
-    const inv = readInventory();
-    const out = [];
-    for (const entry of inv) {
-      if (!entry || !entry.cardId || !entry.cardFilePath) continue;
-      if (!fs.existsSync(entry.cardFilePath)) continue;
-      out.push(readJson(entry.cardFilePath));
+    function readFromInventory(invFile) {
+      if (!fs.existsSync(invFile)) return [];
+      const inv = fs.readFileSync(invFile, 'utf-8').split('\n').map(l => l.trim()).filter(Boolean).map(l => JSON.parse(l));
+      const out = [];
+      for (const entry of inv) {
+        if (!entry || !entry.cardId || !entry.cardFilePath) continue;
+        if (!fs.existsSync(entry.cardFilePath)) continue;
+        out.push(readJson(entry.cardFilePath));
+      }
+      return out;
     }
-    return out;
+    return [...readFromInventory(inventoryFile), ...readFromInventory(gandalfInventoryFile)];
   }
 
   function readCardRuntimeArtifacts() {
-    const cardsOutDir = path.join(runtimeOutDir, 'cards');
-    if (!fs.existsSync(cardsOutDir)) return {};
-
-    const out = {};
-    for (const entry of fs.readdirSync(cardsOutDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.endsWith('.computed.json')) continue;
-      const cardId = entry.name.slice(0, -'.computed.json'.length);
-      out[cardId] = readJson(path.join(cardsOutDir, entry.name));
+    function readFromDir(dir) {
+      const cardsOutDir = path.join(dir, 'cards');
+      if (!fs.existsSync(cardsOutDir)) return {};
+      const out = {};
+      for (const entry of fs.readdirSync(cardsOutDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.computed.json')) continue;
+        const cardId = entry.name.slice(0, -'.computed.json'.length);
+        out[cardId] = readJson(path.join(cardsOutDir, entry.name));
+      }
+      return out;
     }
-    return out;
+    return { ...readFromDir(runtimeOutDir), ...readFromDir(gandalfRuntimeOutDir) };
   }
 
   function readSourcePayloads(cardDefinition) {
@@ -561,7 +636,8 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readChatSignal(cardId) {
-    const chatsDir = path.join(tmpCardsDir, cardId, 'chats');
+    const baseDir = isGandalfCard(cardId) ? tmpGandalfCardsDir : tmpCardsDir;
+    const chatsDir = path.join(baseDir, cardId, 'chats');
     if (!fs.existsSync(chatsDir)) {
       return { count: 0, latest_mtime_ms: 0, processing: false };
     }
@@ -644,6 +720,16 @@ export function createExampleBoardServerRuntime(options = {}) {
       fs.copyFileSync(src, dst);
     }
 
+    // Copy gandalf-card templates if gandalfCardsDir is configured.
+    if (gandalfCardsDir && fs.existsSync(gandalfCardsDir)) {
+      fs.rmSync(tmpGandalfCardsDir, { recursive: true, force: true });
+      fs.mkdirSync(tmpGandalfCardsDir, { recursive: true });
+      for (const entry of fs.readdirSync(gandalfCardsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
+        fs.copyFileSync(path.join(gandalfCardsDir, entry.name), path.join(tmpGandalfCardsDir, entry.name));
+      }
+    }
+
     // Concatenate agent-instructions*.md files into copilot-instructions.md at boardSetupRoot
     const boardSetupRoot = path.dirname(boardDir);
     const agentInstructionFiles = ['agent-instructions.md', 'agent-instructions-cardlayout.md'];
@@ -713,6 +799,68 @@ export function createExampleBoardServerRuntime(options = {}) {
     return resolved;
   }
 
+  function resolveGandalfTaskExecutorPath() {
+    if (!configuredGandalfTaskExecutorPath) return null;
+    if (!fs.existsSync(configuredGandalfTaskExecutorPath)) {
+      const err = new Error(`Gandalf task executor script not found: ${configuredGandalfTaskExecutorPath}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return configuredGandalfTaskExecutorPath;
+  }
+
+  function resolveGandalfChatHandlerPath() {
+    if (!configuredGandalfChatHandlerPath) return null;
+    if (!fs.existsSync(configuredGandalfChatHandlerPath)) {
+      const err = new Error(`Gandalf chat handler script not found: ${configuredGandalfChatHandlerPath}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return configuredGandalfChatHandlerPath;
+  }
+
+  function resolveGandalfInferenceAdapterPath() {
+    if (!configuredGandalfInferenceAdapterPath) return null;
+    if (!fs.existsSync(configuredGandalfInferenceAdapterPath)) {
+      const err = new Error(`Gandalf inference adapter script not found: ${configuredGandalfInferenceAdapterPath}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return configuredGandalfInferenceAdapterPath;
+  }
+
+  function initGandalfCards() {
+    const taskExecutorPath = resolveGandalfTaskExecutorPath();
+    if (!taskExecutorPath) return; // gandalf-cards not configured; skip.
+    fs.mkdirSync(gandalfRuntimeDir, { recursive: true });
+    const chatHandlerPath = resolveGandalfChatHandlerPath();
+    const inferenceAdapterPath = resolveGandalfInferenceAdapterPath();
+    const taskExecutorCmd = `${shellQuote(process.execPath)} ${shellQuote(taskExecutorPath)}`;
+    const chatHandlerCmd = chatHandlerPath ? `${shellQuote(process.execPath)} ${shellQuote(chatHandlerPath)}` : null;
+    const inferenceAdapterCmd = inferenceAdapterPath ? `${shellQuote(process.execPath)} ${shellQuote(inferenceAdapterPath)}` : null;
+    const boardSetupRoot = path.dirname(boardDir);
+    const taskExecutorExtra = JSON.stringify({
+      boardSetupRoot,
+      boardId,
+      gandalfRuntimeDir:  path.relative(boardSetupRoot, gandalfRuntimeDir),
+      runtimeStatusDir: path.relative(boardSetupRoot, gandalfRuntimeOutDir),
+      cardsDir:         path.relative(boardSetupRoot, tmpGandalfCardsDir),
+    });
+    const initArgs = ['init', gandalfRuntimeDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
+    if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
+    if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
+    initArgs.push('--runtime-out', gandalfRuntimeOutDir);
+    try {
+      runCli(initArgs);
+    } catch (err) {
+      const msg = String((err && err.message) || err);
+      if (!msg.includes('no valid board-graph.json')) throw err;
+      clearDirContents(gandalfRuntimeDir);
+      fs.mkdirSync(gandalfRuntimeDir, { recursive: true });
+      runCli(initArgs);
+    }
+  }
+
   function initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
     fs.mkdirSync(boardDir, { recursive: true });
 
@@ -731,7 +879,7 @@ export function createExampleBoardServerRuntime(options = {}) {
     const taskExecutorExtra = JSON.stringify({
       boardSetupRoot,
       boardId,
-      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
+      gandalfRuntimeDir:  path.relative(boardSetupRoot, boardDir),
       runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
     });
@@ -774,6 +922,19 @@ export function createExampleBoardServerRuntime(options = {}) {
       clearDirContents(boardDir);
       initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
     }
+
+    // Board-cards runtime: init if configured but not yet initialized.
+    if (resolveGandalfTaskExecutorPath() && !fs.existsSync(gandalfBoardFile)) {
+      initGandalfCards();
+    }
+  }
+
+  function bootstrapGandalfCards() {
+    if (!fs.existsSync(tmpGandalfCardsDir)) return;
+    const jsonFiles = (fs.readdirSync(tmpGandalfCardsDir)).filter(f => f.endsWith('.json'));
+    if (!jsonFiles.length) return;
+    runCli(['upsert-card', '--rg', gandalfRuntimeDir, '--card-glob', path.join(tmpGandalfCardsDir, '*.json')]);
+    _refreshGandalfCardCache();
   }
 
   function bootstrapCards() {
@@ -784,9 +945,14 @@ export function createExampleBoardServerRuntime(options = {}) {
   function bootstrapBoard() {
     initBoardAndSetup();
     bootstrapCards();
+    bootstrapGandalfCards();
   }
 
   function findCardPath(cardId) {
+    if (isGandalfCard(cardId)) {
+      const found = readGandalfInventory().find((e) => e.cardId === cardId);
+      return found ? found.cardFilePath : null;
+    }
     const inv = readInventory();
     const found = inv.find((e) => e.cardId === cardId);
     return found ? found.cardFilePath : null;
@@ -807,7 +973,8 @@ export function createExampleBoardServerRuntime(options = {}) {
     fs.writeFileSync(cardPath, JSON.stringify(nextCard, null, 2));
 
     if (syncBoard) {
-      runCli(['upsert-card', '--rg', boardDir, '--card', cardPath, '--restart']);
+      const rg = isGandalfCard(cardId) ? gandalfRuntimeDir : boardDir;
+      runCli(['upsert-card', '--rg', rg, '--card', cardPath, '--restart']);
     }
   }
 
@@ -1008,7 +1175,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   // Called with: --boardId <id> --cardId <id> --extraEncJson <base64json>
   // extraEncJson decodes to:
   //   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
-  //   boardRuntimeDir — relative: 'runtime'
+  //   gandalfRuntimeDir — relative: 'runtime'
   //   runtimeStatusDir— relative: 'runtime-out'
   //   cardsDir        — relative: 'surface/tmp-cards'
   //   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
@@ -1024,7 +1191,7 @@ export function createExampleBoardServerRuntime(options = {}) {
     try { fs.mkdirSync(chatsDir, { recursive: true }); fs.writeFileSync(processingFile, '', 'utf-8'); } catch {}
     const extra = Buffer.from(JSON.stringify({
       boardSetupRoot,
-      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
+      gandalfRuntimeDir:  path.relative(boardSetupRoot, boardDir),
       runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
       chatDir:          chatsDir,
@@ -1192,6 +1359,10 @@ export function createExampleBoardServerRuntime(options = {}) {
     const poll = setInterval(() => {
       try {
         runCli(['process-accumulated-events', '--rg', boardDir]);
+        if (fs.existsSync(gandalfBoardFile)) {
+          runCli(['process-accumulated-events', '--rg', gandalfRuntimeDir]);
+        }
+        _refreshGandalfCardCache();
 
         const nextPayload = buildPublishedRuntimePayload();
         const nextHash = stablePayloadString(nextPayload);
@@ -1330,8 +1501,8 @@ export function createExampleBoardServerRuntime(options = {}) {
         const idx = parseInt(cardFileDownloadMatch[2], 10);
         const expectedStoredName = url.searchParams.get('sn');
 
-        const cardPath = path.join(tmpCardsDir, `${cardId}.json`);
-        if (!fs.existsSync(cardPath)) {
+        const cardPath = findCardPath(cardId);
+        if (!cardPath || !fs.existsSync(cardPath)) {
           json(res, 404, { error: 'Card not found' });
           return true;
         }

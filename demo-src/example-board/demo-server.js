@@ -52,6 +52,9 @@ const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPa
 const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath) || _pkgStepMachineCli;
 const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
 const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
+const configuredGandalfTaskExecutorPath = resolveFromConfig(serverConfig.gandalfTaskExecutorPath);
+const configuredGandalfChatHandlerPath = resolveFromConfig(serverConfig.gandalfChatHandlerPath);
+const configuredGandalfInferenceAdapterPath = resolveFromConfig(serverConfig.gandalfInferenceAdapterPath);
 
 if (!process.env.BOARD_LIVE_CARDS_CLI_JS && configuredCliJs) {
   process.env.BOARD_LIVE_CARDS_CLI_JS = configuredCliJs;
@@ -82,6 +85,9 @@ const runtime = createMultiBoardServerRuntime({
   defaultStepMachineCliPath: process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath,
   defaultChatHandlerPath: process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || path.join(__dirname, 'demo-chat-handler.js'),
   defaultInferenceAdapterPath: process.env.DEMO_INFERENCE_ADAPTER_PATH || configuredInferenceAdapterPath || null,
+  defaultGandalfTaskExecutorPath: process.env.DEMO_GANDALF_TASK_EXECUTOR_PATH || configuredGandalfTaskExecutorPath || null,
+  defaultGandalfChatHandlerPath: process.env.DEMO_GANDALF_CHAT_HANDLER_PATH || configuredGandalfChatHandlerPath || null,
+  defaultGandalfInferenceAdapterPath: process.env.DEMO_GANDALF_INFERENCE_ADAPTER_PATH || configuredGandalfInferenceAdapterPath || null,
   boardLiveCardsCliJs: process.env.BOARD_LIVE_CARDS_CLI_JS || configuredCliJs,
 });
 

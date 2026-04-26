@@ -91,6 +91,8 @@ var LiveCard = (function () {
       .lc-files-modal-backdrop .modal-body { overflow-y:auto; flex:1; min-height:200px; padding:1rem; }
       .lc-simulation-card { background:#fdf6ec; border-color:#e0c97f !important; }
       .lc-simulation-card .card-header { background:#faecc8; border-bottom-color:#e0c97f; }
+      .lc-gandalf-card { background:#eef4ff; border-color:#6ea4e0 !important; }
+      .lc-gandalf-card .card-header { background:#d7e8fa; border-bottom-color:#6ea4e0; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -2456,8 +2458,10 @@ var LiveCard = (function () {
     function _buildCardWrapper(node) {
       const wrap = document.createElement('div');
       const card = node && node.card ? node.card : {};
-      const isSimulation = card.meta && card.meta.mode === 'simulation';
-      wrap.className = 'card shadow-sm h-100' + (isSimulation ? ' lc-simulation-card' : '');
+      const isSimulation = card.meta && card.meta.simulation === true;
+      const isGandalfCard  = card.meta && card.meta._gandalfCard === true;
+      const extraClass   = isSimulation ? ' lc-simulation-card' : (isGandalfCard ? ' lc-gandalf-card' : '');
+      wrap.className = 'card shadow-sm h-100' + extraClass;
       const header = document.createElement('div');
       header.className = 'card-header d-flex align-items-center gap-2 py-2';
       const title = (card.meta && card.meta.title) || node.id;
@@ -2652,8 +2656,10 @@ var LiveCard = (function () {
           _makeDraggable(el, node);
         } else {
           const el = document.createElement('div');
-          const isSimCanvas = node.card && node.card.meta && node.card.meta.mode === 'simulation';
-          el.className = 'lc-canvas-card card shadow-sm' + (isSimCanvas ? ' lc-simulation-card' : '');
+          const isSimCanvas   = node.card && node.card.meta && node.card.meta.simulation === true;
+          const isGandalfCanvas = node.card && node.card.meta && node.card.meta._gandalfCard === true;
+          const canvasExtra   = isSimCanvas ? ' lc-simulation-card' : (isGandalfCanvas ? ' lc-gandalf-card' : '');
+          el.className = 'lc-canvas-card card shadow-sm' + canvasExtra;
           el.dataset.nodeId = node.id;
           el.style.left = pos.x + 'px';
           el.style.top  = pos.y + 'px';
