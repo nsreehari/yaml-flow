@@ -247,8 +247,11 @@ export interface ReactiveGraph {
   getState(): LiveGraph;
   /** Current schedule projection. */
   getSchedule(): ScheduleResult;
-  /** Stop accepting events. */
-  dispose(): void;
+  /**
+   * Stop accepting events.
+   * @param options.wait — if true, await all in-flight handler promises before marking disposed.
+   */
+  dispose(options?: { wait?: boolean }): Promise<void>;
 }
 
 // ============================================================================
@@ -274,6 +277,9 @@ export function createReactiveGraph(
     ? configOrLive as LiveGraph
     : createLiveGraph(configOrLive as GraphConfig, executionId);
   let disposed = false;
+
+  // Track in-flight handler promises so callers can await them before dispose.
+  const pendingHandlers = new Set<Promise<void>>();
 
   // Handler registry — mutable, keyed by handler name
   const handlers = new Map<string, TaskHandlerFn>(Object.entries(initialHandlers));
@@ -345,7 +351,7 @@ export function createReactiveGraph(
         const taskState = live.state.tasks[taskName];
         if (!taskState || taskState.status !== 'running') continue;
         const callbackToken = encodeCallbackToken(taskName);
-        runPipeline(taskName, callbackToken, update).catch((error: Error) => {
+        const p = runPipeline(taskName, callbackToken, update).catch((error: Error) => {
           if (disposed) return;
           internalJournal.append({
             type: 'task-failed',
@@ -354,7 +360,8 @@ export function createReactiveGraph(
             timestamp: new Date().toISOString(),
           });
           drain();
-        });
+        }).finally(() => { pendingHandlers.delete(p); });
+        pendingHandlers.add(p);
       }
     }
   }
@@ -445,7 +452,7 @@ export function createReactiveGraph(
     const callbackToken = encodeCallbackToken(taskName);
 
     // Fire-and-forget: run the handler pipeline
-    runPipeline(taskName, callbackToken).catch((error: Error) => {
+    const p = runPipeline(taskName, callbackToken).catch((error: Error) => {
       if (disposed) return;
       internalJournal.append({
         type: 'task-failed',
@@ -454,7 +461,8 @@ export function createReactiveGraph(
         timestamp: new Date().toISOString(),
       });
       drain();
-    });
+    }).finally(() => { pendingHandlers.delete(p); });
+    pendingHandlers.add(p);
   }
 
   // --------------------------------------------------------------------------
@@ -592,7 +600,10 @@ export function createReactiveGraph(
       return schedule(live);
     },
 
-    dispose(): void {
+    async dispose(options?: { wait?: boolean }): Promise<void> {
+      if (options?.wait && pendingHandlers.size > 0) {
+        await Promise.allSettled([...pendingHandlers]);
+      }
       disposed = true;
     },
   };

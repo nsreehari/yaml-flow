@@ -663,7 +663,7 @@ function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {
 
 async function processAccumulatedEventsInlineLoop(boardDir: string, settleDelayMs = 50): Promise<boolean> {
   while (determineLatestPendingAccumulated(boardDir) > 0) {
-    const ran = processAccumulatedEvents(boardDir);
+    const ran = await processAccumulatedEvents(boardDir);
     if (!ran) return false;
     await new Promise<void>(resolve => setTimeout(resolve, settleDelayMs));
   }
@@ -685,7 +685,7 @@ function shouldAvoidDetachedProcessSpawn(): boolean {
  * This function does NOT guarantee full settlement; it only advances the baton
  * by one cycle in the relay model.
  */
-export function processAccumulatedEvents(boardDir: string): boolean {
+export async function processAccumulatedEvents(boardDir: string): Promise<boolean> {
   const boardPath = path.join(boardDir, BOARD_FILE);
   let release: (() => void) | undefined;
   try {
@@ -700,8 +700,8 @@ export function processAccumulatedEvents(boardDir: string): boolean {
     // The engine never reads from external storage — the caller owns that boundary.
     const undrained = journal.drain();
     rg.pushAll(undrained);
+    await rg.dispose({ wait: true });
     saveBoard(boardDir, rg, journal);
-    rg.dispose();
     return true;
   } finally {
     release!();
@@ -748,7 +748,7 @@ export async function processAccumulatedEventsForced(
   boardDir: string,
   options?: { inlineLoop?: boolean },
 ): Promise<void> {
-  processAccumulatedEvents(boardDir);
+  await processAccumulatedEvents(boardDir);
   await processAccumulatedEventsInfinitePass(boardDir, 50, options);
 }
 
