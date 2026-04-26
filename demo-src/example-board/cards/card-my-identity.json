@@ -16,11 +16,11 @@
   ],
   "view": {
     "elements": [
-      { "kind": "markdown", "label": "Display Name", "data": { "bind": "fetched_sources.identity" } }
+      { "kind": "markdown", "data": { "bind": "fetched_sources.identity" } }
     ],
     "layout": {
       "board": { "col": 1, "order": 10 },
-      "canvas": { "x": 50, "y": 450, "w": 320, "h": 140 }
+      "canvas": { "x": 50, "y": 450, "w": 420, "h": 260 }
     },
     "features": { "refresh": true }
   },
