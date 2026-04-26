@@ -11,6 +11,7 @@
  *   cardsDir        — relative subdir: 'surface/tmp-cards'
  *   chatDir         — absolute path to the card's chats directory
  *   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
+ *   serverUrl       — base URL of hosting server (e.g. http://127.0.0.1:7799), optional
  *
  * Invokes copilot_wrapper.bat with a prompt built from conversation history.
  * Session dir is per-card: os.tmpdir()/demo-chat-handler-sessions/<boardId>_<cardId>
@@ -42,7 +43,7 @@ let extra = {};
 try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
 catch { console.error('[demo-chat-handler] bad --extraEncJson'); process.exit(0); }
 
-const { boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, lastChatFile } = extra;
+const { boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, lastChatFile, serverUrl } = extra;
 if (!boardSetupRoot || !chatDir || !lastChatFile) {
   console.error('[demo-chat-handler] missing boardSetupRoot/chatDir/lastChatFile');
   process.exit(0);

@@ -4,6 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -82,6 +83,7 @@ const CORS_HEADERS = {
 
 const runtime = createMultiBoardServerRuntime({
   apiBasePath: '/api/boards',
+  serverUrl: `http://127.0.0.1:${PORT}`,
   defaultCardsDir: process.env.DEMO_CARDS_DIR || configuredCardsDir || null,
   defaultTaskExecutorPath: process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || null,
   defaultStepMachineCliPath: process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath,
@@ -140,6 +142,45 @@ async function handleDemoSetup(req, res, boardId) {
   }
 }
 
+async function handleWorkiqAsk(req, res) {
+  let body = '';
+  for await (const chunk of req) body += chunk;
+  let query;
+  try {
+    query = JSON.parse(body).query;
+  } catch {
+    return jsonReply(res, 400, { error: 'Invalid JSON body' });
+  }
+  if (!query || typeof query !== 'string') {
+    return jsonReply(res, 400, { error: '{ query } string is required' });
+  }
+
+  const workiqJs = path.join(
+    process.env.APPDATA || os.homedir(),
+    'npm', 'node_modules', '@microsoft', 'workiq', 'bin', 'workiq.js'
+  );
+  if (!fs.existsSync(workiqJs)) {
+    return jsonReply(res, 503, { error: `WorkIQ CLI not found at: ${workiqJs}` });
+  }
+
+  // Server has TTY on stdin — workiq can produce output
+  const result = spawnSync(process.execPath, [workiqJs, 'ask', '-q', query], {
+    stdio: ['inherit', 'pipe', 'pipe'],
+    encoding: 'utf-8',
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 60_000,
+  });
+
+  if (result.error) {
+    return jsonReply(res, 500, { error: `workiq spawn error: ${result.error.message}` });
+  }
+  if (result.status !== 0) {
+    return jsonReply(res, 500, { error: `workiq exited ${result.status}`, stderr: result.stderr });
+  }
+
+  jsonReply(res, 200, { response: result.stdout || '' });
+}
+
 const server = http.createServer((req, res) => {
   const method = req.method || 'GET';
   const pathname = new URL(req.url || '/', 'http://localhost').pathname;
@@ -147,6 +188,12 @@ const server = http.createServer((req, res) => {
   if (method === 'OPTIONS') {
     res.writeHead(204, CORS_HEADERS);
     res.end();
+    return;
+  }
+
+  // Route: POST /api/workiq/ask — proxy to WorkIQ (M365 Copilot) from server TTY
+  if (method === 'POST' && pathname === '/api/workiq/ask') {
+    void handleWorkiqAsk(req, res);
     return;
   }
 
@@ -177,4 +224,5 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`  POST ${runtime.apiBasePath}/:boardId/cards/:id/files`);
   console.log(`  GET  ${runtime.apiBasePath}/:boardId/cards/:id/files/:idx`);
   console.log(`  GET  ${runtime.apiBasePath}/:boardId/cards/:id/chats`);
+  console.log(`  POST /api/workiq/ask  {query}              <- WorkIQ (M365 Copilot) proxy`);
 });

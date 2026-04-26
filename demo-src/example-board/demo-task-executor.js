@@ -39,6 +39,7 @@
  *   - { mock: "key" }              → look up key in MOCK_DB (hardcoded below)
  *   - { copilot: { prompt_template, args? } }  → call Copilot CLI with interpolated prompt
  *   - { prompt_template: "..." }   → shorthand copilot call (top-level template)
+ *   - { workiq: { query_template, args? } }   → call WorkIQ (M365 Copilot) with interpolated query
  *   - { "url": { url, method?, headers?, args?, cacheTimeout? }, tickersFrom? }
  *       → single URL fetch via curl with {{key}} interpolation from _projections
  *   - { "url-list": { method?, headers?, cacheTimeout? } }
@@ -400,6 +401,33 @@ function runSourceFetchSubcommand(argv) {
         resultValue = rawOutput;
       }
     }
+  } else if (sourceDef.workiq) {
+    const cfg = typeof sourceDef.workiq === 'object' ? sourceDef.workiq : {};
+    if (!cfg.query_template || typeof cfg.query_template !== 'string') {
+      fail('Source definition missing workiq.query_template', errFile);
+    }
+    const interpolationContext = { ...sourceDef._projections, ...(cfg.args ?? {}) };
+    const query = interpolatePrompt(cfg.query_template, interpolationContext);
+
+    const wrapperPath = path.join(__dirname, 'scripts', 'workiq_wrapper.mjs');
+    if (!fs.existsSync(wrapperPath)) {
+      fail('workiq source kind requires workiq_wrapper.js in scripts/', errFile);
+    }
+    try {
+      execFileSync(process.execPath, [wrapperPath, outFile], {
+        encoding: 'utf-8',
+        stdio: ['inherit', 'pipe', 'pipe'],
+        maxBuffer: 10 * 1024 * 1024,
+        env: {
+          ...process.env,
+          WORKIQ_QUERY: query,
+          ...(extra.serverUrl ? { WORKIQ_SERVER_URL: extra.serverUrl } : {}),
+        },
+      });
+      return; // wrapper wrote directly to outFile
+    } catch (err) {
+      fail(`workiq invocation failed: ${String(err && err.message || err)}`, errFile);
+    }
   } else if (sourceDef.mock) {
     // MOCK_DB lookup — data hardcoded at the top of this file
     resultValue = MOCK_DB[sourceDef.mock];
@@ -407,7 +435,7 @@ function runSourceFetchSubcommand(argv) {
       fail(`Key "${sourceDef.mock}" not found in MOCK_DB`, errFile);
     }
   } else {
-    fail('Source definition has no recognised kind (url, url-list, copilot, mock)', errFile);
+    fail('Source definition has no recognised kind (url, url-list, copilot, workiq, mock)', errFile);
   }
 
   // Write result to --out as JSON payload, same contract as current mock mode.
@@ -451,17 +479,19 @@ function validateSourceDefSubcommand(argv) {
   const hasUrlList  = !!sourceDef['url-list'];
   const hasCopilot    = !!sourceDef.copilot;
   const hasPromptTemplate = typeof sourceDef.prompt_template === 'string';
+  const hasWorkiq     = !!sourceDef.workiq;
   const hasMock       = sourceDef.mock !== undefined;
 
-  const kindCount = [hasUrl, hasUrlList, hasCopilot || hasPromptTemplate, hasMock].filter(Boolean).length;
+  const kindCount = [hasUrl, hasUrlList, hasCopilot || hasPromptTemplate, hasWorkiq, hasMock].filter(Boolean).length;
 
   if (kindCount === 0) {
-    errors.push('No recognised source kind (url, url-list, copilot, mock). Add one of these fields.');
+    errors.push('No recognised source kind (url, url-list, copilot, workiq, mock). Add one of these fields.');
   } else if (kindCount > 1) {
     const kinds = [];
     if (hasUrl)  kinds.push('url');
     if (hasUrlList) kinds.push('url-list');
     if (hasCopilot || hasPromptTemplate) kinds.push('copilot');
+    if (hasWorkiq)    kinds.push('workiq');
     if (hasMock)      kinds.push('mock');
     errors.push(`Multiple source kinds specified: [${kinds.join(', ')}]. Use exactly one.`);
   }
@@ -488,6 +518,14 @@ function validateSourceDefSubcommand(argv) {
       if (!sourceDef.copilot.prompt_template && !hasPromptTemplate) {
         errors.push('copilot.prompt_template is required (or use top-level prompt_template).');
       }
+    }
+  }
+
+  if (hasWorkiq) {
+    if (typeof sourceDef.workiq !== 'object') {
+      errors.push('workiq must be an object.');
+    } else if (!sourceDef.workiq.query_template || typeof sourceDef.workiq.query_template !== 'string') {
+      errors.push('workiq.query_template is required and must be a string.');
     }
   }
 
@@ -536,6 +574,20 @@ const CAPABILITIES = {
       },
       outputShape: 'string | object — raw Copilot text, or parsed JSON if the response is valid JSON.',
     },
+    workiq: {
+      description: 'Query WorkIQ (Microsoft 365 Copilot) with an interpolated query template. Returns raw text response.',
+      inputSchema: {
+        workiq: {
+          type: 'object', required: true,
+          properties: {
+            query_template: { type: 'string', required: true,  description: 'Query with {{key}} placeholders interpolated from _projections and args.' },
+            args:            { type: 'object', required: false, description: 'Extra interpolation args (highest precedence).' },
+          },
+        },
+      },
+      outputShape: 'string — raw M365 Copilot response text.',
+      note: 'Requires workiq CLI installed and Azure CLI logged in (az login).',
+    },
     'url': {
       description: 'Single URL fetch via curl with {{key}} interpolation from _projections. Supports cacheTimeout.',
       inputSchema: {
@@ -577,6 +629,7 @@ const CAPABILITIES = {
       boardRuntimeDir:  { type: 'string', description: 'Relative path to runtime dir.' },
       runtimeStatusDir: { type: 'string', description: 'Relative path to runtime-out dir.' },
       cardsDir:         { type: 'string', description: 'Relative path to cards dir.' },
+      serverUrl:        { type: 'string', description: 'Base URL of the hosting server (e.g. http://127.0.0.1:7799). Used by source kinds that call server-side proxy endpoints.' },
     },
   },
 };

@@ -38,6 +38,22 @@ function parseUrl(urlString) {
   return new URL(urlString, 'http://localhost');
 }
 
+/**
+ * Merges `extraFields` into the `extra` object inside a `.task-executor` JSON file.
+ * No-op if the file doesn't exist or isn't valid JSON.
+ */
+function refreshTaskExecutorExtra(runtimeDir, extraFields) {
+  const taskExecutorFile = path.join(runtimeDir, '.task-executor');
+  if (!fs.existsSync(taskExecutorFile)) return;
+  try {
+    const current = JSON.parse(fs.readFileSync(taskExecutorFile, 'utf-8'));
+    const merged = { ...current, extra: { ...(current.extra || {}), ...extraFields } };
+    fs.writeFileSync(taskExecutorFile, JSON.stringify(merged, null, 2), 'utf-8');
+  } catch {
+    // Silently ignore — board will still function, extra is best-effort
+  }
+}
+
 export function createRuntimeRequestDispatcher(runtime) {
   if (!runtime || typeof runtime !== 'object') {
     throw new Error('runtime is required');
@@ -179,6 +195,7 @@ export function createMultiBoardServerRuntime(options = {}) {
       gandalfChatHandlerPath,
       gandalfInferenceAdapterPath,
       boardLiveCardsCliJs: options.boardLiveCardsCliJs,
+      serverUrl: options.serverUrl || null,
     });
 
     boardServiceCache.set(boardId, service);
@@ -382,6 +399,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     : null;
   const configuredGandalfInferenceAdapterPath = typeof options.gandalfInferenceAdapterPath === 'string' && options.gandalfInferenceAdapterPath.trim()
     ? (path.isAbsolute(options.gandalfInferenceAdapterPath) ? options.gandalfInferenceAdapterPath : path.resolve(process.cwd(), options.gandalfInferenceAdapterPath))
+    : null;
+
+  // Server URL passed down from the hosting server (e.g. demo-server) so executors/handlers
+  // can call back to server-side proxy endpoints (e.g. /api/workiq/ask).
+  const serverUrl = typeof options.serverUrl === 'string' && options.serverUrl.trim()
+    ? options.serverUrl.trim().replace(/\/$/, '')
     : null;
 
   // Board-card ID cache: O(1) lookup, mtime-refreshed each SSE tick.
@@ -849,6 +872,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       boardRuntimeDir:  path.relative(boardSetupRoot, gandalfRuntimeDir),
       runtimeStatusDir: path.relative(boardSetupRoot, gandalfRuntimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpGandalfCardsDir),
+      ...(serverUrl ? { serverUrl } : {}),
     });
     const initArgs = ['init', gandalfRuntimeDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
     if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
@@ -886,6 +910,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
       runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
+      ...(serverUrl ? { serverUrl } : {}),
     });
 
     const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
@@ -923,6 +948,17 @@ export function createExampleBoardServerRuntime(options = {}) {
       clearDirContents(boardDir);
       initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
     }
+
+    // Always refresh the extra in .task-executor so serverUrl and other runtime fields stay current
+    // even when initBoard is skipped (board already initialized from a previous run).
+    refreshTaskExecutorExtra(boardDir, {
+      boardSetupRoot: path.dirname(boardDir),
+      boardId,
+      boardRuntimeDir:  path.relative(path.dirname(boardDir), boardDir),
+      runtimeStatusDir: path.relative(path.dirname(boardDir), runtimeOutDir),
+      cardsDir:         path.relative(path.dirname(boardDir), tmpCardsDir),
+      ...(serverUrl ? { serverUrl } : {}),
+    });
 
     // Board-cards runtime: init if configured but not yet initialized.
     if (resolveGandalfTaskExecutorPath() && !fs.existsSync(gandalfBoardFile)) {
@@ -1200,6 +1236,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       cardsDir:         path.relative(boardSetupRoot, isGandalf ? tmpGandalfCardsDir : tmpCardsDir),
       chatDir:          chatsDir,
       lastChatFile,
+      ...(serverUrl ? { serverUrl } : {}),
     })).toString('base64');
     try {
       const proc = spawn(handlerCmd, [
