@@ -349,7 +349,7 @@ describe('validateLiveCardRuntimeExpressions', () => {
 
   it('rejects provides.src using legacy sources namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'bad-provides-sources',
+      id: 'bad-provides-bsources',
       card_data: {},
       provides: [{ bindTo: 'trades', src: 'sources.rebalance.proposed_trades' }],
     });

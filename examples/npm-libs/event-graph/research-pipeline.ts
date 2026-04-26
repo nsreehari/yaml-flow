@@ -29,16 +29,16 @@ const graph: GraphConfig = {
   },
   tasks: {
     fetch_sources: {
-      provides: ['raw-sources'],
+      provides: ['raw-asources'],
       description: 'Fetch source documents from the web',
     },
     analyse_sentiment: {
-      requires: ['raw-sources'],
+      requires: ['raw-asources'],
       provides: ['sentiment-result'],
       description: 'Run sentiment analysis on sources',
     },
     analyse_entities: {
-      requires: ['raw-sources'],
+      requires: ['raw-asources'],
       provides: ['entity-result'],
       description: 'Extract named entities from sources',
     },

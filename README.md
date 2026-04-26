@@ -263,14 +263,14 @@ settings:
 
 tasks:
   fetch_sources:
-    provides: [raw-sources]
+    provides: [raw-asources]
 
   analyse_sentiment:
-    requires: [raw-sources]
+    requires: [raw-asources]
     provides: [sentiment-result]
 
   analyse_entities:
-    requires: [raw-sources]
+    requires: [raw-asources]
     provides: [entity-result]
 
   merge_analysis:

@@ -13,7 +13,7 @@
  *  - Fan-out / fan-in in the outer graph
  *
  * Outer graph:
- *   discover-sources → extract-batch → transform-batch → [load ∥ validate] → finalize
+ *   discover-bsources → extract-batch → transform-batch → [load ∥ validate] → finalize
  *
  * Inner extract graph (event-graph, per source):
  *   connect → [fetch-metadata ∥ fetch-schema] → snapshot-data
@@ -129,7 +129,7 @@ const outerGraph: GraphConfig = {
   id: 'etl-pipeline',
   settings: { completion: 'all-tasks-complete' },
   tasks: {
-    'discover-sources': {
+    'discover-bsources': {
       provides: ['sources-discovered'],
     },
     'extract-batch': {
@@ -211,7 +211,7 @@ const records = [
 // ============================================================================
 
 const outerHandlers: Record<string, () => Promise<void>> = {
-  'discover-sources': async () => {
+  'discover-bsources': async () => {
     console.log(`  Found ${sources.length} data sources`);
   },
 
