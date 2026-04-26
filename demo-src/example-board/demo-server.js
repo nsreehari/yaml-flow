@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -163,22 +163,34 @@ async function handleWorkiqAsk(req, res) {
     return jsonReply(res, 503, { error: `WorkIQ CLI not found at: ${workiqJs}` });
   }
 
-  // Server has TTY on stdin — workiq can produce output
-  const result = spawnSync(process.execPath, [workiqJs, 'ask', '-q', query], {
-    stdio: ['inherit', 'pipe', 'pipe'],
-    encoding: 'utf-8',
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 60_000,
+  // Server has TTY on stdin — workiq can produce output.
+  // Use async spawn (not spawnSync) to avoid blocking the event loop during the call.
+  await new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    const child = spawn(process.execPath, [workiqJs, 'ask', '-q', query], {
+      stdio: ['inherit', 'pipe', 'pipe'],
+    });
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', (err) => {
+      jsonReply(res, 500, { error: `workiq spawn error: ${err.message}` });
+      resolve();
+    });
+    child.on('close', (code) => {
+      if (code !== 0) {
+        jsonReply(res, 500, { error: `workiq exited ${code}`, stderr });
+      } else {
+        jsonReply(res, 200, { response: stdout });
+      }
+      resolve();
+    });
+    setTimeout(() => {
+      child.kill();
+      jsonReply(res, 504, { error: 'workiq timed out after 60s' });
+      resolve();
+    }, 60_000);
   });
-
-  if (result.error) {
-    return jsonReply(res, 500, { error: `workiq spawn error: ${result.error.message}` });
-  }
-  if (result.status !== 0) {
-    return jsonReply(res, 500, { error: `workiq exited ${result.status}`, stderr: result.stderr });
-  }
-
-  jsonReply(res, 200, { response: result.stdout || '' });
 }
 
 const server = http.createServer((req, res) => {
