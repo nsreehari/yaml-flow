@@ -140,39 +140,6 @@ function curlFetchJson(url, method, headers) {
   return JSON.parse(raw);
 }
 
-function stripCopilotFooter(rawText) {
-  const lines = String(rawText ?? '').split(/\r?\n/);
-
-  // Strip CLI-level tool-call telemetry lines emitted by the copilot binary when
-  // --allow-all activates MCP tools. These are NOT model output — the prompt cannot
-  // suppress them. They look like:
-  //   ● Web Search (MCP: github-mcp-server) · ...
-  //   └ {"type":"output_text",...}
-  const filtered = lines.filter(line => {
-    const t = line.trimStart();
-    return !(
-      /^[●•]\s+/.test(t) ||  // tool invocation lines
-      /^└\s+/.test(t)         // tool result lines
-    );
-  });
-
-  // Remove trailing blank lines.
-  while (filtered.length > 0 && filtered[filtered.length - 1].trim() === '') filtered.pop();
-
-  // Remove the standard trailing Copilot metadata footer, if present.
-  if (
-    filtered.length >= 3 &&
-    /^Changes\b/i.test(filtered[filtered.length - 3]) &&
-    /^Requests\b/i.test(filtered[filtered.length - 2]) &&
-    /^Tokens\b/i.test(filtered[filtered.length - 1])
-  ) {
-    filtered.splice(filtered.length - 3, 3);
-  }
-
-  while (filtered.length > 0 && filtered[filtered.length - 1].trim() === '') filtered.pop();
-  return filtered.join('\n');
-}
-
 function resolveCopilotPrompt(sourceDef) {
   const cfg = sourceDef?.copilot && typeof sourceDef.copilot === 'object' ? sourceDef.copilot : {};
   const template = cfg.prompt_template ?? sourceDef.prompt_template;
@@ -191,87 +158,63 @@ function resolveCopilotPrompt(sourceDef) {
   return interpolatePrompt(template, interpolationContext);
 }
 
-function resolveCopilotExecutable() {
-  const envBin = process.env.COPILOT_BIN;
-  if (envBin && fs.existsSync(envBin)) {
-    return envBin;
+/**
+ * Run a copilot prompt via copilot_wrapper.bat (Windows only).
+ *
+ * The wrapper handles:
+ *   - Session management (--resume UUID for multi-turn continuity)
+ *   - Noise/footer stripping (via copilot_wrapper_helper.ps1)
+ *   - JSON mode extraction with optional result_shape key matching
+ *   - Agentic retry: if the first response isn't valid JSON, the wrapper calls
+ *     copilot again in the same session with a correction prompt, then re-extracts.
+ *
+ * @param {string} prompt         - interpolated prompt string
+ * @param {object} sourceDef      - source definition (may contain copilot.result_shape)
+ * @param {string} wrapperOutFile - path the wrapper writes its JSON output to
+ * @param {string} sessionDir     - persistent dir for session UUID (enables --resume)
+ * @param {string} cwd            - working directory for copilot (boardSetupRoot)
+ * @returns {unknown} parsed JSON result value
+ */
+function runCopilotViaWrapper(prompt, sourceDef, wrapperOutFile, sessionDir, cwd) {
+  const wrapperPath = path.join(__dirname, 'scripts', 'copilot_wrapper.bat');
+
+  const promptFile = wrapperOutFile + '.prompt.txt';
+  fs.writeFileSync(promptFile, prompt, 'utf-8');
+
+  // Optional result_shape_file: top-level keys the response JSON must contain.
+  // Sourced from sourceDef.copilot.result_shape or sourceDef.result_shape.
+  let shapeFile = '';
+  const shape = sourceDef?.copilot?.result_shape ?? sourceDef?.result_shape;
+  if (shape && typeof shape === 'object') {
+    shapeFile = wrapperOutFile + '.shape.json';
+    fs.writeFileSync(shapeFile, JSON.stringify(shape), 'utf-8');
   }
 
-  if (process.platform === 'win32') {
-    try {
-      const out = execFileSync('where.exe', ['copilot'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
-      const candidates = out
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const preferred = candidates.find((p) => /\.(cmd|exe|bat)$/i.test(p));
-      if (preferred) return preferred;
-      if (candidates[0]) return candidates[0];
-    } catch {}
-  } else {
-    try {
-      const out = execFileSync('which', ['copilot'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
-      const first = out.split(/\r?\n/).map((s) => s.trim()).find(Boolean);
-      if (first) return first;
-    } catch {}
-  }
-
-  return 'copilot';
-}
-
-function runCopilotPrompt(prompt, cwd) {
-  const copilotBin = resolveCopilotExecutable();
-  const copilotArgs = ['--allow-all'];
-  const execOpts = {
-    input: String(prompt),
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    maxBuffer: 10 * 1024 * 1024,
-    ...(cwd ? { cwd } : {}),
-  };
+  fs.mkdirSync(sessionDir, { recursive: true });
 
   try {
-    // Prefer stdin prompt delivery to avoid shell/path quoting issues.
-    return execFileSync(copilotBin, copilotArgs, execOpts);
-  } catch (directErr) {
-    // Fallback for Git Bash / Windows wrapper path quoting issues.
-    if (process.platform === 'win32') {
-      const isCmdShim = /\.(bat|cmd)$/i.test(copilotBin);
-
-      if (isCmdShim) {
-        try {
-          return execFileSync(copilotBin, copilotArgs, {
-            ...execOpts,
-            shell: true,
-          });
-        } catch {}
-      }
-
-      try {
-        // Final fallback: resolve through cmd PATH lookup, still piping prompt on stdin.
-        return execFileSync('cmd.exe', ['/d', '/c', 'copilot --allow-all'], execOpts);
-      } catch (cmdErr) {
-        const stderrDirect = directErr && typeof directErr === 'object' && 'stderr' in directErr
-          ? String(directErr.stderr || '')
-          : '';
-        const stderrCmd = cmdErr && typeof cmdErr === 'object' && 'stderr' in cmdErr
-          ? String(cmdErr.stderr || '')
-          : '';
-        const msg = [stderrDirect.trim(), stderrCmd.trim(), String(cmdErr && cmdErr.message || cmdErr)]
-          .filter(Boolean)
-          .join(' | ');
-        throw new Error(msg || 'copilot invocation failed');
-      }
-    }
-
-    const stderrDirect = directErr && typeof directErr === 'object' && 'stderr' in directErr
-      ? String(directErr.stderr || '')
-      : '';
-    const msg = [stderrDirect.trim(), String(directErr && directErr.message || directErr)]
-      .filter(Boolean)
-      .join(' | ');
-    throw new Error(msg || 'copilot invocation failed');
+    execFileSync('cmd.exe', [
+      '/d', '/c',
+      wrapperPath,
+      wrapperOutFile,                    // OUTPUT_FILE
+      sessionDir,                        // SESSION_DIR
+      cwd || process.cwd(),             // WORKING_DIR
+      '@' + promptFile,                 // REQUEST_OR_FILE (@ prefix = file path)
+      'json',                           // RESULT_TYPE — wrapper extracts JSON + retries
+      sourceDef.bindTo || 'executor',   // AGENT_NAME (for log file naming)
+      '',                               // MODEL (empty = wrapper default)
+      shapeFile,                        // RESULT_SHAPE_FILE (empty = accept any JSON)
+    ], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } finally {
+    try { fs.unlinkSync(promptFile); } catch {}
+    if (shapeFile) { try { fs.unlinkSync(shapeFile); } catch {} }
   }
+
+  return JSON.parse(fs.readFileSync(wrapperOutFile, 'utf-8').replace(/^\uFEFF/, ''));
 }
 
 function fail(msg, errFile) {
@@ -438,57 +381,60 @@ function runSourceFetchSubcommand(argv) {
 
     // Use boardSetupRoot (from --extra) as copilot working directory
     const copilotCwd = extra.boardSetupRoot || undefined;
-    let rawOutput = '';
-    try {
-      rawOutput = runCopilotPrompt(prompt, copilotCwd);
-    } catch (err) {
-      const msg = String(err && err.message || err);
-      fail(`copilot invocation failed: ${msg}`, errFile);
-    }
 
-    // Attempt to extract and parse JSON from the copilot response.
-    // Handles preamble text before the JSON by finding the first { or [.
-    // If the result is not a JSON object/array, retries once with a correction
-    // prompt that includes the original turn + bad response, simulating a
-    // multi-turn session with the LLM.
-    function extractJsonFromText(text) {
-      const firstBrace = text.indexOf('{');
-      const firstBracket = text.indexOf('[');
+    // On Windows, delegate entirely to copilot_wrapper.bat which handles:
+    //   - session management (--resume UUID for multi-turn continuity)
+    //   - noise/footer stripping, JSON extraction, agentic retry on bad shape
+    // On non-Windows, fall back to a basic direct invocation (no retry).
+    const wrapperPath = path.join(__dirname, 'scripts', 'copilot_wrapper.bat');
+    const useWrapper = process.platform === 'win32' && fs.existsSync(wrapperPath);
+
+    if (useWrapper) {
+      // Session dir is stable across refreshes so --resume continues the conversation.
+      const sessionDir = path.join(
+        extra.boardSetupRoot || os.tmpdir(),
+        'copilot-sessions',
+        String(sourceDef.bindTo || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'),
+      );
+      const wrapperOutFile = outFile + '.wrapper-out.json';
+      try {
+        resultValue = runCopilotViaWrapper(prompt, sourceDef, wrapperOutFile, sessionDir, copilotCwd);
+      } catch (err) {
+        fail(`copilot invocation failed: ${String(err && err.message || err)}`, errFile);
+      } finally {
+        try { fs.unlinkSync(wrapperOutFile); } catch {}
+      }
+    } else {
+      // Non-Windows fallback: call copilot directly via cmd.exe and do basic JSON extraction.
+      let rawOutput = '';
+      try {
+        rawOutput = execFileSync('cmd.exe', ['/d', '/c', 'copilot --allow-all'], {
+          input: String(prompt),
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          maxBuffer: 10 * 1024 * 1024,
+          ...(copilotCwd ? { cwd: copilotCwd } : {}),
+        });
+      } catch (err) {
+        fail(`copilot invocation failed: ${String(err && err.message || err)}`, errFile);
+      }
+      // Basic JSON extraction: find first { or [ in output
+      const firstBrace = rawOutput.indexOf('{');
+      const firstBracket = rawOutput.indexOf('[');
       const jsonStart = (firstBrace === -1) ? firstBracket
         : (firstBracket === -1) ? firstBrace
         : Math.min(firstBrace, firstBracket);
-      if (jsonStart === -1) return null;
-      try {
-        const parsed = JSON.parse(jsonStart > 0 ? text.slice(jsonStart) : text);
-        return (parsed && typeof parsed === 'object') ? parsed : null;
-      } catch {
-        return null;
+      if (jsonStart !== -1) {
+        try {
+          const parsed = JSON.parse(rawOutput.slice(jsonStart));
+          resultValue = (parsed && typeof parsed === 'object') ? parsed : rawOutput;
+        } catch {
+          resultValue = rawOutput;
+        }
+      } else {
+        resultValue = rawOutput;
       }
     }
-
-    const cleaned = stripCopilotFooter(rawOutput);
-    let parsed = extractJsonFromText(cleaned);
-
-    if (!parsed) {
-      // Retry: send a correction prompt to the same LLM context.
-      // Include the original prompt + the bad response so it has full context.
-      const correctionPrompt =
-        `Previous conversation:\n\nUser: ${prompt}\n\nAssistant: ${cleaned}\n\n` +
-        `Your response above was not valid JSON or contained extra text before/after the JSON object. ` +
-        `Please respond with ONLY the JSON object — no markdown, no explanation, no preamble. ` +
-        `Start your response with { and end with }.`;
-      let retryRaw = '';
-      try {
-        retryRaw = runCopilotPrompt(correctionPrompt, copilotCwd);
-      } catch (retryErr) {
-        // Retry invocation failed — fall through to use original cleaned text
-      }
-      if (retryRaw) {
-        parsed = extractJsonFromText(stripCopilotFooter(retryRaw)) ?? null;
-      }
-    }
-
-    resultValue = parsed ?? cleaned;
   } else if (sourceDef.mock) {
     // MOCK_DB lookup — data hardcoded at the top of this file
     resultValue = MOCK_DB[sourceDef.mock];

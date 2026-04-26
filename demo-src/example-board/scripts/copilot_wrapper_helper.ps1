@@ -15,7 +15,10 @@
 param(
     [Parameter(Mandatory)][string]$OutputFile,
     [Parameter(Mandatory)][string]$ResultType,
-    [string]$ResultShapeFile = ''
+    [string]$ResultShapeFile = '',
+    # When $true (retry pass), write shape-skeleton fallback instead of exiting with code 2.
+    # On first pass, exit 2 signals the caller (.bat) to retry with a correction prompt.
+    [switch]$IsRetry
 )
 
 if (-not (Test-Path $OutputFile)) { exit 0 }
@@ -163,7 +166,7 @@ if (-not $foundJson) {
 if ($foundJson) {
     [IO.File]::WriteAllText($OutputFile, $foundJson, [Text.Encoding]::UTF8)
 } else {
-    # No matching JSON found — record raw in noise file, write shape-skeleton fallback
+    # No matching JSON found — record raw in noise file for upstream visibility
     $NoiseFile = $OutputFile + '.noise'
     $fallbackNoise = "FALLBACK=no_json_match`nSHAPE_KEYS=$($shapeKeys -join ',')`nRAW_LENGTH=$($cleaned.Length)`n---`n$cleaned"
     if (Test-Path $NoiseFile) {
@@ -172,10 +175,16 @@ if ($foundJson) {
     } else {
         [IO.File]::WriteAllText($NoiseFile, $fallbackNoise, [Text.Encoding]::UTF8)
     }
-    $fallback = if ($shapeKeys.Count -gt 0) {
-        $obj = [ordered]@{}
-        foreach ($k in $shapeKeys) { $obj[$k] = $null }
-        $obj | ConvertTo-Json -Depth 2 -Compress
-    } else { '{}' }
-    [IO.File]::WriteAllText($OutputFile, $fallback, [Text.Encoding]::UTF8)
+    if ($IsRetry) {
+        # Second pass — write shape-skeleton so the card gets a structured (empty) result
+        $fallback = if ($shapeKeys.Count -gt 0) {
+            $obj = [ordered]@{}
+            foreach ($k in $shapeKeys) { $obj[$k] = $null }
+            $obj | ConvertTo-Json -Depth 2 -Compress
+        } else { '{}' }
+        [IO.File]::WriteAllText($OutputFile, $fallback, [Text.Encoding]::UTF8)
+    } else {
+        # First pass — exit 2 to signal the caller (.bat) to retry with a correction prompt
+        exit 2
+    }
 }

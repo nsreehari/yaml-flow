@@ -126,6 +126,22 @@ for /f "skip=50 tokens=*" %%f in ('dir /b /o-d "!LOG_DIR!\!LOG_AGENT!_*.log" 2^>
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0copilot_wrapper_helper.ps1" "%OUTPUT_FILE%" "!RESULT_TYPE!" "!RESULT_SHAPE_FILE!"
 
+REM If JSON extraction failed (exit 2) and result_type is json, retry once with a
+REM correction prompt in the same session (--resume SESSION_UUID continues the conversation).
+SET "PS1_EXIT=!ERRORLEVEL!"
+if "!PS1_EXIT!"=="2" (
+    SET "RETRY_PROMPT_FILE=%TEMP%\copilot-retry-!RANDOM!.txt"
+    (
+        echo Your previous response did not contain a valid JSON object.
+        echo Please respond with ONLY the JSON object — no markdown, no explanation, no preamble.
+        echo Start your response with { and end with }.
+    ) > "!RETRY_PROMPT_FILE!"
+    type "!RETRY_PROMPT_FILE!" | call copilot --allow-all --resume !SESSION_UUID! !MODEL_FLAG! > "%OUTPUT_FILE%" 2>&1
+    del "!RETRY_PROMPT_FILE!" 2>nul
+    REM Re-run PS1 with -IsRetry so it writes skeleton on second failure rather than exit 2
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0copilot_wrapper_helper.ps1" "%OUTPUT_FILE%" "!RESULT_TYPE!" "!RESULT_SHAPE_FILE!" "-IsRetry"
+)
+
 if exist "!CACHE_SESSION_PATH!" (
     for %%f in ("!CACHE_SESSION_PATH!\*") do (
         move /y "%%f" "%SESSION_DIR%\" >nul 2>&1
