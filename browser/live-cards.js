@@ -92,7 +92,12 @@ var LiveCard = (function () {
       .lc-simulation-card { background:#fdf6ec; border-color:#e0c97f !important; }
       .lc-simulation-card .card-header { background:#faecc8; border-bottom-color:#e0c97f; }
       .lc-gandalf-card { background:#eef4ff; border-color:#6ea4e0 !important; }
-      .lc-gandalf-card .card-header { background:#d7e8fa; border-bottom-color:#6ea4e0; }
+      .lc-gandalf-card .card-header { background:#d7e8fa; border-bottom-color:#6ea4e0; cursor:pointer; user-select:none; }
+      .lc-gandalf-card .card-header:hover { background:#c8dcf5; }
+      .lc-gandalf-caret { transition:transform .2s; display:inline-flex; align-items:center; margin-left:auto; opacity:.6; flex-shrink:0; cursor:pointer; padding:2px; }
+      .lc-gandalf-caret:hover { opacity:1; }
+      .lc-gandalf-card.lc-collapsed .lc-gandalf-caret { transform:rotate(-90deg); }
+      .lc-gandalf-card.lc-collapsed .card-body { display:none !important; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -2537,8 +2542,30 @@ var LiveCard = (function () {
         badgeHtml = tags.map(t => '<span class="badge bg-secondary ms-1">' + _esc(t) + '</span>').join('');
       }
       header.innerHTML = '<strong class="small">' + _esc(title) + '</strong>' + badgeHtml;
-      
-      // Simulation mode: pin & discard buttons
+
+      // Gandalf cards: collapsible via caret — caret gets its own click listener,
+      // header is left alone for dragging in canvas mode.
+      if (isGandalfCard) {
+        const caret = document.createElement('span');
+        caret.className = 'lc-gandalf-caret';
+        caret.title = 'Collapse / expand';
+        caret.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+        header.appendChild(caret);
+
+        const storageKey = 'lc-gandalf-collapsed:' + (node.id || title);
+        if (sessionStorage.getItem(storageKey) === '1') {
+          wrap.classList.add('lc-collapsed');
+          header.dataset.gandalfCollapsed = '1';
+        }
+
+        caret.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const cardEl = caret.closest('.lc-gandalf-card') || wrap;
+          cardEl.classList.toggle('lc-collapsed');
+          sessionStorage.setItem(storageKey, cardEl.classList.contains('lc-collapsed') ? '1' : '0');
+        });
+        caret.addEventListener('pointerdown', e => e.stopPropagation()); // prevent drag start
+      }
       if (isSimulation) {
         const simBtns = document.createElement('span');
         simBtns.className = 'd-inline-flex align-items-center gap-1 ms-auto';
@@ -2730,6 +2757,9 @@ var LiveCard = (function () {
 
           const { wrap, body } = _buildCardWrapper(node);
           while (wrap.firstChild) el.appendChild(wrap.firstChild);
+          // Re-apply collapsed state: in canvas mode el is the card container, not wrap
+          const movedHeader = el.querySelector('.card-header');
+          if (movedHeader && movedHeader.dataset.gandalfCollapsed === '1') el.classList.add('lc-collapsed');
           canvasInner.appendChild(el);
           nodeMap[node.id] = { node, colEl: el, bodyEl: body };
           engine.render(node, body, { showNotes: false, showChat: false });
