@@ -113,7 +113,7 @@
           <tr><td><code>run-source-fetch --in &lt;file&gt; --out &lt;file&gt; [--err &lt;file&gt;]</code></td><td>Execute one source definition using <code>source.cli</code> (built-in executor). Also the protocol entry point for custom <code>.task-executor</code> scripts.</td><td><code>board-live-cards-cli run-source-fetch --in source.json --out out.json</code></td></tr>
           <tr><td><code>run-inference-internal --in &lt;input.json&gt; --token &lt;token&gt; --rg &lt;dir&gt;</code></td><td><em>Internal.</em> Execute inference via registered <code>.inference-adapter</code> and forward result to <code>inference-done</code>.</td><td>—</td></tr>
           <tr><td><code>inference-done --rg &lt;dir&gt; --token &lt;token&gt; [--result &lt;json&gt;]</code></td><td><em>Internal.</em> Persist <code>llm_task_completion_inference</code> on the card and append a task-progress event.</td><td>—</td></tr>
-          <tr><td><code>probe-source --card &lt;file&gt; [--source-idx &lt;n&gt;] [--source-bind &lt;name&gt;] [--mock-refs &lt;json&gt;] [--rg &lt;dir&gt;] [--out &lt;file&gt;]</code></td><td>Validate that a card source can be fetched. Builds the <code>run-source-fetch</code> payload, invokes the registered executor, and reports <code>PROBE_PASS</code> / <code>PROBE_FAIL</code>. Intended for agents to self-validate source configs before deploying a card.</td><td><code>board-live-cards-cli probe-source --card cards/prices.json --rg ./my-board --mock-refs '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></td></tr>
+          <tr><td><code>probe-source --card &lt;file&gt; [--source-idx &lt;n&gt;] [--source-bind &lt;name&gt;] [--mock-projections &lt;json&gt;] [--rg &lt;dir&gt;] [--out &lt;file&gt;]</code></td><td>Validate that a card source can be fetched. Builds the <code>run-source-fetch</code> payload, invokes the registered executor, and reports <code>PROBE_PASS</code> / <code>PROBE_FAIL</code>. Intended for agents to self-validate source configs before deploying a card.</td><td><code>board-live-cards-cli probe-source --card cards/prices.json --rg ./my-board --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></td></tr>
           <tr><td><code>process-accumulated-events --rg &lt;dir&gt; [--inline-loop]</code></td><td>Drain accumulated board journal events.</td><td><code>board-live-cards-cli process-accumulated-events --rg ./my-board</code></td></tr>
         </tbody>
       </table>
@@ -263,7 +263,7 @@
       <table>
         <thead><tr><th>Argument</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>--in &lt;file&gt;</code></td><td>Path to a JSON file containing one <code>source_defs[]</code> entry, enriched by the runtime with context fields:<br><code>bindTo</code>, <code>outputFile</code>, <code>cwd</code>, <code>boardDir</code>, plus all custom source fields (<code>mock</code>, <code>http</code>, <code>copilot</code>, etc.), and:<br><code>_refs</code> — resolved values from the source&#39;s <code>refs</code> declarations (evaluated from <code>card_data</code>/<code>requires</code> before executor invocation; empty <code>{}</code> if <code>refs</code> was not declared)</td></tr>
+          <tr><td><code>--in &lt;file&gt;</code></td><td>Path to a JSON file containing one <code>source_defs[]</code> entry, enriched by the runtime with context fields:<br><code>bindTo</code>, <code>outputFile</code>, <code>cwd</code>, <code>boardDir</code>, plus all custom source fields (<code>mock</code>, <code>http</code>, <code>copilot</code>, etc.), and:<br><code>_projections</code> — resolved values from the source&#39;s <code>projections</code> declarations (evaluated from <code>card_data</code>/<code>requires</code> before executor invocation; empty <code>{}</code> if <code>projections</code> was not declared)</td></tr>
           <tr><td><code>--out &lt;file&gt;</code></td><td>Path where executor must write the fetch result as JSON. Presence of this file after exit signals success; stored as <code>fetched_sources.&lt;bindTo&gt;</code>.</td></tr>
           <tr><td><code>--err &lt;file&gt;</code></td><td>Optional path where executor writes a plain-text error message on failure.</td></tr>
         </tbody>
@@ -286,14 +286,14 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
   --card cards/card-market-prices.json \
   --source-idx 0 \
   --rg ./my-board \
-  --mock-refs '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></pre>
+  --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></pre>
       <table>
         <thead><tr><th>Flag</th><th>Required</th><th>Description</th></tr></thead>
         <tbody>
           <tr><td><code>--card &lt;card.json&gt;</code></td><td>yes</td><td>Path to the card file to probe.</td></tr>
           <tr><td><code>--source-idx &lt;n&gt;</code></td><td>no (default 0)</td><td>0-based index into <code>source_defs[]</code>.</td></tr>
           <tr><td><code>--source-bind &lt;name&gt;</code></td><td>no</td><td>Select source by <code>bindTo</code> name instead of index.</td></tr>
-          <tr><td><code>--mock-refs &lt;json&gt;</code></td><td>no</td><td>JSON string (or <code>@file.json</code>) supplying <code>_refs</code> values for the source. The agent crafts this to match the source&#39;s <code>refs</code> declarations. Omit to pass empty <code>{}</code>.</td></tr>
+          <tr><td><code>--mock-projections &lt;json&gt;</code></td><td>no</td><td>JSON string (or <code>@file.json</code>) supplying <code>_projections</code> values for the source. The agent crafts this to match the source&#39;s <code>projections</code> declarations. Omit to pass empty <code>{}</code>.</td></tr>
           <tr><td><code>--rg &lt;dir&gt;</code></td><td>no</td><td>Board runtime directory used to locate <code>.task-executor</code>. Defaults to the card file's directory.</td></tr>
           <tr><td><code>--out &lt;file&gt;</code></td><td>no</td><td>Write the raw fetch result JSON to this path.</td></tr>
         </tbody>

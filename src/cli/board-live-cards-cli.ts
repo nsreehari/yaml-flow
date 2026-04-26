@@ -2510,19 +2510,19 @@ async function cmdProbeSource(args: string[]): Promise<void> {
   const cardIdx = args.indexOf('--card');
   const sourceIdxArg = args.indexOf('--source-idx');
   const sourceBindArg = args.indexOf('--source-bind');
-  const mockRefsIdx = args.indexOf('--mock-refs');
+  const mockProjectionsIdx = args.indexOf('--mock-projections');
   const rgIdx = args.indexOf('--rg');
   const outIdx = args.indexOf('--out');
 
   const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
   const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
   const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
-  const mockRefsRaw = mockRefsIdx !== -1 ? args[mockRefsIdx + 1] : undefined;
+  const mockProjectionsRaw = mockProjectionsIdx !== -1 ? args[mockProjectionsIdx + 1] : undefined;
   const boardDirArg = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
   const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
 
   if (!cardFilePath) {
-    console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-refs <json>] [--rg <boardDir>] [--out <result.json>]');
+    console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-projections <json>] [--rg <boardDir>] [--out <result.json>]');
     process.exit(1);
   }
 
@@ -2561,16 +2561,16 @@ async function cmdProbeSource(args: string[]): Promise<void> {
   const cardDir = path.resolve(path.dirname(cardFilePath));
   const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
 
-  // Parse --mock-refs (JSON string or @file.json) — pre-resolved _refs values for testing
-  let mockRefs: Record<string, unknown> = {};
-  if (mockRefsRaw) {
-    const raw = mockRefsRaw.startsWith('@')
-      ? fs.readFileSync(path.resolve(mockRefsRaw.slice(1)), 'utf-8')
-      : mockRefsRaw;
+  // Parse --mock-projections (JSON string or @file.json) — pre-resolved _projections values for testing
+  let mockProjections: Record<string, unknown> = {};
+  if (mockProjectionsRaw) {
+    const raw = mockProjectionsRaw.startsWith('@')
+      ? fs.readFileSync(path.resolve(mockProjectionsRaw.slice(1)), 'utf-8')
+      : mockProjectionsRaw;
     try {
-      mockRefs = JSON.parse(raw);
+      mockProjections = JSON.parse(raw);
     } catch (e) {
-      console.error(`[probe-source] --mock-refs is not valid JSON: ${(e as Error).message}`);
+      console.error(`[probe-source] --mock-projections is not valid JSON: ${(e as Error).message}`);
       process.exit(1);
     }
   }
@@ -2587,7 +2587,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     ...sourceDef,
     cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
     boardDir: typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : boardDir,
-    _refs: mockRefs,
+    _projections: mockProjections,
   };
 
   const sourceKind: string = sourceDef.chartApi ? 'chartApi'
@@ -2598,7 +2598,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
 
   console.log(`[probe-source] card:        ${card.id}`);
   console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
-  console.log(`[probe-source] _refs:       ${JSON.stringify(mockRefs)}`);
+  console.log(`[probe-source] _projections:       ${JSON.stringify(mockProjections)}`);
   console.log(`[probe-source] executor:    ${taskExecutor ?? 'built-in (source.cli only)'}`);
   console.log(`[probe-source] running fetch...`);
 
@@ -2682,7 +2682,7 @@ async function cmdProbeSource(args: string[]): Promise<void> {
     sourceIdx,
     bindTo: sourceDef.bindTo as string,
     sourceKind,
-    mockRefsKeys: Object.keys(mockRefs),
+    mockProjectionsKeys: Object.keys(mockProjections),
     resultSizeBytes: resultRaw !== undefined ? resultRaw.length : 0,
     error: errorMsg ?? undefined,
   };
@@ -2816,15 +2816,15 @@ INTERNAL COMMANDS
     print its capabilities JSON to stdout.  Requires a .task-executor file in <dir>.
 
   probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
-               [--mock-refs <json>] [--rg <boardDir>] [--out <result.json>]
+               [--mock-projections <json>] [--rg <boardDir>] [--out <result.json>]
     Validate that a card source can be fetched successfully.
     Reads the card file, extracts the chosen source (default: index 0), builds the
-    run-source-fetch --in payload with the supplied _refs data, invokes the
+    run-source-fetch --in payload with the supplied _projections data, invokes the
     registered task-executor (or built-in executor for source.cli), and reports pass/fail.
-    --mock-refs:     JSON string (or @file.json) providing pre-resolved _refs values
+    --mock-projections:     JSON string (or @file.json) providing pre-resolved _projections values
                      the source needs.  Craft the minimal payload that exercises the
                      source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
-                     If omitted, _refs is passed as empty ({}).
+                     If omitted, _projections is passed as empty ({}).
     --source-idx:    0-based index into card.source_defs[]. Default: 0.
     --source-bind:   Select source by its bindTo name instead of index.
     --rg:            Board directory used to find .task-executor. Defaults to the
@@ -2879,7 +2879,7 @@ EXAMPLES
   board-live-cards-cli upsert-card --rg ./my-board --card cards/prices.json
   board-live-cards-cli status --rg ./my-board
   board-live-cards-cli retrigger --rg ./my-board --task price-fetch
-  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-refs '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
+  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
 `.trimStart());
 }
 

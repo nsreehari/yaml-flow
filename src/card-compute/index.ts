@@ -40,8 +40,8 @@ export interface ComputeSource {
   script?: string;
   optionalForCompletionGating?: boolean;
   /** Named data projections: each key maps to a JSONata expression rooted at card_data or requires.
-   *  The engine evaluates these before spawning the executor and passes results as _refs. */
-  refs?: Record<string, string>;
+   *  The engine evaluates these before spawning the executor and passes results as _projections. */
+  projections?: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -313,16 +313,16 @@ function validateNode(node: unknown): ValidationResult {
  * 
  * @param source_defs - Array of source definitions
  * @param context - Execution context containing requires, sourcesData, computed_values
- * @returns Promise resolving to a new array of source_defs with _refs attached.
- *          Each _refs entry is the evaluated result of the corresponding refs expression.
+ * @returns Promise resolving to a new array of source_defs with _projections attached.
+ *          Each _projections entry is the evaluated result of the corresponding projections expression.
  */
 async function enrichSources(
   source_defs: any[] | undefined,
   context: {
     card_data?: Record<string, any>;
     requires?: Record<string, any>;
-    sourcesData?: Record<string, any>;      // unused post-refs, kept for call-site compat
-    computed_values?: Record<string, any>;  // unused post-refs, kept for call-site compat
+    sourcesData?: Record<string, any>;      // unused post-projections, kept for call-site compat
+    computed_values?: Record<string, any>;  // unused post-projections, kept for call-site compat
   }
 ): Promise<any[]> {
   if (!source_defs || source_defs.length === 0) return [];
@@ -334,19 +334,19 @@ async function enrichSources(
 
   return Promise.all(
     source_defs.map(async (src: any) => {
-      const _refs: Record<string, unknown> = {};
-      if (src.refs && typeof src.refs === 'object' && !Array.isArray(src.refs)) {
-        for (const [key, expr] of Object.entries(src.refs as Record<string, string>)) {
+      const _projections: Record<string, unknown> = {};
+      if (src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
+        for (const [key, expr] of Object.entries(src.projections as Record<string, string>)) {
           if (typeof expr === 'string' && expr.trim().length > 0) {
             try {
-              _refs[key] = await jsonata(expr).evaluate(evalCtx);
+              _projections[key] = await jsonata(expr).evaluate(evalCtx);
             } catch {
-              _refs[key] = undefined;
+              _projections[key] = undefined;
             }
           }
         }
       }
-      return { ...src, _refs };
+      return { ...src, _projections };
     })
   );
 }

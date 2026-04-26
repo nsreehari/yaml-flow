@@ -11,7 +11,7 @@
     {
       "bindTo": "rebalance",
       "outputFile": "card-rebalance-proposal.json",
-      "refs": {
+      "projections": {
         "holdings": "requires.holdings",
         "positions": "requires.positions",
         "portfolio_mix": "requires.portfolio_mix",

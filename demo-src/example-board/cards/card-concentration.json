@@ -10,7 +10,7 @@
     {
       "bindTo": "analysis",
       "outputFile": "card-concentration-analysis.json",
-      "refs": {
+      "projections": {
         "positions": "requires.positions"
       },
       "copilot": {

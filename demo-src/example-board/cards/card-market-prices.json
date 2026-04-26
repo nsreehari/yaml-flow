@@ -10,7 +10,7 @@
     {
       "bindTo": "quotes",
       "outputFile": "market-prices-quotes.json",
-      "refs": {
+      "projections": {
         "holdings": "requires.holdings"
       },
       "chartApi": {

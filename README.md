@@ -735,7 +735,7 @@ Templates first (expands references), then variables (fills in `${...}` placehol
 ```typescript
 import { resolveConfigTemplates, resolveVariables } from 'yaml-flow/config';
 
-const raw = loadYaml('pipeline.yaml');                  // has configTemplates + ${VAR} refs
+const raw = loadYaml('pipeline.yaml');                  // has configTemplates + ${VAR} projections
 const resolved = resolveVariables(
   resolveConfigTemplates(raw),
   { ENTITY_ID: 'url-42', TOOLS_DIR: '/opt/tools' },

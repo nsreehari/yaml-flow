@@ -207,19 +207,19 @@ var BoardLiveGraph = (function (exports) {
     };
     return Promise.all(
       source_defs.map(async (src) => {
-        const _refs = {};
-        if (src.refs && typeof src.refs === "object" && !Array.isArray(src.refs)) {
-          for (const [key, expr] of Object.entries(src.refs)) {
+        const _projections = {};
+        if (src.projections && typeof src.projections === "object" && !Array.isArray(src.projections)) {
+          for (const [key, expr] of Object.entries(src.projections)) {
             if (typeof expr === "string" && expr.trim().length > 0) {
               try {
-                _refs[key] = await jsonata_shim_default(expr).evaluate(evalCtx);
+                _projections[key] = await jsonata_shim_default(expr).evaluate(evalCtx);
               } catch {
-                _refs[key] = void 0;
+                _projections[key] = void 0;
               }
             }
           }
         }
-        return { ...src, _refs };
+        return { ...src, _projections };
       })
     );
   }

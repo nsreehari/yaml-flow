@@ -47,7 +47,7 @@ foreach ($line in ($cleaned -split "`n")) {
         $t -match '^X ' -or                          # X failed tool ops
         $t -match '^\$ ' -or                         # $ shell commands
         $t -match '^[\u2514\u251c]' -or              # └ ├ tree lines
-        $t -match 'session-state.*\.json' -or        # session-state file refs
+        $t -match 'session-state.*\.json' -or        # session-state file projections
         $t -match 'agent.decision has been simulated' -or
         $t -match 'has been simulated and saved' -or
         $t -match '^\d+ (files?|lines?|matches?) found$' -or  # "3 files found"

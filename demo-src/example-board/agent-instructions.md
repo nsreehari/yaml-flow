@@ -344,25 +344,25 @@ Common customField conventions (demo executor supports `mock` and `copilot`):
 | Field | Meaning |
 |---|---|
 | `"mock": "key"` | Reads from `mock.db` by key — local dev only |
-| `"copilot": { "prompt_template": "...", "args": {} }` | LLM call; `{{key}}` interpolated from `_refs` (named data projections declared in `refs`), then explicit `args` |
+| `"copilot": { "prompt_template": "...", "args": {} }` | LLM call; `{{key}}` interpolated from `_projections` (named data projections declared in `projections`), then explicit `args` |
 | `"prompt_template": "..."` | Shorthand top-level LLM call (equivalent to `copilot.prompt_template`) |
 | `"http": { "url": "...", "method": "GET" }` | HTTP/REST — implement in your executor |
 | `"graphapi": { "query": "..." }` | Microsoft Graph API — implement in your executor |
 | `"script": { "path": "...", "args": {} }` | Local script — implement in your executor |
 | `"teams"`, `"mail"`, `"incidentdb"` | Any domain integration — define in your executor |
 
-Sources can access upstream data via the `refs` property — named JSONata projections from `card_data` or `requires` that the engine evaluates before invoking the executor. The executor receives `_refs` containing the resolved values. See [source_defs refs](#source_defs-refs) and [Task Executor Protocol](#task-executor-protocol) for details.
+Sources can access upstream data via the `projections` property — named JSONata projections from `card_data` or `requires` that the engine evaluates before invoking the executor. The executor receives `_projections` containing the resolved values. See [source_defs projections](#source_defs-projections) and [Task Executor Protocol](#task-executor-protocol) for details.
 
-### source_defs refs
+### source_defs projections
 
-The optional `refs` map lets a source definition declare which upstream data it needs. Each key maps to a JSONata expression rooted at `card_data` or `requires`. The engine evaluates these before invoking the executor and attaches the results as `_refs` on the source payload.
+The optional `projections` map lets a source definition declare which upstream data it needs. Each key maps to a JSONata expression rooted at `card_data` or `requires`. The engine evaluates these before invoking the executor and attaches the results as `_projections` on the source payload.
 
 ```json
 "source_defs": [
   {
     "bindTo": "quotes",
     "outputFile": "quotes.json",
-    "refs": {
+    "projections": {
       "holdings": "requires.holdings",
       "topHoldings": "requires.holdings[weight > 0.05]",
       "threshold": "card_data.threshold"
@@ -375,11 +375,11 @@ The optional `refs` map lets a source definition declare which upstream data it 
 ```
 
 **Rules:**
-- Only `card_data` and `requires` are valid namespaces in `refs` expressions
-- `fetched_sources`, `computed_values`, and `source_defs` are **forbidden** in refs
+- Only `card_data` and `requires` are valid namespaces in `projections` expressions
+- `fetched_sources`, `computed_values`, and `source_defs` are **forbidden** in projections
 - Full JSONata syntax is supported (same as `compute[].expr`)
-- Sources without `refs` receive `_refs: {}` — executor must handle empty refs gracefully
-- `tickersFrom: "refKey.fieldName"` reads from `_refs[refKey]` — the `refs` key must exist
+- Sources without `projections` receive `_projections: {}` — executor must handle empty projections gracefully
+- `tickersFrom: "refKey.fieldName"` reads from `_projections[refKey]` — the `projections` key must exist
 
 ### Optional source field
 - `optionalForCompletionGating: true` — marks this source as optional for default task-completion gating. If set, the card can complete even if this source hasn't been fetched yet.
@@ -529,12 +529,12 @@ node <executor.js> run-source-fetch --in <source.json> --out <result.json> [--er
   "outputFile": "my-card-raw.json",
   "cwd": "/absolute/path/to/board",
   "boardDir": "/absolute/path/to/board",
-  "_refs": { "holdings": [ ... ], "threshold": 0.05 },
+  "_projections": { "holdings": [ ... ], "threshold": 0.05 },
   /* ...any other customFields from the card source definition */
 }
 ```
 
-- `_refs` — resolved values for all entries declared in the source's `refs` map (evaluated from `card_data`/`requires` before executor invocation). Empty object `{}` if `refs` was not declared.
+- `_projections` — resolved values for all entries declared in the source's `projections` map (evaluated from `card_data`/`requires` before executor invocation). Empty object `{}` if `projections` was not declared.
 
 - **`--out`** — path to write the fetched value as raw JSON (any shape; stored under `fetched_sources.<bindTo>`)
 - **`--err`** — optional path to write a plain-text error message on failure
@@ -544,7 +544,7 @@ node <executor.js> run-source-fetch --in <source.json> --out <result.json> [--er
 | `customField` | Meaning |
 |---|---|
 | `"mock": "key"` | Lookup `key` in `mock.db` — local dev |
-| `"copilot": { "prompt_template": "..." }` | LLM call; supports `{{key}}` interpolation against `_refs` |
+| `"copilot": { "prompt_template": "..." }` | LLM call; supports `{{key}}` interpolation against `_projections` |
 | `"http": { "url": "...", "method": "GET" }` | HTTP/REST fetch |
 | `"graphapi": { "query": "..." }` | Microsoft Graph API query |
 | `"script": { "path": "...", "args": {} }` | Run a local script |
@@ -565,7 +565,7 @@ node board-live-cards-cli.js probe-source \
   --card cards/card-market-prices.json \
   --source-idx 0 \
   --rg <boardRuntimeDir> \
-  --mock-refs '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'
+  --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'
 ```
 
 | Flag | Required | Description |
@@ -573,13 +573,13 @@ node board-live-cards-cli.js probe-source \
 | `--card <card.json>` | yes | Path to the card file to probe |
 | `--source-idx <n>` | no (default 0) | 0-based index into `source_defs[]` |
 | `--source-bind <name>` | no | Select source by `bindTo` name instead of index |
-| `--mock-refs <json>` | no | JSON string (or `@file.json`) providing the `_refs` values the source needs. If omitted, `_refs` is `{}`. |
+| `--mock-projections <json>` | no | JSON string (or `@file.json`) providing the `_projections` values the source needs. If omitted, `_projections` is `{}`. |
 | `--rg <boardDir>` | no | Board runtime directory used to locate `.task-executor`. Defaults to the card file's directory. |
 | `--out <result.json>` | no | Write the raw fetch result to this path |
 
 **Output:** the command prints a human-readable report ending with a machine-readable `[probe-source:result]` JSON line. Exit `0` = `PROBE_PASS`, exit `1` = `PROBE_FAIL`.
 
-**`--mock-refs` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card declares `"refs": { "holdings": "requires.holdings" }` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
+**`--mock-projections` is the agent's responsibility.** Craft the minimal payload that exercises the source — for example, if the card declares `"projections": { "holdings": "requires.holdings" }` and the source uses `tickersFrom: "holdings.ticker"`, supply `{"holdings":[{"ticker":"AAPL","quantity":1}]}`.
 
 **Workflow for agents authoring a new card:**
 1. **Discover available source kinds** — run `describe-task-executor-capabilities` to see exactly which source kinds the registered executor supports, their required `customFields`, and expected output shapes. Only use source kinds present in this output.
@@ -592,7 +592,7 @@ node board-live-cards-cli.js probe-source \
    node board-live-cards-cli.js validate-card --card cards/my-card.json
    ```
    Fix any reported errors and re-run until validation passes.
-4. **Probe each source** — run `probe-source` with representative `--mock-refs` data to confirm the executor can successfully fetch each source.
+4. **Probe each source** — run `probe-source` with representative `--mock-projections` data to confirm the executor can successfully fetch each source.
 5. If `PROBE_PASS` → proceed with `upsert-card`.
 6. If `PROBE_FAIL` → inspect the error, fix the source definition or executor, retry from step 3.
 

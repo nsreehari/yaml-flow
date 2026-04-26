@@ -82,14 +82,14 @@ describe('validateLiveCardSchema', () => {
       expect(r.ok).toBe(true);
     });
 
-    it('source_def with refs map', () => {
+    it('source_def with projections map', () => {
       const r = validateLiveCardSchema({
-        id: 'src-refs',
+        id: 'src-projections',
         card_data: {},
         source_defs: [{
           bindTo: 'quotes',
           outputFile: 'quotes.json',
-          refs: {
+          projections: {
             holdings: 'requires.portfolio.holdings',
             threshold: 'card_data.threshold',
           },
@@ -322,7 +322,7 @@ describe('validateLiveCardRuntimeExpressions', () => {
 
   it('accepts view references to fetched_sources/requires/card_data/computed_values', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'ok-view-refs',
+      id: 'ok-view-projections',
       card_data: {},
       view: {
         elements: [
@@ -337,7 +337,7 @@ describe('validateLiveCardRuntimeExpressions', () => {
 
   it('rejects view references using legacy source_defs namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'bad-view-refs',
+      id: 'bad-view-projections',
       card_data: {},
       view: {
         elements: [{ kind: 'table', data: { bind: 'source_defs.raw' } }],
@@ -384,14 +384,14 @@ describe('validateLiveCardRuntimeExpressions', () => {
   });
 });
 
-  it('accepts valid refs expressions (card_data and requires)', () => {
+  it('accepts valid projections expressions (card_data and requires)', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'ok-refs',
+      id: 'ok-projections',
       card_data: {},
       source_defs: [{
         bindTo: 'quotes',
         outputFile: 'quotes.json',
-        refs: {
+        projections: {
           holdings: 'requires.portfolio.holdings',
           topHoldings: 'requires.portfolio.holdings[weight > 0.05]',
           threshold: 'card_data.threshold',
@@ -402,60 +402,60 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it('rejects refs expression using fetched_sources namespace', () => {
+  it('rejects projections expression using fetched_sources namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'bad-refs-fetched',
+      id: 'bad-projections-fetched',
       card_data: {},
       source_defs: [{
         bindTo: 'quotes',
         outputFile: 'quotes.json',
-        refs: { data: 'fetched_sources.previous.data' },
+        projections: { data: 'fetched_sources.previous.data' },
       }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/source_defs/0/refs/data') && e.includes('disallowed namespace "fetched_sources"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/source_defs/0/projections/data') && e.includes('disallowed namespace "fetched_sources"'))).toBe(true);
   });
 
-  it('rejects refs expression using computed_values namespace', () => {
+  it('rejects projections expression using computed_values namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'bad-refs-cv',
+      id: 'bad-projections-cv',
       card_data: {},
       source_defs: [{
         bindTo: 'quotes',
         outputFile: 'quotes.json',
-        refs: { total: 'computed_values.total' },
+        projections: { total: 'computed_values.total' },
       }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/source_defs/0/refs/total') && e.includes('disallowed namespace "computed_values"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/source_defs/0/projections/total') && e.includes('disallowed namespace "computed_values"'))).toBe(true);
   });
 
-  it('rejects refs expression using source_defs namespace', () => {
+  it('rejects projections expression using source_defs namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'bad-refs-sd',
+      id: 'bad-projections-sd',
       card_data: {},
       source_defs: [{
         bindTo: 'quotes',
         outputFile: 'quotes.json',
-        refs: { x: 'source_defs.other.value' },
+        projections: { x: 'source_defs.other.value' },
       }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/source_defs/0/refs/x') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/source_defs/0/projections/x') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
-  it('rejects refs expression with invalid JSONata syntax', () => {
+  it('rejects projections expression with invalid JSONata syntax', () => {
     const r = validateLiveCardRuntimeExpressions({
-      id: 'bad-refs-syntax',
+      id: 'bad-projections-syntax',
       card_data: {},
       source_defs: [{
         bindTo: 'quotes',
         outputFile: 'quotes.json',
-        refs: { data: 'requires.holdings[[[' },
+        projections: { data: 'requires.holdings[[[' },
       }],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors.some(e => e.includes('/source_defs/0/refs/data'))).toBe(true);
+    expect(r.errors.some(e => e.includes('/source_defs/0/projections/data'))).toBe(true);
   });
 
 describe('validateLiveCardDefinition', () => {
