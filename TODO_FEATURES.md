@@ -11,9 +11,9 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
 
 ## Backlog
 
-- [x] 1. add-cards CLI command with glob support
+- [x] 1. upsert-card CLI command with glob support
   - Status: DONE
-  - Goal: board-live-cards-cli add-cards --rg <dir> --card-glob "..."
+  - Goal: board-live-cards-cli upsert-card --rg <dir> --card-glob "..."
   - Notes: support windows and unix glob styles, deterministic order, duplicate-card handling
 
 - [x] 2. enforce single-source parity for live-cards schema (browser vs server)
@@ -66,7 +66,7 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
 - [x] Canonical npm CLI runner path established
 - [x] Portfolio tracker end-to-end automated test suite added
 - [x] CLI-focused test suite stabilized for no-popup test mode
-- [x] add-cards glob support added to board-live-cards-cli
+- [x] upsert-card glob support added to board-live-cards-cli
 - [x] schema parity guard test added for browser vs server live-cards schema
 - [x] board-live-cards status object schema (v1) + `status --json`
 - [x] step-machine scenario harness for reusable synthetic portfolio runs
