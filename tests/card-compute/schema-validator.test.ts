@@ -331,6 +331,41 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.ok).toBe(false);
     expect(r.errors.some(e => e.includes('/view/elements/0/data/bind') && e.includes('disallowed namespace "sources"'))).toBe(true);
   });
+
+  it('accepts provides.src with all four valid namespaces', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'ok-provides',
+      card_data: {},
+      provides: [
+        { bindTo: 'a', src: 'fetched_sources.raw' },
+        { bindTo: 'b', src: 'computed_values.total' },
+        { bindTo: 'c', src: 'card_data.status' },
+        { bindTo: 'd', src: 'requires.upstream' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('rejects provides.src using legacy sources namespace', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-provides-sources',
+      card_data: {},
+      provides: [{ bindTo: 'trades', src: 'sources.rebalance.proposed_trades' }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/provides/0/src') && e.includes('disallowed namespace "sources"'))).toBe(true);
+  });
+
+  it('rejects provides.src with unrecognised namespace', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-provides-unknown',
+      card_data: {},
+      provides: [{ bindTo: 'x', src: 'foobar.value' }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/provides/0/src') && e.includes('must start with a valid namespace'))).toBe(true);
+  });
 });
 
 describe('validateLiveCardDefinition', () => {
