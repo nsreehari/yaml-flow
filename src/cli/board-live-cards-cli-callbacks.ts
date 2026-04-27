@@ -1,0 +1,214 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { GraphEvent } from '../event-graph/types.js';
+
+interface CallbackTokenPayload {
+  taskName: string;
+}
+
+interface SourceTokenPayloadLike {
+  cbk: string;
+  rg: string;
+  cid: string;
+  b: string;
+  d: string;
+  cs?: string;
+}
+
+interface CallbackCommandDeps {
+  decodeCallbackToken: (token: string) => CallbackTokenPayload | null;
+  decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
+  writeRuntimeDataObjects: (boardDir: string, data: Record<string, unknown>) => void;
+  appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
+  processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
+  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+}
+
+export interface CallbackCommandHandlers {
+  cmdTaskCompleted: (args: string[]) => void;
+  cmdTaskFailed: (args: string[]) => void;
+  cmdTaskProgress: (args: string[]) => void;
+  cmdSourceDataFetched: (args: string[]) => void;
+  cmdSourceDataFetchFailure: (args: string[]) => void;
+}
+
+export function createCallbackCommandHandlers(deps: CallbackCommandDeps): CallbackCommandHandlers {
+  function cmdTaskCompleted(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const tokenIdx = args.indexOf('--token');
+    const dataIdx = args.indexOf('--data');
+    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    if (!dir || !token) {
+      console.error('Usage: board-live-cards task-completed --rg <dir> --token <token> [--data <json>]');
+      process.exit(1);
+    }
+
+    const decoded = deps.decodeCallbackToken(token);
+    if (!decoded) {
+      console.error('Invalid callback token');
+      process.exit(1);
+    }
+
+    const data: Record<string, unknown> = dataIdx !== -1
+      ? JSON.parse(args[dataIdx + 1])
+      : {};
+
+    deps.writeRuntimeDataObjects(dir, data);
+
+    deps.appendEventToJournal(dir, {
+      type: 'task-completed',
+      taskName: decoded.taskName,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsForced(dir);
+    console.log('Task completed.');
+  }
+
+  function cmdTaskFailed(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const tokenIdx = args.indexOf('--token');
+    const errorIdx = args.indexOf('--error');
+    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const errorMsg = errorIdx !== -1 ? args[errorIdx + 1] : 'unknown error';
+    if (!dir || !token) {
+      console.error('Usage: board-live-cards task-failed --rg <dir> --token <token> [--error <message>]');
+      process.exit(1);
+    }
+
+    const decoded = deps.decodeCallbackToken(token);
+    if (!decoded) {
+      console.error('Invalid callback token');
+      process.exit(1);
+    }
+
+    deps.appendEventToJournal(dir, {
+      type: 'task-failed',
+      taskName: decoded.taskName,
+      error: errorMsg,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsForced(dir);
+    console.log('Task failed.');
+  }
+
+  function cmdSourceDataFetched(args: string[]): void {
+    const tmpIdx = args.indexOf('--tmp');
+    const tokenIdx = args.indexOf('--token');
+    const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    if (!tmpFile || !token) {
+      console.error('Usage: board-live-cards source-data-fetched --tmp <tmp-file> --token <sourceToken>');
+      process.exit(1);
+    }
+
+    const payload = deps.decodeSourceToken(token);
+    if (!payload) {
+      console.error('Invalid source token');
+      process.exit(1);
+    }
+
+    const { cbk, rg, cid, b, d, cs } = payload;
+    const destPath = path.join(rg, cid, d);
+
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.renameSync(tmpFile, destPath);
+    console.log(`[source-data-fetched] ${cid}.${b} -> ${cid}/${d}`);
+
+    const fetchedAt = new Date().toISOString();
+    const cbkDecoded = deps.decodeCallbackToken(cbk);
+    if (!cbkDecoded) {
+      console.error('Invalid callback token embedded in source token');
+      process.exit(1);
+    }
+
+    deps.appendEventToJournal(rg, {
+      type: 'task-progress',
+      taskName: cbkDecoded.taskName,
+      update: { bindTo: b, outputFile: d, fetchedAt, sourceChecksum: cs },
+      timestamp: fetchedAt,
+    });
+
+    void deps.processAccumulatedEventsInfinitePass(rg);
+  }
+
+  function cmdSourceDataFetchFailure(args: string[]): void {
+    const tokenIdx = args.indexOf('--token');
+    const reasonIdx = args.indexOf('--reason');
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const reason = reasonIdx !== -1 ? args[reasonIdx + 1] : 'unknown';
+    if (!token) {
+      console.error('Usage: board-live-cards source-data-fetch-failure --token <sourceToken> [--reason <msg>]');
+      process.exit(1);
+    }
+
+    const payload = deps.decodeSourceToken(token);
+    if (!payload) {
+      console.error('Invalid source token');
+      process.exit(1);
+    }
+
+    const { cbk, rg, cid, b, d, cs } = payload;
+    console.log(`[source-data-fetch-failure] ${cid}.${b}: ${reason}`);
+
+    const cbkDecoded = deps.decodeCallbackToken(cbk);
+    if (!cbkDecoded) {
+      console.error('Invalid callback token embedded in source token');
+      process.exit(1);
+    }
+
+    const timestamp = new Date().toISOString();
+    deps.appendEventToJournal(rg, {
+      type: 'task-progress',
+      taskName: cbkDecoded.taskName,
+      update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs },
+      timestamp,
+    });
+
+    void deps.processAccumulatedEventsInfinitePass(rg);
+  }
+
+  function cmdTaskProgress(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const tokenIdx = args.indexOf('--token');
+    const updateIdx = args.indexOf('--update');
+
+    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const updateJson = updateIdx !== -1 ? args[updateIdx + 1] : '{}';
+
+    if (!dir || !token) {
+      console.error('Usage: board-live-cards task-progress --rg <dir> --token <token> [--update <json>]');
+      process.exit(1);
+    }
+
+    const decoded = deps.decodeCallbackToken(token);
+    if (!decoded) {
+      console.error('Invalid callback token');
+      process.exit(1);
+    }
+
+    const update = updateJson ? JSON.parse(updateJson) : {};
+
+    deps.appendEventToJournal(dir, {
+      type: 'task-progress',
+      taskName: decoded.taskName,
+      update,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsInfinitePass(dir);
+  }
+
+  return {
+    cmdTaskCompleted,
+    cmdTaskFailed,
+    cmdTaskProgress,
+    cmdSourceDataFetched,
+    cmdSourceDataFetchFailure,
+  };
+}
