@@ -25,6 +25,7 @@ import { validateLiveCardDefinition } from '../card-compute/schema-validator.js'
 import { createBoardCommandHandlers } from './board-live-cards-cli-board-commands.js';
 import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
 import { createNonCoreCommandHandlers } from './board-live-cards-cli-noncore.js';
+import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
 
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
@@ -1822,156 +1823,6 @@ function cmdInferenceDone(args: string[]): void {
  * Reads source definition from --in, executes its cli field,
  * writes result to --out file. Presence of --out indicates success.
  */
-function cmdUpsertCard(args: string[]): void {
-  const rgIdx = args.indexOf('--rg');
-  const cardIdx = args.indexOf('--card');
-  const globIdx = args.indexOf('--card-glob');
-  const cardIdIdx = args.indexOf('--card-id');
-  const restart = args.includes('--restart');
-  const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-  const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
-  const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
-  const requestedCardId = cardIdIdx !== -1 ? args[cardIdIdx + 1] : undefined;
-
-  if (!dir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
-    console.error('Usage: board-live-cards upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]');
-    process.exit(1);
-  }
-
-  if (cardGlob && requestedCardId) {
-    console.error('Usage: --card-id may be used only with --card (single file), not with --card-glob');
-    process.exit(1);
-  }
-
-  const cardFiles = cardFile
-    ? [path.resolve(cardFile)]
-    : resolveCardGlobMatches(cardGlob!);
-
-  if (!cardFile && cardFiles.length === 0) {
-    console.error(`No card files matched glob: ${cardGlob}`);
-    process.exit(1);
-  }
-
-  const idx = buildCardInventoryIndex(dir);
-  const batchByCardId = new Map<string, string>();
-  const batchByCardPath = new Map<string, string>();
-  const plans: Array<{
-    card: BoardLiveCard;
-    absCardPath: string;
-    isInsert: boolean;
-  }> = [];
-  const logs: string[] = [];
-
-  // Phase 1: pre-validate entire batch (atomicity guard)
-  for (const absCardPath of cardFiles) {
-    if (!fs.existsSync(absCardPath)) {
-      console.error(`Card file not found: ${absCardPath}`);
-      process.exit(1);
-    }
-
-    const card: BoardLiveCard = JSON.parse(fs.readFileSync(absCardPath, 'utf-8'));
-    if (!card.id) {
-      console.error(`Card JSON must have an "id" field (${absCardPath})`);
-      process.exit(1);
-    }
-
-    if (requestedCardId && requestedCardId !== card.id) {
-      console.error(
-        `Card id mismatch: --card-id "${requestedCardId}" does not match file id "${card.id}" (${absCardPath})`
-      );
-      process.exit(1);
-    }
-
-    const seenPathCardId = batchByCardPath.get(absCardPath);
-    if (seenPathCardId && seenPathCardId !== card.id) {
-      console.error(
-        `Upsert rejected: file "${absCardPath}" appears multiple times in batch with conflicting ids ` +
-        `("${seenPathCardId}" vs "${card.id}")`
-      );
-      process.exit(1);
-    }
-
-    const seenCardPath = batchByCardId.get(card.id);
-    if (seenCardPath && seenCardPath !== absCardPath) {
-      console.error(
-        `Upsert rejected: card id "${card.id}" appears multiple times in batch with conflicting files ` +
-        `("${seenCardPath}" vs "${absCardPath}")`
-      );
-      process.exit(1);
-    }
-
-    const existingById = idx.byCardId.get(card.id);
-    const existingByPath = idx.byCardPath.get(absCardPath);
-
-    // Enforce strict one-to-one mapping between card id and file path.
-    if (existingByPath && existingByPath.cardId !== card.id) {
-      console.error(
-        `Upsert rejected: file "${absCardPath}" is already mapped to card id "${existingByPath.cardId}", ` +
-        `cannot remap to "${card.id}"`
-      );
-      process.exit(1);
-    }
-
-    if (existingById && existingById.cardFilePath !== absCardPath) {
-      console.error(
-        `Upsert rejected: card id "${card.id}" is already mapped to file "${existingById.cardFilePath}", ` +
-        `cannot remap to "${absCardPath}"`
-      );
-      process.exit(1);
-    }
-
-    batchByCardPath.set(absCardPath, card.id);
-    batchByCardId.set(card.id, absCardPath);
-
-    plans.push({
-      card,
-      absCardPath,
-      isInsert: !existingById,
-    });
-  }
-
-  // Phase 2: commit writes after full pre-validation succeeds
-  for (const plan of plans) {
-    const { card, absCardPath, isInsert } = plan;
-
-    if (isInsert) {
-      const newEntry: CardInventoryEntry = {
-        cardId: card.id,
-        cardFilePath: absCardPath,
-        addedAt: new Date().toISOString(),
-      };
-      appendCardInventory(dir, newEntry);
-      idx.byCardId.set(card.id, newEntry);
-      idx.byCardPath.set(absCardPath, newEntry);
-    }
-
-    const taskConfig = liveCardToTaskConfig(card);
-    appendEventToJournal(dir, {
-      type: 'task-upsert',
-      taskName: card.id,
-      taskConfig,
-      timestamp: new Date().toISOString(),
-    });
-
-    if (restart) {
-      appendEventToJournal(dir, {
-        type: 'task-restart',
-        taskName: card.id,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    logs.push(`Card "${card.id}" ${isInsert ? 'upserted (inserted)' : 'upserted (updated)'}${restart ? ' (restarted)' : ''}.`);
-  }
-
-  void processAccumulatedEventsInfinitePass(dir);
-  if (cardGlob) {
-    console.log(`Upserted ${cardFiles.length} cards from glob: ${cardGlob}${restart ? ' (restarted)' : ''}`);
-  } else {
-    console.log(logs[0]);
-  }
-}
-
 /**
  * process-accumulated-events command.
  *
@@ -2022,6 +1873,14 @@ export async function cli(argv: string[]): Promise<void> {
     splitCommandLine,
     resolveCommandInvocation,
   });
+  const cardCommandHandlers = createCardCommandHandlers({
+    resolveCardGlobMatches,
+    buildCardInventoryIndex,
+    appendCardInventory,
+    liveCardToTaskConfig,
+    appendEventToJournal,
+    processAccumulatedEventsInfinitePass,
+  });
 
   const cmd = argv[0];
   const rest = argv.slice(1);
@@ -2032,7 +1891,7 @@ export async function cli(argv: string[]): Promise<void> {
     case '-h':            return nonCoreCommandHandlers.cmdHelp();
     case 'init':           return boardCommandHandlers.cmdInit(rest);
     case 'status':         return boardCommandHandlers.cmdStatus(rest);
-    case 'upsert-card':    return cmdUpsertCard(rest);
+    case 'upsert-card':    return cardCommandHandlers.cmdUpsertCard(rest);
     case 'validate-card':  return boardCommandHandlers.cmdValidateCard(rest);
     case 'remove-card':              return boardCommandHandlers.cmdRemoveCard(rest);
     case 'retrigger':                 return boardCommandHandlers.cmdRetrigger(rest);
