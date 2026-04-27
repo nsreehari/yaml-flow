@@ -12,21 +12,31 @@ import fg from 'fast-glob';
 import { lockSync } from 'proper-lockfile';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
-import type { ReactiveGraph, TaskHandlerFn } from '../continuous-event-graph/reactive.js';
+import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createLiveGraph, snapshot } from '../continuous-event-graph/core.js';
-import { schedule } from '../continuous-event-graph/schedule.js';
 import type { GraphConfig, TaskConfig, GraphEvent } from '../event-graph/types.js';
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
-import { CardCompute } from '../card-compute/index.js';
-import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/index.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 import { createBoardCommandHandlers } from './board-live-cards-cli-board-commands.js';
 import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
 import { createNonCoreCommandHandlers } from './board-live-cards-cli-noncore.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
 import { createExecutionCommandHandlers } from './board-live-cards-cli-execution-commands.js';
+import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
+import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
+import {
+  createNodeRuntimeStore,
+  createNodeOutputStore,
+  createNodeInputStore,
+  createNodeCardStore,
+  createNodeInvocationAdapter,
+} from './board-live-cards-lib-node-adapters.js';
+// Re-export domain types and functions for backward compatibility
+import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
+export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload } from './board-live-cards-lib-types.js';
+export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure } from './board-live-cards-lib-types.js';
 
 const BOARD_FILE = 'board-graph.json';
 const JOURNAL_FILE = 'board-journal.jsonl';
@@ -40,8 +50,6 @@ const RUNTIME_CARDS_DIR = 'cards';
 const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
 const INFERENCE_ADAPTER_FILE = '.inference-adapter';
 const TASK_EXECUTOR_FILE = '.task-executor';
-const DEFAULT_TASK_COMPLETION_RULE = 'all_required_sources_fetched';
-
 /** Parsed content of a .task-executor file (JSON or plain-text fallback). */
 interface TaskExecutorConfig {
   command: string;
@@ -256,7 +264,7 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journal: BoardJournal)
 
   // Publish status snapshot in the same persistence path as board writes.
   const live = restore(snap);
-  const statusObject = buildBoardStatusObject(dir, live);
+  const statusObject = buildBoardStatusObject(path.resolve(dir), live);
   writeJsonAtomic(resolveStatusSnapshotPath(dir), statusObject);
 }
 
@@ -357,22 +365,10 @@ function decodeCallbackToken(token: string): { taskName: string } | null {
 
 // ============================================================================
 // Source token — per-source opaque token carrying all delivery metadata
+// (SourceTokenPayload interface is re-exported from board-live-cards-lib-types)
 // ============================================================================
 
-export interface SourceTokenPayload {
-  /** Original callback token from the reactive graph (encodes taskName) */
-  cbk: string;
-  /** Board directory (absolute path) */
-  rg: string;
-  /** Card id */
-  cid: string;
-  /** source_defs[].bindTo */
-  b: string;
-  /** source_defs[].outputFile (relative to boardDir) */
-  d: string;
-  /** Per-source invocation checksum */
-  cs?: string;
-}
+import type { SourceTokenPayload } from './board-live-cards-lib-types.js';
 
 export function encodeSourceToken(payload: SourceTokenPayload): string {
   return Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -389,112 +385,10 @@ export function decodeSourceToken(token: string): SourceTokenPayload | null {
 }
 
 // ============================================================================
-// Runtime state sidecar — <cardId>.runtime.json
+// Runtime state — now managed exclusively by RuntimeInternalStore (node-adapters)
+// The SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry types and
+// domain functions are re-exported from board-live-cards-lib-types.
 // ============================================================================
-
-export interface SourceRuntimeEntry {
-  lastRequestedAt?: string;
-  lastFetchedAt?: string;
-  lastError?: string;
-  /** Timestamp of the most recent card-handler dispatch — updated on every fresh invocation.
-   * Replaces checksum-based gating: a source fetch is needed whenever
-   * lastFetchedAt is absent or older than queueRequestedAt. */
-  queueRequestedAt?: string;
-}
-
-export interface InferenceRuntimeEntry {
-  lastRequestedAt?: string;
-  lastFetchedAt?: string;
-  lastError?: string;
-  /** Same semantics as SourceRuntimeEntry.queueRequestedAt. */
-  queueRequestedAt?: string;
-}
-
-type FetchRuntimeEntry = SourceRuntimeEntry | InferenceRuntimeEntry;
-
-function markRequested(entry: FetchRuntimeEntry, requestedAt: string): void {
-  entry.lastRequestedAt = requestedAt;
-}
-
-function markFetchFailed(entry: FetchRuntimeEntry, reason: string): void {
-  entry.lastError = reason;
-  delete entry.lastFetchedAt;
-}
-
-function markFetchCompleted(entry: FetchRuntimeEntry, fetchedAt: string): void {
-  entry.lastFetchedAt = fetchedAt;
-  delete entry.lastError;
-}
-
-export function isSourceInFlight(entry: FetchRuntimeEntry | undefined): boolean {
-  if (!entry?.lastRequestedAt) return false;
-  return !entry.lastFetchedAt || entry.lastFetchedAt < entry.lastRequestedAt;
-}
-
-/**
- * Decide what to do with a source/inference fetch given the current runtime entry
- * and the timestamp of the latest card-handler dispatch (queueRequestedAt).
- *
- * - 'dispatch' : fetch not yet started for this run, or previous fetch predates the request
- * - 'in-flight': fetch is already running for this run — update queueRequestedAt and wait
- * - 'idle'     : fetch already completed for this run — nothing to do
- */
-export function decideSourceAction(
-  entry: FetchRuntimeEntry | undefined,
-  queueRequestedAt: string,
-): 'dispatch' | 'in-flight' | 'idle' {
-  if (!entry?.lastRequestedAt) return 'dispatch';
-  const inFlight = isSourceInFlight(entry);
-  if (inFlight) return 'in-flight';                           // wait; caller updates queueRequestedAt
-  if (!entry.lastFetchedAt) return 'dispatch';                // requested but never fetched
-  if (entry.lastFetchedAt < queueRequestedAt) return 'dispatch'; // fetched before current run
-  return 'idle';                                              // already fetched for this run
-}
-
-export function nextEntryAfterFetchDelivery<T extends FetchRuntimeEntry>(
-  entry: T,
-  fetchedAt: string,
-): T {
-  const next = { ...entry };
-  markFetchCompleted(next, fetchedAt);
-  // If queueRequestedAt is newer than the fetch just completed, the caller
-  // already updated queueRequestedAt while the fetch was in-flight.
-  // The next card-handler invocation will see lastFetchedAt < queueRequestedAt
-  // and dispatch again — no special queuing needed here.
-  return next as T;
-}
-
-export function nextEntryAfterFetchFailure<T extends FetchRuntimeEntry>(
-  entry: T,
-  reason: string,
-): T {
-  const next = { ...entry };
-  markFetchFailed(next, reason);
-  return next as T;
-}
-
-export interface CardRuntimeState {
-  _sources: Record<string, SourceRuntimeEntry>;
-  _inferenceEntry?: InferenceRuntimeEntry;
-  _lastExecutionCount?: number;
-}
-
-function runtimePath(boardDir: string, cardId: string): string {
-  return path.join(boardDir, cardId, 'runtime.json');
-}
-
-function readRuntimeState(boardDir: string, cardId: string): CardRuntimeState {
-  const p = runtimePath(boardDir, cardId);
-  if (!fs.existsSync(p)) return { _sources: {} };
-  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as CardRuntimeState; }
-  catch { return { _sources: {} }; }
-}
-
-function writeRuntimeState(boardDir: string, cardId: string, state: CardRuntimeState): void {
-  const p = runtimePath(boardDir, cardId);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(state, null, 2));
-}
 
 /**
  * Append a raw event to the journal file. No lock, no file read.
@@ -728,7 +622,17 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
     return false;
   }
   try {
-    const { rg, journal } = createBoardReactiveGraph(boardDir);
+    const cardHandlerAdapters = {
+      cardStore: createNodeCardStore(lookupCardPath),
+      runtimeStore: createNodeRuntimeStore(),
+      outputStore: createNodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, INFERENCE_ADAPTER_LOG_FILE),
+      inputStore: createNodeInputStore(JOURNAL_FILE),
+      invocationAdapter: createNodeInvocationAdapter(__dirname, encodeSourceToken),
+    };
+    const envelope = loadBoardEnvelope(boardDir);
+    const live = restore(envelope.graph);
+    const journal = new BoardJournal(path.join(boardDir, JOURNAL_FILE), envelope.lastDrainedJournalId);
+    const rg = createReactiveGraph(live, { handlers: { 'card-handler': createCardHandlerFn(boardDir, cardHandlerAdapters) } });
     // Explicitly drain the external journal and push events into the reactive graph.
     // The engine never reads from external storage — the caller owns that boundary.
     const undrained = journal.drain();
@@ -837,33 +741,6 @@ function getCliInvocation(command: string, args: string[]): { cmd: string; args:
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
-function invokeRunSources(
-  boardDir: string,
-  cardPath: string,
-  callbackToken: string,
-  callback: (err: Error | null) => void,
-): void {
-  const args = ['--card', cardPath, '--token', callbackToken, '--rg', boardDir];
-  const { cmd, args: cmdArgs } = getCliInvocation('run-sourcedefs-internal', args);
-  try {
-    spawnDetachedCommand(cmd, cmdArgs);
-    callback(null);
-  } catch (err) {
-    callback(err instanceof Error ? err : new Error(String(err)));
-  }
-}
-
-function invokeRunInference(boardDir: string, cardId: string, inputFile: string, callbackToken: string, checksum: string | undefined, callback: (err: Error | null) => void): void {
-  const inferenceToken = encodeSourceToken({ cbk: callbackToken, rg: boardDir, cid: cardId, b: '', d: '', cs: checksum });
-  const { cmd, args } = getCliInvocation('run-inference-internal', ['--in', inputFile, '--token', inferenceToken]);
-  try {
-    spawnDetachedCommand(cmd, args);
-    callback(null);
-  } catch (err) {
-    callback(err instanceof Error ? err : new Error(String(err)));
-  }
-}
-
 
 
 function appendTaskExecutorLog(
@@ -883,355 +760,6 @@ function appendTaskExecutorLog(
   }
 }
 
-function appendInferenceAdapterLog(boardDir: string, cardId: string, payload: unknown): void {
-  try {
-    const entry = {
-      timestamp: new Date().toISOString(),
-      cardId,
-      payload,
-    };
-    fs.appendFileSync(path.join(boardDir, INFERENCE_ADAPTER_LOG_FILE), JSON.stringify(entry) + '\n', 'utf-8');
-  } catch (logErr) {
-    console.error(`[inference-adapter-log] append failed: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
-  }
-}
-
-/**
- * Spin up a ReactiveGraph from a board directory with all handlers wired.
- *
- * Single handler:
- *   card-handler — reads card.json, loads sourcesData from outputFiles, runs CardCompute,
- *                  checks undelivered source_defs, emits task-completed or spawns run-sourcedefs-internal.
- *                  Fire & forget — returns 'task-initiated' immediately.
- */
-export interface BoardReactiveGraph {
-  rg: ReactiveGraph;
-  journal: BoardJournal;
-}
-
-export function createBoardReactiveGraph(boardDir: string): BoardReactiveGraph {
-  const envelope = loadBoardEnvelope(boardDir);
-  const live = restore(envelope.graph);
-  const journalPath = path.join(boardDir, JOURNAL_FILE);
-  const journal = new BoardJournal(journalPath, envelope.lastDrainedJournalId);
-
-  const handlers: Record<string, TaskHandlerFn> = {
-    'card-handler': async (input) => {
-      const cardPath = lookupCardPath(boardDir, input.nodeId);
-      if (!cardPath) return 'task-initiate-failure';
-
-      const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
-      const cardId = card.id as string;
-      const cardState = (card.card_data ?? {}) as Record<string, unknown>;
-      const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
-      // optionalForCompletionGating defaults to false when absent.
-      const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
-
-        // Read (or initialise) the runtime sidecar
-        const runtime = readRuntimeState(boardDir, cardId);
-        let runtimeDirty = false;
-
-        // ---- If the task was restarted, clear stale source/inference state ----
-        const currentExecutionCount = input.taskState?.executionCount ?? 0;
-        if (typeof runtime._lastExecutionCount === 'number' && runtime._lastExecutionCount !== currentExecutionCount) {
-          runtime._sources = {};
-          runtime._inferenceEntry = undefined;
-        }
-        if (runtime._lastExecutionCount !== currentExecutionCount) {
-          runtime._lastExecutionCount = currentExecutionCount;
-          runtimeDirty = true;
-        }
-
-        // ---- Handle a task-progress re-invocation (source delivery or failure) ----
-        if (input.update) {
-          const u = input.update;
-          const outputFile = u.outputFile as string;
-          // Only process source updates (which have outputFile); skip non-source updates like inference-done
-          if (outputFile) {
-            if (!runtime._sources[outputFile]) runtime._sources[outputFile] = {};
-            const entry = runtime._sources[outputFile];
-
-            if (u.failure) {
-              // Source fetch failed — record error, stay in-progress
-              runtime._sources[outputFile] = nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown');
-              runtimeDirty = true;
-            } else {
-              // Successful delivery — output file already in place by CLI
-              runtime._sources[outputFile] = nextEntryAfterFetchDelivery(
-                entry,
-                (u.fetchedAt as string | undefined) ?? new Date().toISOString(),
-              );
-              runtimeDirty = true;
-            }
-
-            if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
-          }
-        }
-
-      // ---- Load sourcesData from outputFiles ----
-      const sourcesData: Record<string, unknown> = {};
-      for (const src of allSources) {
-        if (src.outputFile) {
-          const filePath = path.join(boardDir, cardId, src.outputFile);
-          if (fs.existsSync(filePath)) {
-            const raw = fs.readFileSync(filePath, 'utf-8').trim();
-            try { sourcesData[src.bindTo] = JSON.parse(raw); }
-            catch { sourcesData[src.bindTo] = raw; }
-          }
-        }
-      }
-
-      // ---- Run compute ----
-      // input.state[token] = the full task-completed data object from the producer
-      // (e.g. { orders: [...] }). Unwrap to the specific token value so that
-      // compute expressions see requires.orders = [...] not requires.orders = { orders: [...] }.
-      const requires: Record<string, unknown> = {};
-      for (const [token, taskData] of Object.entries(input.state ?? {})) {
-        if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
-          const unwrapped = (taskData as Record<string, unknown>)[token];
-          requires[token] = unwrapped !== undefined ? unwrapped : taskData;
-        } else {
-          requires[token] = taskData;
-        }
-      }
-
-      const computeNode: ComputeNode = {
-        id: cardId,
-        card_data: { ...cardState },
-        requires,
-        source_defs: allSources,
-        compute: card.compute as ComputeStep[] | undefined,
-      };
-      // Always populate _sourcesData so resolve("source_defs.*") works even without compute steps.
-      computeNode._sourcesData = sourcesData;
-      if (card.compute) {
-        await CardCompute.run(computeNode, { sourcesData });
-      }
-      const cvPath = resolveComputedValuesPath(boardDir, cardId);
-      writeJsonAtomic(cvPath, {
-        schema_version: 'v1',
-        card_id: cardId,
-        computed_values: computeNode.computed_values ?? {},
-      });
-
-      // Build enriched source payloads and checksums up-front so dispatch gating
-      // can react to input changes, not only timestamp delivery state.
-      const enrichedCard = { ...card };
-      const enrichedSources = await CardCompute.enrichSources(
-        (Array.isArray(card.source_defs) ? card.source_defs : undefined),
-        {
-          card_data: card.card_data as Record<string, unknown>,
-          requires,
-          sourcesData,
-          computed_values: computeNode.computed_values,
-        }
-      );
-      const sourceCwd = path.dirname(cardPath);
-      enrichedCard.source_defs = Array.isArray(enrichedSources)
-        ? enrichedSources.map((src) => ({
-            ...src,
-            cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
-            boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
-          }))
-        : enrichedSources;
-
-      const enrichedByOutput = new Map<string, unknown>();
-      for (const src of (Array.isArray(enrichedCard.source_defs) ? enrichedCard.source_defs : [])) {
-        const outputFile = (src as { outputFile?: unknown }).outputFile;
-        if (typeof outputFile === 'string' && outputFile) {
-          enrichedByOutput.set(outputFile, src);
-        }
-      }
-
-        // ---- Delivery check: source fetched after queueRequestedAt for all required source_defs ----
-        // queueRequestedAt is stamped on every fresh card-handler dispatch (not-started / completed).
-        // A source needs fetching when: never fetched, or lastFetchedAt < queueRequestedAt.
-        // While a fetch is in-flight we just update queueRequestedAt so the next completion
-        // sees the latest request and re-fetches if needed.
-        const now = new Date().toISOString();
-        // Use the invocation time as queueRequestedAt for this run.
-        const runQueuedAt = input.update ? undefined : now; // only stamp on fresh dispatch, not task-progress
-
-        const undeliveredRequired = requiredSources.filter(s => {
-          const outputFile = s.outputFile;
-          if (typeof outputFile !== 'string' || !outputFile) return true;
-          if (!runtime._sources[outputFile]) runtime._sources[outputFile] = {};
-          const entry = runtime._sources[outputFile];
-          // On a fresh dispatch, update queueRequestedAt to the current time.
-          if (runQueuedAt) {
-            entry.queueRequestedAt = runQueuedAt;
-            runtimeDirty = true;
-          }
-          const qrt = entry.queueRequestedAt ?? entry.lastRequestedAt ?? now;
-          const action = decideSourceAction(entry, qrt);
-          if (action === 'in-flight') return false; // wait; queueRequestedAt already updated above
-          return action === 'dispatch';
-        });
-
-      if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
-
-      if (undeliveredRequired.length > 0) {
-          let stampedAny = false;
-          for (const src of undeliveredRequired) {
-            const outputFile = src.outputFile;
-            if (typeof outputFile !== 'string' || !outputFile) continue;
-            const entry = runtime._sources[outputFile] ?? {};
-            markRequested(entry, now);
-            runtime._sources[outputFile] = entry;
-            stampedAny = true;
-          }
-          if (stampedAny) writeRuntimeState(boardDir, cardId, runtime);
-          if (!stampedAny) return 'task-initiated';
-
-          // Write enriched card to temp location for this invocation
-          const enrichedCardPath = path.join(os.tmpdir(), `card-enriched-${cardId}-${Date.now()}.json`);
-          fs.writeFileSync(enrichedCardPath, JSON.stringify(enrichedCard, null, 2), 'utf-8');
-
-          invokeRunSources(boardDir, enrichedCardPath, input.callbackToken, (err) => {
-            if (err) {
-              console.error(`[card-handler] ${input.nodeId}:`, err.message);
-              try { fs.unlinkSync(enrichedCardPath); } catch {}
-            }
-          });
-        return 'task-initiated';
-      }
-
-      // ---- All required source_defs delivered — build provides payload ----
-      const providesBindings = (card.provides ?? []) as { bindTo: string; ref: string }[];
-      const data: Record<string, unknown> = {};
-      for (const { bindTo, ref } of providesBindings) {
-        data[bindTo] = CardCompute.resolve(computeNode, ref);
-      }
-
-      const completionRule = typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
-        ? card.when_is_task_completed.trim()
-        : DEFAULT_TASK_COMPLETION_RULE;
-
-      const cardData = card.card_data as Record<string, unknown> | undefined;
-      const llmCompletion = (cardData?.llm_task_completion_inference ?? {}) as Record<string, unknown>;
-      const isLlmTaskCompleted = llmCompletion.isTaskCompleted === true;
-      // inferenceRequested lives in the runtime sidecar, not the card file
-      const inferenceEntry = runtime._inferenceEntry ?? {};
-      const inferenceRequestedAt = typeof inferenceEntry.lastRequestedAt === 'string'
-        ? inferenceEntry.lastRequestedAt
-        : undefined;
-      const inferenceCompletedAt = typeof llmCompletion.inferenceCompletedAt === 'string'
-        ? llmCompletion.inferenceCompletedAt
-        : undefined;
-      const inferencePending = !!inferenceRequestedAt
-        && (!inferenceCompletedAt || inferenceCompletedAt < inferenceRequestedAt);
-
-      const latestRequiredSourceFetchedAt = requiredSources.reduce<string | undefined>((latest, src) => {
-        const fetchedAt = runtime._sources[src.outputFile]?.lastFetchedAt;
-        if (typeof fetchedAt !== 'string') return latest;
-        if (!latest || fetchedAt > latest) return fetchedAt;
-        return latest;
-      }, undefined);
-
-      const shouldRequestInference = !inferenceRequestedAt
-        || !inferenceCompletedAt
-        || (!!latestRequiredSourceFetchedAt && latestRequiredSourceFetchedAt > inferenceCompletedAt);
-
-      if (completionRule !== DEFAULT_TASK_COMPLETION_RULE) {
-        if (isLlmTaskCompleted) {
-          // Card carries adapter-evaluated completion; proceed with deterministic completion path below.
-        } else if (inferencePending) {
-          // Request already in flight. Wait for completion callback.
-          return 'task-initiated';
-        } else if (!shouldRequestInference) {
-          // Latest inference has completed and inputs are unchanged. Keep task in progress.
-          return 'task-initiated';
-        } else {
-          const now = new Date().toISOString();
-          const inferencePayload = {
-            cardId,
-            taskName: input.nodeId,
-            completionRule,
-            context: {
-              requires,
-              sourcesData,
-              computed_values: computeNode.computed_values ?? {},
-              provides: data,
-              card_data: computeNode.card_data ?? {},
-            },
-          };
-
-          // Gate inference dispatch using queueRequestedAt — same pattern as source fetches.
-          // On a fresh card-handler dispatch update queueRequestedAt; if in-flight just wait.
-          if (runQueuedAt) {
-            inferenceEntry.queueRequestedAt = runQueuedAt;
-            runtimeDirty = true;
-          }
-          const inferenceQrt = inferenceEntry.queueRequestedAt ?? inferenceEntry.lastRequestedAt ?? now;
-          const inferenceAction = decideSourceAction(inferenceEntry, inferenceQrt);
-
-          if (inferenceAction === 'in-flight') {
-            // Fetch in-flight; queueRequestedAt already updated — wait for completion.
-            runtime._inferenceEntry = inferenceEntry;
-            if (runtimeDirty) writeRuntimeState(boardDir, cardId, runtime);
-            return 'task-initiated';
-          }
-
-          if (inferenceAction === 'idle') {
-            // Already fetched for this run.
-            return 'task-initiated';
-          }
-
-          // dispatch — proceed with invocation
-          const inferenceInFile = path.join(os.tmpdir(), `card-inference-${cardId}-${Date.now()}.json`);
-          fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
-          appendInferenceAdapterLog(boardDir, cardId, inferencePayload);
-
-          markRequested(inferenceEntry, now);
-          runtime._inferenceEntry = inferenceEntry;
-          runtimeDirty = true;
-
-          invokeRunInference(boardDir, cardId, inferenceInFile, input.callbackToken, undefined, (err) => {
-            if (err) {
-              console.error(`[card-handler] ${input.nodeId}:`, err.message);
-              const failedAt = new Date().toISOString();
-              appendEventToJournal(boardDir, {
-                type: 'task-failed',
-                taskName: input.nodeId,
-                error: err.message,
-                timestamp: failedAt,
-              });
-            }
-          });
-          return 'task-initiated';
-        }
-      }
-
-      // Persist task-completed token objects for SSE/runtime consumers.
-      writeRuntimeDataObjects(boardDir, data);
-
-      // Spawn undelivered non-gating source_defs in background.
-        const undeliveredOptional = allSources.filter(s => {
-          if (s.optionalForCompletionGating !== true) return false;
-          const entry = runtime._sources[s.outputFile];
-          if (!entry?.lastRequestedAt) return true;
-          if (!entry.lastFetchedAt) return true;
-          return entry.lastFetchedAt <= entry.lastRequestedAt;
-        });
-      if (undeliveredOptional.length > 0) {
-        invokeRunSources(boardDir, cardPath, input.callbackToken, (err) => {
-          if (err) console.error(`[card-handler] ${input.nodeId}:`, err.message);
-        });
-      }
-
-      appendEventToJournal(boardDir, {
-        type: 'task-completed',
-        taskName: input.nodeId,
-        data,
-        timestamp: new Date().toISOString(),
-      });
-      return 'task-initiated';
-    },
-  };
-
-  const rg = createReactiveGraph(live, { handlers });
-  return { rg, journal };
-}
 
 // ============================================================================
 // CLI
@@ -1258,200 +786,6 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
   return [...matches].map(m => path.resolve(m)).sort((a, b) => a.localeCompare(b));
 }
 
-function buildBoardStatusObject(dir: string, live: LiveGraph): BoardStatusObject {
-  const taskState = live.state.tasks;
-  const taskConfig = live.config.tasks;
-  const cardNames = Object.keys(taskState);
-  const sched = schedule(live);
-
-  const statusCounts = {
-    completed: 0,
-    failed: 0,
-    in_progress: 0,
-    pending: 0,
-    blocked: 0,
-    unresolved: 0,
-  };
-
-  const waitingByCard = new Map<string, string[]>();
-  for (const p of sched.pending) waitingByCard.set(p.taskName, p.waitingOn);
-  for (const u of sched.unresolved) waitingByCard.set(u.taskName, u.missingTokens);
-  for (const b of sched.blocked) waitingByCard.set(b.taskName, b.failedTokens);
-
-  const dependentsByToken = new Map<string, string[]>();
-  for (const [name, cfg] of Object.entries(taskConfig)) {
-    for (const token of cfg.requires ?? []) {
-      const dependents = dependentsByToken.get(token) ?? [];
-      dependents.push(name);
-      dependentsByToken.set(token, dependents);
-    }
-  }
-
-  const cards: BoardStatusCard[] = cardNames.sort().map((name) => {
-    const state = taskState[name] as {
-      status: string;
-      data?: Record<string, unknown>;
-      error?: string;
-      startedAt?: string;
-      completedAt?: string;
-      failedAt?: string;
-      lastUpdated?: string;
-      executionCount?: number;
-      retryCount?: number;
-    };
-    const cfg = taskConfig[name] ?? { requires: [], provides: [] };
-
-    if (state.status === 'completed') statusCounts.completed += 1;
-    else if (state.status === 'failed') statusCounts.failed += 1;
-    else if (state.status === 'in-progress') statusCounts.in_progress += 1;
-
-    const requires = cfg.requires ?? [];
-    const provides = cfg.provides ?? [];
-    const runtimeKeys = Object.keys(state.data ?? {}).sort();
-    const requiresSatisfied = requires.filter((token) => live.state.availableOutputs.includes(token));
-    const requiresMissing = requires.filter((token) => !live.state.availableOutputs.includes(token));
-    const blockedBy = waitingByCard.get(name) ?? requiresMissing;
-
-    const unblocks = new Set<string>();
-    for (const token of provides) {
-      for (const dependent of dependentsByToken.get(token) ?? []) {
-        if (dependent !== name) unblocks.add(dependent);
-      }
-    }
-
-    const lastFailureAt = state.failedAt;
-    const error = state.error
-      ? {
-          message: state.error,
-          code: 'TASK_FAILED',
-          at: lastFailureAt,
-          source: 'task-runtime' as const,
-        }
-      : undefined;
-
-    return {
-      name,
-      status: state.status,
-      error,
-      requires,
-      requires_satisfied: requiresSatisfied,
-      requires_missing: requiresMissing,
-      provides_declared: provides,
-      provides_runtime: runtimeKeys,
-      blocked_by: blockedBy,
-      unblocks: Array.from(unblocks).sort(),
-      runtime: {
-        attempt_count: state.executionCount ?? 0,
-        restart_count: state.retryCount ?? 0,
-        in_progress_since: state.status === 'in-progress' ? (state.startedAt ?? null) : null,
-        last_transition_at: state.lastUpdated ?? null,
-        last_completed_at: state.completedAt ?? null,
-        last_restarted_at: state.startedAt ?? null,
-        status_age_ms: state.lastUpdated ? Math.max(0, Date.now() - Date.parse(state.lastUpdated)) : null,
-      },
-    };
-  });
-
-  statusCounts.pending = sched.pending.length;
-  statusCounts.blocked = sched.blocked.length;
-  statusCounts.unresolved = sched.unresolved.length;
-
-  const fanOut = cards
-    .map((c) => ({ name: c.name, fanOut: c.unblocks.length }))
-    .sort((a, b) => b.fanOut - a.fanOut || a.name.localeCompare(b.name));
-  const maxFanOut = fanOut.length > 0 ? fanOut[0] : { name: null, fanOut: 0 };
-
-  const allRequires = new Set<string>();
-  for (const cfg of Object.values(taskConfig)) {
-    for (const r of cfg.requires ?? []) allRequires.add(r);
-  }
-  let orphanCards = 0;
-  for (const [name, cfg] of Object.entries(taskConfig)) {
-    const requiresNone = (cfg.requires ?? []).length === 0;
-    const provides = cfg.provides ?? [];
-    const feedsAny = provides.some((p) => (dependentsByToken.get(p) ?? []).some((d) => d !== name));
-    if (requiresNone && !feedsAny) orphanCards += 1;
-  }
-
-  return {
-    schema_version: 'v1',
-    meta: {
-      board: {
-        path: path.resolve(dir),
-      },
-    },
-    summary: {
-      card_count: cardNames.length,
-      completed: statusCounts.completed,
-      eligible: sched.eligible.length,
-      pending: statusCounts.pending,
-      blocked: statusCounts.blocked,
-      unresolved: statusCounts.unresolved,
-      failed: statusCounts.failed,
-      in_progress: statusCounts.in_progress,
-      orphan_cards: orphanCards,
-      topology: {
-        edge_count: Array.from(allRequires).length,
-        max_fan_out_card: maxFanOut.name,
-        max_fan_out: maxFanOut.fanOut,
-      },
-    },
-    cards,
-  };
-}
-
-export interface BoardStatusCard {
-  name: string;
-  status: string;
-  error?: {
-    message: string;
-    code?: string;
-    at?: string;
-    source?: 'task-runtime' | 'source-fetch' | 'timeout' | 'unknown';
-  };
-  requires: string[];
-  requires_satisfied: string[];
-  requires_missing: string[];
-  provides_declared: string[];
-  provides_runtime: string[];
-  blocked_by: string[];
-  unblocks: string[];
-  runtime: {
-    attempt_count: number;
-    restart_count: number;
-    in_progress_since: string | null;
-    last_transition_at: string | null;
-    last_completed_at: string | null;
-    last_restarted_at: string | null;
-    status_age_ms: number | null;
-  };
-}
-
-export interface BoardStatusObject {
-  schema_version: 'v1';
-  meta: {
-    board: {
-      path: string;
-    };
-  };
-  summary: {
-    card_count: number;
-    completed: number;
-    eligible: number;
-    pending: number;
-    blocked: number;
-    unresolved: number;
-    failed?: number;
-    in_progress?: number;
-    orphan_cards?: number;
-    topology?: {
-      edge_count: number;
-      max_fan_out_card: string | null;
-      max_fan_out: number;
-    };
-  };
-  cards: BoardStatusCard[];
-}
 
 export async function cli(argv: string[]): Promise<void> {
   const boardCommandHandlers = createBoardCommandHandlers({
@@ -1460,7 +794,7 @@ export async function cli(argv: string[]): Promise<void> {
     loadBoard,
     writeJsonAtomic,
     resolveStatusSnapshotPath,
-    buildBoardStatusObject,
+    buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(path.resolve(dir), live),
     readTaskExecutorConfig,
     resolveCardGlobMatches,
     validateLiveCardDefinition,
