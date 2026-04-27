@@ -168,26 +168,38 @@ async function handleWorkiqAsk(req, res) {
   await new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
+    let responded = false;
     const child = spawn(process.execPath, [workiqJs, 'ask', '-q', query], {
       stdio: ['inherit', 'pipe', 'pipe'],
     });
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', (err) => {
-      jsonReply(res, 500, { error: `workiq spawn error: ${err.message}` });
-      resolve();
-    });
-    child.on('close', (code) => {
-      if (code !== 0) {
-        jsonReply(res, 500, { error: `workiq exited ${code}`, stderr });
-      } else {
-        jsonReply(res, 200, { response: stdout });
+      if (!responded) {
+        responded = true;
+        clearTimeout(timeoutId);
+        jsonReply(res, 500, { error: `workiq spawn error: ${err.message}` });
       }
       resolve();
     });
-    setTimeout(() => {
-      child.kill();
-      jsonReply(res, 504, { error: 'workiq timed out after 60s' });
+    child.on('close', (code) => {
+      if (!responded) {
+        responded = true;
+        clearTimeout(timeoutId);
+        if (code !== 0) {
+          jsonReply(res, 500, { error: `workiq exited ${code}`, stderr });
+        } else {
+          jsonReply(res, 200, { response: stdout });
+        }
+      }
+      resolve();
+    });
+    const timeoutId = setTimeout(() => {
+      if (!responded) {
+        responded = true;
+        child.kill();
+        jsonReply(res, 504, { error: 'workiq timed out after 60s' });
+      }
       resolve();
     }, 60_000);
   });

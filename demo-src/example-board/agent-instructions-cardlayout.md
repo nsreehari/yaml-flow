@@ -26,3 +26,31 @@
 - `board.col` — Bootstrap 12-column span: `3`=quarter, `4`=third, `6`=half, `8`=two-thirds, `12`=full
 - `board.order` — ascending integer, controls vertical sort in board view
 - `canvas` — pixel coordinates/size for drag-layout (canvas mode). `h` must be tall enough for all rendered content — a card with metrics + a 4-row table typically needs 400–500px. Too small a height causes an in-card scrollbar; when in doubt, size generously.
+
+---
+
+## LLM View-Type Guidance (for `kind: "ref"`)
+
+When a source uses Copilot/LLM and the card renders via a `ref` element, the model should emit a `_view` hint alongside the data.
+
+- Keep `_view.kind` within the renderer whitelist only:
+  `table`, `editable-table`, `chart`, `metric`, `list`, `badge`, `text`, `narrative`, `markdown`, `form`, `filter`, `todo`, `alert`
+- Default to `table` when uncertain.
+- Use `editable-table` for user-adjustable tabular rows and include `data.writeTo` to a `card_data` path.
+- Use `chart` only when one clear category/value mapping exists; include `data.chartType` and `data.columns: [labelField, valueField]`.
+- Keep `_view.data` minimal. Static card JSON may override it for safety.
+
+Recommended response shape:
+
+```json
+{
+  "<data_key>": [ ... ],
+  "_view": {
+    "kind": "editable-table",
+    "data": {
+      "writeTo": "card_data.<key>",
+      "columns": ["field1", "field2"]
+    }
+  }
+}
+```

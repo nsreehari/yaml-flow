@@ -137,6 +137,26 @@ function interpolatePrompt(template, args) {
   });
 }
 
+// Reusable prompt fragments available to all copilot source templates.
+// Source definitions can interpolate them with {{view_kind_guidance}} and {{card_layout_guidance}}.
+const COPILOT_PROMPT_CONTEXT = {
+  view_kind_guidance: [
+    'VIEW KIND GUIDANCE (for dynamic ref rendering):',
+    '- Return a _view object whenever your output data is meant for a ref element.',
+    '- Allowed _view.kind values only: table, editable-table, chart, metric, list, badge, text, narrative, markdown, form, filter, todo, alert.',
+    '- If uncertain, use "table".',
+    '- For array rows that users should edit, prefer "editable-table" and set _view.data.writeTo to a card_data path.',
+    '- For chart, set _view.data.chartType and _view.data.columns with [labelField, valueField].',
+    '- Keep _view.data minimal and valid JSON (no comments, no trailing text).',
+  ].join('\n'),
+  card_layout_guidance: [
+    'CARD LAYOUT GUIDANCE:',
+    '- Prefer compact outputs that fit a card: one primary structure plus concise rationale text.',
+    '- Avoid repeating values already present in upstream inputs.',
+    '- If you produce both machine-readable and human-readable content, keep machine-readable fields top-level and concise prose in a separate field.',
+  ].join('\n'),
+};
+
 /**
  * Fetch a URL using the system curl binary (synchronous, no Node event-loop handles).
  * Throws if curl exits non-zero (e.g. HTTP 4xx/5xx with -f, or network error).
@@ -167,6 +187,7 @@ function resolveCopilotPrompt(sourceDef) {
   // evaluated by the engine from card_data/requires before invoking this executor.
   // Explicit args defined on the source take highest precedence.
   const interpolationContext = {
+    ...COPILOT_PROMPT_CONTEXT,
     ...sourceDef._projections,
     ...args,
   };

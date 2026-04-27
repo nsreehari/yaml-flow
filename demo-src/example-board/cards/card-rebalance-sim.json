@@ -19,7 +19,7 @@
         "portfolio_action": "requires.portfolio_action"
       },
       "copilot": {
-        "prompt_template": "You are a portfolio rebalance advisor. Using the intelligence analysis and current holdings below, propose specific trades.\n\nCurrent holdings:\n{{holdings}}\nFields: ticker, quantity, cost_basis ($).\n\nPositions (with live prices):\n{{positions}}\nFields: ticker, quantity, cost_basis, price ($), value ($), gain_$, gain_%, chg_$, chg_pct.\n\nPortfolio intelligence:\n- Mix: {{portfolio_mix}}\n- Risks: {{portfolio_risks}}\n- Action signal: {{portfolio_action}}\n\nIMPORTANT OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown, no preamble, no trailing text.\n- Start with { and end with }.\n- proposed_trades must be an array of objects with EXACTLY these fields per entry:\n  ticker (string), direction (\"reduce\" or \"increase\"), current_qty (number, current shares held), change (number, shares to trade), proposed_qty (number, resulting shares after trade), price (number, current price per share), trade_value (number, change * price rounded to 2 decimals), reason (string, one short sentence).\n- Include one entry per ticker you recommend changing. Do not include tickers with no change.\n\n{\n  \"proposed_trades\": [\n    {\"ticker\": \"AAPL\", \"direction\": \"reduce\", \"current_qty\": 15, \"change\": 5, \"proposed_qty\": 10, \"price\": 210.50, \"trade_value\": 1052.50, \"reason\": \"overweight at 41%, trim before earnings\"}\n  ]\n}"
+        "prompt_template": "You are a portfolio rebalance advisor. Using the intelligence analysis and current holdings below, propose specific trades.\n\nCurrent holdings:\n{{holdings}}\nFields: ticker, quantity, cost_basis ($).\n\nPositions (with live prices):\n{{positions}}\nFields: ticker, quantity, cost_basis, price ($), value ($), gain_$, gain_%, chg_$, chg_pct.\n\nPortfolio intelligence:\n- Mix: {{portfolio_mix}}\n- Risks: {{portfolio_risks}}\n- Action signal: {{portfolio_action}}\n\n{{view_kind_guidance}}\n\n{{card_layout_guidance}}\n\nIMPORTANT OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown, no preamble, no trailing text.\n- Start with { and end with }.\n- proposed_trades must be an array of objects with EXACTLY these fields per entry:\n  ticker (string), direction (\"reduce\" or \"increase\"), current_qty (number, current shares held), change (number, shares to trade), proposed_qty (number, resulting shares after trade), price (number, current price per share), trade_value (number, change * price rounded to 2 decimals), reason (string, one short sentence).\n- Include one entry per ticker you recommend changing. Do not include tickers with no change.\n- Include a top-level _view object for a ref element with this shape:\n  { \"kind\": \"editable-table\"|\"table\"|\"chart\", \"data\": { ... } }\n- If kind is editable-table or table, include data.columns with the exact proposed_trades fields in desired order.\n- If kind is editable-table, also include data.writeTo = \"card_data.proposed_trades\".\n- If kind is chart, include data.chartType and data.columns as [\"ticker\", \"trade_value\"].\n- If unsure, choose editable-table.\n\n{\n  \"proposed_trades\": [\n    {\"ticker\": \"AAPL\", \"direction\": \"reduce\", \"current_qty\": 15, \"change\": 5, \"proposed_qty\": 10, \"price\": 210.50, \"trade_value\": 1052.50, \"reason\": \"overweight at 41%, trim before earnings\"}\n  ],\n  \"_view\": {\n    \"kind\": \"editable-table\",\n    \"data\": {\n      \"writeTo\": \"card_data.proposed_trades\",\n      \"columns\": [\"ticker\", \"direction\", \"current_qty\", \"change\", \"proposed_qty\", \"price\", \"trade_value\", \"reason\"]\n    }\n  }\n}"
       }
     }
   ],
@@ -29,10 +29,12 @@
   "view": {
     "elements": [
       {
-        "kind": "editable-table",
+        "kind": "ref",
         "label": "Proposed Trades",
         "data": {
           "bind": "fetched_sources.rebalance.proposed_trades",
+          "viewBind": "fetched_sources.rebalance._view",
+          "fallbackKind": "editable-table",
           "writeTo": "card_data.proposed_trades",
           "columns": ["ticker", "direction", "current_qty", "change", "proposed_qty", "price", "trade_value", "reason"],
           "schema": {
@@ -45,13 +47,21 @@
             }
           }
         }
+      },
+      {
+        "kind": "notes",
+        "label": "Notes",
+        "data": {
+          "bind": "card_data.notes",
+          "writeTo": "card_data.notes"
+        }
       }
     ],
     "layout": {
       "board": { "col": 6, "order": 7 },
       "canvas": { "x": 840, "y": 480, "w": 500, "h": 280 }
     },
-    "features": { "refresh": true, "notes": true }
+    "features": { "refresh": true }
   },
   "card_data": {}
 }
