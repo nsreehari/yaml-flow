@@ -124,7 +124,7 @@
   // validate — lightweight structural validator (sync)
   // ===========================================================================
 
-  var VALID_ELEMENT_KINDS = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
+  var VALID_ELEMENT_KINDS = ['metric','table','editable-table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','ref','custom','actions'];
   var VALID_STATUSES = ['fresh','stale','loading','error'];
   var ALLOWED_KEYS = ['id','meta','requires','provides','view','card_data','compute','source_defs'];
 

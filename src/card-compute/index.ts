@@ -173,9 +173,9 @@ export interface ValidationResult {
 }
 
 const VALID_ELEMENT_KINDS = new Set([
-  'metric', 'table', 'chart', 'form', 'filter', 'list',
+  'metric', 'table', 'editable-table', 'chart', 'form', 'filter', 'list',
   'notes', 'todo', 'alert', 'narrative', 'badge', 'text',
-  'markdown', 'custom',
+  'markdown', 'ref', 'custom', 'actions',
 ]);
 
 const ALLOWED_KEYS = new Set(['id', 'meta', 'requires', 'provides', 'view', 'card_data', 'compute', 'source_defs']);

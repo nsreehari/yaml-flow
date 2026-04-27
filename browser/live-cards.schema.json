@@ -126,7 +126,7 @@
         "kind":      {
           "enum": ["metric", "table", "editable-table", "chart", "form", "filter", "list",
                    "notes", "todo", "alert", "narrative", "badge", "text",
-                   "markdown", "custom", "actions"]
+                   "markdown", "ref", "custom", "actions"]
         },
         "label":     { "type": "string", "description": "Heading above this element" },
         "className": { "type": "string", "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'" },

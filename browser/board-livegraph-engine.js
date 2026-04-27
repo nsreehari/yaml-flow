@@ -69,6 +69,7 @@ var BoardLiveGraph = (function (exports) {
   var VALID_ELEMENT_KINDS = /* @__PURE__ */ new Set([
     "metric",
     "table",
+    "editable-table",
     "chart",
     "form",
     "filter",
@@ -80,7 +81,9 @@ var BoardLiveGraph = (function (exports) {
     "badge",
     "text",
     "markdown",
-    "custom"
+    "ref",
+    "custom",
+    "actions"
   ]);
   var ALLOWED_KEYS = /* @__PURE__ */ new Set(["id", "meta", "requires", "provides", "view", "card_data", "compute", "source_defs"]);
   function validateNode(node) {
