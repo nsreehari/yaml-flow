@@ -45,8 +45,7 @@
  *   - { "url-list": { method?, headers?, cacheTimeout? } }
  *       → fan-out over _projections.url_list (string[]); returns array of responses.
  *         Build url_list in projections: e.g. `requires.holdings.ticker.('https://host/' & $ & '?q=1')`
- *   - { chartApi: { url, headers? }, tickersFrom }  → removed; use url-list instead
- *     prefer url-list for new sources
+ *     Prefer url-list for multi-URL fan-out sources.
  *   A real executor can also handle: graphapi, teams, mail, incidentdb, script, etc.
  *
  * url / url-list notes:

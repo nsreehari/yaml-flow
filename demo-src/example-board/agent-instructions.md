@@ -509,11 +509,10 @@ The optional `projections` map lets a source definition declare which upstream d
     "outputFile": "quotes.json",
     "projections": {
       "holdings": "requires.holdings",
-      "topHoldings": "requires.holdings[weight > 0.05]",
-      "threshold": "card_data.threshold"
+      "url_list": "requires.holdings.ticker.('https://query1.finance.yahoo.com/v8/finance/chart/' & $ & '?interval=1d&range=1d')"
     },
-    "chartApi": {
-      "tickersFrom": "holdings.ticker"
+    "url-list": {
+      "cacheTimeout": 3600
     }
   }
 ]
@@ -538,7 +537,7 @@ node board-live-cards-cli.js describe-task-executor-capabilities --rg <boardDir>
 ```
 
 This invokes the executor's `describe-capabilities` subcommand and prints its capabilities JSON to stdout. The output includes:
-- **`sourceKinds`** — every source kind the executor handles (e.g. `mock`, `copilot`, `http`, `chartApi`), each with:
+- **`sourceKinds`** — every source kind the executor handles (e.g. `mock`, `copilot`, `workiq`, `url`, `url-list`), each with:
   - `description` — what the kind does
   - `inputSchema` — the exact `customFields` the executor expects on the source entry
   - `outputShape` — the shape of the JSON written to `--out`

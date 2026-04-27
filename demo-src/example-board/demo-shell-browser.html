@@ -378,7 +378,7 @@
 
         return {
           fetchSource: async function (card, sourceDef) {
-            // chartApi source with mock="quotes" → return mock quote data
+            // mock source with mock="quotes" → return mock quote data
             if (sourceDef && sourceDef.mock === 'quotes') return clone(quoteData);
             // copilot source → return mock analysis object
             if (sourceDef && sourceDef.copilot) return clone(mockAnalysis);

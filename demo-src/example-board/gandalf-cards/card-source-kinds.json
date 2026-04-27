@@ -26,10 +26,11 @@
   },
   "card_data": {
     "kinds": [
-      { "kind": "mock",           "description": "Look up a key in the hardcoded MOCK_DB dictionary." },
-      { "kind": "copilot",        "description": "Invoke GitHub Copilot CLI with an interpolated prompt template." },
-      { "kind": "url",      "description": "Single URL fetch via curl with {{key}} interpolation from _projections. Optional cacheTimeout (seconds)." },
-      { "kind": "url-list", "description": "Fan-out over _projections.url_list (string[]); returns array of raw JSON responses. Build url_list in projections JSONata." }
+      { "kind": "mock", "description": "Look up a key in the built-in MOCK_DB dictionary and return static JSON." },
+      { "kind": "copilot", "description": "Invoke GitHub Copilot CLI using copilot.prompt_template (or top-level prompt_template shorthand) with {{key}} interpolation from _projections and args." },
+      { "kind": "workiq", "description": "Invoke WorkIQ (Microsoft 365 Copilot) using workiq.query_template with {{key}} interpolation. Requires workiq CLI + az login." },
+      { "kind": "url", "description": "Single URL fetch via curl with {{key}} interpolation from _projections. Supports method, headers, args, tickersFrom, and cacheTimeout (seconds)." },
+      { "kind": "url-list", "description": "Fan-out fetch over _projections.url_list (string[]), returning an array of raw JSON responses. Supports method, headers, and cacheTimeout." }
     ]
   }
 }
