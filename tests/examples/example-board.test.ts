@@ -20,8 +20,17 @@ const HOLDINGS_SEED = [
   { ticker: 'TSLA',  quantity: 3,  cost_basis: 200 },
 ];
 
-// Yahoo Finance chart API shape used by card-market-prices (chartApi source) and
-// forwarded as the `quotes` token consumed by card-portfolio-value.
+// Raw Yahoo Finance chart API responses (one per ticker) — the shape fetched by the
+// url-list source_def in card-market-prices.  The normalizedQuotes compute step maps
+// over this array and extracts chart.result[0].meta.{...}.
+const RAW_CHART_QUOTES_SEED = [
+  { chart: { result: [{ meta: { symbol: 'AAPL',  longName: 'Apple Inc.',  regularMarketPrice: 180, regularMarketChange:  2.5, regularMarketChangePercent:  1.41 } }] } },
+  { chart: { result: [{ meta: { symbol: 'MSFT',  longName: 'Microsoft',   regularMarketPrice: 420, regularMarketChange: -1.2, regularMarketChangePercent: -0.28 } }] } },
+  { chart: { result: [{ meta: { symbol: 'GOOGL', longName: 'Alphabet',    regularMarketPrice: 165, regularMarketChange:  0.8, regularMarketChangePercent:  0.49 } }] } },
+  { chart: { result: [{ meta: { symbol: 'TSLA',  longName: 'Tesla',       regularMarketPrice: 250, regularMarketChange: -5.0, regularMarketChangePercent: -1.96 } }] } },
+];
+
+// Normalized quote shape forwarded as the `quotes` token consumed by card-portfolio-value.
 const QUOTES_SEED = {
   quoteResponse: {
     result: [
@@ -44,7 +53,7 @@ const POSITIONS_SEED = [
 // source_defs (copilot / chartApi / http) which are not executed in unit tests.
 const CARD_SOURCE_MOCKS: Record<string, Record<string, unknown>> = {
   'card-market-prices': {
-    quotes: QUOTES_SEED,
+    quotes: RAW_CHART_QUOTES_SEED,
   },
   'card-portfolio-intelligence': {
     analysis: {
@@ -81,11 +90,18 @@ const REGION_TOTALS_SEED = [
 
 const TOP_REGION_SEED = { region: 'North', total: 21500 };
 
+const PROPOSED_TRADES_SEED = [
+  { ticker: 'AAPL',  direction: 'reduce',   proposed_qty: 8, trade_value: 360 },
+  { ticker: 'MSFT',  direction: 'increase', proposed_qty: 7, trade_value: 420 },
+  { ticker: 'GOOGL', direction: 'reduce',   proposed_qty: 1, trade_value: 165 },
+];
+
 const TOKEN_FIXTURES: Record<string, unknown> = {
   // portfolio board
   holdings:         HOLDINGS_SEED,
   quotes:           QUOTES_SEED,
   positions:        POSITIONS_SEED,
+  proposed_trades:  PROPOSED_TRADES_SEED,
   portfolio_mix:    '- AAPL dominates at 36%\n- Tech-heavy',
   portfolio_pnl:    '- Best: MSFT\n- Worst: GOOGL',
   portfolio_risks:  '- AAPL: earnings risk',
