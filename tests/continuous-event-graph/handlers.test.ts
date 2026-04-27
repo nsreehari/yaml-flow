@@ -171,8 +171,7 @@ describe('createShellHandler', () => {
     const result = await handler(makeInput());
     expect(result).toBe('task-initiated');
 
-    // Wait for shell to finish
-    await new Promise(r => setTimeout(r, 2000));
+    await vi.waitFor(() => expect(mock.calls).toHaveLength(1), { timeout: 5000 });
     expect(mock.calls).toHaveLength(1);
     expect(mock.calls[0].data?.stdout).toContain('hello');
   });
@@ -186,7 +185,7 @@ describe('createShellHandler', () => {
     });
 
     await handler(makeInput('my-task'));
-    await new Promise(r => setTimeout(r, 2000));
+    await vi.waitFor(() => expect(mock.calls).toHaveLength(1), { timeout: 5000 });
     expect(mock.calls[0].data?.stdout).toContain('my-task');
   });
 
@@ -198,7 +197,7 @@ describe('createShellHandler', () => {
     });
 
     await handler(makeInput());
-    await new Promise(r => setTimeout(r, 2000));
+    await vi.waitFor(() => expect(mock.calls).toHaveLength(1), { timeout: 5000 });
     expect(mock.calls).toHaveLength(1);
     expect(mock.calls[0].errors).toBeDefined();
     expect(mock.calls[0].errors![0]).toContain('exited with code 1');
