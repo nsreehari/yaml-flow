@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const demoServerPath = path.join(repoRoot, 'examples', 'example-board', 'demo-server.js');
+const SOURCE_CARDS_DIR = path.join(repoRoot, 'examples', 'example-board', 'cards');
 
 const TEST_PORT = 7800 + Math.floor(Math.random() * 100); // Use random port to avoid conflicts
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-demo-server-fileapi-'));
@@ -25,6 +26,14 @@ function createMinimalFixtureDirs() {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   fs.mkdirSync(SETUP_DIR, { recursive: true });
+  // Pre-populate TMP_CARDS_DIR with source card JSON files so the runtime
+  // can bootstrap cards and write chat files into the test-controlled location.
+  fs.mkdirSync(TMP_CARDS_DIR, { recursive: true });
+  for (const entry of fs.readdirSync(SOURCE_CARDS_DIR, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.toLowerCase().endsWith('.json')) {
+      fs.copyFileSync(path.join(SOURCE_CARDS_DIR, entry.name), path.join(TMP_CARDS_DIR, entry.name));
+    }
+  }
 }
 
 async function waitForServerReady(): Promise<void> {
@@ -52,6 +61,7 @@ beforeAll(async () => {
       ...process.env,
       DEMO_SERVER_PORT: String(TEST_PORT),
       DEMO_SETUP_DIR: SETUP_DIR,
+      DEMO_CARDS_DIR: TMP_CARDS_DIR,
       DEMO_TASK_EXECUTOR_PATH: path.join(repoRoot, 'examples', 'example-board', 'demo-task-executor.js'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],

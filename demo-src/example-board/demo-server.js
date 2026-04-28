@@ -143,6 +143,7 @@ function demoPrepSetup(boardId, service) {
 
   // Concatenate agent-instructions*.md into copilot-instructions.md at boardSetupRoot.
   const boardSetupRoot = path.dirname(boardDir);
+  fs.mkdirSync(boardSetupRoot, { recursive: true });
   const srcDir = path.dirname(cardsDir);
   const agentInstructionFiles = ['agent-instructions.md', 'agent-instructions-cardlayout.md'];
   const parts = [];
