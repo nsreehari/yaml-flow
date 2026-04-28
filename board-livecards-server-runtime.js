@@ -342,7 +342,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   const tmpSurfaceDir = path.resolve(
     options.tmpSurfaceDir || process.env.DEMO_SURFACE_DIR || path.join(os.tmpdir(), 'board-live-cards-demo-surface')
   );
-  const tmpCardsDir = path.join(tmpSurfaceDir, 'tmp-cards');
+  const tmpCardsDir = cardsDir;
   const runtimeOutDir = path.resolve(
     options.runtimeOutDir || process.env.DEMO_RUNTIME_OUT_DIR || path.join(os.tmpdir(), 'board-live-cards-demo-runtime-out')
   );
@@ -385,7 +385,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   const gandalfCardsDir = options.gandalfCardsDir ? path.resolve(options.gandalfCardsDir) : null;
   const gandalfRuntimeDir = path.resolve(options.gandalfRuntimeDir || path.join(path.dirname(boardDir), 'gandalf-runtime'));
   const gandalfRuntimeOutDir = path.resolve(options.gandalfRuntimeOutDir || path.join(path.dirname(boardDir), 'gandalf-runtime-out'));
-  const tmpGandalfCardsDir = path.join(tmpSurfaceDir, 'tmp-gandalf-cards');
+  const tmpGandalfCardsDir = gandalfCardsDir;
   const gandalfInventoryFile = path.join(gandalfRuntimeDir, 'cards-inventory.jsonl');
   const gandalfBoardFile = path.join(gandalfRuntimeDir, 'board-graph.json');
   const gandalfStatusSnapshotFile = path.join(gandalfRuntimeOutDir, 'board-livegraph-status.json');
@@ -1561,14 +1561,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     corsHeaders,
     boardDir,
     tmpSurfaceDir,
-    tmpCardsDir,
     runtimeOutDir,
     parseUrl,
     json,
     runCli,
     cardsDir,
     gandalfCardsDir,
-    tmpGandalfCardsDir,
     buildPublishedRuntimePayload,
     handleRuntimeApi,
     clearChatRecords,
