@@ -33,6 +33,12 @@ import {
   createNodeCardStore,
   createNodeInvocationAdapter,
 } from './board-live-cards-lib-node-adapters.js';
+import { createNodeStateSnapshotStoreSync } from './board-live-cards-state-snapshot-node.js';
+import {
+  BOARD_GRAPH_KEY,
+  BOARD_LAST_JOURNAL_PROCESSED_ID_KEY,
+  SNAPSHOT_SCHEMA_VERSION_V1,
+} from './board-live-cards-state-snapshot-types.js';
 // Re-export domain types and functions for backward compatibility
 import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
 export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload } from './board-live-cards-lib-types.js';
@@ -81,6 +87,30 @@ const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStr
 export interface BoardEnvelope {
   lastDrainedJournalId: string;
   graph: LiveGraphSnapshot;
+}
+
+const nodeStateSnapshotStore = createNodeStateSnapshotStoreSync({
+  boardFileName: BOARD_FILE,
+  writeJsonAtomic,
+});
+
+function boardEnvelopeToSnapshotEntries(envelope: BoardEnvelope): Record<string, unknown> {
+  return {
+    [BOARD_GRAPH_KEY]: envelope.graph,
+    [BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]: envelope.lastDrainedJournalId,
+  };
+}
+
+function snapshotEntriesToBoardEnvelope(entries: Record<string, unknown>): BoardEnvelope {
+  const graph = entries[BOARD_GRAPH_KEY] as LiveGraphSnapshot | undefined;
+  const lastDrainedJournalId = entries[BOARD_LAST_JOURNAL_PROCESSED_ID_KEY] as string | undefined;
+  if (!graph || typeof graph !== 'object') {
+    throw new Error(`State snapshot is missing required key: ${BOARD_GRAPH_KEY}`);
+  }
+  return {
+    graph,
+    lastDrainedJournalId: typeof lastDrainedJournalId === 'string' ? lastDrainedJournalId : '',
+  };
 }
 
 // ============================================================================
@@ -224,7 +254,7 @@ export function initBoard(dir: string): 'created' | 'exists' {
 
   if (fs.existsSync(boardPath)) {
     // Validate it's a real board envelope
-    const envelope = JSON.parse(fs.readFileSync(boardPath, 'utf-8')) as BoardEnvelope;
+    const envelope = loadBoardEnvelope(dir);
     restore(envelope.graph);
     return 'exists';
   }
@@ -240,12 +270,36 @@ export function initBoard(dir: string): 'created' | 'exists' {
   const live = createLiveGraph(EMPTY_CONFIG);
   const snap = snapshot(live);
   const envelope: BoardEnvelope = { lastDrainedJournalId: '', graph: snap };
-  fs.writeFileSync(boardPath, JSON.stringify(envelope, null, 2));
+  const current = nodeStateSnapshotStore.readSnapshot(dir);
+  const commitResult = nodeStateSnapshotStore.commitSnapshot(dir, {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION_V1,
+    expectedVersion: current.version,
+    commitId: randomUUID(),
+    committedAt: new Date().toISOString(),
+    deleteKeys: [],
+    shallowMerge: boardEnvelopeToSnapshotEntries(envelope),
+  });
+  if (!commitResult.ok) {
+    throw new Error(
+      `State snapshot init commit failed: expected=${current.version ?? 'null'} current=${commitResult.currentVersion ?? 'null'}`,
+    );
+  }
   return 'created';
 }
 
 export function loadBoardEnvelope(dir: string): BoardEnvelope {
-  const raw = fs.readFileSync(path.join(dir, BOARD_FILE), 'utf-8');
+  const boardPath = path.join(dir, BOARD_FILE);
+  if (!fs.existsSync(boardPath)) {
+    throw new Error(`Missing board file: ${boardPath}`);
+  }
+
+  const snapshot = nodeStateSnapshotStore.readSnapshot(dir);
+  if (snapshot.values[BOARD_GRAPH_KEY]) {
+    return snapshotEntriesToBoardEnvelope(snapshot.values);
+  }
+
+  // Compatibility fallback for envelopes written before snapshot-store wiring.
+  const raw = fs.readFileSync(boardPath, 'utf-8');
   return JSON.parse(raw) as BoardEnvelope;
 }
 
@@ -260,12 +314,32 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journal: BoardJournal)
     lastDrainedJournalId: journal.lastDrainedJournalId,
     graph: snap,
   };
-  writeJsonAtomic(path.join(dir, BOARD_FILE), envelope);
+  const current = nodeStateSnapshotStore.readSnapshot(dir);
+  const commitResult = nodeStateSnapshotStore.commitSnapshot(dir, {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION_V1,
+    expectedVersion: current.version,
+    commitId: randomUUID(),
+    committedAt: new Date().toISOString(),
+    deleteKeys: [],
+    shallowMerge: boardEnvelopeToSnapshotEntries(envelope),
+  });
+  if (!commitResult.ok) {
+    throw new Error(
+      `State snapshot commit failed: expected=${current.version ?? 'null'} current=${commitResult.currentVersion ?? 'null'}`,
+    );
+  }
 
   // Publish status snapshot in the same persistence path as board writes.
-  const live = restore(snap);
-  const statusObject = buildBoardStatusObject(path.resolve(dir), live);
-  writeJsonAtomic(resolveStatusSnapshotPath(dir), statusObject);
+  // This is a read-model cache; cache failures must not fail authoritative commits.
+  try {
+    const live = restore(snap);
+    const statusObject = buildBoardStatusObject(path.resolve(dir), live);
+    writeJsonAtomic(resolveStatusSnapshotPath(dir), statusObject);
+  } catch (err) {
+    console.warn(
+      `[board-live-cards] status cache publish failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function runtimeOutConfigPath(boardDir: string): string {
