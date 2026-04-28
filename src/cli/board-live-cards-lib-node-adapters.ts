@@ -240,14 +240,23 @@ function shouldSuppressSpawn(): boolean {
 }
 
 function getCliInvocationPath(cliDir: string): { cmd: string; args: string[] } | null {
+  // Prefer direct source + tsx when available (fastest startup, no dynamic import overhead).
+  const tsPath = path.join(cliDir, 'board-live-cards-cli.ts');
+  const localTsxBin = path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx');
+  const localTsxMjs = path.join(cliDir, '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const localTsx = fs.existsSync(localTsxMjs) ? localTsxMjs : localTsxBin;
+  if (fs.existsSync(tsPath) && fs.existsSync(localTsx)) {
+    return { cmd: process.execPath, args: [localTsx, tsPath] };
+  }
+  // When cliDir is the project root, prefer the compiled dist entry over the wrapper.
+  const distJsPath = path.join(cliDir, 'dist', 'cli', 'board-live-cards-cli.js');
+  if (fs.existsSync(distJsPath)) {
+    return { cmd: process.execPath, args: [distJsPath] };
+  }
+  // Direct JS in cliDir (e.g. dist/cli context when cliDir = dist/cli/).
   const jsPath = path.join(cliDir, 'board-live-cards-cli.js');
   if (fs.existsSync(jsPath)) {
     return { cmd: process.execPath, args: [jsPath] };
-  }
-  const tsPath = path.join(cliDir, 'board-live-cards-cli.ts');
-  const localTsx = path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx');
-  if (fs.existsSync(tsPath) && fs.existsSync(localTsx)) {
-    return { cmd: process.execPath, args: [localTsx, tsPath] };
   }
   return null; // caller falls back to npx tsx
 }

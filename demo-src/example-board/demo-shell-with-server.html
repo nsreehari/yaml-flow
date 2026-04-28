@@ -192,11 +192,14 @@
         document.getElementById('boardTitle').textContent = bid + ' (Server Runtime)';
         document.getElementById('boardDesc').textContent = '';
 
+        // Demo-setup is a host-level concern; call it explicitly before bootstrapping.
+        const setupRes = await fetch(boardPaths(bid).demoSetup);
+        if (!setupRes.ok) throw new Error(`demo-setup failed (${setupRes.status})`);
+
         await runtimeClient.bootstrapBoard({
           boardId: bid,
           taskExecutorPath: resolveTaskExecutorPathParam(),
           rootElement: document.getElementById('boardRoot'),
-          runDemoSetup: true,
           mode: currentMode,
         });
 

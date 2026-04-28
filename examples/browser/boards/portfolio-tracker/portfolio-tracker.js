@@ -113,7 +113,7 @@ function statusText() {
   return runCli(['status', '--rg', BOARD], true) ?? '';
 }
 
-async function waitForAllCompleted(label, timeoutMs = 30000, pollMs = 500) {
+async function waitForAllCompleted(label, timeoutMs = 90000, pollMs = 500) {
   const start = Date.now();
   const includeInferenceCards = fs.existsSync(path.join(CARDS, 'portfolio-risk-assessment.json'))
     && fs.existsSync(path.join(CARDS, 'rebalancing-strategy.json'));
