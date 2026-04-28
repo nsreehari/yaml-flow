@@ -66,6 +66,19 @@ beforeAll(async () => {
   });
 
   await waitForServerReady();
+
+  // Register the board and run demo-setup explicitly.
+  // The runtime no longer implicitly copies cards; the host (demo-server) is
+  // responsible for calling demo-setup before any board operation.
+  await fetch(`${API_BASE}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'default' }),
+  });
+  const setupRes = await fetch(`${API_BASE}/demo-setup`);
+  if (!setupRes.ok) {
+    throw new Error(`demo-setup failed: ${setupRes.status} ${await setupRes.text()}`);
+  }
 });
 
 afterAll(async () => {
