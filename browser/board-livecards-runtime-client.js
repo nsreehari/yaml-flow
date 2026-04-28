@@ -124,17 +124,11 @@
       const p = params && typeof params === 'object' ? params : {};
       const boardId = String(p.boardId || 'default');
       const taskExecutorPath = typeof p.taskExecutorPath === 'string' ? p.taskExecutorPath.trim() : '';
-      const runDemoSetup = p.runDemoSetup !== false;
       const mode = String(p.mode || currentMode || 'board');
       const rootEl = p.rootElement;
       if (!rootEl) throw new Error('bootstrapBoard requires params.rootElement');
 
       const paths = boardPaths(boardId);
-
-      if (runDemoSetup) {
-        const setup = await fetchServer(paths.demoSetup);
-        if (!setup.ok) throw new Error(`Server demo-setup failed (${setup.status}).`);
-      }
 
       const initBoardPath = taskExecutorPath
         ? `${paths.initBoard}?taskExecutorPath=${encodeURIComponent(taskExecutorPath)}`
