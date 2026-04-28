@@ -903,6 +903,8 @@ export function createExampleBoardServerRuntime(options = {}) {
       runtimeStatusDir: path.relative(path.dirname(boardDir), runtimeOutDir),
       cardsDir:         path.relative(path.dirname(boardDir), tmpCardsDir),
       ...(serverUrl ? { serverUrl } : {}),
+      ...(configuredBoardLiveCardsCliJs ? { boardLiveCardsCliJs: configuredBoardLiveCardsCliJs } : {}),
+      ...(configuredStepMachineCliPath ? { stepMachineCliPath: configuredStepMachineCliPath } : {}),
     });
 
     // Board-cards runtime: init if configured but not yet initialized.
@@ -1156,12 +1158,14 @@ export function createExampleBoardServerRuntime(options = {}) {
   // The handler file lives in the appropriate runtime dir (.chat-handler).
   // Called with: --boardId <id> --cardId <id> --extraEncJson <base64json>
   // extraEncJson decodes to:
-  //   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
-  //   boardRuntimeDir — relative: 'runtime' (or 'gandalf-runtime' for gandalf cards)
-  //   runtimeStatusDir— relative: 'runtime-out'
-  //   cardsDir        — relative: 'surface/tmp-cards' (or 'surface/tmp-gandalf-cards')
-  //   chatDir         — relative (from cardsDir): e.g. 'card-portfolio/chats'
-  //   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
+  //   boardSetupRoot      — absolute path to board root (parent of runtime/, surface/, runtime-out/)
+  //   boardRuntimeDir     — relative: 'runtime' (or 'gandalf-runtime' for gandalf cards)
+  //   runtimeStatusDir    — relative: 'runtime-out'
+  //   cardsDir            — relative: 'surface/tmp-cards' (or 'surface/tmp-gandalf-cards')
+  //   chatDir             — relative (from cardsDir): e.g. 'card-portfolio/chats'
+  //   lastChatFile        — filename of the just-written user message, e.g. '001_user.txt'
+  //   boardLiveCardsCliJs — absolute path to board-live-cards-cli.js (if configured)
+  //   stepMachineCliPath  — absolute path to step-machine-cli.js (if configured)
   // Handler failures are logged and silently ignored — chat-send response is never affected.
   function invokeChatHandler(cardId, chatsDir, lastChatFile) {
     const isGandalf = isGandalfCard(cardId);
@@ -1181,6 +1185,8 @@ export function createExampleBoardServerRuntime(options = {}) {
       chatDir:          chatsDir,
       lastChatFile,
       ...(serverUrl ? { serverUrl } : {}),
+      ...(configuredBoardLiveCardsCliJs ? { boardLiveCardsCliJs: configuredBoardLiveCardsCliJs } : {}),
+      ...(configuredStepMachineCliPath ? { stepMachineCliPath: configuredStepMachineCliPath } : {}),
     })).toString('base64');
     try {
       const proc = spawn(handlerCmd, [
