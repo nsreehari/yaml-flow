@@ -126,13 +126,67 @@ function jsonReply(res, status, payload) {
   res.end(body);
 }
 
+// ---------------------------------------------------------------------------
+// Card preparation — host-level concern, not a reusable runtime concern.
+// Copies source card JSON files into the runtime's tmpCardsDir and writes
+// the concatenated copilot-instructions.md at the board setup root.
+// The runtime's bootstrap operations assume cards are already in tmpCardsDir;
+// the host (this file) decides how and when they get there.
+// ---------------------------------------------------------------------------
+
+const _demoPrepSetupDone = new Map(); // boardId → true
+
+function isDemoSetupDone(boardId, service) {
+  return _demoPrepSetupDone.get(boardId) === true && fs.existsSync(service.tmpCardsDir);
+}
+
+function demoPrepSetup(boardId, service) {
+  const { tmpSurfaceDir, tmpCardsDir, cardsDir, gandalfCardsDir, tmpGandalfCardsDir, boardDir } = service;
+
+  fs.mkdirSync(tmpSurfaceDir, { recursive: true });
+  fs.rmSync(tmpCardsDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpCardsDir, { recursive: true });
+
+  const entries = fs.readdirSync(cardsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.toLowerCase().endsWith('.json')) continue;
+    fs.copyFileSync(path.join(cardsDir, entry.name), path.join(tmpCardsDir, entry.name));
+  }
+
+  // Copy gandalf-card templates if gandalfCardsDir is configured.
+  if (gandalfCardsDir && fs.existsSync(gandalfCardsDir)) {
+    fs.rmSync(tmpGandalfCardsDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpGandalfCardsDir, { recursive: true });
+    for (const entry of fs.readdirSync(gandalfCardsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
+      fs.copyFileSync(path.join(gandalfCardsDir, entry.name), path.join(tmpGandalfCardsDir, entry.name));
+    }
+  }
+
+  // Concatenate agent-instructions*.md into copilot-instructions.md at boardSetupRoot.
+  const boardSetupRoot = path.dirname(boardDir);
+  const srcDir = path.dirname(cardsDir);
+  const agentInstructionFiles = ['agent-instructions.md', 'agent-instructions-cardlayout.md'];
+  const parts = [];
+  for (const fname of agentInstructionFiles) {
+    const fpath = path.join(srcDir, fname);
+    if (fs.existsSync(fpath)) parts.push(fs.readFileSync(fpath, 'utf-8').trimEnd());
+  }
+  if (parts.length > 0) {
+    fs.writeFileSync(path.join(boardSetupRoot, 'copilot-instructions.md'), parts.join('\n\n') + '\n', 'utf-8');
+  }
+
+  _demoPrepSetupDone.set(boardId, true);
+}
+
 async function handleDemoSetup(req, res, boardId) {
   try {
-    const { service, boardRoot } = runtime.requireBoardService(boardId);
+    const { service } = runtime.requireBoardService(boardId);
     let setupPerformed = false;
 
-    if (!service.isDemoSetupDone()) {
-      service.ensureDemoSetup();
+    if (!isDemoSetupDone(boardId, service)) {
+      demoPrepSetup(boardId, service);
       setupPerformed = true;
     }
 

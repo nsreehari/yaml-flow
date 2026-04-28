@@ -883,7 +883,7 @@ export default {
         cwd: exampleDir,
         encoding: 'utf-8',
         windowsHide: true,
-        env: { ...process.env, BOARD_LIVE_CARDS_NO_SPAWN: '1' },
+        env: process.env,
         timeout: 110_000,
       }
     );

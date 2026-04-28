@@ -614,6 +614,7 @@ function shouldAvoidDetachedProcessSpawn(): boolean {
  */
 export async function processAccumulatedEvents(boardDir: string): Promise<boolean> {
   const boardPath = path.join(boardDir, BOARD_FILE);
+  const cliDir = path.resolve(__dirname, '..', '..');
   let release: (() => void) | undefined;
   try {
     release = lockSync(boardPath, { retries: 0 });
@@ -627,7 +628,7 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
       runtimeStore: createNodeRuntimeStore(),
       outputStore: createNodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, INFERENCE_ADAPTER_LOG_FILE),
       inputStore: createNodeInputStore(JOURNAL_FILE),
-      invocationAdapter: createNodeInvocationAdapter(__dirname, encodeSourceToken),
+      invocationAdapter: createNodeInvocationAdapter(cliDir, encodeSourceToken),
     };
     const envelope = loadBoardEnvelope(boardDir);
     const live = restore(envelope.graph);

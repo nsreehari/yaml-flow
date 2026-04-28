@@ -424,8 +424,6 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
   function isGandalfCard(cardId) { return _gandalfCardIds.has(cardId); }
 
-  let didDemoSetup = false;
-
   function resolveCliJsPath() {
     if (configuredBoardLiveCardsCliJs && fs.existsSync(configuredBoardLiveCardsCliJs)) return configuredBoardLiveCardsCliJs;
 
@@ -729,57 +727,6 @@ export function createExampleBoardServerRuntime(options = {}) {
     };
   }
 
-  function demoPrepSetup() {
-    fs.mkdirSync(tmpSurfaceDir, { recursive: true });
-    fs.rmSync(tmpCardsDir, { recursive: true, force: true });
-    fs.mkdirSync(tmpCardsDir, { recursive: true });
-
-    const entries = fs.readdirSync(cardsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.toLowerCase().endsWith('.json')) continue;
-      const src = path.join(cardsDir, entry.name);
-      const dst = path.join(tmpCardsDir, entry.name);
-      fs.copyFileSync(src, dst);
-    }
-
-    // Copy gandalf-card templates if gandalfCardsDir is configured.
-    if (gandalfCardsDir && fs.existsSync(gandalfCardsDir)) {
-      fs.rmSync(tmpGandalfCardsDir, { recursive: true, force: true });
-      fs.mkdirSync(tmpGandalfCardsDir, { recursive: true });
-      for (const entry of fs.readdirSync(gandalfCardsDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
-        fs.copyFileSync(path.join(gandalfCardsDir, entry.name), path.join(tmpGandalfCardsDir, entry.name));
-      }
-    }
-
-    // Concatenate agent-instructions*.md files into copilot-instructions.md at boardSetupRoot
-    const boardSetupRoot = path.dirname(boardDir);
-    const agentInstructionFiles = ['agent-instructions.md', 'agent-instructions-cardlayout.md'];
-    const srcDir = path.dirname(cardsDir); // board source dir where agent-instructions*.md live
-    const parts = [];
-    for (const fname of agentInstructionFiles) {
-      const fpath = path.join(srcDir, fname);
-      if (fs.existsSync(fpath)) {
-        parts.push(fs.readFileSync(fpath, 'utf-8').trimEnd());
-      }
-    }
-    if (parts.length > 0) {
-      fs.writeFileSync(path.join(boardSetupRoot, 'copilot-instructions.md'), parts.join('\n\n') + '\n', 'utf-8');
-    }
-
-    didDemoSetup = true;
-  }
-
-  function isDemoSetupDone() {
-    return didDemoSetup && fs.existsSync(tmpCardsDir);
-  }
-
-  function ensureDemoSetup() {
-    if (isDemoSetupDone()) return;
-    demoPrepSetup();
-  }
-
   function resolveTaskExecutorPath(taskExecutorPathParam) {
     const raw = typeof taskExecutorPathParam === 'string' ? taskExecutorPathParam.trim() : '';
     const resolved = raw
@@ -931,8 +878,6 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
-    ensureDemoSetup();
-
     if (!fs.existsSync(boardFile)) {
       initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
     }
@@ -976,7 +921,6 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function bootstrapCards() {
-    ensureDemoSetup();
     runCli(['upsert-card', '--rg', boardDir, '--card-glob', path.join(tmpCardsDir, '*.json')]);
   }
 
@@ -1461,7 +1405,6 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
 
       if (method === 'GET' && p === `${apiBasePath}/board-status`) {
-        ensureDemoSetup();
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }
@@ -1617,9 +1560,9 @@ export function createExampleBoardServerRuntime(options = {}) {
     parseUrl,
     json,
     runCli,
-    demoPrepSetup,
-    ensureDemoSetup,
-    isDemoSetupDone,
+    cardsDir,
+    gandalfCardsDir,
+    tmpGandalfCardsDir,
     buildPublishedRuntimePayload,
     handleRuntimeApi,
     clearChatRecords,

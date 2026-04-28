@@ -79,14 +79,14 @@ function cliCommand() {
 
 function runCli(args, capture = false) {
   const { cmd, prefixArgs } = cliCommand();
+  const env = { ...process.env };
+  // This demo needs real worker dispatch; suppressing spawn keeps source/inference tasks in running state.
+  delete env.BOARD_LIVE_CARDS_NO_SPAWN;
   const result = spawnSync(cmd, [...prefixArgs, ...args], {
     stdio: capture ? 'pipe' : 'inherit',
     shell: false,
     windowsHide: true,
-    env: {
-      ...process.env,
-      BOARD_LIVE_CARDS_NO_SPAWN: '1',
-    },
+    env,
     encoding: capture ? 'utf-8' : undefined,
   });
 

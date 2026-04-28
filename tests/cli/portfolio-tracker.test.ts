@@ -11,10 +11,7 @@ describe('portfolio tracker demo', () => {
   it('runs end-to-end as a black-box example', { timeout: 120000 }, () => {
     const result = spawnSync(process.execPath, [trackerScript], {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        BOARD_LIVE_CARDS_NO_SPAWN: '1',
-      },
+      env: process.env,
       encoding: 'utf-8',
       windowsHide: true,
     });
@@ -39,10 +36,7 @@ describe('portfolio tracker demo', () => {
     const taskExecutorCmd = `node ${taskExecutorPath}`;
     const result = spawnSync(process.execPath, [trackerScript, '--task-executor', taskExecutorCmd], {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        BOARD_LIVE_CARDS_NO_SPAWN: '1',
-      },
+      env: process.env,
       encoding: 'utf-8',
       windowsHide: true,
     });
