@@ -282,6 +282,20 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Pre-flight: ensure card files are copied into tmpCardsDir before any board
+  // operation. The reusable runtime assumes cards are already in place; the host
+  // (this file) is responsible for putting them there.
+  if (boardSegMatch) {
+    try {
+      const { service } = runtime.requireBoardService(boardSegMatch[1]);
+      if (!isDemoSetupDone(boardSegMatch[1], service)) {
+        demoPrepSetup(boardSegMatch[1], service);
+      }
+    } catch {
+      // Board not registered yet — let dispatch return the appropriate error.
+    }
+  }
+
   // All other /api/boards routes are handled by the reusable runtime
   void dispatch(req, res);
 });
