@@ -4,13 +4,29 @@
  * This file captures the locked V1 rules for deterministic state commits across
  * Node CLI, Python CLI, Azure Function, and Browser adapters.
  *
- * Design constraints encoded here:
+ * AUTHORITATIVE STATE (5 MUTABLE KEYS IN SNAPSHOT):
+ * - board/graph: LiveGraphSnapshot (reactive state, changes during execution)
+ * - board/lastJournalProcessedId: string (drain cursor, changes during drain cycle)
+ * - cards/<id>/runtime: CardRuntimeSnapshot (per-card engine state)
+ * - cards/<id>/fetched-sources-manifest: FetchedSourceManifestEntry[] (source fetch metadata)
+ * - outputStore: computed values, inference logs (changes during execution)
+ *
+ * CONFIGURATION STATE (NOT IN SNAPSHOT - loaded from files at init):
+ * - CardsStore: card definitions from card-source-kinds.json
+ *   (When upsert-card is called, updates are written directly to the config file,
+ *    not persisted via snapshot. Snapshot contains only runtime state.)
+ * - ControlStore: task executor & inference config from .task-executor, .inference-adapter
+ * - LockingAdapter: transient, never persisted
+ * - InvocationAdapter: stateless, never persisted
+ *
+ * DESIGN CONSTRAINTS:
  * - Authoritative state uses commit envelopes with shallow merge + deletes.
  * - Deletes are applied before shallow merge.
  * - Commits are optimistic-concurrency guarded via expectedVersion.
  * - Adapters must expose all-or-nothing commit semantics.
- * - Fetched source payloads are immutable blobs; authoritative state stores refs.
- */
+ * - Fetched source payloads are immutable blobs; authoritative state stores refs only.
+ * - Snapshot is atomic: crash mid-commit leaves no partial state visible.
+ 
 
 import type { LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type {
@@ -64,12 +80,15 @@ export interface StateSnapshotReadView {
    */
   version: string | null;
   /**
-   * Key-value map of authoritative state.
-   * Example keys:
-   * - board/graph
-   * - board/lastJournalProcessedId
-   * - cards/<id>/runtime
-   * - cards/<id>/fetched-sources-manifest
+   * Key-value map of mutable authoritative runtime state (5 keys only).
+   * Configuration state (CardsStore, ControlStore) is loaded from files at init time, not here.
+   *
+   * Keys in this map:
+   * - board/graph: LiveGraphSnapshot
+   * - board/lastJournalProcessedId: string
+   * - cards/<id>/runtime: CardRuntimeSnapshot
+   * - cards/<id>/fetched-sources-manifest: FetchedSourceManifestEntry[]
+   * - outputStore: computed values & logs
    */
   values: Record<string, unknown>;
 }

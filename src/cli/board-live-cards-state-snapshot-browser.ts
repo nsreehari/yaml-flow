@@ -1,3 +1,16 @@
+/**
+ * Browser (localStorage) adapter for board-live-cards snapshot store.
+ *
+ * Persists 5 mutable runtime state keys using browser localStorage.
+ * Single-tab safe (localStorage does not support concurrent browser tabs).
+ *
+ * Configuration state (CardsStore, ControlStore) is NOT persisted here;
+ * it is loaded from card-source-kinds.json and config at init time.
+ *
+ * Version hashing uses non-cryptographic deterministic hash for performance.
+ * Stable stringify ensures same hash across runs with identical state.
+ */
+
 import {
   applyStateSnapshotCommitEnvelope,
   SNAPSHOT_SCHEMA_VERSION_V1,

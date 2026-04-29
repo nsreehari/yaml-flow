@@ -247,7 +247,18 @@ export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
  * Initialize a board directory.
  * - Dir doesn't exist → create it, write empty board-graph.json
  * - Dir exists + valid board-graph.json → no-op, return 'exists'
- * - Dir exists + non-empty (no valid board-graph.json) → throw
+/**
+ * Initialize a new board or verify existing board in the given directory.
+ *
+ * INIT PHASE:
+ * 1. Create empty LiveGraph with EMPTY_CONFIG
+ * 2. Snapshot it and commit to snapshot-store (board/graph + board/lastJournalProcessedId keys only)
+ * 3. Configuration state (CardsStore, ControlStore) is NOT persisted here.
+ *    Card definitions are loaded from card-source-kinds.json files at runtime.
+ *    Config files (.task-executor, .inference-adapter) are loaded from disk on demand.
+ *
+ * Returns 'created' if new board was created, 'exists' if board already existed.
+ * Throws if directory exists but is non-empty and has no valid board-graph.json.
  */
 export function initBoard(dir: string): 'created' | 'exists' {
   const boardPath = path.join(dir, BOARD_FILE);
@@ -287,6 +298,18 @@ export function initBoard(dir: string): 'created' | 'exists' {
   return 'created';
 }
 
+/**
+ * Load the board envelope (graph + drained cursor) from persistent snapshot store.
+ *
+ * LOAD PHASE:
+ * 1. Read snapshot from disk (5 mutable keys: board/graph, board/lastJournalProcessedId, etc.)
+ * 2. Configuration state (CardsStore, ControlStore) is NOT loaded here.
+ *    Cards are loaded separately when needed (during upsert-card commands).
+ *    Config files are read on demand (.task-executor, .inference-adapter).
+ * 3. Restore the graph to verify integrity (no corruption detected during load).
+ *
+ * Falls back to direct board-graph.json read for compatibility with boards created before snapshot-store wiring.
+ */
 export function loadBoardEnvelope(dir: string): BoardEnvelope {
   const boardPath = path.join(dir, BOARD_FILE);
   if (!fs.existsSync(boardPath)) {
@@ -308,6 +331,22 @@ export function loadBoard(dir: string): LiveGraph {
   return restore(envelope.graph);
 }
 
+/**
+ * Save board state to persistent snapshot store after drain cycle.
+ *
+ * SAVE PHASE (Drain Cycle):
+ * 1. Serialize current ReactiveGraph to snapshot
+ * 2. Commit to snapshot-store with optimistic concurrency check (expectedVersion)
+ * 3. Snapshot persists only 5 mutable runtime keys:
+ *    - board/graph, board/lastJournalProcessedId (in board-graph.json)
+ *    - cards/<id>/runtime, cards/<id>/fetched-sources-manifest, outputStore (in .state-snapshot/ sidecars)
+ * 4. Configuration state (CardsStore, ControlStore) is NOT persisted here.
+ *    Config changes from upsert-card are written directly to card-source-kinds.json.
+ *    Control config is persisted separately in .task-executor, .inference-adapter files.
+ * 5. Publish status cache as best-effort (cache failures do not fail the commit).
+ *
+ * Throws if version mismatch detected (concurrent modification from another host/process).
+ */
 export function saveBoard(dir: string, rg: ReactiveGraph, journal: BoardJournal): void {
   const snap = rg.snapshot();
   const envelope: BoardEnvelope = {

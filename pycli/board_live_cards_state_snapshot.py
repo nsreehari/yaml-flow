@@ -1,3 +1,17 @@
+"""
+board_live_cards_state_snapshot — Python adapter for snapshot persistence.
+
+Persists 5 mutable runtime state keys:
+- board/graph and board/lastJournalProcessedId → board-graph.json
+- cards/<id>/runtime, cards/<id>/fetched-sources-manifest, outputStore → .state-snapshot/ tree
+
+Configuration state (CardsStore, ControlStore) is NOT persisted here;
+it is loaded from card-source-kinds.json and config files at init time.
+
+Version hashing is deterministic: sorts all keys before SHA256 to ensure
+reproducible collision detection across hosts (Node, Python, Azure, Browser).
+"""
+
 from __future__ import annotations
 
 import hashlib
