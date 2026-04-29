@@ -98,7 +98,7 @@ export {
   validateLiveGraph, validateReactiveGraph,
   mutateGraph,
   createCallbackHandler, createFireAndForgetHandler,
-  createShellHandler, createScriptHandler, createWebhookHandler, createNoopHandler,
+  createShellHandler, createProcessHandler, createScriptHandler, createWebhookHandler, createNoopHandler,
   liveCardsToReactiveGraph,
   MemoryJournal,
 } from './continuous-event-graph/index.js';
@@ -111,7 +111,7 @@ export type {
   TaskHandlerFn, TaskHandlerInput, TaskHandlerReturn,
   Journal,
   ReactiveGraphValidationInput, GraphMutation,
-  ShellHandlerOptions, ScriptHandlerOptions, WebhookHandlerOptions, ResolveCallbackFn,
+  ShellHandlerOptions, ProcessHandlerOptions, CommandSpec, ScriptHandlerOptions, WebhookHandlerOptions, ResolveCallbackFn,
   LiveCard, LiveBoard, LiveCardsToReactiveOptions, LiveCardsToReactiveResult,
 } from './continuous-event-graph/index.js';
 

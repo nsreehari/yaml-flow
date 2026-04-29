@@ -21,12 +21,36 @@
  *   createNoopHandler       — always resolves immediately (testing/placeholders)
  */
 
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import type { TaskHandlerFn, TaskHandlerInput, TaskHandlerReturn } from './reactive.js';
 
 /** Minimal resolveCallback interface — matches ReactiveGraph.resolveCallback */
 export interface ResolveCallbackFn {
   (callbackToken: string, data: Record<string, unknown>, errors?: string[]): void;
+}
+
+/**
+ * Structured command specification for process-based handlers.
+ *
+ * Use this everywhere instead of raw command strings:
+ * - command: the executable name or path (no embedded args)
+ * - args:    explicit argument array (no shell quoting needed)
+ *
+ * JSON config format:
+ *   Old: { "command": "node path/to/exec.js --flag" }  ← parsed for compat by parseCommandSpec
+ *   New: { "command": "node", "args": ["path/to/exec.js", "--flag"] }
+ */
+export interface CommandSpec {
+  /** Executable name or path. No embedded args. */
+  command: string;
+  /** Explicit argument list. No shell quoting needed. */
+  args?: string[];
+  /** Working directory. */
+  cwd?: string;
+  /** Additional environment variables merged over process.env. */
+  env?: Record<string, string>;
+  /** Timeout in milliseconds. */
+  timeoutMs?: number;
 }
 
 // ============================================================================
@@ -166,6 +190,91 @@ export function createShellHandler(options: ShellHandlerOptions): TaskHandlerFn 
 
         if (exitCode !== 0 && !exitCodeMap?.[exitCode]) {
           getResolve()(callbackToken, {}, [`Command exited with code ${exitCode}: ${stderr || error?.message}`]);
+          return;
+        }
+
+        const data: Record<string, unknown> = {};
+        if (captureOutput) {
+          data.stdout = stdout;
+          data.stderr = stderr;
+          data.exitCode = exitCode;
+        }
+
+        getResolve()(callbackToken, data);
+      },
+    );
+
+    return 'task-initiated';
+  };
+}
+
+// ============================================================================
+// Process handler — structured command execution (no shell)
+// ============================================================================
+
+export interface ProcessHandlerOptions extends CommandSpec {
+  /** Map exit codes to result keys (default: 0 → success, non-zero → error) */
+  exitCodeMap?: Record<number, string>;
+  /** If true, include stdout/stderr/exitCode in the data payload */
+  captureOutput?: boolean;
+  /** Lazy getter for the resolveCallback function */
+  getResolve: () => ResolveCallbackFn;
+}
+
+/**
+ * Create a TaskHandlerFn that spawns a process using structured command + args.
+ *
+ * Unlike createShellHandler, this uses execFile — no ambient shell, no quoting
+ * issues, safe on Windows and Linux. ${taskName} is substituted in both the
+ * command and each arg string.
+ *
+ * Prefer this over createShellHandler for all programmatic invocations
+ * (task-executors, source fetchers, inference adapters).
+ *
+ * @example
+ * ```ts
+ * const handler = createProcessHandler({
+ *   command: 'node',
+ *   args: ['scripts/fetch.js', '--task', '${taskName}'],
+ *   cwd: '/app',
+ *   captureOutput: true,
+ *   getResolve: () => graph.resolveCallback.bind(graph),
+ * });
+ * ```
+ */
+export function createProcessHandler(options: ProcessHandlerOptions): TaskHandlerFn {
+  const {
+    command: commandTemplate,
+    args: argsTemplate = [],
+    cwd,
+    env,
+    timeoutMs = 30_000,
+    exitCodeMap,
+    captureOutput = false,
+    getResolve,
+  } = options;
+
+  return async (input: TaskHandlerInput): Promise<TaskHandlerReturn> => {
+    const { callbackToken, nodeId } = input;
+    const command = commandTemplate.replace(/\$\{taskName\}/g, nodeId);
+    const args = argsTemplate.map(a => a.replace(/\$\{taskName\}/g, nodeId));
+
+    execFile(
+      command,
+      args,
+      {
+        cwd,
+        env: env ? { ...process.env, ...env } : undefined,
+        timeout: timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+        encoding: 'utf8',
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        const exitCode = error?.code as number | undefined ?? (error ? 1 : 0);
+
+        if (exitCode !== 0 && !exitCodeMap?.[exitCode]) {
+          getResolve()(callbackToken, {}, [`Process exited with code ${exitCode}: ${stderr || error?.message}`]);
           return;
         }
 

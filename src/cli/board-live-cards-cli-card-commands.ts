@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import fg from 'fast-glob';
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
 

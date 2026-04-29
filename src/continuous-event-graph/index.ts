@@ -64,11 +64,12 @@ export {
   createCallbackHandler,
   createFireAndForgetHandler,
   createShellHandler,
+  createProcessHandler,
   createScriptHandler,
   createWebhookHandler,
   createNoopHandler,
 } from './handlers.js';
-export type { ShellHandlerOptions, ScriptHandlerOptions, WebhookHandlerOptions, ResolveCallbackFn } from './handlers.js';
+export type { ShellHandlerOptions, ProcessHandlerOptions, CommandSpec, ScriptHandlerOptions, WebhookHandlerOptions, ResolveCallbackFn } from './handlers.js';
 
 // Live Cards → Reactive Graph bridge
 export { liveCardsToReactiveGraph } from './live-cards-bridge.js';
