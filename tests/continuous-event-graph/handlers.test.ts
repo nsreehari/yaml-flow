@@ -163,7 +163,8 @@ describe('createShellHandler', () => {
   it('runs a simple echo command and resolves', async () => {
     const mock = mockResolve();
     const handler = createShellHandler({
-      command: 'echo hello',
+      // Use node -e instead of shell built-ins for Windows/Linux parity.
+      command: 'node -e "console.log(\'hello\')"',
       captureOutput: true,
       getResolve: () => mock.resolve,
     });
@@ -179,7 +180,8 @@ describe('createShellHandler', () => {
   it('substitutes ${taskName} in command', async () => {
     const mock = mockResolve();
     const handler = createShellHandler({
-      command: 'echo ${taskName}',
+      // Keep ${taskName} substitution, but run via node for shell portability.
+      command: 'node -e "console.log(process.argv[1])" ${taskName}',
       captureOutput: true,
       getResolve: () => mock.resolve,
     });
@@ -192,7 +194,8 @@ describe('createShellHandler', () => {
   it('resolves with error on non-zero exit code', async () => {
     const mock = mockResolve();
     const handler = createShellHandler({
-      command: 'exit 1',
+      // Avoid shell built-in "exit"; use node so behavior is consistent cross-platform.
+      command: 'node -e "process.exit(1)"',
       getResolve: () => mock.resolve,
     });
 
