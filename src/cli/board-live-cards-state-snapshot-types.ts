@@ -26,7 +26,7 @@
  * - Adapters must expose all-or-nothing commit semantics.
  * - Fetched source payloads are immutable blobs; authoritative state stores refs only.
  * - Snapshot is atomic: crash mid-commit leaves no partial state visible.
- 
+ */
 
 import type { LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type {
