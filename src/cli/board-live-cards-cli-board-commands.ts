@@ -6,6 +6,7 @@ import type { GraphEvent } from '../event-graph/types.js';
 
 interface TaskExecutorConfigLike {
   command: string;
+  args?: string[];
   extra?: Record<string, unknown>;
 }
 
@@ -172,7 +173,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
             fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
             let stdout: string;
             try {
-              stdout = deps.execCommandSync(teConfig.command, ['validate-source-def', '--in', tmpFile], { shell: true, timeout: 10_000 });
+              stdout = deps.execCommandSync(teConfig.command, [...(teConfig.args ?? []), 'validate-source-def', '--in', tmpFile], { timeout: 10_000 });
             } catch (execErr: any) {
               stdout = typeof execErr?.stdout === 'string' ? execErr.stdout
                 : Buffer.isBuffer(execErr?.stdout) ? execErr.stdout.toString('utf-8')

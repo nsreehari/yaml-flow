@@ -3,11 +3,16 @@
  */
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  parseCommandSpec,
+  splitCommandLine,
+  runSync,
+  runAsync,
+  runDetached,
+} from './process-runner.js';
 import fg from 'fast-glob';
 import { lockSync } from 'proper-lockfile';
 import { restore } from '../continuous-event-graph/core.js';
@@ -56,17 +61,20 @@ const RUNTIME_CARDS_DIR = 'cards';
 const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
 const INFERENCE_ADAPTER_FILE = '.inference-adapter';
 const TASK_EXECUTOR_FILE = '.task-executor';
-/** Parsed content of a .task-executor file (JSON or plain-text fallback). */
+/** Parsed content of a .task-executor file. command+args form preferred; legacy plain string also accepted. */
 interface TaskExecutorConfig {
   command: string;
+  args?: string[];
   extra?: Record<string, unknown>;
 }
 
 /**
  * Read and parse a .task-executor file.
- * Supports JSON format: { "command": "...", "extra": { ... } }
- * Falls back to treating the entire content as a plain command string (backward compat).
- * The `extra` bag is merged blindly into each source payload before invoking the executor.
+ * Supports:
+ *   { "command": "node", "args": ["executor.js"], "extra": {} }  ← preferred
+ *   { "command": "node executor.js", "extra": {} }              ← legacy: command string parsed via splitCommandLine
+ *   "node executor.js"                                           ← legacy: plain text
+ * Returns a normalized config with command/args ready for execCommandSync.
  */
 function readTaskExecutorConfig(boardDir: string): TaskExecutorConfig | undefined {
   const executorFile = path.join(boardDir, TASK_EXECUTOR_FILE);
@@ -76,10 +84,12 @@ function readTaskExecutorConfig(boardDir: string): TaskExecutorConfig | undefine
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && typeof parsed.command === 'string') {
-      return parsed as TaskExecutorConfig;
+      const spec = parseCommandSpec({ command: parsed.command, args: parsed.args });
+      return { command: spec.command, args: spec.args, extra: parsed.extra };
     }
   } catch { /* not JSON — treat as plain command */ }
-  return { command: raw };
+  const spec = parseCommandSpec(raw);
+  return { command: spec.command, args: spec.args };
 }
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
@@ -538,94 +548,17 @@ function determineLatestPendingAccumulated(boardDir: string): number {
   }
 }
 
-function shouldUseShellForCommand(cmd: string, forceShell?: boolean): boolean {
-  if (typeof forceShell === 'boolean') return forceShell;
-  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd);
-}
-
-/** Cached git-bash path (resolved once per process, persisted to disk across invocations). */
-let _gitBashPath: string | false | undefined;
-const GIT_BASH_CACHE_FILE = path.join(os.tmpdir(), '.board-live-cards-git-bash-cache.json');
-
-function findGitBash(): string | false {
-  if (_gitBashPath !== undefined) return _gitBashPath;
-  if (process.platform !== 'win32') return (_gitBashPath = false);
-
-  // Try disk cache first
-  try {
-    const cached = JSON.parse(fs.readFileSync(GIT_BASH_CACHE_FILE, 'utf8'));
-    if (cached.path === false || (typeof cached.path === 'string' && fs.existsSync(cached.path))) {
-      return (_gitBashPath = cached.path);
-    }
-  } catch { /* cache miss or corrupt — probe fresh */ }
-
-  const candidates = [
-    process.env.SHELL,
-    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Git', 'usr', 'bin', 'bash.exe'),
-    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Git', 'bin', 'bash.exe'),
-    process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Git', 'bin', 'bash.exe'),
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
-  ];
-  for (const c of candidates) {
-    if (c && /bash(\.exe)?$/i.test(c) && fs.existsSync(c)) {
-      _gitBashPath = c;
-      try { fs.writeFileSync(GIT_BASH_CACHE_FILE, JSON.stringify({ path: c })); } catch { /* best-effort */ }
-      return _gitBashPath;
-    }
-  }
-  _gitBashPath = false;
-  try { fs.writeFileSync(GIT_BASH_CACHE_FILE, JSON.stringify({ path: false })); } catch { /* best-effort */ }
-  return _gitBashPath;
-}
-
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
+// Thin wrappers delegating to process-runner — no duplicate logic here.
 function spawnDetachedCommand(cmd: string, args: string[]): void {
-  if (process.platform === 'win32') {
-    const bash = findGitBash();
-    if (bash) {
-      // Git-bash background: no console popup, survives parent exit.
-      const shellCmd = [cmd, ...args].map((a) => shellQuote(a.replace(/\\/g, '/'))).join(' ');
-      const child = spawn(bash, ['-c', shellCmd], { detached: true, stdio: 'ignore', windowsHide: true });
-      child.unref();
-      return;
-    }
-    // Fallback: cmd /c start /b + detached so child survives parent exit.
-    const child = spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
-    return;
-  }
-  // Unix: straightforward detached spawn.
-  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-  child.unref();
+  runDetached({ command: cmd, args });
 }
 
 function execCommandSync(
   cmd: string,
   args: string[],
-  options?: {
-    shell?: boolean;
-    timeout?: number;
-    encoding?: BufferEncoding;
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  },
+  options?: { shell?: boolean; timeout?: number; encoding?: BufferEncoding; cwd?: string; env?: NodeJS.ProcessEnv },
 ): string {
-  const output = execFileSync(cmd, args, {
-    shell: shouldUseShellForCommand(cmd, options?.shell),
-    timeout: options?.timeout,
-    encoding: options?.encoding,
-    cwd: options?.cwd,
-    windowsHide: true,
-    env: options?.env,
-  });
-  return typeof output === 'string' ? output : output.toString('utf-8');
+  return runSync({ command: cmd, args, cwd: options?.cwd, timeoutMs: options?.timeout, env: options?.env as Record<string, string> | undefined });
 }
 
 function execCommandAsync(
@@ -633,62 +566,12 @@ function execCommandAsync(
   args: string[],
   callback: (err: Error | null, stdout: string, stderr: string) => void,
 ): void {
-  execFile(
-    cmd,
-    args,
-    { shell: shouldUseShellForCommand(cmd), encoding: 'utf8', windowsHide: true },
-    (err, stdout, stderr) => callback(err ?? null, stdout, stderr),
-  );
-}
-
-function splitCommandLine(command: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let quote: '"' | '\'' | null = null;
-
-  for (const ch of command.trim()) {
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (ch === '"' || ch === '\'') {
-      quote = ch;
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      if (current) {
-        tokens.push(current);
-        current = '';
-      }
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (quote) {
-    throw new Error(`Unterminated quote in command: ${command}`);
-  }
-
-  if (current) tokens.push(current);
-  return tokens;
+  runAsync({ command: cmd, args }, callback);
 }
 
 function resolveCommandInvocation(rawCmd: string, rawArgs: string[]): { cmd: string; args: string[] } {
-  if (/^(node|node\.exe)$/i.test(rawCmd)) {
-    return { cmd: process.execPath, args: rawArgs };
-  }
-  // Keep script-based commands consistent for source and inference paths.
-  if (/\.m?js$/i.test(rawCmd)) {
-    return { cmd: process.execPath, args: [rawCmd, ...rawArgs] };
-  }
-  return { cmd: rawCmd, args: rawArgs };
+  const spec = parseCommandSpec({ command: rawCmd, args: rawArgs });
+  return { cmd: spec.command, args: spec.args ?? [] };
 }
 
 function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {

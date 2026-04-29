@@ -34,6 +34,7 @@ interface CardRuntimeStateLike {
 
 interface TaskExecutorConfigLike {
   command: string;
+  args?: string[];
   extra?: Record<string, unknown>;
 }
 
@@ -127,7 +128,8 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
 
     // Load registered task-executor (if any)
     const teConfig = deps.readTaskExecutorConfig(boardDir!);
-    const taskExecutor = teConfig?.command;
+    const taskExecutorCmd = teConfig?.command;
+    const taskExecutorArgs = teConfig?.args ?? [];
     const taskExecutorExtraB64 = teConfig?.extra
       ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
       : undefined;
@@ -165,7 +167,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
         });
       }
 
-      if (taskExecutor) {
+      if (taskExecutorCmd) {
         // External task-executor registered: invoke run-source-fetch subcommand
         if (!src.outputFile) {
           console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
@@ -182,12 +184,11 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
         };
         deps.appendTaskExecutorLog(boardDir!, sourceForExecutor, 'external-task-executor');
         fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
-        const executorArgs = ['run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile];
+        const executorArgs = [...taskExecutorArgs, 'run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile];
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-        console.log(`[run-sourcedefs-internal] task-executor: ${taskExecutor} ${executorArgs.join(' ')}`);
+        console.log(`[run-sourcedefs-internal] task-executor: ${taskExecutorCmd} ${executorArgs.join(' ')}`);
         try {
-          deps.execCommandSync(taskExecutor, executorArgs, {
-            shell: true,
+          deps.execCommandSync(taskExecutorCmd, executorArgs, {
             timeout: src.timeout ?? 120_000,
           });
         } catch (err: unknown) {

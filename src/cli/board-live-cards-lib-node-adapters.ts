@@ -17,8 +17,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { lockSync } from 'proper-lockfile';
+import { runDetached } from './process-runner.js';
 import type {
   RuntimeInternalStore,
   RuntimeStoreSession,
@@ -271,59 +271,6 @@ function buildCliInvocation(cliDir: string, command: string, args: string[]): { 
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
-let _gitBashCache: string | false | undefined;
-const GIT_BASH_CACHE_FILE = path.join(os.tmpdir(), '.board-live-cards-git-bash-path.json');
-
-function findGitBash(): string | false {
-  if (_gitBashCache !== undefined) return _gitBashCache;
-  try {
-    const cached = JSON.parse(fs.readFileSync(GIT_BASH_CACHE_FILE, 'utf-8'));
-    if (typeof cached?.path === 'string' || cached?.path === false) {
-      _gitBashCache = cached.path;
-      return _gitBashCache as string | false;
-    }
-  } catch { /* miss */ }
-  const candidates = [
-    'C:\\Program Files\\Git\\bin\\bash.exe',
-    'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      _gitBashCache = c;
-      try { fs.writeFileSync(GIT_BASH_CACHE_FILE, JSON.stringify({ path: c })); } catch { /* best-effort */ }
-      return c;
-    }
-  }
-  _gitBashCache = false;
-  try { fs.writeFileSync(GIT_BASH_CACHE_FILE, JSON.stringify({ path: false })); } catch { /* best-effort */ }
-  return false;
-}
-
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
-function spawnDetached(cmd: string, args: string[]): void {
-  if (process.platform === 'win32') {
-    const bash = findGitBash();
-    if (bash) {
-      const shellCmd = [cmd, ...args].map(a => shellQuote(a.replace(/\\/g, '/'))).join(' ');
-      const child = spawn(bash, ['-c', shellCmd], { detached: true, stdio: 'ignore', windowsHide: true });
-      child.unref();
-      return;
-    }
-    const child = spawn('cmd', ['/c', 'start', '/b', '', cmd, ...args], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
-    return;
-  }
-  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-  child.unref();
-}
-
 class NodeInvocationAdapter implements InvocationAdapter {
   constructor(
     private readonly cliDir: string,
@@ -349,7 +296,7 @@ class NodeInvocationAdapter implements InvocationAdapter {
       const args = ['--card', enrichedCardPath, '--token', callbackToken, '--rg', boardDir];
       const { cmd, args: cmdArgs } = buildCliInvocation(this.cliDir, 'run-sourcedefs-internal', args);
       const invocationId = randomUUID();
-      spawnDetached(cmd, cmdArgs);
+      runDetached({ command: cmd, args: cmdArgs });
       return { dispatched: true, invocationId };
     } catch (err) {
       return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
@@ -379,7 +326,7 @@ class NodeInvocationAdapter implements InvocationAdapter {
         ['--in', inferenceInFile, '--token', inferenceToken],
       );
       const invocationId = randomUUID();
-      spawnDetached(cmd, args);
+      runDetached({ command: cmd, args });
       return { dispatched: true, invocationId };
     } catch (err) {
       return { dispatched: false, error: err instanceof Error ? err.message : String(err) };

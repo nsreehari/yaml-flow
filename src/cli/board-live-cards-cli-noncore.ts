@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 interface TaskExecutorConfigLike {
   command: string;
+  args?: string[];
   extra?: Record<string, unknown>;
 }
 
@@ -183,7 +184,8 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
 
     // Detect registered task-executor
     const teConfig = deps.readTaskExecutorConfig(boardDir);
-    const taskExecutor = teConfig?.command;
+    const taskExecutorCmd = teConfig?.command;
+    const taskExecutorBaseArgs = teConfig?.args ?? [];
     const taskExecutorExtraB64 = teConfig?.extra
       ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
       : undefined;
@@ -200,10 +202,10 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     // Call describe-capabilities, get sourceKinds keys, find which one appears in sourceDef.
     // Falls back to 'unknown' if executor is unavailable or call fails.
     let sourceKind = 'unknown';
-    if (taskExecutor) {
+    if (taskExecutorCmd) {
       try {
-        const capRaw = deps.execCommandSync(taskExecutor, ['describe-capabilities'], {
-          shell: true, timeout: 8_000, encoding: 'utf-8',
+        const capRaw = deps.execCommandSync(taskExecutorCmd, [...taskExecutorBaseArgs, 'describe-capabilities'], {
+          timeout: 8_000, encoding: 'utf-8',
         });
         const caps = JSON.parse(String(capRaw));
         const knownKinds: string[] = caps?.sourceKinds ? Object.keys(caps.sourceKinds) : [];
@@ -217,7 +219,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     console.log(`[probe-source] card:        ${card.id}`);
     console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
     console.log(`[probe-source] _projections:       ${JSON.stringify(mockProjections)}`);
-    console.log(`[probe-source] executor:    ${taskExecutor ?? 'built-in (source.cli only)'}`);
+    console.log(`[probe-source] executor:    ${taskExecutorCmd ?? 'built-in (source.cli only)'}`);
     console.log('[probe-source] running fetch...');
 
     const ts = Date.now();
@@ -232,11 +234,10 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     let resultRaw: string | undefined;
 
     try {
-      if (taskExecutor) {
-        const executorArgs = ['run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile];
+      if (taskExecutorCmd) {
+        const executorArgs = [...taskExecutorBaseArgs, 'run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile];
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-        deps.execCommandSync(taskExecutor, executorArgs, {
-          shell: true,
+        deps.execCommandSync(taskExecutorCmd, executorArgs, {
           timeout: (sourceDef.timeout as number) ?? 30_000,
         });
       } else {
@@ -324,8 +325,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     }
 
     try {
-      const stdout = deps.execCommandSync(teConfig.command, ['describe-capabilities'], {
-        shell: true,
+      const stdout = deps.execCommandSync(teConfig.command, [...(teConfig.args ?? []), 'describe-capabilities'], {
         timeout: 10_000,
         encoding: 'utf-8',
       });

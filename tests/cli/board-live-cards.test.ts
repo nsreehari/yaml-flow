@@ -1225,8 +1225,9 @@ describe('windows launcher behavior', () => {
   });
 
   it('keeps CLI child-process launches hidden on Windows', () => {
-    const cliSource = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'board-live-cards-cli.ts'), 'utf-8');
-    expect(cliSource).toContain('windowsHide: true');
-    expect((cliSource.match(/windowsHide: true/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    // All process execution is consolidated in process-runner.ts; check there.
+    const processRunner = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'process-runner.ts'), 'utf-8');
+    expect(processRunner).toContain('windowsHide: true');
+    expect((processRunner.match(/windowsHide: true/g) ?? []).length).toBeGreaterThanOrEqual(4);
   });
 });

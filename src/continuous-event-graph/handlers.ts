@@ -350,21 +350,17 @@ export function createScriptHandler(options: ScriptHandlerOptions): TaskHandlerF
   } = options;
 
   const resolvedRuntime = runtime ?? detectRuntime(scriptPath);
+  const command = resolvedRuntime === 'node' ? process.execPath : resolvedRuntime;
 
-  // Delegate to shell handler with the constructed command
-  const shellArgs = [ctx_taskName_placeholder, ...args].join(' ');
-  const command = `${resolvedRuntime} ${scriptPath} ${shellArgs}`;
-
-  return createShellHandler({
-    command: command.replace(ctx_taskName_placeholder, '${taskName}'),
+  return createProcessHandler({
+    command,
+    args: [scriptPath, '${taskName}', ...args],
     cwd,
     timeoutMs,
     captureOutput,
     getResolve,
   });
 }
-
-const ctx_taskName_placeholder = '__TASK_NAME__';
 
 // ============================================================================
 // Webhook handler — POST to a URL
