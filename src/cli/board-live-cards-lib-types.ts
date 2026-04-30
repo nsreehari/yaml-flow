@@ -55,11 +55,6 @@ export interface SourceTokenPayload {
   cs?: string;
 }
 
-export interface TaskExecutorConfig {
-  command: string;
-  extra?: Record<string, unknown>;
-}
-
 // ============================================================================
 // Pure domain functions (no I/O — safe in neutral bundle)
 // ============================================================================
@@ -151,19 +146,6 @@ export interface OutputStore {
   writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void;
   /** Write task-completed data objects. Idempotent (atomic rename on Node, blob PUT on Azure). */
   writeDataObjects(boardDir: string, data: Record<string, unknown>): void;
-  /** Append a structured inference diagnostic log entry. */
-  appendInferenceLog(boardDir: string, cardId: string, payload: unknown): void;
-}
-
-// ============================================================================
-// LockingAdapter — board-level exclusive lock
-//
-// Invariant: Locking is acquired at the lib service boundary (processAccumulatedEvents),
-// not inside individual adapters or handlers.
-// ============================================================================
-
-export interface LockingAdapter {
-  withLock<T>(boardDir: string, fn: () => T): T;
 }
 
 // ============================================================================
@@ -201,19 +183,6 @@ export interface InvocationAdapter {
     inferencePayload: unknown,
     callbackToken: string,
   ): Promise<DispatchResult>;
-}
-
-// ============================================================================
-// ControlStore — read-only in handlers; written only during init/admin flows
-//
-// Invariant: ControlStore writes only during init/administrative flows.
-// Handlers must never write .task-executor or .inference-adapter.
-// ============================================================================
-
-export interface ControlStore {
-  readTaskExecutorConfig(boardDir: string): TaskExecutorConfig | undefined;
-  /** Returns the inference adapter command string, or undefined if not configured. */
-  readInferenceAdapterConfig(boardDir: string): string | undefined;
 }
 
 // ============================================================================

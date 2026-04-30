@@ -12,6 +12,8 @@ import {
   runSync,
   runAsync,
   runDetached,
+  makeBoardTempFilePath,
+  buildBoardCliInvocation,
 } from './process-runner.js';
 import fg from 'fast-glob';
 import { lockSync } from 'proper-lockfile';
@@ -28,6 +30,8 @@ import { createBoardCommandHandlers } from './board-live-cards-cli-board-command
 import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
 import { createNonCoreCommandHandlers } from './board-live-cards-cli-noncore.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
+import { createFsKvStorage } from './storage-fs-adapters.js';
+import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
 import { createExecutionCommandHandlers } from './board-live-cards-cli-execution-commands.js';
 import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
 import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
@@ -38,9 +42,10 @@ import {
 } from './board-live-cards-lib-node-adapters.js';
 import {
   createCardStore, createJournalStore, createExecutionRequestStore,
-  createStateSnapshotStore,
+  createStateSnapshotStore, createBoardConfigStore,
   BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
   type StateSnapshotStorageAdapter, type StateSnapshotReadView,
+  type BoardConfigStore,
 } from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
 import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
@@ -61,18 +66,29 @@ function createFsCardStorageAdapter(boardDir: string) {
   const indexPath = path.join(boardDir, '.card-index.json');
   const inventoryPath = path.join(boardDir, INVENTORY_FILE);
 
-  // Build a CardIndex from the append-only card-inventory.jsonl.
+  // Build a CardIndex from the append-only card-inventory.jsonl (legacy)
+  // and the new card-upsert KV store (new path). KV entries take precedence.
   // The card file path IS the key — adapter.readCard(key) reads the file at that path.
   function buildIndexFromInventory(): import('./board-live-cards-all-stores.js').CardIndex {
-    if (!fs.existsSync(inventoryPath)) return {};
-    const lines = fs.readFileSync(inventoryPath, 'utf-8').split('\n').filter(l => l.trim());
     const result: import('./board-live-cards-all-stores.js').CardIndex = {};
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line) as { cardId: string; cardFilePath: string; addedAt: string };
-        const absPath = path.resolve(entry.cardFilePath);
-        result[entry.cardId] = { key: absPath, checksum: '', updatedAt: entry.addedAt };
-      } catch { /* skip malformed lines */ }
+    // Legacy: read from cards-inventory.jsonl
+    if (fs.existsSync(inventoryPath)) {
+      const lines = fs.readFileSync(inventoryPath, 'utf-8').split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as { cardId: string; cardFilePath: string; addedAt: string };
+          const absPath = path.resolve(entry.cardFilePath);
+          result[entry.cardId] = { key: absPath, checksum: '', updatedAt: entry.addedAt };
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    // New path: read from .card-upsert-kv — overrides legacy entries
+    const upsertKv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+    for (const cardId of upsertKv.listKeys()) {
+      const entry = upsertKv.read(cardId) as CardUpsertIndexEntry | null;
+      if (entry?.blobRef) {
+        result[cardId] = { key: entry.blobRef, checksum: entry.taskConfigHash, updatedAt: entry.updatedAt };
+      }
     }
     return result;
   }
@@ -155,45 +171,45 @@ function createFsExecutionRequestStorageAdapter(boardDir: string) {
     },
   };
 }
-const TASK_EXECUTOR_LOG_FILE = 'task-executor.jsonl';
-const INFERENCE_ADAPTER_LOG_FILE = 'inference-adapter.jsonl';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
 const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
 const RUNTIME_CARDS_DIR = 'cards';
 const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
-const INFERENCE_ADAPTER_FILE = '.inference-adapter';
-const TASK_EXECUTOR_FILE = '.task-executor';
-/** Parsed content of a .task-executor file. command+args form preferred; legacy plain string also accepted. */
-interface TaskExecutorConfig {
-  command: string;
-  args?: string[];
-  extra?: Record<string, unknown>;
+const CONFIG_KEY_TASK_EXECUTOR = 'task-executor';
+const CONFIG_KEY_INFERENCE_ADAPTER = 'inference-adapter';
+/** File names for board config entries — used only by the fs adapter. */
+const CONFIG_FILE_MAP: Record<string, string> = {
+  [CONFIG_KEY_TASK_EXECUTOR]: '.task-executor',
+  [CONFIG_KEY_INFERENCE_ADAPTER]: '.inference-adapter',
+};
+
+function createFsBoardConfigStorageAdapter(boardDir: string) {
+  return {
+    readRaw(key: string): string | null {
+      const fileName = CONFIG_FILE_MAP[key];
+      if (!fileName) return null;
+      const filePath = path.join(boardDir, fileName);
+      if (!fs.existsSync(filePath)) return null;
+      return fs.readFileSync(filePath, 'utf-8');
+    },
+    writeRaw(key: string, raw: string): void {
+      const fileName = CONFIG_FILE_MAP[key];
+      if (!fileName) throw new Error(`Unknown config key: ${key}`);
+      fs.writeFileSync(path.join(boardDir, fileName), raw, 'utf-8');
+    },
+    deleteRaw(key: string): void {
+      const fileName = CONFIG_FILE_MAP[key];
+      if (!fileName) return;
+      const filePath = path.join(boardDir, fileName);
+      try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch { /* best-effort */ }
+    },
+  };
 }
 
-/**
- * Read and parse a .task-executor file.
- * Supports:
- *   { "command": "node", "args": ["executor.js"], "extra": {} }  ← preferred
- *   { "command": "node executor.js", "extra": {} }              ← legacy: command string parsed via splitCommandLine
- *   "node executor.js"                                           ← legacy: plain text
- * Returns a normalized config with command/args ready for execCommandSync.
- */
-function readTaskExecutorConfig(boardDir: string): TaskExecutorConfig | undefined {
-  const executorFile = path.join(boardDir, TASK_EXECUTOR_FILE);
-  if (!fs.existsSync(executorFile)) return undefined;
-  const raw = fs.readFileSync(executorFile, 'utf-8').trim();
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && typeof parsed.command === 'string') {
-      const spec = parseCommandSpec({ command: parsed.command, args: parsed.args });
-      return { command: spec.command, args: spec.args, extra: parsed.extra };
-    }
-  } catch { /* not JSON — treat as plain command */ }
-  const spec = parseCommandSpec(raw);
-  return { command: spec.command, args: spec.args };
+function createBoardConfig(boardDir: string): BoardConfigStore {
+  return createBoardConfigStore(createFsBoardConfigStorageAdapter(boardDir), parseCommandSpec);
 }
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
@@ -388,9 +404,25 @@ export function readCardInventory(boardDir: string): CardInventoryEntry[] {
 }
 
 export function lookupCardPath(boardDir: string, cardId: string): string | null {
+  // Check new KV store first
+  const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+  const kvEntry = kv.read(cardId) as CardUpsertIndexEntry | null;
+  if (kvEntry?.blobRef) return kvEntry.blobRef;
+  // Fall back to legacy inventory
   const entries = readCardInventory(boardDir);
   const entry = entries.find(e => e.cardId === cardId);
   return entry?.cardFilePath ?? null;
+}
+
+/** Read all entries from the card-upsert KV dedup cache. Keyed by cardId. */
+export function readCardUpsertIndex(boardDir: string): Record<string, CardUpsertIndexEntry> {
+  const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+  const result: Record<string, CardUpsertIndexEntry> = {};
+  for (const cardId of kv.listKeys()) {
+    const entry = kv.read(cardId) as CardUpsertIndexEntry | null;
+    if (entry) result[cardId] = entry;
+  }
+  return result;
 }
 
 export function appendCardInventory(boardDir: string, entry: CardInventoryEntry): void {
@@ -759,7 +791,7 @@ function resolveCommandInvocation(rawCmd: string, rawArgs: string[]): { cmd: str
 }
 
 function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {
-  const { cmd, args: cliArgs } = getCliInvocation('process-accumulated-events', ['--rg', boardDir, '--inline-loop']);
+  const { cmd, args: cliArgs } = buildBoardCliInvocation(__dirname, 'process-accumulated-events', ['--rg', boardDir, '--inline-loop']);
   try {
     spawnDetachedCommand(cmd, cliArgs);
     return true;
@@ -794,7 +826,7 @@ function shouldAvoidDetachedProcessSpawn(): boolean {
  */
 export async function processAccumulatedEvents(boardDir: string): Promise<boolean> {
   const boardPath = path.join(boardDir, BOARD_FILE);
-  const cliDir = path.resolve(__dirname, '..', '..');
+  const cliDir = __dirname;
   let release: (() => void) | undefined;
   try {
     release = lockSync(boardPath, { retries: 0 });
@@ -821,7 +853,7 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
     const cardHandlerAdapters = {
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
       runtimeStore: createNodeRuntimeStore(),
-      outputStore: createNodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, INFERENCE_ADAPTER_LOG_FILE),
+      outputStore: createNodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath),
       executionRequestStore,
     };
     const envelope = loadBoardEnvelope(boardDir);
@@ -931,48 +963,11 @@ export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
 // ============================================================================
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const LOCAL_TSX_CLI = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 /**
  * Generalized CLI invocation: determines how to invoke this script in current environment.
  * Returns { cmd, args } suitable for execFile() or execFileSync().
  */
-function getCliInvocation(command: string, args: string[]): { cmd: string; args: string[] } {
-  const jsPath = path.join(__dirname, 'board-live-cards-cli.js');
-  if (fs.existsSync(jsPath)) {
-    return { cmd: process.execPath, args: [jsPath, command, ...args] };
-  }
-
-  const tsPath = path.join(__dirname, 'board-live-cards-cli.ts');
-  if (fs.existsSync(tsPath) && fs.existsSync(LOCAL_TSX_CLI)) {
-    return { cmd: process.execPath, args: [LOCAL_TSX_CLI, tsPath, command, ...args] };
-  }
-
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
-}
-
-
-
-function appendTaskExecutorLog(
-  boardDir: string,
-  hydratedSource: unknown,
-  mode: 'external-task-executor' | 'built-in-run-source-fetch',
-): void {
-  try {
-    const entry = {
-      timestamp: new Date().toISOString(),
-      mode,
-      hydratedSource,
-    };
-    fs.appendFileSync(path.join(boardDir, TASK_EXECUTOR_LOG_FILE), JSON.stringify(entry) + '\n', 'utf-8');
-  } catch (logErr) {
-    console.error(`[task-executor-log] append failed: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
-  }
-}
-
-
 // ============================================================================
 // CLI
 // ============================================================================
@@ -1007,7 +1002,8 @@ export async function cli(argv: string[]): Promise<void> {
     writeJsonAtomic,
     resolveStatusSnapshotPath,
     buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(path.resolve(dir), live),
-    readTaskExecutorConfig,
+    getConfigStore: createBoardConfig,
+    makeTempFilePath: makeBoardTempFilePath,
     resolveCardGlobMatches,
     validateLiveCardDefinition,
     execCommandSync,
@@ -1023,22 +1019,30 @@ export async function cli(argv: string[]): Promise<void> {
     processAccumulatedEventsInfinitePass,
   });
   const nonCoreCommandHandlers = createNonCoreCommandHandlers({
-    readTaskExecutorConfig,
+    getConfigStore: createBoardConfig,
     execCommandSync,
     splitCommandLine,
     resolveCommandInvocation,
+    makeTempFilePath: makeBoardTempFilePath,
   });
   const cardCommandHandlers = createCardCommandHandlers({
     resolveCardGlobMatches,
-    buildCardInventoryIndex,
-    appendCardInventory,
+    readCardUpsertEntry: (boardDir: string, cardId: string): CardUpsertIndexEntry | null => {
+      const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+      return kv.read(cardId) as CardUpsertIndexEntry | null;
+    },
+    writeCardUpsertEntry: (boardDir: string, cardId: string, entry: CardUpsertIndexEntry): void => {
+      const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+      kv.write(cardId, entry);
+    },
+    defaultBlobRef: (_cardId: string, absCardPath: string): string => absCardPath,
     liveCardToTaskConfig,
     appendEventToJournal,
     processAccumulatedEventsInfinitePass,
   });
   const executionCommandHandlers = createExecutionCommandHandlers({
-    INFERENCE_ADAPTER_FILE,
-    readTaskExecutorConfig,
+    getConfigStore: createBoardConfig,
+    makeTempFilePath: makeBoardTempFilePath,
     execCommandSync,
     execCommandAsync,
     splitCommandLine,
@@ -1047,8 +1051,7 @@ export async function cli(argv: string[]): Promise<void> {
     decodeSourceToken,
     decodeCallbackToken,
     spawnDetachedCommand,
-    getCliInvocation,
-    appendTaskExecutorLog,
+    getCliInvocation: buildBoardCliInvocation.bind(null, __dirname),
     appendEventToJournal,
     processAccumulatedEventsInfinitePass,
     processAccumulatedEventsForced,

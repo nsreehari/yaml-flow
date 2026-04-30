@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { GraphEvent } from '../event-graph/types.js';
 import { injectTaskProgress } from './board-live-cards-cli-callbacks.js';
+import type { BoardConfigStore } from './board-live-cards-all-stores.js';
 
 // ============================================================================
 // Local type aliases (mirrors non-exported types in main CLI module)
@@ -33,16 +33,9 @@ interface CardRuntimeStateLike {
 // Dependency interfaces
 // ============================================================================
 
-interface TaskExecutorConfigLike {
-  command: string;
-  args?: string[];
-  extra?: Record<string, unknown>;
-}
-
 interface ExecutionCommandDeps {
-  INFERENCE_ADAPTER_FILE: string;
-  TASK_EXECUTOR_LOG_FILE?: string;
-  readTaskExecutorConfig: (boardDir: string) => TaskExecutorConfigLike | undefined;
+  getConfigStore: (boardDir: string) => BoardConfigStore;
+  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
   execCommandSync: (
     cmd: string,
     args: string[],
@@ -66,11 +59,6 @@ interface ExecutionCommandDeps {
   decodeCallbackToken: (token: string) => { taskName: string } | null;
   spawnDetachedCommand: (cmd: string, args: string[]) => void;
   getCliInvocation: (command: string, args: string[]) => { cmd: string; args: string[] };
-  appendTaskExecutorLog: (
-    boardDir: string,
-    hydratedSource: unknown,
-    mode: 'external-task-executor' | 'built-in-run-source-fetch',
-  ) => void;
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
   processAccumulatedEventsForced: (boardDir: string, options?: { inlineLoop?: boolean }) => Promise<void>;
@@ -128,7 +116,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
     console.log(`[run-sourcedefs-internal] Processing card "${card.id as string}"`);
 
     // Load registered task-executor (if any)
-    const teConfig = deps.readTaskExecutorConfig(boardDir!);
+    const teConfig = deps.getConfigStore(boardDir!).readTaskExecutorConfig();
     const taskExecutorCmd = teConfig?.command;
     const taskExecutorArgs = teConfig?.args ?? [];
     const taskExecutorExtraB64 = teConfig?.extra
@@ -175,15 +163,14 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
           reportFailure('no outputFile configured');
           return;
         }
-        const inFile  = path.join(os.tmpdir(), `card-source-in-${src.bindTo}-${Date.now()}.json`);
-        const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
-        const errFile = path.join(os.tmpdir(), `card-source-err-${src.bindTo}-${Date.now()}.txt`);
+        const inFile  = deps.makeTempFilePath(boardDir!, `source-in-${src.bindTo}`);
+        const outFile = deps.makeTempFilePath(boardDir!, `source-out-${src.bindTo}`);
+        const errFile = deps.makeTempFilePath(boardDir!, `source-err-${src.bindTo}`, '.txt');
         const sourceForExecutor = {
           ...src,
           cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : path.dirname(cardFilePath || ''),
           boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
         };
-        deps.appendTaskExecutorLog(boardDir!, sourceForExecutor, 'external-task-executor');
         fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
         const executorArgs = [...taskExecutorArgs, 'run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile];
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
@@ -214,7 +201,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
         reportFailure('no outputFile configured');
         return;
       }
-      const outFile = path.join(os.tmpdir(), `card-source-out-${src.bindTo}-${Date.now()}.json`);
+      const outFile = deps.makeTempFilePath(boardDir!, `source-out-${src.bindTo}`);
       if (!src.cli) {
         const errMsg = 'source.cli is required for built-in source execution';
         console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
@@ -225,12 +212,6 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
       const timeout = src.timeout ?? 120_000;
       const sourceCwd = typeof src.cwd === 'string' ? src.cwd : path.dirname(cardFilePath || '');
       const sourceBoardDir = typeof src.boardDir === 'string' ? src.boardDir : boardDir;
-      const sourceForBuiltInExecutor = {
-        ...src,
-        cwd: sourceCwd,
-        boardDir: sourceBoardDir,
-      };
-      deps.appendTaskExecutorLog(boardDir!, sourceForBuiltInExecutor, 'built-in-run-source-fetch');
       const cmdParts = deps.splitCommandLine(src.cli);
       if (cmdParts.length === 0) {
         const errMsg = 'source.cli command is empty';
@@ -303,7 +284,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
     }
 
     function spawnInferenceDoneError(reason: string): void {
-      const tmpFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.json`);
+      const tmpFile = deps.makeTempFilePath(boardDir, 'inference-err');
       fs.writeFileSync(tmpFile, JSON.stringify({ isTaskCompleted: false, reason }), 'utf-8');
       spawnInferenceDone(tmpFile);
     }
@@ -313,15 +294,14 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
       return;
     }
 
-    const adapterFile = path.join(boardDir, deps.INFERENCE_ADAPTER_FILE);
-    const inferenceAdapter = fs.existsSync(adapterFile) ? fs.readFileSync(adapterFile, 'utf-8').trim() : undefined;
+    const inferenceAdapter = deps.getConfigStore(boardDir).readInferenceAdapter();
     if (!inferenceAdapter) {
-      spawnInferenceDoneError(`inference adapter is not configured (${deps.INFERENCE_ADAPTER_FILE})`);
+      spawnInferenceDoneError(`inference adapter is not configured (.inference-adapter)`);;
       return;
     }
 
-    const outFile = path.join(os.tmpdir(), `card-inference-out-${Date.now()}.json`);
-    const errFile = path.join(os.tmpdir(), `card-inference-err-${Date.now()}.txt`);
+    const outFile = deps.makeTempFilePath(boardDir, 'inference-out');
+    const errFile = deps.makeTempFilePath(boardDir, 'inference-err', '.txt');
     const adapterParts = deps.splitCommandLine(inferenceAdapter);
     if (adapterParts.length === 0) {
       spawnInferenceDoneError('inference adapter command is empty');

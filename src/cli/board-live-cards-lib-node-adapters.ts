@@ -14,22 +14,17 @@
  */
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { lockSync } from 'proper-lockfile';
-import { runDetached } from './process-runner.js';
+import { runDetached, makeBoardTempFilePath, buildBoardCliInvocation } from './process-runner.js';
 import type {
   RuntimeInternalStore,
   RuntimeStoreSession,
   SourceRuntimeEntry,
   InferenceRuntimeEntry,
   OutputStore,
-  LockingAdapter,
   InvocationAdapter,
   DispatchResult,
-  ControlStore,
-  TaskExecutorConfig,
 } from './board-live-cards-lib-types.js';
 
 // ============================================================================
@@ -139,7 +134,6 @@ class NodeOutputStore implements OutputStore {
   constructor(
     private readonly resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
     private readonly resolveDataObjectsDirPath: (boardDir: string) => string,
-    private readonly inferenceAdapterLogFile: string,
   ) {}
 
   writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void {
@@ -161,48 +155,13 @@ class NodeOutputStore implements OutputStore {
     }
   }
 
-  appendInferenceLog(boardDir: string, cardId: string, payload: unknown): void {
-    try {
-      const entry = { timestamp: new Date().toISOString(), cardId, payload };
-      fs.appendFileSync(
-        path.join(boardDir, this.inferenceAdapterLogFile),
-        JSON.stringify(entry) + '\n',
-        'utf-8',
-      );
-    } catch (logErr) {
-      console.error(`[inference-adapter-log] append failed: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
-    }
-  }
 }
 
 export function createNodeOutputStore(
   resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
   resolveDataObjectsDirPath: (boardDir: string) => string,
-  inferenceAdapterLogFile: string,
 ): OutputStore {
-  return new NodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, inferenceAdapterLogFile);
-}
-
-// ============================================================================
-// LockingAdapter
-// ============================================================================
-
-class NodeLockingAdapter implements LockingAdapter {
-  constructor(private readonly boardFile: string) {}
-
-  withLock<T>(boardDir: string, fn: () => T): T {
-    const boardPath = path.join(boardDir, this.boardFile);
-    const release = lockSync(boardPath, { retries: { retries: 5, minTimeout: 100 } });
-    try {
-      return fn();
-    } finally {
-      release();
-    }
-  }
-}
-
-export function createNodeLockingAdapter(boardFile: string): LockingAdapter {
-  return new NodeLockingAdapter(boardFile);
+  return new NodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath);
 }
 
 // ============================================================================
@@ -216,38 +175,6 @@ export function createNodeLockingAdapter(boardFile: string): LockingAdapter {
 
 function shouldSuppressSpawn(): boolean {
   return process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1';
-}
-
-function getCliInvocationPath(cliDir: string): { cmd: string; args: string[] } | null {
-  // Prefer direct source + tsx when available (fastest startup, no dynamic import overhead).
-  const tsPath = path.join(cliDir, 'board-live-cards-cli.ts');
-  const localTsxBin = path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx');
-  const localTsxMjs = path.join(cliDir, '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const localTsx = fs.existsSync(localTsxMjs) ? localTsxMjs : localTsxBin;
-  if (fs.existsSync(tsPath) && fs.existsSync(localTsx)) {
-    return { cmd: process.execPath, args: [localTsx, tsPath] };
-  }
-  // When cliDir is the project root, prefer the compiled dist entry over the wrapper.
-  const distJsPath = path.join(cliDir, 'dist', 'cli', 'board-live-cards-cli.js');
-  if (fs.existsSync(distJsPath)) {
-    return { cmd: process.execPath, args: [distJsPath] };
-  }
-  // Direct JS in cliDir (e.g. dist/cli context when cliDir = dist/cli/).
-  const jsPath = path.join(cliDir, 'board-live-cards-cli.js');
-  if (fs.existsSync(jsPath)) {
-    return { cmd: process.execPath, args: [jsPath] };
-  }
-  return null; // caller falls back to npx tsx
-}
-
-function buildCliInvocation(cliDir: string, command: string, args: string[]): { cmd: string; args: string[] } {
-  const found = getCliInvocationPath(cliDir);
-  if (found) {
-    return { cmd: found.cmd, args: [...found.args, command, ...args] };
-  }
-  const tsPath = path.join(cliDir, 'board-live-cards-cli.ts');
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
 class NodeInvocationAdapter implements InvocationAdapter {
@@ -269,11 +196,11 @@ class NodeInvocationAdapter implements InvocationAdapter {
     try {
       // Write enriched card to a temp file — the adapter owns this concern.
       const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
-      const enrichedCardPath = path.join(os.tmpdir(), `card-enriched-${cardId}-${Date.now()}.json`);
+      const enrichedCardPath = makeBoardTempFilePath(boardDir, `card-enriched-${cardId}`);
       fs.writeFileSync(enrichedCardPath, JSON.stringify(enrichedCard, null, 2), 'utf-8');
 
       const args = ['--card', enrichedCardPath, '--token', callbackToken, '--rg', boardDir];
-      const { cmd, args: cmdArgs } = buildCliInvocation(this.cliDir, 'run-sourcedefs-internal', args);
+      const { cmd, args: cmdArgs } = buildBoardCliInvocation(this.cliDir, 'run-sourcedefs-internal', args);
       const invocationId = randomUUID();
       runDetached({ command: cmd, args: cmdArgs });
       return { dispatched: true, invocationId };
@@ -293,13 +220,13 @@ class NodeInvocationAdapter implements InvocationAdapter {
     }
     try {
       // Write inference input to a temp file — the adapter owns this concern.
-      const inferenceInFile = path.join(os.tmpdir(), `card-inference-${cardId}-${Date.now()}.json`);
+      const inferenceInFile = makeBoardTempFilePath(boardDir, `card-inference-${cardId}`);
       fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
 
       const inferenceToken = this.encodeSourceToken({
         cbk: callbackToken, rg: boardDir, cid: cardId, b: '', d: '', cs: undefined,
       });
-      const { cmd, args } = buildCliInvocation(
+      const { cmd, args } = buildBoardCliInvocation(
         this.cliDir,
         'run-inference-internal',
         ['--in', inferenceInFile, '--token', inferenceToken],
@@ -323,37 +250,6 @@ export function createNodeInvocationAdapter(
 }
 
 // ============================================================================
-// ControlStore (read-only; written only during init/admin CLI commands)
+// ControlStore is replaced by BoardConfigStore (all-stores.ts).
+// createNodeControlStore is removed — kept here as a tombstone comment only.
 // ============================================================================
-
-class NodeControlStore implements ControlStore {
-  constructor(
-    private readonly taskExecutorFile: string,
-    private readonly inferenceAdapterFile: string,
-  ) {}
-
-  readTaskExecutorConfig(boardDir: string): TaskExecutorConfig | undefined {
-    const executorFile = path.join(boardDir, this.taskExecutorFile);
-    if (!fs.existsSync(executorFile)) return undefined;
-    const raw = fs.readFileSync(executorFile, 'utf-8').trim();
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.command === 'string') return parsed as TaskExecutorConfig;
-    } catch { /* fall through to plain-string compat */ }
-    return { command: raw };
-  }
-
-  readInferenceAdapterConfig(boardDir: string): string | undefined {
-    const adapterFile = path.join(boardDir, this.inferenceAdapterFile);
-    if (!fs.existsSync(adapterFile)) return undefined;
-    const raw = fs.readFileSync(adapterFile, 'utf-8').trim();
-    return raw || undefined;
-  }
-}
-
-export function createNodeControlStore(
-  taskExecutorFile: string,
-  inferenceAdapterFile: string,
-): ControlStore {
-  return new NodeControlStore(taskExecutorFile, inferenceAdapterFile);
-}

@@ -1,14 +1,8 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
-
-interface TaskExecutorConfigLike {
-  command: string;
-  args?: string[];
-  extra?: Record<string, unknown>;
-}
+import type { BoardConfigStore } from './board-live-cards-all-stores.js';
 
 interface ValidateResultLike {
   errors: string[];
@@ -21,7 +15,8 @@ interface BoardCommandDeps {
   writeJsonAtomic: (filePath: string, data: unknown) => void;
   resolveStatusSnapshotPath: (dir: string) => string;
   buildBoardStatusObject: (dir: string, live: LiveGraph) => any;
-  readTaskExecutorConfig: (boardDir: string) => TaskExecutorConfigLike | undefined;
+  getConfigStore: (boardDir: string) => BoardConfigStore;
+  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
   resolveCardGlobMatches: (cardGlob: string) => string[];
   validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
   execCommandSync: (command: string, args: string[], options?: Record<string, unknown>) => string;
@@ -58,20 +53,20 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
 
     const result = deps.initBoard(dir);
 
+    const config = deps.getConfigStore(dir);
     if (taskExecutor) {
       const teExtraIdx = args.indexOf('--task-executor-extra');
       let teExtra: Record<string, unknown> | undefined;
       if (teExtraIdx !== -1 && args[teExtraIdx + 1]) {
         try { teExtra = JSON.parse(args[teExtraIdx + 1]); } catch { /* ignore bad JSON */ }
       }
-      const teConfig: TaskExecutorConfigLike = { command: taskExecutor, ...(teExtra ? { extra: teExtra } : {}) };
-      fs.writeFileSync(path.join(dir, '.task-executor'), JSON.stringify(teConfig, null, 2), 'utf-8');
+      config.writeTaskExecutorConfig({ command: taskExecutor, ...(teExtra ? { extra: teExtra } : {}) });
     }
     if (chatHandler) {
       fs.writeFileSync(path.join(dir, '.chat-handler'), chatHandler, 'utf-8');
     }
     if (inferenceAdapter) {
-      fs.writeFileSync(path.join(dir, '.inference-adapter'), inferenceAdapter, 'utf-8');
+      config.writeInferenceAdapter(inferenceAdapter);
     }
 
     const runtimeOutDir = deps.configureRuntimeOutDir(dir, runtimeOut);
@@ -133,9 +128,9 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       throw new Error('Usage: board-live-cards validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]');
     }
 
-    let teConfig: TaskExecutorConfigLike | undefined;
+    let teConfig: ReturnType<BoardConfigStore['readTaskExecutorConfig']>;
     if (boardDir) {
-      teConfig = deps.readTaskExecutorConfig(boardDir);
+      teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
       if (!teConfig) {
         throw new Error(`--rg specified but no .task-executor found in ${boardDir}`);
       }
@@ -168,7 +163,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       if (teConfig && Array.isArray(card.source_defs)) {
         for (const src of card.source_defs as Array<Record<string, unknown>>) {
           const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
-          const tmpFile = path.join(os.tmpdir(), `validate-src-${bindTo}-${Date.now()}.json`);
+          const tmpFile = deps.makeTempFilePath(boardDir!, `validate-src-${bindTo}`);
           try {
             fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
             let stdout: string;

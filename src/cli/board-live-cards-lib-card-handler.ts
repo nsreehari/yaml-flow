@@ -260,7 +260,6 @@ export function createCardHandlerFn(
             }
 
             // dispatch inference
-            adapters.outputStore.appendInferenceLog(boardDir, cardId, inferencePayload);
             session.setInferenceEntry({ ...updatedInferenceEntry, lastRequestedAt: now });
             session.flush();
 

@@ -1,25 +1,29 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
+import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
 
 export type BoardLiveCard = LiveCard;
 
-export interface CardInventoryEntry {
-  cardId: string;
-  cardFilePath: string;
-  addedAt: string;
-}
-
-export interface CardInventoryIndex {
-  byCardId: Map<string, CardInventoryEntry>;
-  byCardPath: Map<string, CardInventoryEntry>;
-}
-
 interface CardCommandDeps {
   resolveCardGlobMatches: (cardGlob: string) => string[];
-  buildCardInventoryIndex: (boardDir: string) => CardInventoryIndex;
-  appendCardInventory: (boardDir: string, entry: CardInventoryEntry) => void;
+  /**
+   * Read the KV dedup entry for a card. Returns null if the card has never been upserted.
+   * boardDir is passed so the dep can locate the right KV store without capturing it at construction time.
+   */
+  readCardUpsertEntry: (boardDir: string, cardId: string) => CardUpsertIndexEntry | null;
+  /**
+   * Write the KV dedup entry AFTER the journal entry has been appended.
+   * Always called after appendEventToJournal — never before.
+   */
+  writeCardUpsertEntry: (boardDir: string, cardId: string, entry: CardUpsertIndexEntry) => void;
+  /**
+   * Derive the logical blobRef for a brand-new card (first upsert).
+   * For fs: returns the absolute card file path.
+   */
+  defaultBlobRef: (cardId: string, absCardPath: string) => string;
   liveCardToTaskConfig: (card: BoardLiveCard) => TaskConfig;
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
@@ -27,6 +31,18 @@ interface CardCommandDeps {
 
 export interface CardCommandHandlers {
   cmdUpsertCard: (args: string[]) => void;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || value === undefined || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${(value as unknown[]).map(stableJson).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+}
+
+function computeTaskConfigHash(taskConfig: TaskConfig): string {
+  return createHash('sha256').update(stableJson(taskConfig)).digest('hex');
 }
 
 export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHandlers {
@@ -60,17 +76,13 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
       process.exit(1);
     }
 
-    const idx = deps.buildCardInventoryIndex(dir);
-    const batchByCardId = new Map<string, string>();
-    const batchByCardPath = new Map<string, string>();
-    const plans: Array<{
-      card: BoardLiveCard;
-      absCardPath: string;
-      isInsert: boolean;
-    }> = [];
-    const logs: string[] = [];
+    // -----------------------------------------------------------------------
+    // Phase 1: validate entire batch before writing anything
+    // -----------------------------------------------------------------------
+    const batchByCardId = new Map<string, string>();   // cardId  → absPath
+    const batchByCardPath = new Map<string, string>(); // absPath → cardId
+    const plans: Array<{ card: BoardLiveCard; absCardPath: string }> = [];
 
-    // Phase 1: pre-validate entire batch (atomicity guard)
     for (const absCardPath of cardFiles) {
       if (!fs.existsSync(absCardPath)) {
         console.error(`Card file not found: ${absCardPath}`);
@@ -90,6 +102,7 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
         process.exit(1);
       }
 
+      // Within-batch duplicate checks
       const seenPathCardId = batchByCardPath.get(absCardPath);
       if (seenPathCardId && seenPathCardId !== card.id) {
         console.error(
@@ -108,58 +121,57 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
         process.exit(1);
       }
 
-      const existingById = idx.byCardId.get(card.id);
-      const existingByPath = idx.byCardPath.get(absCardPath);
-
-      // Enforce strict one-to-one mapping between card id and file path.
-      if (existingByPath && existingByPath.cardId !== card.id) {
+      // Cross-batch id→file remapping guard (read KV once here for validation)
+      const existing = deps.readCardUpsertEntry(dir, card.id);
+      if (existing && existing.blobRef !== absCardPath) {
         console.error(
-          `Upsert rejected: file "${absCardPath}" is already mapped to card id "${existingByPath.cardId}", ` +
-          `cannot remap to "${card.id}"`
-        );
-        process.exit(1);
-      }
-
-      if (existingById && existingById.cardFilePath !== absCardPath) {
-        console.error(
-          `Upsert rejected: card id "${card.id}" is already mapped to file "${existingById.cardFilePath}", ` +
-          `cannot remap to "${absCardPath}"`
+          `Upsert rejected: card id "${card.id}" is already mapped to "${existing.blobRef}", cannot remap to "${absCardPath}"`
         );
         process.exit(1);
       }
 
       batchByCardPath.set(absCardPath, card.id);
       batchByCardId.set(card.id, absCardPath);
-
-      plans.push({
-        card,
-        absCardPath,
-        isInsert: !existingById,
-      });
+      plans.push({ card, absCardPath });
     }
 
-    // Phase 2: commit writes after full pre-validation succeeds
-    for (const plan of plans) {
-      const { card, absCardPath, isInsert } = plan;
+    // -----------------------------------------------------------------------
+    // Phase 2: per-card hash check → journal (truth) → KV (cache)
+    //
+    // Write order: journal.append() THEN kv.write()
+    // A crash between the two leaves a stale KV — the next upsert will see
+    // "changed" and re-append a task-upsert; addNode is idempotent in the board.
+    // -----------------------------------------------------------------------
+    let changedCount = 0;
+    let skippedCount = 0;
+    const logs: string[] = [];
 
-      if (isInsert) {
-        const newEntry: CardInventoryEntry = {
-          cardId: card.id,
-          cardFilePath: absCardPath,
-          addedAt: new Date().toISOString(),
-        };
-        deps.appendCardInventory(dir, newEntry);
-        idx.byCardId.set(card.id, newEntry);
-        idx.byCardPath.set(absCardPath, newEntry);
+    for (const { card, absCardPath } of plans) {
+      const taskConfig = deps.liveCardToTaskConfig(card);
+      const taskConfigHash = computeTaskConfigHash(taskConfig);
+      const existing = deps.readCardUpsertEntry(dir, card.id);
+      const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
+
+      if (!taskConfigChanged && !restart) {
+        skippedCount++;
+        logs.push(`Card "${card.id}" unchanged — skipped.`);
+        continue;
       }
 
-      const taskConfig = deps.liveCardToTaskConfig(card);
-      deps.appendEventToJournal(dir, {
-        type: 'task-upsert',
-        taskName: card.id,
-        taskConfig,
-        timestamp: new Date().toISOString(),
-      });
+      if (taskConfigChanged) {
+        const blobRef = existing?.blobRef ?? deps.defaultBlobRef(card.id, absCardPath);
+
+        // 1. Journal first — card blob is already on disk at absCardPath
+        deps.appendEventToJournal(dir, {
+          type: 'task-upsert',
+          taskName: card.id,
+          taskConfig,
+          timestamp: new Date().toISOString(),
+        });
+
+        // 2. KV second — dedup cache update
+        deps.writeCardUpsertEntry(dir, card.id, { blobRef, taskConfigHash, updatedAt: new Date().toISOString() });
+      }
 
       if (restart) {
         deps.appendEventToJournal(dir, {
@@ -169,16 +181,24 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
         });
       }
 
-      logs.push(`Card "${card.id}" ${isInsert ? 'upserted (inserted)' : 'upserted (updated)'}${restart ? ' (restarted)' : ''}.`);
+      changedCount++;
+      logs.push(`Card "${card.id}" ${existing ? 'upserted (updated)' : 'upserted (inserted)'}${restart ? ' (restarted)' : ''}.`);
     }
 
-    void deps.processAccumulatedEventsInfinitePass(dir);
+    if (changedCount > 0) {
+      void deps.processAccumulatedEventsInfinitePass(dir);
+    }
+
     if (cardGlob) {
-      console.log(`Upserted ${cardFiles.length} cards from glob: ${cardGlob}${restart ? ' (restarted)' : ''}`);
-    } else {
+      console.log(
+        `Processed ${cardFiles.length} cards from glob: ${cardGlob} ` +
+        `(${changedCount} changed, ${skippedCount} skipped)${restart ? ' (restarted)' : ''}`
+      );
+    } else if (logs.length > 0) {
       console.log(logs[0]);
     }
   }
 
   return { cmdUpsertCard };
 }
+

@@ -1,18 +1,13 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
-
-interface TaskExecutorConfigLike {
-  command: string;
-  args?: string[];
-  extra?: Record<string, unknown>;
-}
+import type { BoardConfigStore } from './board-live-cards-all-stores.js';
 
 interface NonCoreCommandDeps {
-  readTaskExecutorConfig: (boardDir: string) => TaskExecutorConfigLike | undefined;
+  getConfigStore: (boardDir: string) => BoardConfigStore;
   execCommandSync: (command: string, args: string[], options?: Record<string, unknown>) => unknown;
   splitCommandLine: (command: string) => string[];
   resolveCommandInvocation: (rawCmd: string, rawArgs: string[]) => { cmd: string; args: string[] };
+  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
 }
 
 export interface NonCoreCommandHandlers {
@@ -183,7 +178,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     }
 
     // Detect registered task-executor
-    const teConfig = deps.readTaskExecutorConfig(boardDir);
+    const teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
     const taskExecutorCmd = teConfig?.command;
     const taskExecutorBaseArgs = teConfig?.args ?? [];
     const taskExecutorExtraB64 = teConfig?.extra
@@ -222,10 +217,9 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     console.log(`[probe-source] executor:    ${taskExecutorCmd ?? 'built-in (source.cli only)'}`);
     console.log('[probe-source] running fetch...');
 
-    const ts = Date.now();
-    const inFile = path.join(os.tmpdir(), `probe-in-${sourceDef.bindTo}-${ts}.json`);
-    const tmpOut = path.join(os.tmpdir(), `probe-out-${sourceDef.bindTo}-${ts}.json`);
-    const errFile = path.join(os.tmpdir(), `probe-err-${sourceDef.bindTo}-${ts}.txt`);
+    const inFile = deps.makeTempFilePath(boardDir, `probe-in-${sourceDef.bindTo}`);
+    const tmpOut = deps.makeTempFilePath(boardDir, `probe-out-${sourceDef.bindTo}`);
+    const errFile = deps.makeTempFilePath(boardDir, `probe-err-${sourceDef.bindTo}`, '.txt');
 
     fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2), 'utf-8');
 
@@ -318,7 +312,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
       process.exit(1);
     }
 
-    const teConfig = deps.readTaskExecutorConfig(boardDir);
+    const teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
     if (!teConfig) {
       console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${boardDir}`);
       process.exit(1);

@@ -29,6 +29,26 @@ import type { CommandSpec } from '../continuous-event-graph/handlers.js';
 export type { CommandSpec };
 
 // ============================================================================
+// makeBoardTempFilePath — board-scoped temp file path for external process handoff
+// ============================================================================
+
+/**
+ * Return a unique file path under `<boardDir>/.tmp/` suitable for passing
+ * to an external binary (task-executor, inference-adapter) as `--in`, `--out`,
+ * or `--err` arguments.
+ *
+ * - Files are co-located with the board they belong to (not global os.tmpdir()).
+ * - The `.tmp/` directory is created on demand.
+ * - The file itself is NOT created here — the caller writes it before use.
+ * - `ext` defaults to `.json`; use `.txt` for plain-text error files.
+ */
+export function makeBoardTempFilePath(boardDir: string, label: string, ext = '.json'): string {
+  const tmpDir = path.join(boardDir, '.tmp');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  return path.join(tmpDir, `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+}
+
+// ============================================================================
 // parseCommandSpec — legacy string or structured CommandSpec → normalized form
 // ============================================================================
 
@@ -237,4 +257,39 @@ export function runDetached(spec: CommandSpec): void {
 
   const child = spawn(command, args, { detached: true, stdio: 'ignore' });
   child.unref();
+}
+
+// ============================================================================
+// buildBoardCliInvocation — resolve how to invoke board-live-cards-cli
+//
+// cliDir is the directory containing board-live-cards-cli.ts / .js.
+// Probe order: compiled .js → tsx dev → npx tsx fallback.
+// ============================================================================
+
+/**
+ * Return { cmd, args } that invokes `board-live-cards-cli <command> [...args]`
+ * in whatever environment is available (compiled dist, dev tsx, npx fallback).
+ *
+ * Pass `__dirname` (from the calling file's own directory) as `cliDir`.
+ */
+export function buildBoardCliInvocation(
+  cliDir: string,
+  command: string,
+  args: string[],
+): { cmd: string; args: string[] } {
+  const jsPath = path.join(cliDir, 'board-live-cards-cli.js');
+  if (fs.existsSync(jsPath)) {
+    return { cmd: process.execPath, args: [jsPath, command, ...args] };
+  }
+
+  const tsPath = path.join(cliDir, 'board-live-cards-cli.ts');
+  const tsxMjs = path.join(cliDir, '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const tsxBin = path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx');
+  const tsx = fs.existsSync(tsxMjs) ? tsxMjs : tsxBin;
+  if (fs.existsSync(tsPath) && fs.existsSync(tsx)) {
+    return { cmd: process.execPath, args: [tsx, tsPath, command, ...args] };
+  }
+
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }

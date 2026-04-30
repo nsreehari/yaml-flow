@@ -28,6 +28,23 @@ export interface CardIndexEntry {
 export type CardIndex = Record<string, CardIndexEntry>;
 export type CardChecksumIndex = Record<string, string>;
 
+/**
+ * Per-card entry stored in the card-upsert KV cache (one key per cardId).
+ * Lives alongside the board journal — NOT inside the board snapshot.
+ * Purpose: dedup gate to avoid redundant task-upsert journal entries.
+ *
+ * Write order: journal.append() THEN kv.write() — so a crash between the two
+ * leaves the journal entry intact (board is correct) and the KV stale (next
+ * upsert will see "changed" and re-append; addNode is idempotent in the board).
+ */
+export interface CardUpsertIndexEntry {
+  /** Logical reference to the card blob — absolute path for fs, blob name for cloud. */
+  blobRef: string;
+  /** SHA-256 of stable-JSON-serialised taskConfig. Dedup key. */
+  taskConfigHash: string;
+  updatedAt: string;
+}
+
 // ============================================================================
 // CardStorageAdapter — injected by the caller
 // ============================================================================
@@ -422,6 +439,90 @@ export function createStateSnapshotStore(adapter: StateSnapshotStorageAdapter): 
       const nextValues = applyStateSnapshotCommitEnvelope(current.values, envelope);
       const newVersion = adapter.writeValues(scopeId, nextValues, envelope.deleteKeys);
       return { ok: true, newVersion };
+    },
+  };
+}
+
+// ============================================================================
+// Config store — types
+// ============================================================================
+
+/**
+ * Parsed config for a registered task-executor.
+ * Supports both the preferred structured form and the legacy plain-string form.
+ *   Preferred:  { "command": "node", "args": ["executor.js"], "extra": {} }
+ *   Legacy cmd: { "command": "node executor.js" }
+ *   Legacy str: "node executor.js"
+ */
+export interface TaskExecutorConfig {
+  command: string;
+  args?: string[];
+  extra?: Record<string, unknown>;
+}
+
+// ============================================================================
+// BoardConfigStorageAdapter — injected by the caller
+// ============================================================================
+
+export interface BoardConfigStorageAdapter {
+  /** Read the raw stored string for a named config key. Returns null if absent. */
+  readRaw(key: string): string | null;
+  /** Persist the raw string for a named config key. */
+  writeRaw(key: string, raw: string): void;
+  /** Remove a config key. No-op if absent. */
+  deleteRaw(key: string): void;
+}
+
+// ============================================================================
+// BoardConfigStore — pure logic interface
+// ============================================================================
+
+export interface BoardConfigStore {
+  readTaskExecutorConfig(): TaskExecutorConfig | undefined;
+  writeTaskExecutorConfig(config: TaskExecutorConfig): void;
+  readInferenceAdapter(): string | undefined;
+  writeInferenceAdapter(value: string): void;
+}
+
+// ============================================================================
+// createBoardConfigStore — pure logic factory
+// ============================================================================
+
+/**
+ * @param adapter     Raw string I/O, keyed by 'task-executor' / 'inference-adapter'.
+ * @param parseSpec   Normalises legacy string or structured { command, args } →
+ *                    { command, args }. Injected to keep this module platform-free.
+ */
+export function createBoardConfigStore(
+  adapter: BoardConfigStorageAdapter,
+  parseSpec: (raw: string | { command: string; args?: string[] }) => { command: string; args?: string[] },
+): BoardConfigStore {
+  return {
+    readTaskExecutorConfig(): TaskExecutorConfig | undefined {
+      const raw = adapter.readRaw('task-executor');
+      if (!raw?.trim()) return undefined;
+      const trimmed = raw.trim();
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && typeof parsed.command === 'string') {
+          const spec = parseSpec({ command: parsed.command, args: parsed.args });
+          return { command: spec.command, args: spec.args, extra: parsed.extra };
+        }
+      } catch { /* not JSON — treat as plain command string */ }
+      const spec = parseSpec(trimmed);
+      return { command: spec.command, args: spec.args };
+    },
+
+    writeTaskExecutorConfig(config: TaskExecutorConfig): void {
+      adapter.writeRaw('task-executor', JSON.stringify(config, null, 2));
+    },
+
+    readInferenceAdapter(): string | undefined {
+      return adapter.readRaw('inference-adapter')?.trim() || undefined;
+    },
+
+    writeInferenceAdapter(value: string): void {
+      adapter.writeRaw('inference-adapter', value);
     },
   };
 }

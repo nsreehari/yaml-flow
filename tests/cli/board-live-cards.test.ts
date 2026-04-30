@@ -9,7 +9,7 @@ import addFormats from 'ajv-formats';
 import {
   initBoard, loadBoard, loadBoardEnvelope, saveBoard, cli,
   liveCardToTaskConfig,
-  readCardInventory, lookupCardPath, appendCardInventory,
+  readCardInventory, lookupCardPath, appendCardInventory, readCardUpsertIndex,
   BoardJournal, appendEventToJournal, getUndrainedEntries,
 } from '../../src/cli/board-live-cards-cli.js';
 import type { BoardLiveCard, CardInventoryEntry, BoardEnvelope, JournalEntry } from '../../src/cli/board-live-cards-cli.js';
@@ -803,8 +803,8 @@ describe('cli upsert-card atomicity', () => {
     errSpy.mockRestore();
 
     // Atomicity assertion: only original mapping remains; y must not be inserted.
-    const inv = readCardInventory(dir);
-    expect(inv.map(e => e.cardId).sort()).toEqual(['x']);
+    const upsertIdx = readCardUpsertIndex(dir);
+    expect(Object.keys(upsertIdx).sort()).toEqual(['x']);
 
     await cli(['process-accumulated-events', '--rg', dir, '--inline-loop']);
     const live = loadBoard(dir);
@@ -827,8 +827,8 @@ describe('cli upsert-card atomicity', () => {
     exitSpy.mockRestore();
     errSpy.mockRestore();
 
-    // Atomicity assertion: no inventory entries written.
-    expect(readCardInventory(dir)).toHaveLength(0);
+    // Atomicity assertion: no KV entries written.
+    expect(Object.keys(readCardUpsertIndex(dir))).toHaveLength(0);
   });
 });
 
