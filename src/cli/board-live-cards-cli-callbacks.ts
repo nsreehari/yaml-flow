@@ -2,6 +2,32 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { GraphEvent } from '../event-graph/types.js';
 
+/**
+ * Append a task-progress event to the board journal and schedule a drain pass.
+ *
+ * This is the single place that knows the shape of a task-progress journal entry.
+ * All callback commands (source-data-fetched, source-data-fetch-failure,
+ * task-progress, inference-done) go through this helper instead of hand-crafting
+ * the event inline.
+ */
+export function injectTaskProgress(
+  boardDir: string,
+  taskName: string,
+  update: Record<string, unknown>,
+  deps: {
+    appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
+    processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+  },
+): void {
+  deps.appendEventToJournal(boardDir, {
+    type: 'task-progress',
+    taskName,
+    update,
+    timestamp: new Date().toISOString(),
+  });
+  void deps.processAccumulatedEventsInfinitePass(boardDir);
+}
+
 interface CallbackTokenPayload {
   taskName: string;
 }
@@ -126,14 +152,7 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
       process.exit(1);
     }
 
-    deps.appendEventToJournal(rg, {
-      type: 'task-progress',
-      taskName: cbkDecoded.taskName,
-      update: { bindTo: b, outputFile: d, fetchedAt, sourceChecksum: cs },
-      timestamp: fetchedAt,
-    });
-
-    void deps.processAccumulatedEventsInfinitePass(rg);
+    injectTaskProgress(rg, cbkDecoded.taskName, { bindTo: b, outputFile: d, fetchedAt, sourceChecksum: cs }, deps);
   }
 
   function cmdSourceDataFetchFailure(args: string[]): void {
@@ -161,15 +180,7 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
       process.exit(1);
     }
 
-    const timestamp = new Date().toISOString();
-    deps.appendEventToJournal(rg, {
-      type: 'task-progress',
-      taskName: cbkDecoded.taskName,
-      update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs },
-      timestamp,
-    });
-
-    void deps.processAccumulatedEventsInfinitePass(rg);
+    injectTaskProgress(rg, cbkDecoded.taskName, { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs }, deps);
   }
 
   function cmdTaskProgress(args: string[]): void {
@@ -194,14 +205,7 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
 
     const update = updateJson ? JSON.parse(updateJson) : {};
 
-    deps.appendEventToJournal(dir, {
-      type: 'task-progress',
-      taskName: decoded.taskName,
-      update,
-      timestamp: new Date().toISOString(),
-    });
-
-    void deps.processAccumulatedEventsInfinitePass(dir);
+    injectTaskProgress(dir, decoded.taskName, update, deps);
   }
 
   return {

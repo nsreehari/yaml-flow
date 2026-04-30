@@ -14,6 +14,7 @@
 import type { TaskHandlerFn } from '../continuous-event-graph/reactive.js';
 import { CardCompute } from '../card-compute/index.js';
 import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/index.js';
+import type { ExecutionRequestEntry } from './board-live-cards-all-stores.js';
 import type {
   CardHandlerAdapters,
   InferenceRuntimeEntry,
@@ -34,12 +35,16 @@ const DEFAULT_TASK_COMPLETION_RULE = 'all_required_sources_fetched';
  *   const handlerFn = createCardHandlerFn(adapters);
  *   const rg = createReactiveGraph(live, { handlers: { 'card-handler': handlerFn } });
  */
-export function createCardHandlerFn(boardDir: string, adapters: CardHandlerAdapters): TaskHandlerFn {
+export function createCardHandlerFn(
+  boardDir: string,
+  journalId: string,
+  adapters: CardHandlerAdapters,
+  taskCompletedFn: (taskName: string, data: Record<string, unknown>) => void,
+  _taskFailedFn: (taskName: string, error: string) => void,
+): TaskHandlerFn {
   return async (input) => {
-        const cardPath = adapters.cardStore.lookupCardPath(boardDir, input.nodeId);
-        if (!cardPath) return 'task-initiate-failure';
-
-        const card = adapters.cardStore.readCard(cardPath);
+        const pendingRequests: ExecutionRequestEntry[] = [];
+        const card = adapters.cardStore.readCard(input.nodeId);
         if (!card) return 'task-initiate-failure';
 
         const cardId = card.id as string;
@@ -84,7 +89,7 @@ export function createCardHandlerFn(boardDir: string, adapters: CardHandlerAdapt
         const sourcesData: Record<string, unknown> = {};
         for (const src of allSources) {
           if (src.outputFile) {
-            const content = adapters.cardStore.readSourceFileContent(boardDir, cardId, src.outputFile);
+            const content = adapters.cardStore.readSourceFileContent(cardId, src.outputFile);
             if (content !== null) {
               sourcesData[src.bindTo] = content;
             }
@@ -130,9 +135,12 @@ export function createCardHandlerFn(boardDir: string, adapters: CardHandlerAdapt
           },
         );
 
-        // Derive the card's directory from its path for relative cwd resolution.
+        // Derive the card's directory from its registered path for relative cwd resolution.
         // We use a simple string operation (split on / or \) to stay Node-free.
-        const sourceCwd = cardPath.replace(/[\\/][^\\/]*$/, '');
+        const registeredPath = adapters.cardStore.readCardKey(input.nodeId);
+        const sourceCwd = registeredPath
+          ? registeredPath.replace(/[\\/][^\\/]*$/, '')
+          : boardDir;
         enrichedCard.source_defs = Array.isArray(enrichedSources)
           ? enrichedSources.map(src => ({
               ...src,
@@ -173,14 +181,8 @@ export function createCardHandlerFn(boardDir: string, adapters: CardHandlerAdapt
           if (stampedAny) session.flush();
           if (!stampedAny) return 'task-initiated';
 
-          const result = await adapters.invocationAdapter.requestSourceFetch(
-            boardDir,
-            enrichedCard as Record<string, unknown>,
-            input.callbackToken,
-          );
-          if (!result.dispatched && result.error) {
-            console.error(`[card-handler] ${input.nodeId}: source fetch dispatch failed: ${result.error}`);
-          }
+          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardDir, enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
+          adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
           return 'task-initiated';
         }
 
@@ -262,21 +264,8 @@ export function createCardHandlerFn(boardDir: string, adapters: CardHandlerAdapt
             session.setInferenceEntry({ ...updatedInferenceEntry, lastRequestedAt: now });
             session.flush();
 
-            const inferenceResult = await adapters.invocationAdapter.requestInference(
-              boardDir,
-              cardId,
-              inferencePayload,
-              input.callbackToken,
-            );
-            if (!inferenceResult.dispatched) {
-              const failedAt = new Date().toISOString();
-              adapters.inputStore.appendEvent(boardDir, {
-                type: 'task-failed',
-                taskName: input.nodeId,
-                error: inferenceResult.error ?? 'inference dispatch failed',
-                timestamp: failedAt,
-              });
-            }
+            pendingRequests.push({ taskKind: 'inference', payload: { boardDir, cardId, inferencePayload, callbackToken: input.callbackToken } });
+            adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
             return 'task-initiated';
           }
         }
@@ -294,17 +283,12 @@ export function createCardHandlerFn(boardDir: string, adapters: CardHandlerAdapt
           return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
         if (undeliveredOptional.length > 0) {
-          adapters.invocationAdapter.requestSourceFetch(boardDir, enrichedCard as Record<string, unknown>, input.callbackToken)
-            .catch(err => console.error(`[card-handler] ${input.nodeId}: optional source fetch:`, err));
+          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardDir, enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
         }
 
-        // InputStore mutation is explicit — not a side effect of compute.
-        adapters.inputStore.appendEvent(boardDir, {
-          type: 'task-completed',
-          taskName: input.nodeId,
-          data,
-          timestamp: new Date().toISOString(),
-        });
+        // Notify board of task completion via injected callback.
+        taskCompletedFn(input.nodeId, data);
+        if (pendingRequests.length > 0) adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
         return 'task-initiated';
   };
 }

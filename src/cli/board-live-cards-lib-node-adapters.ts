@@ -25,15 +25,12 @@ import type {
   SourceRuntimeEntry,
   InferenceRuntimeEntry,
   OutputStore,
-  InputStore,
   LockingAdapter,
   InvocationAdapter,
   DispatchResult,
-  CardStore,
   ControlStore,
   TaskExecutorConfig,
 } from './board-live-cards-lib-types.js';
-import type { GraphEvent } from '../event-graph/types.js';
 
 // ============================================================================
 // Internal raw type — never exported
@@ -187,24 +184,6 @@ export function createNodeOutputStore(
 }
 
 // ============================================================================
-// InputStore
-// ============================================================================
-
-class NodeInputStore implements InputStore {
-  constructor(private readonly journalFile: string) {}
-
-  appendEvent(boardDir: string, event: GraphEvent): void {
-    const journalPath = path.join(boardDir, this.journalFile);
-    const entry = { id: randomUUID(), event };
-    fs.appendFileSync(journalPath, JSON.stringify(entry) + '\n', 'utf-8');
-  }
-}
-
-export function createNodeInputStore(journalFile: string): InputStore {
-  return new NodeInputStore(journalFile);
-}
-
-// ============================================================================
 // LockingAdapter
 // ============================================================================
 
@@ -341,46 +320,6 @@ export function createNodeInvocationAdapter(
   }) => string,
 ): InvocationAdapter {
   return new NodeInvocationAdapter(cliDir, encodeSourceToken);
-}
-
-// ============================================================================
-// CardStore
-// ============================================================================
-
-class NodeCardStore implements CardStore {
-  constructor(
-    private readonly lookupCardPathFn: (boardDir: string, nodeId: string) => string | null,
-  ) {}
-
-  readCard(cardPath: string): Record<string, unknown> | null {
-    try {
-      return JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-
-  readSourceFileContent(boardDir: string, cardId: string, outputFile: string): unknown {
-    const filePath = path.join(boardDir, cardId, outputFile);
-    if (!fs.existsSync(filePath)) return null;
-    try {
-      const raw = fs.readFileSync(filePath, 'utf-8').trim();
-      try { return JSON.parse(raw); }
-      catch { return raw; }
-    } catch {
-      return null;
-    }
-  }
-
-  lookupCardPath(boardDir: string, nodeId: string): string | null {
-    return this.lookupCardPathFn(boardDir, nodeId);
-  }
-}
-
-export function createNodeCardStore(
-  lookupCardPath: (boardDir: string, nodeId: string) => string | null,
-): CardStore {
-  return new NodeCardStore(lookupCardPath);
 }
 
 // ============================================================================

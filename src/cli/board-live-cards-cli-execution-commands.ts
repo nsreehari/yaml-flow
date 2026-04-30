@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { GraphEvent } from '../event-graph/types.js';
+import { injectTaskProgress } from './board-live-cards-cli-callbacks.js';
 
 // ============================================================================
 // Local type aliases (mirrors non-exported types in main CLI module)
@@ -438,18 +439,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
     fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
     fs.writeFileSync(runtimePath, JSON.stringify(runtime, null, 2), 'utf-8');
 
-    deps.appendEventToJournal(dir, {
-      type: 'task-progress',
-      taskName,
-      update: {
-        kind: 'inference-done',
-        isTaskCompleted: isTaskCompletedFlag,
-        inputChecksum,
-      },
-      timestamp: inferenceCompletedAt,
-    });
-
-    void deps.processAccumulatedEventsInfinitePass(dir);
+    injectTaskProgress(dir, taskName, { kind: 'inference-done', isTaskCompleted: isTaskCompletedFlag, inputChecksum }, deps);
   }
 
   /**

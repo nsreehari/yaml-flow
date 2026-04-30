@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   parseCommandSpec,
@@ -34,23 +34,127 @@ import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
 import {
   createNodeRuntimeStore,
   createNodeOutputStore,
-  createNodeInputStore,
-  createNodeCardStore,
   createNodeInvocationAdapter,
 } from './board-live-cards-lib-node-adapters.js';
-import { createNodeStateSnapshotStoreSync } from './board-live-cards-state-snapshot-node.js';
 import {
-  BOARD_GRAPH_KEY,
-  BOARD_LAST_JOURNAL_PROCESSED_ID_KEY,
-  SNAPSHOT_SCHEMA_VERSION_V1,
-} from './board-live-cards-state-snapshot-types.js';
+  createCardStore, createJournalStore, createExecutionRequestStore,
+  createStateSnapshotStore,
+  BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
+  type StateSnapshotStorageAdapter, type StateSnapshotReadView,
+} from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
 import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
 export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload } from './board-live-cards-lib-types.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure } from './board-live-cards-lib-types.js';
 
 const BOARD_FILE = 'board-graph.json';
-const JOURNAL_FILE = 'board-journal.jsonl';
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${(value as unknown[]).map(stableJson).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+}
+
+function createFsCardStorageAdapter(boardDir: string) {
+  const indexPath = path.join(boardDir, '.card-index.json');
+  const inventoryPath = path.join(boardDir, INVENTORY_FILE);
+
+  // Build a CardIndex from the append-only card-inventory.jsonl.
+  // The card file path IS the key — adapter.readCard(key) reads the file at that path.
+  function buildIndexFromInventory(): import('./board-live-cards-all-stores.js').CardIndex {
+    if (!fs.existsSync(inventoryPath)) return {};
+    const lines = fs.readFileSync(inventoryPath, 'utf-8').split('\n').filter(l => l.trim());
+    const result: import('./board-live-cards-all-stores.js').CardIndex = {};
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as { cardId: string; cardFilePath: string; addedAt: string };
+        const absPath = path.resolve(entry.cardFilePath);
+        result[entry.cardId] = { key: absPath, checksum: '', updatedAt: entry.addedAt };
+      } catch { /* skip malformed lines */ }
+    }
+    return result;
+  }
+
+  return {
+    readIndex() {
+      // Prefer explicit .card-index.json if written by writeCard; fall back to inventory.
+      if (fs.existsSync(indexPath)) {
+        try { return JSON.parse(fs.readFileSync(indexPath, 'utf-8')); } catch { /* fall through */ }
+      }
+      return buildIndexFromInventory();
+    },
+    writeIndex(index: unknown) {
+      const tmp = `${indexPath}.${process.pid}.${randomUUID()}.tmp`;
+      fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(index, null, 2), 'utf-8');
+      fs.renameSync(tmp, indexPath);
+    },
+    readCard(key: string) {
+      if (!fs.existsSync(key)) return null;
+      try { return JSON.parse(fs.readFileSync(key, 'utf-8')); } catch { return null; }
+    },
+    writeCard(key: string, card: unknown): string {
+      const json = stableJson(card);
+      const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
+      fs.mkdirSync(path.dirname(key), { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(JSON.parse(json), null, 2), 'utf-8');
+      fs.renameSync(tmp, key);
+      return createHash('sha256').update(json).digest('hex');
+    },
+    cardExists(key: string) { return fs.existsSync(key); },
+    readSourceOutput(cardId: string, outputFile: string): unknown {
+      const filePath = path.join(boardDir, cardId, outputFile);
+      if (!fs.existsSync(filePath)) return null;
+      const raw = fs.readFileSync(filePath, 'utf-8').trim();
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return raw; }
+    },
+    defaultCardKey(cardId: string) { return path.join(boardDir, `${cardId}.json`); },
+  };
+}
+
+function createFsJournalStorageAdapter(boardDir: string) {
+  const journalPath = path.join(boardDir, 'board-journal.jsonl');
+  return {
+    readAllEntries() {
+      if (!fs.existsSync(journalPath)) return [];
+      const content = fs.readFileSync(journalPath, 'utf-8').trim();
+      if (!content) return [];
+      return content.split('\n').filter(Boolean).map((l: string) => JSON.parse(l));
+    },
+    appendEntry(entry: { id: string; event: unknown }) {
+      fs.appendFileSync(journalPath, JSON.stringify(entry) + '\n', 'utf-8');
+    },
+    generateId() { return randomUUID(); },
+  };
+}
+
+function createFsExecutionRequestStorageAdapter(boardDir: string) {
+  const dir = path.join(boardDir, '.execution-requests');
+  function entryFilePath(journalId: string): string {
+    return path.join(dir, `${journalId}.json`);
+  }
+  return {
+    writeEntries(journalId: string, entries: unknown[]): void {
+      const fp = entryFilePath(journalId);
+      fs.mkdirSync(dir, { recursive: true });
+      const tmp = `${fp}.${process.pid}.${randomUUID()}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), 'utf-8');
+      fs.renameSync(tmp, fp);
+    },
+    readEntries(journalId: string) {
+      const fp = entryFilePath(journalId);
+      if (!fs.existsSync(fp)) return null;
+      try { return JSON.parse(fs.readFileSync(fp, 'utf-8')) as import('./board-live-cards-all-stores.js').ExecutionRequestEntry[]; } catch { return null; }
+    },
+    deleteEntries(journalId: string): void {
+      const fp = entryFilePath(journalId);
+      try { if (fs.existsSync(fp)) fs.unlinkSync(fp); } catch { /* best-effort */ }
+    },
+  };
+}
 const TASK_EXECUTOR_LOG_FILE = 'task-executor.jsonl';
 const INFERENCE_ADAPTER_LOG_FILE = 'inference-adapter.jsonl';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
@@ -99,10 +203,90 @@ export interface BoardEnvelope {
   graph: LiveGraphSnapshot;
 }
 
-const nodeStateSnapshotStore = createNodeStateSnapshotStoreSync({
-  boardFileName: BOARD_FILE,
-  writeJsonAtomic,
-});
+function createFsStateSnapshotStorageAdapter(boardFileName: string): StateSnapshotStorageAdapter {
+  const sidecarRootDirName = '.state-snapshot';
+
+  function keyToSidecarPath(scopeDir: string, key: string): string {
+    return path.join(scopeDir, sidecarRootDirName, ...key.split('/').filter(Boolean)) + '.json';
+  }
+
+  function stableStringify(value: unknown): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${(value as unknown[]).map(stableStringify).join(',')}]`;
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+  }
+
+  function valueToVersion(values: Record<string, unknown>): string {
+    return createHash('sha256').update(stableStringify(values)).digest('hex');
+  }
+
+  function readJson(filePath: string): unknown {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  }
+
+  return {
+    readValues(scopeDir: string): StateSnapshotReadView {
+      const boardPath = path.join(scopeDir, boardFileName);
+      if (!fs.existsSync(boardPath)) return { version: null, values: {} };
+
+      const env = readJson(boardPath) as { graph: unknown; lastDrainedJournalId?: string };
+      const values: Record<string, unknown> = {
+        [BOARD_GRAPH_KEY]: env.graph,
+        [BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]: env.lastDrainedJournalId ?? '',
+      };
+
+      const sidecarRoot = path.join(scopeDir, sidecarRootDirName);
+      if (fs.existsSync(sidecarRoot)) {
+        const stack: string[] = [sidecarRoot];
+        const files: string[] = [];
+        while (stack.length > 0) {
+          const current = stack.pop()!;
+          for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+            const abs = path.join(current, entry.name);
+            if (entry.isDirectory()) { stack.push(abs); continue; }
+            if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+            files.push(abs);
+          }
+        }
+        files.sort((a, b) => a.localeCompare(b));
+        for (const abs of files) {
+          const key = path.relative(sidecarRoot, abs).replace(/\\/g, '/').replace(/\.json$/, '');
+          values[key] = readJson(abs);
+        }
+      }
+
+      return { version: valueToVersion(values), values };
+    },
+
+    writeValues(scopeDir: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
+      const graph = nextValues[BOARD_GRAPH_KEY];
+      const lastDrainedJournalId = nextValues[BOARD_LAST_JOURNAL_PROCESSED_ID_KEY] as string;
+      if (!graph || typeof graph !== 'object') throw new Error(`Snapshot missing required key: ${BOARD_GRAPH_KEY}`);
+      writeJsonAtomic(path.join(scopeDir, boardFileName), { graph, lastDrainedJournalId });
+
+      const boardKeys = new Set([BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]);
+      // Delete sidecar files for removed keys.
+      for (const key of deletedKeys) {
+        if (boardKeys.has(key)) continue;
+        const p = keyToSidecarPath(scopeDir, key);
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      }
+      // Write all non-board keys as sidecar blobs.
+      for (const [key, value] of Object.entries(nextValues)) {
+        if (boardKeys.has(key)) continue;
+        writeJsonAtomic(keyToSidecarPath(scopeDir, key), value);
+      }
+
+      return valueToVersion(nextValues);
+    },
+  };
+}
+
+const nodeStateSnapshotStore = createStateSnapshotStore(
+  createFsStateSnapshotStorageAdapter(BOARD_FILE),
+);
 
 function boardEnvelopeToSnapshotEntries(envelope: BoardEnvelope): Record<string, unknown> {
   return {
@@ -357,10 +541,11 @@ export function loadBoard(dir: string): LiveGraph {
  *
  * Throws if version mismatch detected (concurrent modification from another host/process).
  */
-export function saveBoard(dir: string, rg: ReactiveGraph, journal: BoardJournal): void {
+export function saveBoard(dir: string, rg: ReactiveGraph, journalOrCursor: BoardJournal | string): void {
+  const newCursor = typeof journalOrCursor === 'string' ? journalOrCursor : journalOrCursor.lastDrainedJournalId;
   const snap = rg.snapshot();
   const envelope: BoardEnvelope = {
-    lastDrainedJournalId: journal.lastDrainedJournalId,
+    lastDrainedJournalId: newCursor,
     graph: snap,
   };
   const current = nodeStateSnapshotStore.readSnapshot(dir);
@@ -518,16 +703,14 @@ export function decodeSourceToken(token: string): SourceTokenPayload | null {
  * Safe for hundreds of concurrent callers (appendFileSync is atomic for small writes).
  */
 export function appendEventToJournal(boardDir: string, event: GraphEvent): void {
-  const journalPath = path.join(boardDir, JOURNAL_FILE);
-  const entry: JournalEntry = { id: randomUUID(), event };
-  fs.appendFileSync(journalPath, JSON.stringify(entry) + '\n', 'utf-8');
+  createJournalStore(createFsJournalStorageAdapter(boardDir)).appendEvent(event);
 }
 
 /**
  * Read journal entries after the given ID. Pure file read, no mutation.
  */
 export function getUndrainedEntries(boardDir: string, lastDrainedId: string): JournalEntry[] {
-  const journalPath = path.join(boardDir, JOURNAL_FILE);
+  const journalPath = path.join(boardDir, 'board-journal.jsonl');
   if (!fs.existsSync(journalPath)) return [];
   const content = fs.readFileSync(journalPath, 'utf-8').trim();
   if (!content) return [];
@@ -542,7 +725,8 @@ function determineLatestPendingAccumulated(boardDir: string): number {
   if (!fs.existsSync(boardPath)) return 0;
   try {
     const envelope = loadBoardEnvelope(boardDir);
-    return getUndrainedEntries(boardDir, envelope.lastDrainedJournalId).length;
+    const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
+    return journalStore.pendingCount(envelope.lastDrainedJournalId);
   } catch {
     return 0;
   }
@@ -619,23 +803,54 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
     return false;
   }
   try {
+    const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
+      appendEventToJournal(boardDir, { type: 'task-completed', taskName, data, timestamp: new Date().toISOString() });
+    };
+    const taskFailedFn = (taskName: string, error: string): void => {
+      appendEventToJournal(boardDir, { type: 'task-failed', taskName, error, timestamp: new Date().toISOString() });
+    };
+    const onDispatchFailed = (entry: import('./board-live-cards-all-stores.js').ExecutionRequestEntry, error: string): void => {
+      const p = entry.payload as Record<string, unknown>;
+      const taskName = (p?.enrichedCard as Record<string, unknown> | undefined)?.id as string | undefined
+        ?? p?.cardId as string | undefined
+        ?? 'unknown';
+      taskFailedFn(taskName, error);
+    };
+    const executionRequestStore = createExecutionRequestStore(createFsExecutionRequestStorageAdapter(boardDir), onDispatchFailed);
     const cardHandlerAdapters = {
-      cardStore: createNodeCardStore(lookupCardPath),
+      cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
       runtimeStore: createNodeRuntimeStore(),
       outputStore: createNodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, INFERENCE_ADAPTER_LOG_FILE),
-      inputStore: createNodeInputStore(JOURNAL_FILE),
-      invocationAdapter: createNodeInvocationAdapter(cliDir, encodeSourceToken),
+      executionRequestStore,
     };
     const envelope = loadBoardEnvelope(boardDir);
     const live = restore(envelope.graph);
-    const journal = new BoardJournal(path.join(boardDir, JOURNAL_FILE), envelope.lastDrainedJournalId);
-    const rg = createReactiveGraph(live, { handlers: { 'card-handler': createCardHandlerFn(boardDir, cardHandlerAdapters) } });
-    // Explicitly drain the external journal and push events into the reactive graph.
-    // The engine never reads from external storage — the caller owns that boundary.
-    const undrained = journal.drain();
+    const { events: undrained, newCursor } = journalStore.readEntriesAfterCursor(envelope.lastDrainedJournalId);
+    const invocationAdapter = createNodeInvocationAdapter(cliDir, encodeSourceToken);
+    const rg = createReactiveGraph(live, { handlers: { 'card-handler': createCardHandlerFn(boardDir, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn) } });
     rg.pushAll(undrained);
     await rg.dispose({ wait: true });
-    saveBoard(boardDir, rg, journal);
+    saveBoard(boardDir, rg, newCursor);
+    executionRequestStore.dispatchEntriesForJournalId(newCursor, (entry) => {
+      if (entry.taskKind === 'source-fetch') {
+        const p = entry.payload as { boardDir: string; enrichedCard: Record<string, unknown>; callbackToken: string };
+        invocationAdapter.requestSourceFetch(p.boardDir, p.enrichedCard, p.callbackToken)
+          .catch((err: unknown) => taskFailedFn(
+            (p.enrichedCard?.id as string | undefined) ?? 'unknown',
+            err instanceof Error ? err.message : String(err),
+          ));
+      } else if (entry.taskKind === 'inference') {
+        const p = entry.payload as { boardDir: string; cardId: string; inferencePayload: unknown; callbackToken: string };
+        invocationAdapter.requestInference(p.boardDir, p.cardId, p.inferencePayload, p.callbackToken)
+          .catch((err: unknown) => taskFailedFn(
+            p.cardId ?? 'unknown',
+            err instanceof Error ? err.message : String(err),
+          ));
+      } else {
+        console.warn(`[process-accumulated-events] unknown taskKind "${entry.taskKind}" — skipping`);
+      }
+    });
     return true;
   } finally {
     release!();

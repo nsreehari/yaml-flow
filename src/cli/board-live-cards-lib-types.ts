@@ -13,7 +13,10 @@
  *   - InvocationAdapter results are structured, not raw shell-centric.
  */
 
-import type { GraphEvent } from '../event-graph/types.js';
+import type { CardStore } from './board-live-cards-all-stores.js';
+export type { CardStore };
+import type { ExecutionRequestStore } from './board-live-cards-all-stores.js';
+export type { ExecutionRequestStore };
 
 // ============================================================================
 // Shared domain types
@@ -153,18 +156,6 @@ export interface OutputStore {
 }
 
 // ============================================================================
-// InputStore — explicit journal mutations
-//
-// Invariant: InputStore mutations are explicit operations, never side effects.
-// A side-effect write (e.g. writing the journal inside a compute step) violates this.
-// ============================================================================
-
-export interface InputStore {
-  /** Append a structured event to the board journal. */
-  appendEvent(boardDir: string, event: GraphEvent): void;
-}
-
-// ============================================================================
 // LockingAdapter — board-level exclusive lock
 //
 // Invariant: Locking is acquired at the lib service boundary (processAccumulatedEvents),
@@ -213,19 +204,6 @@ export interface InvocationAdapter {
 }
 
 // ============================================================================
-// CardStore — read-only access to card definitions and source output data
-// ============================================================================
-
-export interface CardStore {
-  /** Read and parse card.json from the given path. Returns null if not found. */
-  readCard(cardPath: string): Record<string, unknown> | null;
-  /** Returns parsed JSON or raw string content of a source output file. Null if absent. */
-  readSourceFileContent(boardDir: string, cardId: string, outputFile: string): unknown;
-  /** Look up the filesystem path of a card by its nodeId. Returns null if not in inventory. */
-  lookupCardPath(boardDir: string, nodeId: string): string | null;
-}
-
-// ============================================================================
 // ControlStore — read-only in handlers; written only during init/admin flows
 //
 // Invariant: ControlStore writes only during init/administrative flows.
@@ -246,6 +224,5 @@ export interface CardHandlerAdapters {
   cardStore: CardStore;
   runtimeStore: RuntimeInternalStore;
   outputStore: OutputStore;
-  inputStore: InputStore;
-  invocationAdapter: InvocationAdapter;
+  executionRequestStore: ExecutionRequestStore;
 }
