@@ -37,10 +37,11 @@ import { createExecutionCommandHandlers } from './board-live-cards-cli-execution
 import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
 import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
 import {
-  createNodeRuntimeStore,
-  createNodeOutputStore,
-  createNodeInvocationAdapter,
-} from './board-live-cards-lib-node-adapters.js';
+  createFsRuntimeStore,
+  createFsOutputStore,
+  computeStableJsonHash,
+} from './storage-fs-adapters.js';
+import { createNodeInvocationAdapter } from './process-runner.js';
 import {
   createCardStore, createJournalStore, createExecutionRequestStore,
   createStateSnapshotStore, createBoardConfigStore,
@@ -822,8 +823,8 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
     const executionRequestStore = createExecutionRequestStore(createFsExecutionRequestStorageAdapter(boardDir), onDispatchFailed);
     const cardHandlerAdapters = {
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
-      runtimeStore: createNodeRuntimeStore(),
-      outputStore: createNodeOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath),
+      runtimeStore: createFsRuntimeStore(),
+      outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath),
       executionRequestStore,
     };
     const envelope = loadBoardEnvelope(boardDir);
@@ -1007,6 +1008,7 @@ export async function cli(argv: string[]): Promise<void> {
       kv.write(cardId, entry);
     },
     liveCardToTaskConfig,
+    hashTaskConfig: computeStableJsonHash,
     appendEventToJournal,
     processAccumulatedEventsInfinitePass,
   });

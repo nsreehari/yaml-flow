@@ -15,7 +15,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 
 import type {
   BlobStorage,
@@ -25,6 +25,13 @@ import type {
   KVStorage,
   StorageProvider,
 } from './storage-interface.js';
+import type {
+  RuntimeInternalStore,
+  RuntimeStoreSession,
+  SourceRuntimeEntry,
+  InferenceRuntimeEntry,
+  OutputStore,
+} from './board-live-cards-lib-types.js';
 
 // ============================================================================
 // FsBlobStorage
@@ -170,6 +177,151 @@ export function createFsJournalStorage(journalPath: string): JournalStorage {
 //   kv      → boardDir/.kv/
 //   journal → boardDir/<journalFile>
 // ============================================================================
+
+// ============================================================================
+// computeStableJsonHash — canonical content hash for any value
+//
+// Used by card-commands to dedup upserts without needing node:crypto at the
+// pure-logic layer.
+// ============================================================================
+
+function stableJson(value: unknown): string {
+  if (value === null || value === undefined || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${(value as unknown[]).map(stableJson).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+}
+
+export function computeStableJsonHash(value: unknown): string {
+  return createHash('sha256').update(stableJson(value)).digest('hex');
+}
+
+// ============================================================================
+// createFsRuntimeStore — FS-backed RuntimeInternalStore
+//
+// Persists per-card runtime state at <boardDir>/<cardId>/runtime.json.
+// State is private; exposed only through RuntimeStoreSession.
+// ============================================================================
+
+interface CardRuntimeState {
+  _sources: Record<string, SourceRuntimeEntry>;
+  _inferenceEntry?: InferenceRuntimeEntry;
+  _lastExecutionCount?: number;
+}
+
+class FsRuntimeStoreSession implements RuntimeStoreSession {
+  private state: CardRuntimeState;
+  private dirty = false;
+
+  constructor(
+    private readonly boardDir: string,
+    private readonly cardId: string,
+  ) {
+    this.state = FsRuntimeInternalStore.readState(boardDir, cardId);
+  }
+
+  getSourceEntry(outputFile: string): SourceRuntimeEntry {
+    return { ...(this.state._sources[outputFile] ?? {}) };
+  }
+  setSourceEntry(outputFile: string, entry: SourceRuntimeEntry): void {
+    this.state._sources[outputFile] = entry;
+    this.dirty = true;
+  }
+  resetSources(): void {
+    this.state._sources = {};
+    this.dirty = true;
+  }
+  getInferenceEntry(): InferenceRuntimeEntry {
+    return { ...(this.state._inferenceEntry ?? {}) };
+  }
+  setInferenceEntry(entry: InferenceRuntimeEntry): void {
+    this.state._inferenceEntry = entry;
+    this.dirty = true;
+  }
+  resetInferenceEntry(): void {
+    this.state._inferenceEntry = undefined;
+    this.dirty = true;
+  }
+  getLastExecutionCount(): number | undefined {
+    return this.state._lastExecutionCount;
+  }
+  setLastExecutionCount(count: number): void {
+    this.state._lastExecutionCount = count;
+    this.dirty = true;
+  }
+  flush(): void {
+    if (!this.dirty) return;
+    FsRuntimeInternalStore.writeState(this.boardDir, this.cardId, this.state);
+    this.dirty = false;
+  }
+}
+
+class FsRuntimeInternalStore implements RuntimeInternalStore {
+  openSession(boardDir: string, cardId: string): RuntimeStoreSession {
+    return new FsRuntimeStoreSession(boardDir, cardId);
+  }
+  static readState(boardDir: string, cardId: string): CardRuntimeState {
+    const p = path.join(boardDir, cardId, 'runtime.json');
+    if (!fs.existsSync(p)) return { _sources: {} };
+    try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as CardRuntimeState; }
+    catch { return { _sources: {} }; }
+  }
+  static writeState(boardDir: string, cardId: string, state: CardRuntimeState): void {
+    const p = path.join(boardDir, cardId, 'runtime.json');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(state, null, 2));
+  }
+}
+
+export function createFsRuntimeStore(): RuntimeInternalStore {
+  return new FsRuntimeInternalStore();
+}
+
+// ============================================================================
+// createFsOutputStore — FS-backed OutputStore
+//
+// Writes computed-values and data-objects JSON files atomically.
+// schema_version: 'v1' is enforced here — never at call sites.
+// ============================================================================
+
+function writeJsonAtomic(filePath: string, payload: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+class FsOutputStore implements OutputStore {
+  constructor(
+    private readonly resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
+    private readonly resolveDataObjectsDirPath: (boardDir: string) => string,
+  ) {}
+
+  writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void {
+    writeJsonAtomic(this.resolveComputedValuesPath(boardDir, cardId), {
+      schema_version: 'v1',
+      card_id: cardId,
+      computed_values: values,
+    });
+  }
+
+  writeDataObjects(boardDir: string, data: Record<string, unknown>): void {
+    for (const [token, payload] of Object.entries(data)) {
+      if (!token) continue;
+      const fileName = token.replace(/[\\/]/g, '__');
+      if (!fileName) continue;
+      writeJsonAtomic(path.join(this.resolveDataObjectsDirPath(boardDir), fileName), payload);
+    }
+  }
+}
+
+export function createFsOutputStore(
+  resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
+  resolveDataObjectsDirPath: (boardDir: string) => string,
+): OutputStore {
+  return new FsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath);
+}
 
 export function createFsStorageProvider(boardDir: string, journalFile: string): StorageProvider {
   return {

@@ -24,7 +24,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync, execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
+import type { InvocationAdapter, DispatchResult } from './board-live-cards-lib-types.js';
 
 export type { CommandSpec };
 
@@ -292,4 +294,76 @@ export function buildBoardCliInvocation(
 
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
+}
+
+// ============================================================================
+// createNodeInvocationAdapter — spawns board CLI sub-processes for source-fetch
+// and inference requests. Owns temp file creation for subprocess handoff.
+// BOARD_LIVE_CARDS_NO_SPAWN=1 suppresses actual spawning (used in tests).
+// ============================================================================
+
+function shouldSuppressSpawn(): boolean {
+  return process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1';
+}
+
+class NodeInvocationAdapter implements InvocationAdapter {
+  constructor(
+    private readonly cliDir: string,
+    private readonly encodeSourceToken: (payload: {
+      cbk: string; rg: string; cid: string; b: string; d: string; cs?: string;
+    }) => string,
+  ) {}
+
+  async requestSourceFetch(
+    boardDir: string,
+    enrichedCard: Record<string, unknown>,
+    callbackToken: string,
+  ): Promise<DispatchResult> {
+    if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
+    try {
+      const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
+      const enrichedCardPath = makeBoardTempFilePath(boardDir, `card-enriched-${cardId}`);
+      fs.writeFileSync(enrichedCardPath, JSON.stringify(enrichedCard, null, 2), 'utf-8');
+      const args = ['--card', enrichedCardPath, '--token', callbackToken, '--rg', boardDir];
+      const { cmd, args: cmdArgs } = buildBoardCliInvocation(this.cliDir, 'run-sourcedefs-internal', args);
+      runDetached({ command: cmd, args: cmdArgs });
+      return { dispatched: true, invocationId: randomUUID() };
+    } catch (err) {
+      return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async requestInference(
+    boardDir: string,
+    cardId: string,
+    inferencePayload: unknown,
+    callbackToken: string,
+  ): Promise<DispatchResult> {
+    if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
+    try {
+      const inferenceInFile = makeBoardTempFilePath(boardDir, `card-inference-${cardId}`);
+      fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
+      const inferenceToken = this.encodeSourceToken({
+        cbk: callbackToken, rg: boardDir, cid: cardId, b: '', d: '', cs: undefined,
+      });
+      const { cmd, args } = buildBoardCliInvocation(
+        this.cliDir,
+        'run-inference-internal',
+        ['--in', inferenceInFile, '--token', inferenceToken],
+      );
+      runDetached({ command: cmd, args });
+      return { dispatched: true, invocationId: randomUUID() };
+    } catch (err) {
+      return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+}
+
+export function createNodeInvocationAdapter(
+  cliDir: string,
+  encodeSourceToken: (payload: {
+    cbk: string; rg: string; cid: string; b: string; d: string; cs?: string;
+  }) => string,
+): InvocationAdapter {
+  return new NodeInvocationAdapter(cliDir, encodeSourceToken);
 }

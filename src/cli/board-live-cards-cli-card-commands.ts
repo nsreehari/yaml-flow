@@ -1,11 +1,13 @@
-import { createHash } from 'node:crypto';
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
 import type { CardUpsertIndexEntry, CardStore } from './board-live-cards-all-stores.js';
 
 export type BoardLiveCard = LiveCard;
 
+// CardCommandDeps — all platform-specific concerns are injected
 interface CardCommandDeps {
+  /** Compute a stable content hash of a TaskConfig for dedup. Injected to keep this module platform-free. */
+  hashTaskConfig: (taskConfig: TaskConfig) => string;
   /** Read a card from the board's authoritative CardStore. */
   getCardStore: (boardDir: string) => CardStore;
   /**
@@ -27,18 +29,6 @@ export interface CardCommandHandlers {
   upsertCardById: (boardDir: string, cardId: string, restart: boolean) => string;
 }
 
-function stableJson(value: unknown): string {
-  if (value === null || value === undefined || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${(value as unknown[]).map(stableJson).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
-}
-
-function computeTaskConfigHash(taskConfig: TaskConfig): string {
-  return createHash('sha256').update(stableJson(taskConfig)).digest('hex');
-}
-
 export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHandlers {
   /**
    * Core upsert logic: given a card already in CardStore, hash, dedup, journal.
@@ -51,7 +41,7 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
     }
 
     const taskConfig = deps.liveCardToTaskConfig(card);
-    const taskConfigHash = computeTaskConfigHash(taskConfig);
+    const taskConfigHash = deps.hashTaskConfig(taskConfig);
     const existing = deps.readCardUpsertEntry(boardDir, cardId);
     const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
 
