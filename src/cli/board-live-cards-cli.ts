@@ -30,6 +30,7 @@ import { createBoardCommandHandlers } from './board-live-cards-cli-board-command
 import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
 import { createNonCoreCommandHandlers } from './board-live-cards-cli-noncore.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
+import { createCompatCommandHandlers } from './board-live-cards-cli-compat.js';
 import { createFsKvStorage } from './storage-fs-adapters.js';
 import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
 import { createExecutionCommandHandlers } from './board-live-cards-cli-execution-commands.js';
@@ -49,8 +50,8 @@ import {
 } from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
 import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
-export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload } from './board-live-cards-lib-types.js';
-export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure } from './board-live-cards-lib-types.js';
+export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
+export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib-types.js';
 
 const BOARD_FILE = 'board-graph.json';
 
@@ -177,39 +178,8 @@ const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
 const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
 const RUNTIME_CARDS_DIR = 'cards';
 const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
-const CONFIG_KEY_TASK_EXECUTOR = 'task-executor';
-const CONFIG_KEY_INFERENCE_ADAPTER = 'inference-adapter';
-/** File names for board config entries — used only by the fs adapter. */
-const CONFIG_FILE_MAP: Record<string, string> = {
-  [CONFIG_KEY_TASK_EXECUTOR]: '.task-executor',
-  [CONFIG_KEY_INFERENCE_ADAPTER]: '.inference-adapter',
-};
-
-function createFsBoardConfigStorageAdapter(boardDir: string) {
-  return {
-    readRaw(key: string): string | null {
-      const fileName = CONFIG_FILE_MAP[key];
-      if (!fileName) return null;
-      const filePath = path.join(boardDir, fileName);
-      if (!fs.existsSync(filePath)) return null;
-      return fs.readFileSync(filePath, 'utf-8');
-    },
-    writeRaw(key: string, raw: string): void {
-      const fileName = CONFIG_FILE_MAP[key];
-      if (!fileName) throw new Error(`Unknown config key: ${key}`);
-      fs.writeFileSync(path.join(boardDir, fileName), raw, 'utf-8');
-    },
-    deleteRaw(key: string): void {
-      const fileName = CONFIG_FILE_MAP[key];
-      if (!fileName) return;
-      const filePath = path.join(boardDir, fileName);
-      try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch { /* best-effort */ }
-    },
-  };
-}
-
 function createBoardConfig(boardDir: string): BoardConfigStore {
-  return createBoardConfigStore(createFsBoardConfigStorageAdapter(boardDir), parseCommandSpec);
+  return createBoardConfigStore(createFsKvStorage(path.join(boardDir, '.config')), parseCommandSpec);
 }
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
@@ -1003,10 +973,11 @@ export async function cli(argv: string[]): Promise<void> {
     resolveStatusSnapshotPath,
     buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(path.resolve(dir), live),
     getConfigStore: createBoardConfig,
+    getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
     makeTempFilePath: makeBoardTempFilePath,
-    resolveCardGlobMatches,
     validateLiveCardDefinition,
     execCommandSync,
+    readStdin: () => fs.readFileSync('/dev/stdin', 'utf-8'),
     appendEventToJournal,
     processAccumulatedEventsInfinitePass,
   });
@@ -1026,7 +997,7 @@ export async function cli(argv: string[]): Promise<void> {
     makeTempFilePath: makeBoardTempFilePath,
   });
   const cardCommandHandlers = createCardCommandHandlers({
-    resolveCardGlobMatches,
+    getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
     readCardUpsertEntry: (boardDir: string, cardId: string): CardUpsertIndexEntry | null => {
       const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
       return kv.read(cardId) as CardUpsertIndexEntry | null;
@@ -1035,11 +1006,18 @@ export async function cli(argv: string[]): Promise<void> {
       const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
       kv.write(cardId, entry);
     },
-    defaultBlobRef: (_cardId: string, absCardPath: string): string => absCardPath,
     liveCardToTaskConfig,
     appendEventToJournal,
     processAccumulatedEventsInfinitePass,
   });
+  const compatCommandHandlers = createCompatCommandHandlers({
+    getCardAdminStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
+    upsertCardById: cardCommandHandlers.upsertCardById,
+    validateCards: boardCommandHandlers.validateCards,
+    resolveCardGlobMatches,
+    processAccumulatedEventsInfinitePass,
+  });
+
   const executionCommandHandlers = createExecutionCommandHandlers({
     getConfigStore: createBoardConfig,
     makeTempFilePath: makeBoardTempFilePath,
@@ -1068,8 +1046,12 @@ export async function cli(argv: string[]): Promise<void> {
     case '-h':            return nonCoreCommandHandlers.cmdHelp();
     case 'init':           return boardCommandHandlers.cmdInit(rest);
     case 'status':         return boardCommandHandlers.cmdStatus(rest);
-    case 'upsert-card':    return cardCommandHandlers.cmdUpsertCard(rest);
-    case 'validate-card':  return boardCommandHandlers.cmdValidateCard(rest);
+    case 'upsert-card':    return rest.some((a: string) => a === '--card' || a === '--card-glob')
+      ? compatCommandHandlers.compatUpsertCard(rest)
+      : cardCommandHandlers.cmdUpsertCard(rest);
+    case 'validate-card':  return rest.some((a: string) => a === '--card' || a === '--card-glob')
+      ? compatCommandHandlers.compatValidateCard(rest)
+      : boardCommandHandlers.cmdValidateCard(rest);
     case 'remove-card':              return boardCommandHandlers.cmdRemoveCard(rest);
     case 'retrigger':                 return boardCommandHandlers.cmdRetrigger(rest);
     case 'task-completed':            return callbackCommandHandlers.cmdTaskCompleted(rest);

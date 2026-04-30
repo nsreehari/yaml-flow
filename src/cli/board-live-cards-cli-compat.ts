@@ -1,0 +1,183 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { LiveCard, CardAdminStore } from './board-live-cards-all-stores.js';
+import type { CommandResponse } from './board-live-cards-lib-types.js';
+import { Resp } from './board-live-cards-lib-types.js';
+import { createFsKvStorage } from './storage-fs-adapters.js';
+
+export type BoardLiveCard = LiveCard;
+
+/** KV-backed index of cardId → absolute source file path, maintained by the compat layer. */
+function getCompatSourceKv(boardDir: string) {
+  return createFsKvStorage(path.join(boardDir, '.compat-card-sources'));
+}
+
+interface CompatDeps {
+  getCardAdminStore: (boardDir: string) => CardAdminStore;
+  upsertCardById: (boardDir: string, cardId: string, restart: boolean) => string;
+  validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
+  resolveCardGlobMatches: (cardGlob: string) => string[];
+  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+}
+
+export interface CompatCommandHandlers {
+  compatUpsertCard: (args: string[]) => void;
+  compatValidateCard: (args: string[]) => void;
+}
+
+export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHandlers {
+
+  function readCardFromFile(filePath: string): BoardLiveCard {
+    if (!fs.existsSync(filePath)) throw new Error(`Card file not found: ${filePath}`);
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as BoardLiveCard;
+    } catch (err) {
+      throw new Error(`Invalid JSON in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function compatUpsertCard(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const cardIdx = args.indexOf('--card');
+    const globIdx = args.indexOf('--card-glob');
+    const restart = args.includes('--restart');
+    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+    const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+
+    if (!boardDir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
+      console.error('Usage: board-live-cards upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--restart]');
+      process.exit(1);
+    }
+
+    const files = cardFile
+      ? [path.resolve(cardFile)]
+      : deps.resolveCardGlobMatches(cardGlob!);
+
+    if (files.length === 0) {
+      console.error(`No card files matched glob: ${cardGlob}`);
+      process.exit(1);
+    }
+
+    // Phase 1: parse all files, check for duplicates and id→path remapping
+    const plans: Array<{ card: BoardLiveCard; absPath: string }> = [];
+    const seenIds = new Map<string, string>(); // cardId → absPath
+    const compatKv = getCompatSourceKv(boardDir!);
+
+    for (const absPath of files) {
+      const card = readCardFromFile(absPath);
+      if (!card.id) {
+        console.error(`Card JSON must have an "id" field (${absPath})`);
+        process.exit(1);
+      }
+      const conflict = seenIds.get(card.id);
+      if (conflict && conflict !== absPath) {
+        console.error(`Upsert rejected: card id "${card.id}" appears in multiple files ("${conflict}" vs "${absPath}")`);
+        process.exit(1);
+      }
+      seenIds.set(card.id, absPath);
+      // Check id→path remapping: if card was previously upserted from a different file, reject
+      const knownPath = compatKv.read(card.id) as string | null;
+      if (knownPath && path.resolve(knownPath) !== absPath) {
+        console.error(
+          `Upsert rejected: card id "${card.id}" is already registered at "${knownPath}" ` +
+          `— refusing to remap from "${absPath}"`,
+        );
+        process.exit(1);
+      }
+      plans.push({ card, absPath });
+    }
+
+    // Phase 2: write to CardStore then upsert via clean handler
+    const store = deps.getCardAdminStore(boardDir);
+    let changedCount = 0;
+    let skippedCount = 0;
+    const logs: string[] = [];
+
+    for (const { card } of plans) {
+      store.writeCard(card.id, card);
+      const msg = deps.upsertCardById(boardDir, card.id, restart);
+      if (msg.includes('skipped')) { skippedCount++; } else { changedCount++; }
+      logs.push(msg);
+      compatKv.write(card.id, plans.find(p => p.card === card)!.absPath);
+    }
+
+    if (changedCount > 0) {
+      void deps.processAccumulatedEventsInfinitePass(boardDir);
+    }
+
+    if (cardGlob) {
+      console.log(
+        `Processed ${files.length} cards from glob: ${cardGlob} ` +
+        `(${changedCount} changed, ${skippedCount} skipped)${restart ? ' (restarted)' : ''}`,
+      );
+    } else if (logs.length > 0) {
+      console.log(logs[0]);
+    }
+  }
+
+  function compatValidateCard(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const cardIdx = args.indexOf('--card');
+    const globIdx = args.indexOf('--card-glob');
+    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+    const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
+
+    if ((!cardFile && !cardGlob) || (cardFile && cardGlob)) {
+      throw new Error('Usage: board-live-cards validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]');
+    }
+
+    const files = cardFile
+      ? [path.resolve(cardFile)]
+      : deps.resolveCardGlobMatches(cardGlob!);
+
+    if (files.length === 0) {
+      throw new Error(`No card files matched glob: ${cardGlob}`);
+    }
+
+    // Parse files, collecting I/O errors separately
+    const cards: Record<string, unknown>[] = [];
+    const fileErrors: Array<{ label: string; error: string }> = [];
+
+    for (const f of files) {
+      const label = path.relative(process.cwd(), f) || f;
+      if (!fs.existsSync(f)) {
+        fileErrors.push({ label, error: 'file not found' });
+        continue;
+      }
+      try {
+        cards.push(JSON.parse(fs.readFileSync(f, 'utf-8')));
+      } catch (err) {
+        fileErrors.push({ label, error: `invalid JSON — ${err instanceof Error ? err.message : String(err)}` });
+      }
+    }
+
+    for (const { label, error } of fileErrors) {
+      console.error(`FAIL  ${label}: ${error}`);
+    }
+
+    // Validate parsed cards via clean handler
+    const results = deps.validateCards(cards, boardDir);
+    let failures = fileErrors.length;
+
+    for (const r of results) {
+      const label = r.data.cardId;
+      if (Resp.isSuccess(r)) {
+        console.log(`OK    ${label}`);
+      } else {
+        console.error(`FAIL  ${label}:`);
+        for (const err of r.data.errors) console.error(`        ${err}`);
+        failures++;
+      }
+    }
+
+    if (failures > 0) {
+      throw new Error(`${failures} of ${files.length} card(s) failed validation.`);
+    }
+    console.log(`\n${files.length} card(s) passed validation.`);
+  }
+
+  return { compatUpsertCard, compatValidateCard };
+}
+

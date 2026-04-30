@@ -2,7 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
-import type { BoardConfigStore } from './board-live-cards-all-stores.js';
+import type { BoardConfigStore, CardStore } from './board-live-cards-all-stores.js';
+import type { CommandResponse } from './board-live-cards-lib-types.js';
+import { Resp } from './board-live-cards-lib-types.js';
 
 interface ValidateResultLike {
   errors: string[];
@@ -16,10 +18,11 @@ interface BoardCommandDeps {
   resolveStatusSnapshotPath: (dir: string) => string;
   buildBoardStatusObject: (dir: string, live: LiveGraph) => any;
   getConfigStore: (boardDir: string) => BoardConfigStore;
+  getCardStore: (boardDir: string) => CardStore;
   makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
-  resolveCardGlobMatches: (cardGlob: string) => string[];
   validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
   execCommandSync: (command: string, args: string[], options?: Record<string, unknown>) => string;
+  readStdin: () => string;
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
 }
@@ -28,6 +31,8 @@ export interface BoardCommandHandlers {
   cmdInit: (args: string[]) => void;
   cmdStatus: (args: string[]) => void;
   cmdValidateCard: (args: string[]) => void;
+  /** Direct validate — used by compat layer to avoid stdin coupling. */
+  validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
   cmdRemoveCard: (args: string[]) => void;
   cmdRetrigger: (args: string[]) => void;
 }
@@ -63,7 +68,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       config.writeTaskExecutorConfig({ command: taskExecutor, ...(teExtra ? { extra: teExtra } : {}) });
     }
     if (chatHandler) {
-      fs.writeFileSync(path.join(dir, '.chat-handler'), chatHandler, 'utf-8');
+      config.writeChatHandler(chatHandler);
     }
     if (inferenceAdapter) {
       config.writeInferenceAdapter(inferenceAdapter);
@@ -116,50 +121,17 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     console.log(`Schedule: ${statusObject.summary.eligible} eligible, ${statusObject.summary.pending} pending, ${statusObject.summary.blocked} blocked, ${statusObject.summary.unresolved} unresolved`);
   }
 
-  function cmdValidateCard(args: string[]): void {
-    const cardIdx = args.indexOf('--card');
-    const globIdx = args.indexOf('--card-glob');
-    const rgIdx = args.indexOf('--rg');
-    const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
-    const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+  function validateCardObjects(
+    cards: Record<string, unknown>[],
+    boardDir: string | undefined,
+  ): CommandResponse<{ cardId: string; errors: string[] }>[] {
+    const teConfig = boardDir ? deps.getConfigStore(boardDir).readTaskExecutorConfig() : undefined;
 
-    if ((!cardFile && !cardGlob) || (cardFile && cardGlob)) {
-      throw new Error('Usage: board-live-cards validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]');
-    }
-
-    let teConfig: ReturnType<BoardConfigStore['readTaskExecutorConfig']>;
-    if (boardDir) {
-      teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
-      if (!teConfig) {
-        throw new Error(`--rg specified but no .task-executor found in ${boardDir}`);
-      }
-    }
-
-    const files = cardFile ? [path.resolve(cardFile)] : deps.resolveCardGlobMatches(cardGlob!);
-    if (files.length === 0) {
-      throw new Error(`No card files matched glob: ${cardGlob}`);
-    }
-
-    let failures = 0;
-    for (const f of files) {
-      const label = path.relative(process.cwd(), f) || f;
-      if (!fs.existsSync(f)) {
-        console.error(`FAIL  ${label}: file not found`);
-        failures++;
-        continue;
-      }
-      let card: Record<string, unknown>;
-      try {
-        card = JSON.parse(fs.readFileSync(f, 'utf-8'));
-      } catch (err) {
-        console.error(`FAIL  ${label}: invalid JSON — ${err instanceof Error ? err.message : String(err)}`);
-        failures++;
-        continue;
-      }
-      const result = deps.validateLiveCardDefinition(card);
-
+    return cards.map((card) => {
+      const cardId = typeof card.id === 'string' ? card.id : '(unknown)';
+      const schemaErrors = deps.validateLiveCardDefinition(card).errors;
       const sourceErrors: string[] = [];
+
       if (teConfig && Array.isArray(card.source_defs)) {
         for (const src of card.source_defs as Array<Record<string, unknown>>) {
           const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
@@ -168,7 +140,11 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
             fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
             let stdout: string;
             try {
-              stdout = deps.execCommandSync(teConfig.command, [...(teConfig.args ?? []), 'validate-source-def', '--in', tmpFile], { timeout: 10_000 });
+              stdout = deps.execCommandSync(
+                teConfig.command,
+                [...(teConfig.args ?? []), 'validate-source-def', '--in', tmpFile],
+                { timeout: 10_000 },
+              );
             } catch (execErr: any) {
               stdout = typeof execErr?.stdout === 'string' ? execErr.stdout
                 : Buffer.isBuffer(execErr?.stdout) ? execErr.stdout.toString('utf-8')
@@ -192,22 +168,57 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
         }
       }
 
-      const allErrors = [...result.errors, ...sourceErrors];
+      const allErrors = [...schemaErrors, ...sourceErrors];
       if (allErrors.length === 0) {
-        console.log(`OK    ${label}`);
-      } else {
-        console.error(`FAIL  ${label}:`);
-        for (const error of allErrors) {
-          console.error(`        ${error}`);
-        }
-        failures++;
+        return Resp.success({ cardId, errors: [] as string[] });
       }
+      return Resp.error(allErrors.join('; '), { cardId, errors: allErrors }) as CommandResponse<{ cardId: string; errors: string[] }>;
+    });
+  }
+
+  function cmdValidateCard(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const cardIdIdx = args.indexOf('--card-id');
+    const stdioMode = args.includes('--cards-stdio');
+    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+
+    if (stdioMode) {
+      // --cards-stdio: read JSON array of card objects from stdin, write results to stdout
+      let cards: Record<string, unknown>[];
+      try {
+        const raw = deps.readStdin();
+        cards = JSON.parse(raw) as Record<string, unknown>[];
+        if (!Array.isArray(cards)) throw new Error('stdin must be a JSON array');
+      } catch (err) {
+        const resp = Resp.error(`Failed to parse stdin: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(JSON.stringify([resp]));
+        return;
+      }
+      const results = validateCardObjects(cards, boardDir);
+      console.log(JSON.stringify(results, null, 2));
+      return;
     }
 
-    if (failures > 0) {
-      throw new Error(`${failures} of ${files.length} card(s) failed validation.`);
+    if (cardIdIdx !== -1) {
+      // --card-id: read from CardStore
+      const cardId = args[cardIdIdx + 1];
+      if (!cardId || !boardDir) {
+        throw new Error('Usage: board-live-cards validate-card --rg <boardDir> --card-id <id>');
+      }
+      const card = deps.getCardStore(boardDir).readCard(cardId);
+      if (!card) {
+        throw new Error(`Card "${cardId}" not found in board at ${boardDir}`);
+      }
+      const [result] = validateCardObjects([card as Record<string, unknown>], boardDir);
+      if (result.status === 'error') {
+        for (const err of result.data.errors) console.error(`  ${err}`);
+        throw new Error(`Card "${cardId}" failed validation.`);
+      }
+      console.log(`OK    ${cardId}`);
+      return;
     }
-    console.log(`\n${files.length} card(s) passed validation.`);
+
+    throw new Error('Usage: board-live-cards validate-card (--card-id <id> --rg <boardDir>) | (--cards-stdio [--rg <boardDir>])');
   }
 
   function cmdRemoveCard(args: string[]): void {
@@ -254,6 +265,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     cmdInit,
     cmdStatus,
     cmdValidateCard,
+    validateCards: validateCardObjects,
     cmdRemoveCard,
     cmdRetrigger,
   };

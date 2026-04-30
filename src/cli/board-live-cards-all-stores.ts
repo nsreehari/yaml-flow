@@ -6,8 +6,8 @@
  * provided by the CLI entry point and passed in at construction time.
  */
 
+import type { KVStorage } from './storage-interface.js';
 import type { GraphEvent } from '../event-graph/types.js';
-
 // ============================================================================
 // Card store — types
 // ============================================================================
@@ -461,19 +461,6 @@ export interface TaskExecutorConfig {
 }
 
 // ============================================================================
-// BoardConfigStorageAdapter — injected by the caller
-// ============================================================================
-
-export interface BoardConfigStorageAdapter {
-  /** Read the raw stored string for a named config key. Returns null if absent. */
-  readRaw(key: string): string | null;
-  /** Persist the raw string for a named config key. */
-  writeRaw(key: string, raw: string): void;
-  /** Remove a config key. No-op if absent. */
-  deleteRaw(key: string): void;
-}
-
-// ============================================================================
 // BoardConfigStore — pure logic interface
 // ============================================================================
 
@@ -482,6 +469,8 @@ export interface BoardConfigStore {
   writeTaskExecutorConfig(config: TaskExecutorConfig): void;
   readInferenceAdapter(): string | undefined;
   writeInferenceAdapter(value: string): void;
+  readChatHandler(): string | undefined;
+  writeChatHandler(value: string): void;
 }
 
 // ============================================================================
@@ -489,17 +478,23 @@ export interface BoardConfigStore {
 // ============================================================================
 
 /**
- * @param adapter     Raw string I/O, keyed by 'task-executor' / 'inference-adapter'.
+ * @param kv          Key-value store. Keys used: 'task-executor', 'inference-adapter', 'chat-handler'.
  * @param parseSpec   Normalises legacy string or structured { command, args } →
  *                    { command, args }. Injected to keep this module platform-free.
  */
 export function createBoardConfigStore(
-  adapter: BoardConfigStorageAdapter,
+  kv: KVStorage,
   parseSpec: (raw: string | { command: string; args?: string[] }) => { command: string; args?: string[] },
 ): BoardConfigStore {
+  function readKey(key: string): string | null {
+    const v = kv.read(key);
+    if (v == null) return null;
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  }
+
   return {
     readTaskExecutorConfig(): TaskExecutorConfig | undefined {
-      const raw = adapter.readRaw('task-executor');
+      const raw = readKey('task-executor');
       if (!raw?.trim()) return undefined;
       const trimmed = raw.trim();
       try {
@@ -514,15 +509,23 @@ export function createBoardConfigStore(
     },
 
     writeTaskExecutorConfig(config: TaskExecutorConfig): void {
-      adapter.writeRaw('task-executor', JSON.stringify(config, null, 2));
+      kv.write('task-executor', JSON.stringify(config, null, 2));
     },
 
     readInferenceAdapter(): string | undefined {
-      return adapter.readRaw('inference-adapter')?.trim() || undefined;
+      return readKey('inference-adapter')?.trim() || undefined;
     },
 
     writeInferenceAdapter(value: string): void {
-      adapter.writeRaw('inference-adapter', value);
+      kv.write('inference-adapter', value);
+    },
+
+    readChatHandler(): string | undefined {
+      return readKey('chat-handler')?.trim() || undefined;
+    },
+
+    writeChatHandler(value: string): void {
+      kv.write('chat-handler', value);
     },
   };
 }

@@ -195,3 +195,45 @@ export interface CardHandlerAdapters {
   outputStore: OutputStore;
   executionRequestStore: ExecutionRequestStore;
 }
+
+// ============================================================================
+// CommandResponse — standard response envelope for CLI commands
+// ============================================================================
+
+export interface CommandResponse<T extends Record<string, unknown> = Record<string, unknown>> {
+  status: 'success' | 'error';
+  data: T;
+  error?: string;
+}
+
+/**
+ * Helpers for constructing and inspecting CommandResponse objects.
+ *
+ * Usage:
+ *   Resp.success({ cardId: 'T1', errors: [] })
+ *   Resp.error('Card not found')
+ *   Resp.getData(response)
+ *   Resp.getStatus(response)
+ *   Resp.isSuccess(response)
+ */
+export const Resp = {
+  success<T extends Record<string, unknown>>(data: T): CommandResponse<T> {
+    return { status: 'success', data };
+  },
+
+  error(error: string, data: Record<string, unknown> = {}): CommandResponse {
+    return { status: 'error', data, error };
+  },
+
+  getStatus(r: CommandResponse): 'success' | 'error' {
+    return r.status;
+  },
+
+  getData<T extends Record<string, unknown>>(r: CommandResponse<T>): T {
+    return r.data;
+  },
+
+  isSuccess(r: CommandResponse): boolean {
+    return r.status === 'success';
+  },
+} as const;
