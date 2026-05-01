@@ -6,7 +6,7 @@
  * provided by the CLI entry point and passed in at construction time.
  */
 
-import type { KVStorage } from './storage-interface.js';
+import type { KVStorage, BlobStorage } from './storage-interface.js';
 import type { GraphEvent } from '../event-graph/types.js';
 // ============================================================================
 // Card store — types
@@ -56,7 +56,6 @@ export interface CardStorageAdapter {
   /** Write card content; returns checksum of what was written. */
   writeCard(key: string, card: LiveCard): string;
   cardExists(key: string): boolean;
-  readSourceOutput(cardId: string, outputFile: string): unknown;
   defaultCardKey(cardId: string): string;
 }
 
@@ -70,7 +69,6 @@ export interface CardStore {
   readAllCards(): LiveCard[];
   readChecksumIndex(): CardChecksumIndex;
   changedSince(snapshotChecksumIndex: CardChecksumIndex): string[];
-  readSourceFileContent(cardId: string, outputFile: string): unknown;
 }
 
 // ============================================================================
@@ -138,10 +136,6 @@ export function createCardStore(adapter: CardStorageAdapter): CardAdminStore {
       return changed;
     },
 
-    readSourceFileContent(cardId: string, outputFile: string): unknown {
-      return adapter.readSourceOutput(cardId, outputFile);
-    },
-
     validateUpsert(id: string, cardKey: string): CardUpsertValidation {
       const index = loadIndex();
       const existingById = index[id];
@@ -170,6 +164,42 @@ export function createCardStore(adapter: CardStorageAdapter): CardAdminStore {
 
     readIndex(): CardIndex {
       return loadIndex();
+    },
+  };
+}
+
+// ============================================================================
+// FetchedSourcesStore — content-addressed store for fetched source payloads
+//
+// Backed by BlobStorage. Key = <cardId>/<outputFile>.
+// On Node/fs: resolves to <boardDir>/<cardId>/<outputFile> (same path as before).
+// On Azure: resolves to a blob container key.
+// readSource returns parsed JSON where possible, falls back to raw string.
+// ============================================================================
+
+export interface FetchedSourcesStore {
+  /** Read fetched source content. Returns parsed JSON or raw string; null if not yet fetched. */
+  readSource(cardId: string, outputFile: string): unknown;
+  /** Write fetched source content (string from executor stdout or file). */
+  writeSource(cardId: string, outputFile: string, content: string): void;
+  /** True if the source file has been fetched at least once. */
+  hasSource(cardId: string, outputFile: string): boolean;
+}
+
+export function createFetchedSourcesStore(blob: BlobStorage): FetchedSourcesStore {
+  return {
+    readSource(cardId, outputFile): unknown {
+      const raw = blob.read(`${cardId}/${outputFile}`);
+      if (raw == null) return null;
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      try { return JSON.parse(trimmed); } catch { return trimmed; }
+    },
+    writeSource(cardId, outputFile, content): void {
+      blob.write(`${cardId}/${outputFile}`, content);
+    },
+    hasSource(cardId, outputFile): boolean {
+      return blob.exists(`${cardId}/${outputFile}`);
     },
   };
 }
@@ -343,6 +373,23 @@ export interface CardRuntimeSnapshot {
   _sources: Record<string, { lastRequestedAt?: string; lastFetchedAt?: string; queueRequestedAt?: string }>;
   _inferenceEntry?: { lastRequestedAt?: string; queueRequestedAt?: string; inferenceCompletedAt?: string };
   _lastExecutionCount?: number;
+}
+
+/** Store abstraction for per-card reactive runtime state. */
+export interface CardRuntimeStore {
+  readRuntime(cardId: string): CardRuntimeSnapshot;
+  writeRuntime(cardId: string, state: CardRuntimeSnapshot): void;
+}
+
+export function createCardRuntimeStore(kv: KVStorage): CardRuntimeStore {
+  return {
+    readRuntime(cardId) {
+      return (kv.read(cardRuntimeKey(cardId)) as CardRuntimeSnapshot | null) ?? { _sources: {} };
+    },
+    writeRuntime(cardId, state) {
+      kv.write(cardRuntimeKey(cardId), state);
+    },
+  };
 }
 
 /** Metadata entry for a fetched source payload blob. */

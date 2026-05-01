@@ -15,8 +15,8 @@ import {
   makeBoardTempFilePath,
   buildBoardCliInvocation,
 } from './process-runner.js';
+import { withRelayLock } from './storage-interface.js';
 import fg from 'fast-glob';
-import { lockSync } from 'proper-lockfile';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -31,26 +31,28 @@ import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.
 import { createNonCoreCommandHandlers } from './board-live-cards-cli-noncore.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
 import { createCompatCommandHandlers } from './board-live-cards-cli-compat.js';
-import { createFsKvStorage } from './storage-fs-adapters.js';
 import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
 import { createExecutionCommandHandlers } from './board-live-cards-cli-execution-commands.js';
 import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
 import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
 import {
-  createFsRuntimeStore,
   createFsOutputStore,
   computeStableJsonHash,
+  createFsKvStorage,
+  createFsBlobStorage,
+  createFsAtomicRelayLock,
 } from './storage-fs-adapters.js';
 import { createNodeInvocationAdapter } from './process-runner.js';
 import {
   createCardStore, createJournalStore, createExecutionRequestStore,
-  createStateSnapshotStore, createBoardConfigStore,
+  createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
   BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
   type StateSnapshotStorageAdapter, type StateSnapshotReadView,
   type BoardConfigStore,
 } from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
 import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
+import type { InvocationAdapter } from './process-interface.js';
 export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib-types.js';
 
@@ -122,13 +124,6 @@ function createFsCardStorageAdapter(boardDir: string) {
       return createHash('sha256').update(json).digest('hex');
     },
     cardExists(key: string) { return fs.existsSync(key); },
-    readSourceOutput(cardId: string, outputFile: string): unknown {
-      const filePath = path.join(boardDir, cardId, outputFile);
-      if (!fs.existsSync(filePath)) return null;
-      const raw = fs.readFileSync(filePath, 'utf-8').trim();
-      if (!raw) return null;
-      try { return JSON.parse(raw); } catch { return raw; }
-    },
     defaultCardKey(cardId: string) { return path.join(boardDir, `${cardId}.json`); },
   };
 }
@@ -190,6 +185,23 @@ export interface BoardEnvelope {
   graph: LiveGraphSnapshot;
 }
 
+/**
+ * FS-backed StateSnapshotStorageAdapter.
+ *
+ * CLEANUP TODO: This adapter has hard-coded knowledge of two board-domain keys
+ * (`board/graph` and `board/lastJournalProcessedId` — see BOARD_GRAPH_KEY /
+ * BOARD_LAST_JOURNAL_PROCESSED_ID_KEY) that it packs into a single
+ * `board-graph.json` file for backward compatibility with boards written before
+ * the snapshot-store abstraction existed. All other keys are written as
+ * `.state-snapshot/<key>.json` sidecar files.
+ *
+ * A pure FS storage adapter should not know about domain key names. The
+ * correct long-term shape is: every key maps to its own sidecar file under
+ * `.state-snapshot/`, and `board-graph.json` is retired or read-only for
+ * legacy compat. Once the test suite no longer depends on the packed
+ * `board-graph.json` format, remove the special-casing of BOARD_GRAPH_KEY
+ * and BOARD_LAST_JOURNAL_PROCESSED_ID_KEY here.
+ */
 function createFsStateSnapshotStorageAdapter(boardFileName: string): StateSnapshotStorageAdapter {
   const sidecarRootDirName = '.state-snapshot';
 
@@ -565,18 +577,6 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journalOrCursor: Board
       `State snapshot commit failed: expected=${current.version ?? 'null'} current=${commitResult.currentVersion ?? 'null'}`,
     );
   }
-
-  // Publish status snapshot in the same persistence path as board writes.
-  // This is a read-model cache; cache failures must not fail authoritative commits.
-  try {
-    const live = restore(snap);
-    const statusObject = buildBoardStatusObject(path.resolve(dir), live);
-    writeJsonAtomic(resolveStatusSnapshotPath(dir), statusObject);
-  } catch (err) {
-    console.warn(
-      `[board-live-cards] status cache publish failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
 }
 
 function runtimeOutConfigPath(boardDir: string): string {
@@ -642,20 +642,6 @@ function writeJsonAtomic(filePath: string, payload: unknown): void {
   const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
   fs.renameSync(tmpPath, filePath);
-}
-
-/**
- * Acquire an exclusive lock on the board, run `fn`, then release.
- * Uses proper-lockfile on board-graph.json.
- */
-export function withBoardLock<T>(boardDir: string, fn: () => T): T {
-  const boardPath = path.join(boardDir, BOARD_FILE);
-  const release = lockSync(boardPath, { retries: { retries: 5, minTimeout: 100 } });
-  try {
-    return fn();
-  } finally {
-    release();
-  }
 }
 
 // ============================================================================
@@ -761,29 +747,6 @@ function resolveCommandInvocation(rawCmd: string, rawArgs: string[]): { cmd: str
   return { cmd: spec.command, args: spec.args ?? [] };
 }
 
-function spawnDetachedProcessAccumulatedWorker(boardDir: string): boolean {
-  const { cmd, args: cliArgs } = buildBoardCliInvocation(__dirname, 'process-accumulated-events', ['--rg', boardDir, '--inline-loop']);
-  try {
-    spawnDetachedCommand(cmd, cliArgs);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function processAccumulatedEventsInlineLoop(boardDir: string, settleDelayMs = 50): Promise<boolean> {
-  while (determineLatestPendingAccumulated(boardDir) > 0) {
-    const ran = await processAccumulatedEvents(boardDir);
-    if (!ran) return false;
-    await new Promise<void>(resolve => setTimeout(resolve, settleDelayMs));
-  }
-  return true;
-}
-
-function shouldAvoidDetachedProcessSpawn(): boolean {
-  return process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1';
-}
-
 /**
  * Run one lock-guarded processing pass for this board.
  *
@@ -795,17 +758,11 @@ function shouldAvoidDetachedProcessSpawn(): boolean {
  * This function does NOT guarantee full settlement; it only advances the baton
  * by one cycle in the relay model.
  */
-export async function processAccumulatedEvents(boardDir: string): Promise<boolean> {
+export async function processAccumulatedEvents(boardDir: string, continuation?: () => void): Promise<boolean> {
   const boardPath = path.join(boardDir, BOARD_FILE);
   const cliDir = __dirname;
-  let release: (() => void) | undefined;
-  try {
-    release = lockSync(boardPath, { retries: 0 });
-  } catch {
-    // Lock held by another process — it will drain our entries
-    return false;
-  }
-  try {
+  const lock = createFsAtomicRelayLock(boardPath);
+  return withRelayLock(lock, async () => {
     const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
       appendEventToJournal(boardDir, { type: 'task-completed', taskName, data, timestamp: new Date().toISOString() });
@@ -823,8 +780,9 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
     const executionRequestStore = createExecutionRequestStore(createFsExecutionRequestStorageAdapter(boardDir), onDispatchFailed);
     const cardHandlerAdapters = {
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
-      runtimeStore: createFsRuntimeStore(),
-      outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath),
+      cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(path.join(boardDir, '.state-snapshot'))),
+      fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(boardDir)),
+      outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath),
       executionRequestStore,
     };
     const envelope = loadBoardEnvelope(boardDir);
@@ -835,6 +793,11 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
     rg.pushAll(undrained);
     await rg.dispose({ wait: true });
     saveBoard(boardDir, rg, newCursor);
+    try {
+      cardHandlerAdapters.outputStore.writeStatusSnapshot(boardDir, buildBoardStatusObject(path.resolve(boardDir), restore(rg.snapshot())));
+    } catch (err) {
+      console.warn(`[board-live-cards] status cache publish failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     executionRequestStore.dispatchEntriesForJournalId(newCursor, (entry) => {
       if (entry.taskKind === 'source-fetch') {
         const p = entry.payload as { boardDir: string; enrichedCard: Record<string, unknown>; callbackToken: string };
@@ -854,54 +817,25 @@ export async function processAccumulatedEvents(boardDir: string): Promise<boolea
         console.warn(`[process-accumulated-events] unknown taskKind "${entry.taskKind}" — skipping`);
       }
     });
-    return true;
-  } finally {
-    release!();
-  }
+  }, continuation);
 }
 
 /**
- * Schedule continued draining until the board eventually settles.
- *
- * GUARANTEE (system-level eventual progress):
- * - Default behavior launches a detached background worker process that runs
- *   `process-accumulated-events --inline-loop`.
- * - Returns quickly to caller; does not synchronously wait for settlement.
- * - Under relay assumptions, pending entries eventually drain to zero:
- *   1) at least one runner continues, 2) no crash/forced exit in relay window,
- *   3) lock remains healthy, 4) new events do not arrive forever.
- *
- * INTERNAL MODE:
- * - `inlineLoop: true` executes the while(pending) loop in the current process.
- * - Used by the worker command to avoid recursive worker spawning.
+ * If there are pending events, run one drain pass then dispatch a new process
+ * via the adapter to continue — allowing the current process to exit immediately after.
+ * If nothing is pending, returns without doing anything.
  */
-export async function processAccumulatedEventsInfinitePass(
-  boardDir: string,
-  settleDelayMs = 50,
-  options?: { inlineLoop?: boolean },
-): Promise<boolean> {
-  if (options?.inlineLoop || shouldAvoidDetachedProcessSpawn()) {
-    return processAccumulatedEventsInlineLoop(boardDir, settleDelayMs);
-  }
-  return spawnDetachedProcessAccumulatedWorker(boardDir);
+export async function processAccumulatedEventsInfinitePass(boardDir: string, adapter: InvocationAdapter): Promise<boolean> {
+  if (determineLatestPendingAccumulated(boardDir) === 0) return true;
+  return processAccumulatedEvents(boardDir, () => { void adapter.requestProcessAccumulated(boardDir); });
 }
 
 /**
- * Forced drain entrypoint: first run one immediate pass, then delegate to
- * infinite-pass continuation.
- *
- * GUARANTEE:
- * - In default mode, this guarantees immediate forward progress (single pass)
- *   and guaranteed scheduling of eventual continuation (background worker).
- * - In `inlineLoop` mode, this runs full in-process settle loop and returns
- *   only after pending reaches zero (or lock contention aborts loop).
+ * Run one immediate drain pass then schedule infinite-pass continuation.
  */
-export async function processAccumulatedEventsForced(
-  boardDir: string,
-  options?: { inlineLoop?: boolean },
-): Promise<void> {
+export async function processAccumulatedEventsForced(boardDir: string, adapter: InvocationAdapter): Promise<void> {
   await processAccumulatedEvents(boardDir);
-  await processAccumulatedEventsInfinitePass(boardDir, 50, options);
+  await processAccumulatedEventsInfinitePass(boardDir, adapter);
 }
 
 // ============================================================================
@@ -966,36 +900,37 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
 
 
 export async function cli(argv: string[]): Promise<void> {
+  const processAccumulatedAdapter = createNodeInvocationAdapter(__dirname, encodeSourceToken);
+  const scheduleInfinitePass = (boardDir: string) => processAccumulatedEventsInfinitePass(boardDir, processAccumulatedAdapter);
+  const scheduleForced = (boardDir: string) => processAccumulatedEventsForced(boardDir, processAccumulatedAdapter);
   const boardCommandHandlers = createBoardCommandHandlers({
     initBoard,
     configureRuntimeOutDir,
     loadBoard,
-    writeJsonAtomic,
-    resolveStatusSnapshotPath,
+    outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath),
     buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(path.resolve(dir), live),
     getConfigStore: createBoardConfig,
-    getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
-    makeTempFilePath: makeBoardTempFilePath,
-    validateLiveCardDefinition,
-    execCommandSync,
-    readStdin: () => fs.readFileSync('/dev/stdin', 'utf-8'),
     appendEventToJournal,
-    processAccumulatedEventsInfinitePass,
+    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
   const callbackCommandHandlers = createCallbackCommandHandlers({
     decodeCallbackToken,
     decodeSourceToken,
+    getFetchedSourcesStore: (boardDir: string) => createFetchedSourcesStore(createFsBlobStorage(boardDir)),
     writeRuntimeDataObjects,
     appendEventToJournal,
-    processAccumulatedEventsForced,
-    processAccumulatedEventsInfinitePass,
+    processAccumulatedEventsForced: scheduleForced,
+    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
   const nonCoreCommandHandlers = createNonCoreCommandHandlers({
     getConfigStore: createBoardConfig,
+    getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
     execCommandSync,
     splitCommandLine,
     resolveCommandInvocation,
     makeTempFilePath: makeBoardTempFilePath,
+    validateLiveCardDefinition,
+    readStdin: () => fs.readFileSync('/dev/stdin', 'utf-8'),
   });
   const cardCommandHandlers = createCardCommandHandlers({
     getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
@@ -1010,14 +945,14 @@ export async function cli(argv: string[]): Promise<void> {
     liveCardToTaskConfig,
     hashTaskConfig: computeStableJsonHash,
     appendEventToJournal,
-    processAccumulatedEventsInfinitePass,
+    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
   const compatCommandHandlers = createCompatCommandHandlers({
     getCardAdminStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
     upsertCardById: cardCommandHandlers.upsertCardById,
-    validateCards: boardCommandHandlers.validateCards,
+    validateCards: nonCoreCommandHandlers.validateCards,
     resolveCardGlobMatches,
-    processAccumulatedEventsInfinitePass,
+    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
 
   const executionCommandHandlers = createExecutionCommandHandlers({
@@ -1033,8 +968,8 @@ export async function cli(argv: string[]): Promise<void> {
     spawnDetachedCommand,
     getCliInvocation: buildBoardCliInvocation.bind(null, __dirname),
     appendEventToJournal,
-    processAccumulatedEventsInfinitePass,
-    processAccumulatedEventsForced,
+    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
+    processAccumulatedEventsForced: scheduleForced,
     lookupCardPath,
     nextEntryAfterFetchDelivery,
   });
@@ -1053,7 +988,7 @@ export async function cli(argv: string[]): Promise<void> {
       : cardCommandHandlers.cmdUpsertCard(rest);
     case 'validate-card':  return rest.some((a: string) => a === '--card' || a === '--card-glob')
       ? compatCommandHandlers.compatValidateCard(rest)
-      : boardCommandHandlers.cmdValidateCard(rest);
+      : nonCoreCommandHandlers.cmdValidateCard(rest);
     case 'remove-card':              return boardCommandHandlers.cmdRemoveCard(rest);
     case 'retrigger':                 return boardCommandHandlers.cmdRetrigger(rest);
     case 'task-completed':            return callbackCommandHandlers.cmdTaskCompleted(rest);

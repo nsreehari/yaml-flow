@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { GraphEvent } from '../event-graph/types.js';
+import type { FetchedSourcesStore } from './board-live-cards-all-stores.js';
 
 /**
  * Append a task-progress event to the board journal and schedule a drain pass.
@@ -44,6 +44,7 @@ interface SourceTokenPayloadLike {
 interface CallbackCommandDeps {
   decodeCallbackToken: (token: string) => CallbackTokenPayload | null;
   decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
+  getFetchedSourcesStore: (boardDir: string) => FetchedSourcesStore;
   writeRuntimeDataObjects: (boardDir: string, data: Record<string, unknown>) => void;
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
@@ -139,10 +140,11 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
     }
 
     const { cbk, rg, cid, b, d, cs } = payload;
-    const destPath = path.join(rg, cid, d);
 
-    fs.mkdirSync(path.dirname(destPath), { recursive: true });
-    fs.renameSync(tmpFile, destPath);
+    // Write fetched source content through FetchedSourcesStore (boardDir = rg)
+    const content = fs.readFileSync(tmpFile, 'utf-8');
+    deps.getFetchedSourcesStore(rg).writeSource(cid, d, content);
+    try { fs.unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
     console.log(`[source-data-fetched] ${cid}.${b} -> ${cid}/${d}`);
 
     const fetchedAt = new Date().toISOString();

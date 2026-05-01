@@ -26,8 +26,7 @@ import * as path from 'node:path';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
-import type { InvocationAdapter, DispatchResult } from './board-live-cards-lib-types.js';
-
+import type { InvocationAdapter, DispatchResult } from './process-interface.js';
 export type { CommandSpec };
 
 // ============================================================================
@@ -351,6 +350,17 @@ class NodeInvocationAdapter implements InvocationAdapter {
         'run-inference-internal',
         ['--in', inferenceInFile, '--token', inferenceToken],
       );
+      runDetached({ command: cmd, args });
+      return { dispatched: true, invocationId: randomUUID() };
+    } catch (err) {
+      return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async requestProcessAccumulated(boardDir: string): Promise<DispatchResult> {
+    if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
+    try {
+      const { cmd, args } = buildBoardCliInvocation(this.cliDir, 'process-accumulated-events', ['--rg', boardDir]);
       runDetached({ command: cmd, args });
       return { dispatched: true, invocationId: randomUUID() };
     } catch (err) {

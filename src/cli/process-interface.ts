@@ -1,0 +1,70 @@
+/**
+ * process-interface.ts
+ *
+ * The interface contract for plugging in a new process-dispatch backend.
+ *
+ * To add a new backend (e.g. Azure Functions, AWS Lambda, in-process test double):
+ *   1. Create a new file (e.g. process-azure-runner.ts, process-lambda-runner.ts).
+ *   2. Implement the `InvocationAdapter` interface — three methods:
+ *        - requestSourceFetch   — dispatch a source-data fetch for a card
+ *        - requestInference     — dispatch LLM inference for a card
+ *        - requestProcessAccumulated — schedule the next drain pass
+ *   3. Export a factory (e.g. `createAzureInvocationAdapter(...): InvocationAdapter`).
+ *   4. Wire the factory at the top-level entrypoint (equivalent of `cli()` in
+ *      board-live-cards-cli.ts) instead of `createNodeInvocationAdapter`.
+ *
+ * The Node implementation lives in process-runner.ts (`createNodeInvocationAdapter`).
+ */
+
+// ============================================================================
+// DispatchResult — structured result returned by every InvocationAdapter method
+// ============================================================================
+
+export interface DispatchResult {
+  /** Whether the request was successfully dispatched (does not mean completed). */
+  dispatched: boolean;
+  /** Opaque identifier for the dispatched invocation, if available. */
+  invocationId?: string;
+  /** Human-readable error message if dispatched is false. */
+  error?: string;
+}
+
+// ============================================================================
+// InvocationAdapter — implement this interface to add a new process backend
+//
+// Invariant: Results are a structured DispatchResult, not raw shell output or callbacks.
+// The adapter owns all host-specific concerns (temp files, process spawning, queue messages).
+// All methods are fire-and-forget from the caller's perspective — the Promise resolves once
+// the dispatch is enqueued/spawned, not when the work completes.
+// ============================================================================
+
+export interface InvocationAdapter {
+  /**
+   * Dispatch a source-data fetch for a card.
+   * `enrichedCard` is passed by value; the adapter owns temp file management if needed.
+   */
+  requestSourceFetch(
+    boardDir: string,
+    enrichedCard: Record<string, unknown>,
+    callbackToken: string,
+  ): Promise<DispatchResult>;
+
+  /**
+   * Dispatch LLM inference for a card.
+   * `inferencePayload` is passed by value; the adapter owns temp file management if needed.
+   */
+  requestInference(
+    boardDir: string,
+    cardId: string,
+    inferencePayload: unknown,
+    callbackToken: string,
+  ): Promise<DispatchResult>;
+
+  /**
+   * Schedule a new drain pass for the board (the `process-accumulated-events` cycle).
+   * Node: spawns a detached CLI process.
+   * Azure: enqueues a function trigger / storage-queue message.
+   * In-process test double: calls the handler synchronously or records the call.
+   */
+  requestProcessAccumulated(boardDir: string): Promise<DispatchResult>;
+}

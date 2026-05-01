@@ -61,7 +61,7 @@ interface ExecutionCommandDeps {
   getCliInvocation: (command: string, args: string[]) => { cmd: string; args: string[] };
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
-  processAccumulatedEventsForced: (boardDir: string, options?: { inlineLoop?: boolean }) => Promise<void>;
+  processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
   lookupCardPath: (boardDir: string, cardId: string) => string | null;
   nextEntryAfterFetchDelivery: <T extends FetchRuntimeEntryLike>(entry: T, fetchedAt: string) => T;
 }
@@ -422,25 +422,14 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
     injectTaskProgress(dir, taskName, { kind: 'inference-done', isTaskCompleted: isTaskCompletedFlag, inputChecksum }, deps);
   }
 
-  /**
-   * process-accumulated-events command.
-   *
-   * Default mode: performs one immediate pass and schedules relay continuation
-   * in a detached worker process.
-   *
-   * Internal mode (--inline-loop): execute full in-process settle loop.
-   * Used only by the detached worker to avoid recursive respawn.
-   */
   async function cmdTryDrain(args: string[]): Promise<void> {
     const rgIdx = args.indexOf('--rg');
-    const inlineLoop = args.includes('--inline-loop');
     const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
     if (!boardDir) {
       console.error('Usage: board-live-cards process-accumulated-events --rg <dir>');
       process.exit(1);
     }
-
-    await deps.processAccumulatedEventsForced(boardDir, { inlineLoop });
+    await deps.processAccumulatedEventsForced(boardDir);
   }
 
   return { cmdRunSources, cmdRunInference, cmdInferenceDone, cmdTryDrain };

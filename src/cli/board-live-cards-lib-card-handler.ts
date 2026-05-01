@@ -15,6 +15,7 @@ import type { TaskHandlerFn } from '../continuous-event-graph/reactive.js';
 import { CardCompute } from '../card-compute/index.js';
 import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/index.js';
 import type { ExecutionRequestEntry } from './board-live-cards-all-stores.js';
+import type { CardRuntimeSnapshot } from './board-live-cards-all-stores.js';
 import type {
   CardHandlerAdapters,
   InferenceRuntimeEntry,
@@ -52,44 +53,57 @@ export function createCardHandlerFn(
         const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
         const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
 
-        // ---- Open a runtime session (opaque — raw state never crosses module boundary) ----
-        const session = adapters.runtimeStore.openSession(boardDir, cardId);
+        // ---- Open runtime state via CardRuntimeStore ----
+        let state: CardRuntimeSnapshot = adapters.cardRuntimeStore.readRuntime(cardId);
+        let dirty = false;
+
+        const flush = (): void => {
+          if (!dirty) return;
+          adapters.cardRuntimeStore.writeRuntime(cardId, state);
+          dirty = false;
+        };
+
+        const getSourceEntry = (outputFile: string): import('./board-live-cards-lib-types.js').SourceRuntimeEntry =>
+          ({ ...(state._sources[outputFile] ?? {}) });
+        const setSourceEntry = (outputFile: string, entry: import('./board-live-cards-lib-types.js').SourceRuntimeEntry): void => {
+          state._sources[outputFile] = entry; dirty = true;
+        };
+        const getInferenceEntry = (): InferenceRuntimeEntry => ({ ...(state._inferenceEntry ?? {}) });
+        const setInferenceEntry = (entry: InferenceRuntimeEntry): void => { state._inferenceEntry = entry; dirty = true; };
 
         // ---- If the task was restarted, clear stale source/inference state ----
         const currentExecutionCount = input.taskState?.executionCount ?? 0;
-        const lastExecCount = session.getLastExecutionCount();
+        const lastExecCount = state._lastExecutionCount;
         if (typeof lastExecCount === 'number' && lastExecCount !== currentExecutionCount) {
-          session.resetSources();
-          session.resetInferenceEntry();
+          state._sources = {}; state._inferenceEntry = undefined; dirty = true;
         }
         if (lastExecCount !== currentExecutionCount) {
-          session.setLastExecutionCount(currentExecutionCount);
+          state._lastExecutionCount = currentExecutionCount; dirty = true;
         }
 
         // ---- Handle a task-progress re-invocation (source delivery or failure) ----
         if (input.update) {
           const u = input.update;
           const outputFile = u.outputFile as string;
-          // Only process source updates (which have outputFile); skip inference-done updates
           if (outputFile) {
-            const entry = session.getSourceEntry(outputFile);
+            const entry = getSourceEntry(outputFile);
             if (u.failure) {
-              session.setSourceEntry(outputFile, nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown'));
+              setSourceEntry(outputFile, nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown'));
             } else {
-              session.setSourceEntry(outputFile, nextEntryAfterFetchDelivery(
+              setSourceEntry(outputFile, nextEntryAfterFetchDelivery(
                 entry,
                 (u.fetchedAt as string | undefined) ?? new Date().toISOString(),
               ));
             }
-            session.flush();
+            flush();
           }
         }
 
-        // ---- Load sourcesData from outputFiles (via CardStore — no direct fs access) ----
+        // ---- Load sourcesData from FetchedSourcesStore ----
         const sourcesData: Record<string, unknown> = {};
         for (const src of allSources) {
           if (src.outputFile) {
-            const content = adapters.cardStore.readSourceFileContent(cardId, src.outputFile);
+            const content = adapters.fetchedSourcesStore.readSource(cardId, src.outputFile as string);
             if (content !== null) {
               sourcesData[src.bindTo] = content;
             }
@@ -156,10 +170,10 @@ export function createCardHandlerFn(
         const undeliveredRequired = requiredSources.filter(s => {
           const outputFile = s.outputFile;
           if (typeof outputFile !== 'string' || !outputFile) return true;
-          let entry = session.getSourceEntry(outputFile);
+          let entry = getSourceEntry(outputFile);
           if (runQueuedAt) {
             entry = { ...entry, queueRequestedAt: runQueuedAt };
-            session.setSourceEntry(outputFile, entry);
+            setSourceEntry(outputFile, entry);
           }
           const qrt = entry.queueRequestedAt ?? entry.lastRequestedAt ?? now;
           const action = decideSourceAction(entry, qrt);
@@ -167,18 +181,18 @@ export function createCardHandlerFn(
           return action === 'dispatch';
         });
 
-        session.flush();
+        flush();
 
         if (undeliveredRequired.length > 0) {
           let stampedAny = false;
           for (const src of undeliveredRequired) {
             const outputFile = src.outputFile;
             if (typeof outputFile !== 'string' || !outputFile) continue;
-            const entry = session.getSourceEntry(outputFile);
-            session.setSourceEntry(outputFile, { ...entry, lastRequestedAt: now });
+            const entry = getSourceEntry(outputFile);
+            setSourceEntry(outputFile, { ...entry, lastRequestedAt: now });
             stampedAny = true;
           }
-          if (stampedAny) session.flush();
+          if (stampedAny) flush();
           if (!stampedAny) return 'task-initiated';
 
           pendingRequests.push({ taskKind: 'source-fetch', payload: { boardDir, enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
@@ -201,7 +215,7 @@ export function createCardHandlerFn(
         const llmCompletion = (cardData?.llm_task_completion_inference ?? {}) as Record<string, unknown>;
         const isLlmTaskCompleted = llmCompletion.isTaskCompleted === true;
 
-        const inferenceEntry = session.getInferenceEntry();
+        const inferenceEntry = getInferenceEntry();
         const inferenceRequestedAt = typeof inferenceEntry.lastRequestedAt === 'string'
           ? inferenceEntry.lastRequestedAt
           : undefined;
@@ -212,7 +226,7 @@ export function createCardHandlerFn(
           && (!inferenceCompletedAt || inferenceCompletedAt < inferenceRequestedAt);
 
         const latestRequiredSourceFetchedAt = requiredSources.reduce<string | undefined>((latest, src) => {
-          const fetchedAt = session.getSourceEntry(src.outputFile).lastFetchedAt;
+          const fetchedAt = getSourceEntry(src.outputFile).lastFetchedAt;
           if (typeof fetchedAt !== 'string') return latest;
           if (!latest || fetchedAt > latest) return fetchedAt;
           return latest;
@@ -246,23 +260,22 @@ export function createCardHandlerFn(
             let updatedInferenceEntry: InferenceRuntimeEntry = { ...inferenceEntry };
             if (runQueuedAt) {
               updatedInferenceEntry = { ...updatedInferenceEntry, queueRequestedAt: runQueuedAt };
-              session.setInferenceEntry(updatedInferenceEntry);
+              setInferenceEntry(updatedInferenceEntry);
             }
             const inferenceQrt = updatedInferenceEntry.queueRequestedAt ?? updatedInferenceEntry.lastRequestedAt ?? now;
             const inferenceAction = decideSourceAction(updatedInferenceEntry, inferenceQrt);
 
             if (inferenceAction === 'in-flight') {
-              session.flush();
-              return 'task-initiated';
-            }
-            if (inferenceAction === 'idle') {
-              return 'task-initiated';
-            }
+            flush();
+            return 'task-initiated';
+          }
+          if (inferenceAction === 'idle') {
+            return 'task-initiated';
+          }
 
-            // dispatch inference
-            session.setInferenceEntry({ ...updatedInferenceEntry, lastRequestedAt: now });
-            session.flush();
-
+          // dispatch inference
+          setInferenceEntry({ ...updatedInferenceEntry, lastRequestedAt: now });
+          flush();
             pendingRequests.push({ taskKind: 'inference', payload: { boardDir, cardId, inferencePayload, callbackToken: input.callbackToken } });
             adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
             return 'task-initiated';
@@ -276,7 +289,7 @@ export function createCardHandlerFn(
         // Spawn undelivered non-gating (optional) source_defs in background.
         const undeliveredOptional = allSources.filter(s => {
           if (s.optionalForCompletionGating !== true) return false;
-          const entry = session.getSourceEntry(s.outputFile);
+          const entry = getSourceEntry(s.outputFile as string);
           if (!entry.lastRequestedAt) return true;
           if (!entry.lastFetchedAt) return true;
           return entry.lastFetchedAt <= entry.lastRequestedAt;

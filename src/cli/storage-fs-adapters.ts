@@ -16,8 +16,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
+import { lockSync } from 'proper-lockfile';
 
 import type {
+  AtomicRelayLock,
   BlobStorage,
   JournalEntry,
   JournalReadResult,
@@ -26,10 +28,6 @@ import type {
   StorageProvider,
 } from './storage-interface.js';
 import type {
-  RuntimeInternalStore,
-  RuntimeStoreSession,
-  SourceRuntimeEntry,
-  InferenceRuntimeEntry,
   OutputStore,
 } from './board-live-cards-lib-types.js';
 
@@ -198,87 +196,6 @@ export function computeStableJsonHash(value: unknown): string {
 }
 
 // ============================================================================
-// createFsRuntimeStore — FS-backed RuntimeInternalStore
-//
-// Persists per-card runtime state at <boardDir>/<cardId>/runtime.json.
-// State is private; exposed only through RuntimeStoreSession.
-// ============================================================================
-
-interface CardRuntimeState {
-  _sources: Record<string, SourceRuntimeEntry>;
-  _inferenceEntry?: InferenceRuntimeEntry;
-  _lastExecutionCount?: number;
-}
-
-class FsRuntimeStoreSession implements RuntimeStoreSession {
-  private state: CardRuntimeState;
-  private dirty = false;
-
-  constructor(
-    private readonly boardDir: string,
-    private readonly cardId: string,
-  ) {
-    this.state = FsRuntimeInternalStore.readState(boardDir, cardId);
-  }
-
-  getSourceEntry(outputFile: string): SourceRuntimeEntry {
-    return { ...(this.state._sources[outputFile] ?? {}) };
-  }
-  setSourceEntry(outputFile: string, entry: SourceRuntimeEntry): void {
-    this.state._sources[outputFile] = entry;
-    this.dirty = true;
-  }
-  resetSources(): void {
-    this.state._sources = {};
-    this.dirty = true;
-  }
-  getInferenceEntry(): InferenceRuntimeEntry {
-    return { ...(this.state._inferenceEntry ?? {}) };
-  }
-  setInferenceEntry(entry: InferenceRuntimeEntry): void {
-    this.state._inferenceEntry = entry;
-    this.dirty = true;
-  }
-  resetInferenceEntry(): void {
-    this.state._inferenceEntry = undefined;
-    this.dirty = true;
-  }
-  getLastExecutionCount(): number | undefined {
-    return this.state._lastExecutionCount;
-  }
-  setLastExecutionCount(count: number): void {
-    this.state._lastExecutionCount = count;
-    this.dirty = true;
-  }
-  flush(): void {
-    if (!this.dirty) return;
-    FsRuntimeInternalStore.writeState(this.boardDir, this.cardId, this.state);
-    this.dirty = false;
-  }
-}
-
-class FsRuntimeInternalStore implements RuntimeInternalStore {
-  openSession(boardDir: string, cardId: string): RuntimeStoreSession {
-    return new FsRuntimeStoreSession(boardDir, cardId);
-  }
-  static readState(boardDir: string, cardId: string): CardRuntimeState {
-    const p = path.join(boardDir, cardId, 'runtime.json');
-    if (!fs.existsSync(p)) return { _sources: {} };
-    try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as CardRuntimeState; }
-    catch { return { _sources: {} }; }
-  }
-  static writeState(boardDir: string, cardId: string, state: CardRuntimeState): void {
-    const p = path.join(boardDir, cardId, 'runtime.json');
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(state, null, 2));
-  }
-}
-
-export function createFsRuntimeStore(): RuntimeInternalStore {
-  return new FsRuntimeInternalStore();
-}
-
-// ============================================================================
 // createFsOutputStore — FS-backed OutputStore
 //
 // Writes computed-values and data-objects JSON files atomically.
@@ -296,6 +213,7 @@ class FsOutputStore implements OutputStore {
   constructor(
     private readonly resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
     private readonly resolveDataObjectsDirPath: (boardDir: string) => string,
+    private readonly resolveStatusSnapshotPath?: (boardDir: string) => string,
   ) {}
 
   writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void {
@@ -314,13 +232,26 @@ class FsOutputStore implements OutputStore {
       writeJsonAtomic(path.join(this.resolveDataObjectsDirPath(boardDir), fileName), payload);
     }
   }
+
+  writeStatusSnapshot(boardDir: string, status: unknown): void {
+    if (!this.resolveStatusSnapshotPath) return;
+    writeJsonAtomic(this.resolveStatusSnapshotPath(boardDir), status);
+  }
+
+  readStatusSnapshot(boardDir: string): unknown | null {
+    if (!this.resolveStatusSnapshotPath) return null;
+    const p = this.resolveStatusSnapshotPath(boardDir);
+    if (!fs.existsSync(p)) return null;
+    try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return null; }
+  }
 }
 
 export function createFsOutputStore(
   resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
   resolveDataObjectsDirPath: (boardDir: string) => string,
+  resolveStatusSnapshotPath?: (boardDir: string) => string,
 ): OutputStore {
-  return new FsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath);
+  return new FsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath);
 }
 
 export function createFsStorageProvider(boardDir: string, journalFile: string): StorageProvider {
@@ -328,5 +259,22 @@ export function createFsStorageProvider(boardDir: string, journalFile: string): 
     blob:    createFsBlobStorage(boardDir),
     kv:      createFsKvStorage(path.join(boardDir, '.kv')),
     journal: createFsJournalStorage(path.join(boardDir, journalFile)),
+  };
+}
+
+/**
+ * FS implementation of AtomicRelayLock.
+ * Uses proper-lockfile on the given file path as the lock target.
+ * tryAcquire() is non-blocking (retries: 0) — returns null immediately if busy.
+ */
+export function createFsAtomicRelayLock(lockTargetPath: string): AtomicRelayLock {
+  return {
+    tryAcquire() {
+      try {
+        return lockSync(lockTargetPath, { retries: 0 });
+      } catch {
+        return null;
+      }
+    },
   };
 }

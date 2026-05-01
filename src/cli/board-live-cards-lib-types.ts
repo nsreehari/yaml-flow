@@ -13,8 +13,8 @@
  *   - InvocationAdapter results are structured, not raw shell-centric.
  */
 
-import type { CardStore } from './board-live-cards-all-stores.js';
-export type { CardStore };
+import type { CardStore, FetchedSourcesStore, CardRuntimeStore } from './board-live-cards-all-stores.js';
+export type { CardStore, FetchedSourcesStore, CardRuntimeStore };
 import type { ExecutionRequestStore } from './board-live-cards-all-stores.js';
 export type { ExecutionRequestStore };
 
@@ -103,38 +103,6 @@ export function nextEntryAfterFetchFailure<T extends FetchRuntimeEntry>(
 }
 
 // ============================================================================
-// RuntimeInternalStore — opaque session-based interface
-//
-// Invariant: CardRuntimeState is never returned raw from public APIs.
-// The raw persisted shape is hidden inside the store implementation.
-// All reads/writes go through a RuntimeStoreSession, which is acquired
-// per card-handler invocation and flushed once at natural checkpoints.
-// ============================================================================
-
-export interface RuntimeStoreSession {
-  /** Returns the source runtime entry for the given outputFile, or {} if absent. */
-  getSourceEntry(outputFile: string): SourceRuntimeEntry;
-  setSourceEntry(outputFile: string, entry: SourceRuntimeEntry): void;
-  /** Clear all source entries (called when execution count changes). */
-  resetSources(): void;
-
-  /** Returns the inference runtime entry, or {} if absent. */
-  getInferenceEntry(): InferenceRuntimeEntry;
-  setInferenceEntry(entry: InferenceRuntimeEntry): void;
-  resetInferenceEntry(): void;
-
-  getLastExecutionCount(): number | undefined;
-  setLastExecutionCount(count: number): void;
-
-  /** Write all dirty state to backing store. No-op if nothing changed. */
-  flush(): void;
-}
-
-export interface RuntimeInternalStore {
-  openSession(boardDir: string, cardId: string): RuntimeStoreSession;
-}
-
-// ============================================================================
 // OutputStore — idempotent, schema-versioned writes
 //
 // Invariant: schema_version is enforced by the store, not by call sites.
@@ -146,44 +114,21 @@ export interface OutputStore {
   writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void;
   /** Write task-completed data objects. Idempotent (atomic rename on Node, blob PUT on Azure). */
   writeDataObjects(boardDir: string, data: Record<string, unknown>): void;
+  /**
+   * Write the board status read-model cache (best-effort).
+   * Called after each successful drain pass. Failures must not fail the authoritative commit.
+   */
+  writeStatusSnapshot(boardDir: string, status: unknown): void;
+  /** Read the board status read-model cache. Returns null if absent or unreadable. */
+  readStatusSnapshot(boardDir: string): unknown | null;
 }
 
 // ============================================================================
-// InvocationAdapter — normalized, structured dispatch
-//
-// Invariant: Results are a structured DispatchResult, not raw shell output or callbacks.
-// The adapter owns all host-specific concerns (temp files, process spawning, queue messages).
+// InvocationAdapter — see process-interface.ts for the full contract and
+// instructions for adding a new backend.
 // ============================================================================
 
-export interface DispatchResult {
-  dispatched: boolean;
-  invocationId?: string;
-  error?: string;
-}
-
-export interface InvocationAdapter {
-  /**
-   * Fire-and-forget: dispatch a source fetch for a card.
-   * enrichedCard is passed by value; the adapter owns temp file management if needed.
-   * Returns Promise so Azure Function / queue-backed adapters can await message enqueue.
-   */
-  requestSourceFetch(
-    boardDir: string,
-    enrichedCard: Record<string, unknown>,
-    callbackToken: string,
-  ): Promise<DispatchResult>;
-
-  /**
-   * Fire-and-forget: dispatch LLM inference for a card.
-   * inferencePayload is passed by value; the adapter owns temp file management if needed.
-   */
-  requestInference(
-    boardDir: string,
-    cardId: string,
-    inferencePayload: unknown,
-    callbackToken: string,
-  ): Promise<DispatchResult>;
-}
+export type { DispatchResult, InvocationAdapter } from './process-interface.js';
 
 // ============================================================================
 // CardHandlerAdapters — aggregate of all adapters consumed by createCardHandler
@@ -191,7 +136,9 @@ export interface InvocationAdapter {
 
 export interface CardHandlerAdapters {
   cardStore: CardStore;
-  runtimeStore: RuntimeInternalStore;
+  cardRuntimeStore: CardRuntimeStore;
+  /** Blob store for fetched source payloads. Key: <cardId>/<outputFile>. */
+  fetchedSourcesStore: FetchedSourcesStore;
   outputStore: OutputStore;
   executionRequestStore: ExecutionRequestStore;
 }

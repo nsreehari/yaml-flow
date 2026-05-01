@@ -120,3 +120,67 @@ export interface StorageProvider {
   journal: JournalStorage;
   kv: KVStorage;
 }
+
+// ============================================================================
+// AtomicRelayLock — non-blocking try-acquire lock with relay-on-busy semantics
+//
+// This interface serves TWO tightly coupled purposes which are intentionally
+// unified into a single primitive:
+//
+//   1. ATOMICITY — ensures that a read-mutate-save cycle is executed by at
+//      most one actor at a time, preventing concurrent actors from racing on
+//      stale state and writing conflicting snapshots.
+//
+//   2. RELAY SIGNAL — when tryAcquire() returns null, the caller knows the
+//      cycle is already in progress. Because the holder always reads fresh
+//      state upon entry, it will pick up every change appended by the skipping
+//      caller before the lock was attempted. The caller can therefore safely
+//      exit — its work will be completed by the holder. This is the
+//      "relay baton" pattern: the lock being held IS the in-progress signal.
+//
+// These two purposes are not an accidental overload — they are the same
+// invariant expressed at different scopes. Any backend implementation
+// (FS lockfile, Cosmos document lease, Azure entity lock, in-memory flag)
+// that satisfies "at most one holder at a time" automatically satisfies both.
+//
+// Contract:
+//   - tryAcquire() is non-blocking. It never waits.
+//   - Returns a release function on success, or null if already held.
+//   - The release function must be called exactly once (use try/finally).
+//   - Behaviour after calling release() more than once is undefined.
+// ============================================================================
+
+export interface AtomicRelayLock {
+  /**
+   * Attempt to acquire the lock without blocking.
+   * Returns a `release` function if successful, or `null` if the lock is
+   * already held by another actor (relay: that actor will complete the work).
+   */
+  tryAcquire(): (() => void) | null;
+}
+
+/**
+ * Execute `work` under an `AtomicRelayLock`.
+ *
+ * - If the lock is busy, returns false immediately (relay: the holder will
+ *   complete the work on behalf of this caller).
+ * - If acquired, runs `work` exclusively, releases the lock, then calls
+ *   `continuation` if provided — allowing the caller to schedule the next
+ *   cycle (e.g. spawn a detached process) after the lock is free.
+ * - Returns true if work ran.
+ */
+export async function withRelayLock(
+  lock: AtomicRelayLock,
+  work: () => Promise<void>,
+  continuation?: () => void,
+): Promise<boolean> {
+  const release = lock.tryAcquire();
+  if (!release) return false; // relay: holder is already doing the work
+  try {
+    await work();
+  } finally {
+    release(); // release before continuation so it can immediately re-acquire
+  }
+  continuation?.();
+  return true;
+}
