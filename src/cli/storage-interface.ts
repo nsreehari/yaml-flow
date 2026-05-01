@@ -21,7 +21,7 @@
  *
  *   JournalStorageAdapter     → Journal (board-journal.jsonl)
  *
- *   ExecutionRequestStorageAdapter → KV (keyed by journalId)
+ *   ExecutionRequestStore → KV (keyed by journalId, via createFsKvStorage)
  *
  *   StateSnapshotStorageAdapter
  *     board-graph.json (packed single JSON, written atomically)   → Blob

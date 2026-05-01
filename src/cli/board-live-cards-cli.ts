@@ -156,30 +156,6 @@ function createFsJournalStorageAdapter(boardDir: string) {
   };
 }
 
-function createFsExecutionRequestStorageAdapter(boardDir: string) {
-  const dir = path.join(boardDir, '.execution-requests');
-  function entryFilePath(journalId: string): string {
-    return path.join(dir, `${journalId}.json`);
-  }
-  return {
-    writeEntries(journalId: string, entries: unknown[]): void {
-      const fp = entryFilePath(journalId);
-      fs.mkdirSync(dir, { recursive: true });
-      const tmp = `${fp}.${process.pid}.${genUUID()}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), 'utf-8');
-      renameSync(tmp, fp);
-    },
-    readEntries(journalId: string) {
-      const fp = entryFilePath(journalId);
-      if (!fs.existsSync(fp)) return null;
-      try { return JSON.parse(fs.readFileSync(fp, 'utf-8')) as import('./board-live-cards-all-stores.js').ExecutionRequestEntry[]; } catch { return null; }
-    },
-    deleteEntries(journalId: string): void {
-      const fp = entryFilePath(journalId);
-      try { if (fs.existsSync(fp)) fs.unlinkSync(fp); } catch { /* best-effort */ }
-    },
-  };
-}
 const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
@@ -830,7 +806,7 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
         ?? 'unknown';
       taskFailedFn(taskName, error);
     };
-    const executionRequestStore = createExecutionRequestStore(createFsExecutionRequestStorageAdapter(boardDir), onDispatchFailed);
+    const executionRequestStore = createExecutionRequestStore(createFsKvStorage(path.join(boardDir, '.execution-requests')), onDispatchFailed);
     const cardHandlerAdapters = {
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
       cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(path.join(boardDir, '.state-snapshot'))),

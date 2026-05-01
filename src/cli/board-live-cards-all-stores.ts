@@ -298,19 +298,6 @@ export interface ExecutionRequestEntry {
 }
 
 // ============================================================================
-// ExecutionRequestStorageAdapter — key-value blob semantics, injected by caller
-// ============================================================================
-
-export interface ExecutionRequestStorageAdapter {
-  /** Replace the stored entry list for this journalId key. Creates if absent. */
-  writeEntries(journalId: string, entries: ExecutionRequestEntry[]): void;
-  /** Read all entries for this journalId. Returns null if key does not exist. */
-  readEntries(journalId: string): ExecutionRequestEntry[] | null;
-  /** Remove the key entirely. No-op if absent. */
-  deleteEntries(journalId: string): void;
-}
-
-// ============================================================================
 // ExecutionRequestStore — pure logic
 // ============================================================================
 
@@ -335,19 +322,19 @@ export interface ExecutionRequestStore {
 // ============================================================================
 
 export function createExecutionRequestStore(
-  adapter: ExecutionRequestStorageAdapter,
+  kv: KVStorage,
   onDispatchFailed: (entry: ExecutionRequestEntry, error: string) => void,
 ): ExecutionRequestStore {
   return {
     appendEntries(journalId: string, entries: ExecutionRequestEntry[]): void {
       if (!journalId || entries.length === 0) return;
-      const existing = adapter.readEntries(journalId) ?? [];
-      adapter.writeEntries(journalId, [...existing, ...entries]);
+      const existing = (kv.read(journalId) as ExecutionRequestEntry[] | null) ?? [];
+      kv.write(journalId, [...existing, ...entries]);
     },
 
     dispatchEntriesForJournalId(journalId: string, processorFn: (entry: ExecutionRequestEntry) => void): void {
       if (!journalId) return;
-      const entries = adapter.readEntries(journalId);
+      const entries = kv.read(journalId) as ExecutionRequestEntry[] | null;
       if (!entries || entries.length === 0) return;
       for (const entry of entries) {
         try { processorFn(entry); } catch (err) {
@@ -356,7 +343,7 @@ export function createExecutionRequestStore(
           try { onDispatchFailed(entry, msg); } catch { /* guard against failure in error handler */ }
         }
       }
-      adapter.deleteEntries(journalId);
+      kv.delete(journalId);
     },
   };
 }
