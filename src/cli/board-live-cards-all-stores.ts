@@ -372,7 +372,6 @@ export function cardFetchedSourcesManifestKey(cardId: string): string {
 /** Per-card runtime state stored under cards/<id>/runtime. */
 export interface CardRuntimeSnapshot {
   _sources: Record<string, { lastRequestedAt?: string; lastFetchedAt?: string; queueRequestedAt?: string }>;
-  _inferenceEntry?: { lastRequestedAt?: string; queueRequestedAt?: string; inferenceCompletedAt?: string };
   _lastExecutionCount?: number;
 }
 
@@ -515,8 +514,6 @@ export interface TaskExecutorConfig {
 export interface BoardConfigStore {
   readTaskExecutorConfig(): TaskExecutorConfig | undefined;
   writeTaskExecutorConfig(config: TaskExecutorConfig): void;
-  readInferenceAdapter(): string | undefined;
-  writeInferenceAdapter(value: string): void;
   readChatHandler(): string | undefined;
   writeChatHandler(value: string): void;
 }
@@ -526,7 +523,7 @@ export interface BoardConfigStore {
 // ============================================================================
 
 /**
- * @param kv          Key-value store. Keys used: 'task-executor', 'inference-adapter', 'chat-handler'.
+ * @param kv          Key-value store. Keys used: 'task-executor', 'chat-handler'.
  * @param parseSpec   Normalises legacy string or structured { command, args } →
  *                    { command, args }. Injected to keep this module platform-free.
  */
@@ -558,14 +555,6 @@ export function createBoardConfigStore(
 
     writeTaskExecutorConfig(config: TaskExecutorConfig): void {
       kv.write('task-executor', JSON.stringify(config, null, 2));
-    },
-
-    readInferenceAdapter(): string | undefined {
-      return readKey('inference-adapter')?.trim() || undefined;
-    },
-
-    writeInferenceAdapter(value: string): void {
-      kv.write('inference-adapter', value);
     },
 
     readChatHandler(): string | undefined {

@@ -2,10 +2,15 @@
   "id": "card-ex-inference-progress",
   "meta": {
     "title": "Inference Progress Demo",
-    "tags": ["inference", "async"],
+    "tags": [
+      "inference",
+      "async"
+    ],
     "desc": "Demonstrates async inference task-progress when evidence is insufficient"
   },
-  "requires": ["orders"],
+  "requires": [
+    "orders"
+  ],
   "compute": [
     {
       "bindTo": "orderCount",
@@ -16,13 +21,14 @@
       "expr": "'pending'"
     }
   ],
-  "when_is_task_completed": "From the available information, deployment done.",
   "view": {
     "elements": [
       {
         "kind": "metric",
         "label": "Orders Seen",
-        "data": { "bind": "computed_values.orderCount" }
+        "data": {
+          "bind": "computed_values.orderCount"
+        }
       },
       {
         "kind": "badge",
@@ -36,16 +42,26 @@
         }
       },
       {
-
         "kind": "text",
         "label": "Inference Reason",
         "style": "muted-italic",
-        "data": { "bind": "card_data.llm_task_completion_inference.reason", "hideIfEmpty": true }
+        "data": {
+          "bind": "card_data.llm_task_completion_inference.reason",
+          "hideIfEmpty": true
+        }
       }
     ],
     "layout": {
-      "board": { "col": 4, "order": 24 },
-      "canvas": { "x": 1140, "y": 1100, "w": 260, "h": 180 }
+      "board": {
+        "col": 4,
+        "order": 24
+      },
+      "canvas": {
+        "x": 1140,
+        "y": 1100,
+        "w": 260,
+        "h": 180
+      }
     }
   },
   "card_data": {}

@@ -13,7 +13,7 @@ import {
   genUUID,
   resolveModuleDir,
 } from './process-runner.js';
-import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import { withRelayLock, serializeRef } from './storage-interface.js';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -24,7 +24,7 @@ import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 import { createBoardCommandHandlers } from './board-live-cards-cli-board-commands.js';
-import { createCallbackCommandHandlers, injectTaskProgress } from './board-live-cards-cli-callbacks.js';
+import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
 import { createCompatCommandHandlers } from './board-live-cards-cli-compat.js';
 import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
@@ -48,9 +48,9 @@ import {
   type BoardConfigStore, type CardStore,
 } from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
-import { nextEntryAfterFetchDelivery, Resp, type CommandResponse } from './board-live-cards-lib-types.js';
+import { Resp, type CommandResponse } from './board-live-cards-lib-types.js';
 import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
-export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
+export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib-types.js';
 
 const BOARD_LOCK_FILE = '.board.lock';
@@ -63,7 +63,7 @@ function createBoardConfig(boardDir: string): BoardConfigStore {
 }
 
 function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
-  const base = createNodeInvocationAdapter(cliDir, encodeSourceToken);
+  const base = createNodeInvocationAdapter(cliDir);
   // Path to the built-in source-cli executor — compiled alongside this CLI in dist/cli/.
   const sourceCliExecutorPath = path.join(cliDir, 'source-cli-task-executor.js');
   // Board CLI script path — used as the back-channel `via` for reportComplete() callbacks.
@@ -73,7 +73,6 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
     : (_cliArgs[1] ?? _cliArgs[0]);
 
   return {
-    requestInference: base.requestInference.bind(base),
     requestProcessAccumulated: base.requestProcessAccumulated.bind(base),
     async requestSourceFetch(
       boardDir: string,
@@ -592,13 +591,6 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
             (p.enrichedCard?.id as string | undefined) ?? 'unknown',
             err instanceof Error ? err.message : String(err),
           ));
-      } else if (entry.taskKind === 'inference') {
-        const p = entry.payload as { boardDir: string; cardId: string; inferencePayload: unknown; callbackToken: string };
-        invocationAdapter.requestInference(p.boardDir, p.cardId, p.inferencePayload, p.callbackToken)
-          .catch((err: unknown) => taskFailedFn(
-            p.cardId ?? 'unknown',
-            err instanceof Error ? err.message : String(err),
-          ));
       } else {
         console.warn(`[process-accumulated-events] unknown taskKind "${entry.taskKind}" — skipping`);
       }
@@ -937,11 +929,10 @@ USAGE
   board-live-cards-cli <command> [options]
 
 BOARD MANAGEMENT
-  init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]
+  init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]
     Create a new board in <dir>.
     If --task-executor is given, writes <dir>/.task-executor with the script path.
     If --chat-handler is given, writes <dir>/.chat-handler with the script path.
-    If --inference-adapter is given, writes <dir>/.inference-adapter with the script path.
     Writes <dir>/.runtime-out (default: <dir>/runtime-out).
     Published runtime files:
       <runtime-out>/board-livegraph-status.json
@@ -1041,16 +1032,6 @@ INTERNAL COMMANDS
     --out:           Optional path to write the raw fetch result JSON.
     Prints a structured report ending with a [probe-source:result] JSON line.
     Exits 0 on PROBE_PASS, 1 on PROBE_FAIL.
-
-  run-inference-internal --in <input.json> --token <inferenceToken>
-    Execute inference via registered .inference-adapter and forward result to inference-done.
-    inferenceToken encodes boardDir (rg), cardId (cid), callbackToken (cbk), checksum (cs).
-    (Internal command — invoked by the card-handler when custom completion rule is used.)
-
-  inference-done --tmp <result.json> --token <inferenceToken>
-    Persist llm_task_completion_inference on the card and append a task-progress event.
-    Reads boardDir/callbackToken/checksum from decoded inferenceToken; deletes --tmp file after reading.
-    (Internal command — invoked by run-inference-internal.)
 
 RUN-SOURCE-FETCH PROTOCOL
   External task-executors implement:
@@ -1205,224 +1186,15 @@ EXAMPLES
 // Execution command handlers (inlined from board-live-cards-cli-execution-commands.ts)
 // ============================================================================
 
-// Local type aliases (mirrors non-exported types in main CLI module)
-interface SourceTokenPayloadLike {
-  cbk: string;
-  rg: string;
-  cid: string;
-  b: string;
-  d: string;
-  cs?: string;
-}
-
-interface FetchRuntimeEntryLike {
-  lastRequestedAt?: string;
-  lastFetchedAt?: string;
-  lastError?: string;
-  queueRequestedAt?: string;
-}
-
 interface ExecutionCommandDeps {
-  getConfigStore: (boardDir: string) => BoardConfigStore;
-  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
-  executor: CommandExecutor;
-  decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
-  decodeCallbackToken: (token: string) => { taskName: string } | null;
-  getCliInvocation: (command: string, args: string[]) => { cmd: string; args: string[] };
-  appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
-  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
   processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
-  lookupCardPath: (boardDir: string, cardId: string) => string | null;
-  nextEntryAfterFetchDelivery: <T extends FetchRuntimeEntryLike>(entry: T, fetchedAt: string) => T;
 }
 
 interface ExecutionCommandHandlers {
-  cmdRunInference: (args: string[]) => void;
-  cmdInferenceDone: (args: string[]) => void;
   cmdTryDrain: (args: string[]) => Promise<void>;
 }
 
 function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
-  function cmdRunInference(args: string[]): void {
-    const inIdx = args.indexOf('--in-ref');
-    const tokenIdx = args.indexOf('--token');
-    const inRaw = inIdx !== -1 ? args[inIdx + 1] : undefined;
-    const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-
-    if (!inRaw || !inferenceToken) {
-      console.error('Usage: board-live-cards run-inference-internal --in-ref <::kind::value> --token <inference-token>');
-      process.exit(1);
-    }
-
-    let inRef: ReturnType<typeof parseRef>;
-    try { inRef = parseRef(inRaw); } catch (e) {
-      console.error(`[run-inference-internal] invalid --in ref: ${(e as Error).message}`);
-      process.exit(1);
-    }
-
-    // Decode inference token (encoded via encodeSourceToken: cbk, rg, cid, b='', d='', cs)
-    const decodedToken = deps.decodeSourceToken(inferenceToken);
-    if (!decodedToken) {
-      console.error('Invalid inference token');
-      process.exit(1);
-    }
-    const callbackToken = decodedToken.cbk;
-    const boardDir = decodedToken.rg;
-
-    const cbkDecoded = deps.decodeCallbackToken(callbackToken);
-    if (!cbkDecoded) {
-      console.error('Invalid callback token embedded in inference token');
-      process.exit(1);
-    }
-
-    function spawnInferenceDone(tmpFile: string): void {
-      const { cmd, args: cliArgs } = deps.getCliInvocation('inference-done', ['--tmp', tmpFile, '--token', inferenceToken!]);
-      deps.executor.spawnDetached(cmd, cliArgs);
-    }
-
-    function spawnInferenceDoneError(reason: string): void {
-      const tmpFile = deps.makeTempFilePath(boardDir, 'inference-err');
-      fs.writeFileSync(tmpFile, JSON.stringify({ isTaskCompleted: false, reason }), 'utf-8');
-      spawnInferenceDone(tmpFile);
-    }
-
-    if (inRef!.kind !== 'fs-path' || !inRef!.value) {
-      spawnInferenceDoneError(`inference input ref unsupported kind: ${inRef!.kind}`);
-      return;
-    }
-    const inFile = inRef!.value;
-
-    if (!fs.existsSync(inFile)) {
-      spawnInferenceDoneError(`inference input not found: ${inFile}`);
-      return;
-    }
-
-    const inferenceAdapter = deps.getConfigStore(boardDir).readInferenceAdapter();
-    if (!inferenceAdapter) {
-      spawnInferenceDoneError(`inference adapter is not configured (.inference-adapter)`);;
-      return;
-    }
-
-    const outFile = deps.makeTempFilePath(boardDir, 'inference-out');
-    const errFile = deps.makeTempFilePath(boardDir, 'inference-err', '.txt');
-    const adapterParts = deps.executor.splitCommand(inferenceAdapter);
-    if (adapterParts.length === 0) {
-      spawnInferenceDoneError('inference adapter command is empty');
-      return;
-    }
-
-    const adapterRawCmd = adapterParts[0];
-    const adapterRawArgs = adapterParts.slice(1);
-    const { cmd: adapterCmd, args: adapterArgsPrefix } = deps.executor.resolveInvocation(adapterRawCmd, adapterRawArgs);
-    const adapterArgs = [...adapterArgsPrefix, 'run-inference',
-      '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
-      '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
-      '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
-    ];
-
-    try {
-      deps.executor.executeSync(adapterCmd, adapterArgs, {
-        shell: false,
-        timeout: 120_000,
-        cwd: boardDir,
-        env: {
-          ...process.env,
-          BOARD_DIR: boardDir,
-        },
-      });
-    } catch (err: unknown) {
-      const reason = (err as Error).message ?? String(err);
-      spawnInferenceDoneError(reason);
-      return;
-    }
-
-    if (!fs.existsSync(outFile)) {
-      const errMsg = fs.existsSync(errFile)
-        ? fs.readFileSync(errFile, 'utf-8').trim()
-        : 'inference adapter produced no output file';
-      spawnInferenceDoneError(errMsg);
-      return;
-    }
-
-    // Adapter wrote outFile — pass it directly as --tmp; cmdInferenceDone reads and deletes it.
-    spawnInferenceDone(outFile);
-  }
-
-  function cmdInferenceDone(args: string[]): void {
-    const tmpIdx = args.indexOf('--tmp');
-    const tokenIdx = args.indexOf('--token');
-
-    const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
-    const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-
-    if (!tmpFile || !inferenceToken) {
-      console.error('Usage: board-live-cards inference-done --tmp <result.json> --token <inference-token>');
-      process.exit(1);
-    }
-
-    const decodedToken = deps.decodeSourceToken(inferenceToken);
-    if (!decodedToken) {
-      console.error('Invalid inference token');
-      process.exit(1);
-    }
-
-    const { cbk: callbackToken, rg: dir, cs: inputChecksum } = decodedToken;
-
-    const decoded = deps.decodeCallbackToken(callbackToken);
-    if (!decoded) {
-      console.error('Invalid callback token embedded in inference token');
-      process.exit(1);
-    }
-
-    const taskName = decoded.taskName;
-    const cardPath = deps.lookupCardPath(dir, taskName);
-    if (!cardPath) {
-      console.error(`Card file for task "${taskName}" not found in inventory`);
-      process.exit(1);
-    }
-
-    let result: { isTaskCompleted?: boolean; reason?: string; evidence?: string; data?: Record<string, unknown> } = {};
-    if (fs.existsSync(tmpFile)) {
-      try {
-        result = JSON.parse(fs.readFileSync(tmpFile, 'utf-8').trim());
-      } catch (err) {
-        result = { isTaskCompleted: false, reason: `failed to parse inference result: ${err instanceof Error ? err.message : String(err)}` };
-      }
-      try { fs.unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
-    } else {
-      result = { isTaskCompleted: false, reason: `inference result file not found: ${tmpFile}` };
-    }
-
-    const isTaskCompletedFlag = result.isTaskCompleted === true;
-    const inferenceCompletedAt = new Date().toISOString();
-
-    const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
-    if (!card.card_data) card.card_data = {};
-    const cardData = card.card_data as Record<string, unknown>;
-    const existingInference = (cardData.llm_task_completion_inference && typeof cardData.llm_task_completion_inference === 'object')
-      ? (cardData.llm_task_completion_inference as Record<string, unknown>)
-      : {};
-    cardData.llm_task_completion_inference = {
-      ...existingInference,
-      isTaskCompleted: isTaskCompletedFlag,
-      reason: typeof result.reason === 'string' ? result.reason : '',
-      evidence: typeof result.evidence === 'string' ? result.evidence : '',
-      inferenceCompletedAt,
-    };
-    fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
-
-    // Update inference runtime entry to reflect completion
-    const runtimeStore = createCardRuntimeStore(createFsKvStorage(path.join(dir, '.state-snapshot')));
-    const runtime = runtimeStore.readRuntime(taskName);
-    const inferenceEntry = runtime._inferenceEntry ?? {};
-    runtimeStore.writeRuntime(taskName, {
-      ...runtime,
-      _inferenceEntry: deps.nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt),
-    });
-
-    injectTaskProgress(dir, taskName, { kind: 'inference-done', isTaskCompleted: isTaskCompletedFlag, inputChecksum }, deps);
-  }
-
   async function cmdTryDrain(args: string[]): Promise<void> {
     const rgIdx = args.indexOf('--rg');
     const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
@@ -1433,7 +1205,7 @@ function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCo
     await deps.processAccumulatedEventsForced(boardDir);
   }
 
-  return { cmdRunInference, cmdInferenceDone, cmdTryDrain };
+  return { cmdTryDrain };
 }
 
 export async function cli(argv: string[]): Promise<void> {
@@ -1493,17 +1265,7 @@ export async function cli(argv: string[]): Promise<void> {
   });
 
   const executionCommandHandlers = createExecutionCommandHandlers({
-    getConfigStore: createBoardConfig,
-    makeTempFilePath: makeBoardTempFilePath,
-    executor,
-    decodeSourceToken,
-    decodeCallbackToken,
-    getCliInvocation: buildBoardCliInvocation.bind(null, __dirname),
-    appendEventToJournal,
-    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
     processAccumulatedEventsForced: scheduleForced,
-    lookupCardPath,
-    nextEntryAfterFetchDelivery,
   });
 
   const cmd = argv[0];
@@ -1530,8 +1292,6 @@ export async function cli(argv: string[]): Promise<void> {
       ? compatCommandHandlers.compatSourceDataFetchedTmp(rest)
       : callbackCommandHandlers.cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return callbackCommandHandlers.cmdSourceDataFetchFailure(rest);
-    case 'run-inference-internal':    return executionCommandHandlers.cmdRunInference(rest);
-    case 'inference-done':            return executionCommandHandlers.cmdInferenceDone(rest);
     case 'probe-source':               return await nonCoreCommandHandlers.cmdProbeSource(rest);
     case 'describe-task-executor-capabilities': return nonCoreCommandHandlers.cmdDescribeTaskExecutorCapabilities(rest);
     case 'process-accumulated-events': return await executionCommandHandlers.cmdTryDrain(rest);

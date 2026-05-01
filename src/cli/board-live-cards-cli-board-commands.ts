@@ -24,19 +24,17 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
   function cmdInit(args: string[]): void {
     const dir = args[0];
     if (!dir) {
-      throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]');
+      throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
     }
 
     const teIdx = args.indexOf('--task-executor');
     const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
     const chIdx = args.indexOf('--chat-handler');
     const chatHandler = chIdx !== -1 ? args[chIdx + 1] : undefined;
-    const iaIdx = args.indexOf('--inference-adapter');
-    const inferenceAdapter = iaIdx !== -1 ? args[iaIdx + 1] : undefined;
     const roIdx = args.indexOf('--runtime-out');
     const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
     if (roIdx !== -1 && !runtimeOut) {
-      throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]');
+      throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
     }
 
     const result = deps.initBoard(dir);
@@ -52,9 +50,6 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     }
     if (chatHandler) {
       config.writeChatHandler(chatHandler);
-    }
-    if (inferenceAdapter) {
-      config.writeInferenceAdapter(inferenceAdapter);
     }
 
     const runtimeOutDir = deps.configureRuntimeOutDir(dir, runtimeOut);

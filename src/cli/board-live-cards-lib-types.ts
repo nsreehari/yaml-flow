@@ -28,15 +28,7 @@ export interface SourceRuntimeEntry {
   queueRequestedAt?: string;
 }
 
-export interface InferenceRuntimeEntry {
-  lastRequestedAt?: string;
-  lastFetchedAt?: string;
-  lastError?: string;
-  /** Same semantics as SourceRuntimeEntry.queueRequestedAt. */
-  queueRequestedAt?: string;
-}
-
-export type FetchRuntimeEntry = SourceRuntimeEntry | InferenceRuntimeEntry;
+export type FetchRuntimeEntry = SourceRuntimeEntry;
 
 export interface SourceTokenPayload {
   /** Original callback token from the reactive graph (encodes taskName) */

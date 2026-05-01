@@ -5,9 +5,8 @@
  *
  * To add a new backend (e.g. Azure Functions, AWS Lambda, in-process test double):
  *   1. Create a new file (e.g. process-azure-runner.ts, process-lambda-runner.ts).
- *   2. Implement the `InvocationAdapter` interface — three methods:
+ *   2. Implement the `InvocationAdapter` interface — two methods:
  *        - requestSourceFetch   — dispatch a source-data fetch for a card
- *        - requestInference     — dispatch LLM inference for a card
  *        - requestProcessAccumulated — schedule the next drain pass
  *   3. Export a factory (e.g. `createAzureInvocationAdapter(...): InvocationAdapter`).
  *   4. Wire the factory at the top-level entrypoint (equivalent of `cli()` in
@@ -46,17 +45,6 @@ export interface InvocationAdapter {
   requestSourceFetch(
     boardDir: string,
     enrichedCard: Record<string, unknown>,
-    callbackToken: string,
-  ): Promise<DispatchResult>;
-
-  /**
-   * Dispatch LLM inference for a card.
-   * `inferencePayload` is passed by value; the adapter owns temp file management if needed.
-   */
-  requestInference(
-    boardDir: string,
-    cardId: string,
-    inferencePayload: unknown,
     callbackToken: string,
   ): Promise<DispatchResult>;
 

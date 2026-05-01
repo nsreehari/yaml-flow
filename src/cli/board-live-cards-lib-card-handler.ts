@@ -18,15 +18,12 @@ import type { ExecutionRequestEntry } from './board-live-cards-all-stores.js';
 import type { CardRuntimeSnapshot } from './board-live-cards-all-stores.js';
 import type {
   CardHandlerAdapters,
-  InferenceRuntimeEntry,
 } from './board-live-cards-lib-types.js';
 import {
   decideSourceAction,
   nextEntryAfterFetchDelivery,
   nextEntryAfterFetchFailure,
 } from './board-live-cards-lib-types.js';
-
-const DEFAULT_TASK_COMPLETION_RULE = 'all_required_sources_fetched';
 
 /**
  * Create the 'card-handler' TaskHandlerFn to inject into a ReactiveGraph.
@@ -68,14 +65,12 @@ export function createCardHandlerFn(
         const setSourceEntry = (outputFile: string, entry: import('./board-live-cards-lib-types.js').SourceRuntimeEntry): void => {
           state._sources[outputFile] = entry; dirty = true;
         };
-        const getInferenceEntry = (): InferenceRuntimeEntry => ({ ...(state._inferenceEntry ?? {}) });
-        const setInferenceEntry = (entry: InferenceRuntimeEntry): void => { state._inferenceEntry = entry; dirty = true; };
 
         // ---- If the task was restarted, clear stale source/inference state ----
         const currentExecutionCount = input.taskState?.executionCount ?? 0;
         const lastExecCount = state._lastExecutionCount;
         if (typeof lastExecCount === 'number' && lastExecCount !== currentExecutionCount) {
-          state._sources = {}; state._inferenceEntry = undefined; dirty = true;
+          state._sources = {}; dirty = true;
         }
         if (lastExecCount !== currentExecutionCount) {
           state._lastExecutionCount = currentExecutionCount; dirty = true;
@@ -211,82 +206,7 @@ export function createCardHandlerFn(
           data[bindTo] = CardCompute.resolve(computeNode, ref);
         }
 
-        const completionRule = typeof card.when_is_task_completed === 'string' && card.when_is_task_completed.trim()
-          ? card.when_is_task_completed.trim()
-          : DEFAULT_TASK_COMPLETION_RULE;
-
-        const cardData = card.card_data as Record<string, unknown> | undefined;
-        const llmCompletion = (cardData?.llm_task_completion_inference ?? {}) as Record<string, unknown>;
-        const isLlmTaskCompleted = llmCompletion.isTaskCompleted === true;
-
-        const inferenceEntry = getInferenceEntry();
-        const inferenceRequestedAt = typeof inferenceEntry.lastRequestedAt === 'string'
-          ? inferenceEntry.lastRequestedAt
-          : undefined;
-        const inferenceCompletedAt = typeof llmCompletion.inferenceCompletedAt === 'string'
-          ? llmCompletion.inferenceCompletedAt
-          : undefined;
-        const inferencePending = !!inferenceRequestedAt
-          && (!inferenceCompletedAt || inferenceCompletedAt < inferenceRequestedAt);
-
-        const latestRequiredSourceFetchedAt = requiredSources.reduce<string | undefined>((latest, src) => {
-          const fetchedAt = getSourceEntry(src.outputFile).lastFetchedAt;
-          if (typeof fetchedAt !== 'string') return latest;
-          if (!latest || fetchedAt > latest) return fetchedAt;
-          return latest;
-        }, undefined);
-
-        const shouldRequestInference = !inferenceRequestedAt
-          || !inferenceCompletedAt
-          || (!!latestRequiredSourceFetchedAt && latestRequiredSourceFetchedAt > inferenceCompletedAt);
-
-        if (completionRule !== DEFAULT_TASK_COMPLETION_RULE) {
-          if (isLlmTaskCompleted) {
-            // Card carries adapter-evaluated completion; fall through to deterministic completion.
-          } else if (inferencePending) {
-            return 'task-initiated';
-          } else if (!shouldRequestInference) {
-            return 'task-initiated';
-          } else {
-            const inferencePayload = {
-              cardId,
-              taskName: input.nodeId,
-              completionRule,
-              context: {
-                requires,
-                sourcesData,
-                computed_values: computeNode.computed_values ?? {},
-                provides: data,
-                card_data: computeNode.card_data ?? {},
-              },
-            };
-
-            let updatedInferenceEntry: InferenceRuntimeEntry = { ...inferenceEntry };
-            if (runQueuedAt) {
-              updatedInferenceEntry = { ...updatedInferenceEntry, queueRequestedAt: runQueuedAt };
-              setInferenceEntry(updatedInferenceEntry);
-            }
-            const inferenceQrt = updatedInferenceEntry.queueRequestedAt ?? updatedInferenceEntry.lastRequestedAt ?? now;
-            const inferenceAction = decideSourceAction(updatedInferenceEntry, inferenceQrt);
-
-            if (inferenceAction === 'in-flight') {
-            flush();
-            return 'task-initiated';
-          }
-          if (inferenceAction === 'idle') {
-            return 'task-initiated';
-          }
-
-          // dispatch inference
-          setInferenceEntry({ ...updatedInferenceEntry, lastRequestedAt: now });
-          flush();
-            pendingRequests.push({ taskKind: 'inference', payload: { boardDir, cardId, inferencePayload, callbackToken: input.callbackToken } });
-            adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
-            return 'task-initiated';
-          }
-        }
-
-        // ---- All required sources delivered and no LLM inference needed ----
+        // ---- All required sources delivered — complete the task ----
         // PublishedOutputsStore.writeDataObjects is idempotent.
         adapters.outputStore.writeDataObjects(data);
 

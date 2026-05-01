@@ -1,27 +1,35 @@
 {
   "id": "rebalancing-strategy",
-  "meta": { "title": "Rebalancing Strategy" },
-  "requires": ["table", "totalValue", "riskAssessment"],
-  "provides": [
-    { "bindTo": "rebalancingPlan", "ref": "card_data.llm_task_completion_inference.reason" }
-  ],
-  "card_data": {
-    "llm_task_completion_inference": {
-      "sync_tmp_file": "tmp_file3"
-    }
+  "meta": {
+    "title": "Rebalancing Strategy"
   },
-  "when_is_task_completed": "Complete this task when a concrete rebalancing recommendation can be produced from the current holdings table, total value, and risk assessment.",
+  "requires": [
+    "table",
+    "totalValue",
+    "riskAssessment"
+  ],
+  "provides": [
+    {
+      "bindTo": "rebalancingPlan",
+      "ref": "card_data.llm_task_completion_inference.reason"
+    }
+  ],
+  "card_data": {},
   "view": {
     "elements": [
       {
         "kind": "text",
         "label": "Rebalancing Recommendation",
-        "data": { "bind": "card_data.llm_task_completion_inference.reason" }
+        "data": {
+          "bind": "card_data.llm_task_completion_inference.reason"
+        }
       },
       {
         "kind": "text",
         "label": "Suggested Moves",
-        "data": { "bind": "card_data.llm_task_completion_inference.evidence" }
+        "data": {
+          "bind": "card_data.llm_task_completion_inference.evidence"
+        }
       }
     ]
   }

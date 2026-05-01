@@ -26,7 +26,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { serializeRef } from './storage-interface.js';
+
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
 import type { InvocationAdapter, DispatchResult } from './process-interface.js';
 export type { CommandSpec };
@@ -319,9 +319,6 @@ function shouldSuppressSpawn(): boolean {
 class NodeInvocationAdapter implements InvocationAdapter {
   constructor(
     private readonly cliDir: string,
-    private readonly encodeSourceToken: (payload: {
-      cbk: string; rg: string; cid: string; b: string; d: string; cs?: string;
-    }) => string,
   ) {}
 
   async requestSourceFetch(
@@ -343,31 +340,6 @@ class NodeInvocationAdapter implements InvocationAdapter {
     }
   }
 
-  async requestInference(
-    boardDir: string,
-    cardId: string,
-    inferencePayload: unknown,
-    callbackToken: string,
-  ): Promise<DispatchResult> {
-    if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
-    try {
-      const inferenceInFile = makeBoardTempFilePath(boardDir, `card-inference-${cardId}`);
-      fs.writeFileSync(inferenceInFile, JSON.stringify(inferencePayload, null, 2), 'utf-8');
-      const inferenceToken = this.encodeSourceToken({
-        cbk: callbackToken, rg: boardDir, cid: cardId, b: '', d: '', cs: undefined,
-      });
-      const { cmd, args } = buildBoardCliInvocation(
-        this.cliDir,
-        'run-inference-internal',
-        ['--in-ref', serializeRef({ kind: 'fs-path', value: inferenceInFile }), '--token', inferenceToken],
-      );
-      runDetached({ command: cmd, args });
-      return { dispatched: true, invocationId: randomUUID() };
-    } catch (err) {
-      return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
   async requestProcessAccumulated(boardDir: string): Promise<DispatchResult> {
     if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
     try {
@@ -382,11 +354,8 @@ class NodeInvocationAdapter implements InvocationAdapter {
 
 export function createNodeInvocationAdapter(
   cliDir: string,
-  encodeSourceToken: (payload: {
-    cbk: string; rg: string; cid: string; b: string; d: string; cs?: string;
-  }) => string,
 ): InvocationAdapter {
-  return new NodeInvocationAdapter(cliDir, encodeSourceToken);
+  return new NodeInvocationAdapter(cliDir);
 }
 
 // ============================================================================
