@@ -377,3 +377,36 @@ export function createNodeInvocationAdapter(
 ): InvocationAdapter {
   return new NodeInvocationAdapter(cliDir, encodeSourceToken);
 }
+
+// ============================================================================
+// createNodeCommandExecutor — Node implementation of CommandExecutor
+//
+// Wraps runSync / runAsync / runDetached / parseCommandSpec / splitCommandLine
+// into a single injectable object. Pass to command handlers instead of the
+// individual execCommandSync / execCommandAsync / resolveCommandInvocation /
+// splitCommandLine / spawnDetachedCommand dep functions.
+// ============================================================================
+
+import type { CommandExecutor, ExecOptions } from './process-interface.js';
+
+export function createNodeCommandExecutor(): CommandExecutor {
+  return {
+    executeSync(cmd: string, args: string[], options?: ExecOptions): string {
+      return runSync(
+        { command: cmd, args, cwd: options?.cwd, timeoutMs: options?.timeout, env: options?.env as Record<string, string> | undefined },
+        { encoding: options?.encoding },
+      );
+    },
+    executeAsync(cmd: string, args: string[], callback: (err: Error | null, stdout: string, stderr: string) => void): void {
+      runAsync({ command: cmd, args }, callback);
+    },
+    resolveInvocation(rawCmd: string, rawArgs: string[]): { cmd: string; args: string[] } {
+      const spec = parseCommandSpec({ command: rawCmd, args: rawArgs });
+      return { cmd: spec.command, args: spec.args ?? [] };
+    },
+    splitCommand: splitCommandLine,
+    spawnDetached(cmd: string, args: string[]): void {
+      runDetached({ command: cmd, args });
+    },
+  };
+}

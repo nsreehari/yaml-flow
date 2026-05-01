@@ -68,3 +68,42 @@ export interface InvocationAdapter {
    */
   requestProcessAccumulated(boardDir: string): Promise<DispatchResult>;
 }
+
+// ============================================================================
+// ExecOptions — options for synchronous/async command execution
+// ============================================================================
+
+export interface ExecOptions {
+  shell?: boolean;
+  timeout?: number;
+  encoding?: BufferEncoding;
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+}
+
+// ============================================================================
+// CommandExecutor — injectable abstraction over child-process execution
+//
+// Replaces ad-hoc execCommandSync / execCommandAsync / resolveCommandInvocation /
+// splitCommandLine / spawnDetachedCommand dep-function bundles in command handlers.
+//
+// Node implementation: createNodeCommandExecutor() in process-runner.ts.
+// Test double: provide an in-memory stub that records calls / returns canned output.
+// ============================================================================
+
+export interface CommandExecutor {
+  /** Run a command synchronously and return stdout. */
+  executeSync(cmd: string, args: string[], options?: ExecOptions): string;
+  /** Run a command asynchronously; callback receives (err, stdout, stderr). */
+  executeAsync(
+    cmd: string,
+    args: string[],
+    callback: (err: Error | null, stdout: string, stderr: string) => void,
+  ): void;
+  /** Resolve a raw cmd+args pair through node/script detection (parseCommandSpec). */
+  resolveInvocation(rawCmd: string, rawArgs: string[]): { cmd: string; args: string[] };
+  /** Split a shell-style command string into tokens (legacy compat). */
+  splitCommand(command: string): string[];
+  /** Fire-and-forget background spawn (survives parent exit). */
+  spawnDetached(cmd: string, args: string[]): void;
+}

@@ -8,10 +8,6 @@ import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   parseCommandSpec,
-  splitCommandLine,
-  runSync,
-  runAsync,
-  runDetached,
   makeBoardTempFilePath,
   buildBoardCliInvocation,
 } from './process-runner.js';
@@ -42,7 +38,7 @@ import {
   createFsBlobStorage,
   createFsAtomicRelayLock,
 } from './storage-fs-adapters.js';
-import { createNodeInvocationAdapter } from './process-runner.js';
+import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
 import {
   createCardStore, createJournalStore, createExecutionRequestStore,
   createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
@@ -721,32 +717,6 @@ function determineLatestPendingAccumulated(boardDir: string): number {
   }
 }
 
-// Thin wrappers delegating to process-runner — no duplicate logic here.
-function spawnDetachedCommand(cmd: string, args: string[]): void {
-  runDetached({ command: cmd, args });
-}
-
-function execCommandSync(
-  cmd: string,
-  args: string[],
-  options?: { shell?: boolean; timeout?: number; encoding?: BufferEncoding; cwd?: string; env?: NodeJS.ProcessEnv },
-): string {
-  return runSync({ command: cmd, args, cwd: options?.cwd, timeoutMs: options?.timeout, env: options?.env as Record<string, string> | undefined });
-}
-
-function execCommandAsync(
-  cmd: string,
-  args: string[],
-  callback: (err: Error | null, stdout: string, stderr: string) => void,
-): void {
-  runAsync({ command: cmd, args }, callback);
-}
-
-function resolveCommandInvocation(rawCmd: string, rawArgs: string[]): { cmd: string; args: string[] } {
-  const spec = parseCommandSpec({ command: rawCmd, args: rawArgs });
-  return { cmd: spec.command, args: spec.args ?? [] };
-}
-
 /**
  * Run one lock-guarded processing pass for this board.
  *
@@ -912,6 +882,7 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
 
 export async function cli(argv: string[]): Promise<void> {
   const processAccumulatedAdapter = createNodeInvocationAdapter(__dirname, encodeSourceToken);
+  const executor = createNodeCommandExecutor();
   const scheduleInfinitePass = (boardDir: string) => processAccumulatedEventsInfinitePass(boardDir, processAccumulatedAdapter);
   const scheduleForced = (boardDir: string) => processAccumulatedEventsForced(boardDir, processAccumulatedAdapter);
   const boardCommandHandlers = createBoardCommandHandlers({
@@ -937,9 +908,7 @@ export async function cli(argv: string[]): Promise<void> {
   const nonCoreCommandHandlers = createNonCoreCommandHandlers({
     getConfigStore: createBoardConfig,
     getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
-    execCommandSync,
-    splitCommandLine,
-    resolveCommandInvocation,
+    executor,
     makeTempFilePath: makeBoardTempFilePath,
     validateLiveCardDefinition,
     readStdin: () => fs.readFileSync('/dev/stdin', 'utf-8'),
@@ -971,14 +940,10 @@ export async function cli(argv: string[]): Promise<void> {
   const executionCommandHandlers = createExecutionCommandHandlers({
     getConfigStore: createBoardConfig,
     makeTempFilePath: makeBoardTempFilePath,
-    execCommandSync,
-    execCommandAsync,
-    splitCommandLine,
-    resolveCommandInvocation,
+    executor,
     encodeSourceToken,
     decodeSourceToken,
     decodeCallbackToken,
-    spawnDetachedCommand,
     getCliInvocation: buildBoardCliInvocation.bind(null, __dirname),
     appendEventToJournal,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,

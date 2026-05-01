@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { GraphEvent } from '../event-graph/types.js';
+import type { CommandExecutor } from './process-interface.js';
 import { injectTaskProgress } from './board-live-cards-cli-callbacks.js';
 import type { BoardConfigStore } from './board-live-cards-all-stores.js';
 
@@ -36,28 +37,10 @@ interface CardRuntimeStateLike {
 interface ExecutionCommandDeps {
   getConfigStore: (boardDir: string) => BoardConfigStore;
   makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
-  execCommandSync: (
-    cmd: string,
-    args: string[],
-    options?: {
-      shell?: boolean;
-      timeout?: number;
-      encoding?: BufferEncoding;
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-    },
-  ) => string;
-  execCommandAsync: (
-    cmd: string,
-    args: string[],
-    callback: (err: Error | null, stdout: string, stderr: string) => void,
-  ) => void;
-  splitCommandLine: (command: string) => string[];
-  resolveCommandInvocation: (rawCmd: string, rawArgs: string[]) => { cmd: string; args: string[] };
+  executor: CommandExecutor;
   encodeSourceToken: (payload: SourceTokenPayloadLike) => string;
   decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
   decodeCallbackToken: (token: string) => { taskName: string } | null;
-  spawnDetachedCommand: (cmd: string, args: string[]) => void;
   getCliInvocation: (command: string, args: string[]) => { cmd: string; args: string[] };
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
@@ -81,7 +64,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
   // Local helpers used only by cmdRunSources
   function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
     const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--ref-kind', 'fs-path', '--ref-value', tmpFile, '--token', sourceToken]);
-    deps.execCommandAsync(cmd, args, (err, stdout, stderr) => {
+    deps.executor.executeAsync(cmd, args, (err, stdout, stderr) => {
       if (err) console.error(`[source-data-fetched] call failed:`, err.message);
       if (stdout) console.log(stdout.trim());
       if (stderr) console.error(stderr.trim());
@@ -91,7 +74,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
 
   function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err: Error | null) => void): void {
     const { cmd, args } = deps.getCliInvocation('source-data-fetch-failure', ['--token', sourceToken, '--reason', reason]);
-    deps.execCommandAsync(cmd, args, (err) => callback(err));
+    deps.executor.executeAsync(cmd, args, (err) => callback(err));
   }
 
   function cmdRunSources(args: string[]): void {
@@ -176,7 +159,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
         console.log(`[run-sourcedefs-internal] task-executor: ${taskExecutorCmd} ${executorArgs.join(' ')}`);
         try {
-          deps.execCommandSync(taskExecutorCmd, executorArgs, {
+          deps.executor.executeSync(taskExecutorCmd, executorArgs, {
             timeout: src.timeout ?? 120_000,
           });
         } catch (err: unknown) {
@@ -212,7 +195,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
       const timeout = src.timeout ?? 120_000;
       const sourceCwd = typeof src.cwd === 'string' ? src.cwd : path.dirname(cardFilePath || '');
       const sourceBoardDir = typeof src.boardDir === 'string' ? src.boardDir : boardDir;
-      const cmdParts = deps.splitCommandLine(src.cli);
+      const cmdParts = deps.executor.splitCommand(src.cli);
       if (cmdParts.length === 0) {
         const errMsg = 'source.cli command is empty';
         console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
@@ -221,11 +204,11 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
       }
 
       const rawCmd = cmdParts[0];
-      const { cmd, args: cliArgs } = deps.resolveCommandInvocation(rawCmd, cmdParts.slice(1));
+      const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
 
       let stdout: string;
       try {
-        stdout = deps.execCommandSync(cmd, cliArgs, {
+        stdout = deps.executor.executeSync(cmd, cliArgs, {
           shell: false,
           encoding: 'utf-8',
           timeout,
@@ -280,7 +263,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
 
     function spawnInferenceDone(tmpFile: string): void {
       const { cmd, args: cliArgs } = deps.getCliInvocation('inference-done', ['--tmp', tmpFile, '--token', inferenceToken!]);
-      deps.spawnDetachedCommand(cmd, cliArgs);
+      deps.executor.spawnDetached(cmd, cliArgs);
     }
 
     function spawnInferenceDoneError(reason: string): void {
@@ -302,7 +285,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
 
     const outFile = deps.makeTempFilePath(boardDir, 'inference-out');
     const errFile = deps.makeTempFilePath(boardDir, 'inference-err', '.txt');
-    const adapterParts = deps.splitCommandLine(inferenceAdapter);
+    const adapterParts = deps.executor.splitCommand(inferenceAdapter);
     if (adapterParts.length === 0) {
       spawnInferenceDoneError('inference adapter command is empty');
       return;
@@ -310,11 +293,11 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
 
     const adapterRawCmd = adapterParts[0];
     const adapterRawArgs = adapterParts.slice(1);
-    const { cmd: adapterCmd, args: adapterArgsPrefix } = deps.resolveCommandInvocation(adapterRawCmd, adapterRawArgs);
+    const { cmd: adapterCmd, args: adapterArgsPrefix } = deps.executor.resolveInvocation(adapterRawCmd, adapterRawArgs);
     const adapterArgs = [...adapterArgsPrefix, 'run-inference', '--in', inFile, '--out', outFile, '--err', errFile];
 
     try {
-      deps.execCommandSync(adapterCmd, adapterArgs, {
+      deps.executor.executeSync(adapterCmd, adapterArgs, {
         shell: false,
         timeout: 120_000,
         cwd: boardDir,

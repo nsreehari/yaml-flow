@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { CommandExecutor } from './process-interface.js';
 import type { BoardConfigStore, CardStore } from './board-live-cards-all-stores.js';
 import type { CommandResponse } from './board-live-cards-lib-types.js';
 import { Resp } from './board-live-cards-lib-types.js';
@@ -11,9 +12,7 @@ interface ValidateResultLike {
 interface NonCoreCommandDeps {
   getConfigStore: (boardDir: string) => BoardConfigStore;
   getCardStore: (boardDir: string) => CardStore;
-  execCommandSync: (command: string, args: string[], options?: Record<string, unknown>) => unknown;
-  splitCommandLine: (command: string) => string[];
-  resolveCommandInvocation: (rawCmd: string, rawArgs: string[]) => { cmd: string; args: string[] };
+  executor: CommandExecutor;
   makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
   validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
   readStdin: () => string;
@@ -78,7 +77,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     const sourceBoardDir = typeof source.boardDir === 'string' ? source.boardDir : undefined;
 
     // Parse command with quote support to preserve args like --flag "value with spaces".
-    const cmdParts = deps.splitCommandLine(source.cli);
+    const cmdParts = deps.executor.splitCommand(source.cli);
     if (cmdParts.length === 0) {
       const msg = 'Source cli command is empty';
       if (errFile) fs.writeFileSync(errFile, msg);
@@ -86,11 +85,11 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
       process.exit(1);
     }
     const rawCmd = cmdParts[0];
-    const { cmd, args: cliArgs } = deps.resolveCommandInvocation(rawCmd, cmdParts.slice(1));
+    const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
 
     let stdout: string;
     try {
-      stdout = deps.execCommandSync(cmd, cliArgs, {
+      stdout = deps.executor.executeSync(cmd, cliArgs, {
         shell: false,
         encoding: 'utf-8',
         timeout,
@@ -211,7 +210,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     let sourceKind = 'unknown';
     if (taskExecutorCmd) {
       try {
-        const capRaw = deps.execCommandSync(taskExecutorCmd, [...taskExecutorBaseArgs, 'describe-capabilities'], {
+        const capRaw = deps.executor.executeSync(taskExecutorCmd, [...taskExecutorBaseArgs, 'describe-capabilities'], {
           timeout: 8_000, encoding: 'utf-8',
         });
         const caps = JSON.parse(String(capRaw));
@@ -243,7 +242,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
       if (taskExecutorCmd) {
         const executorArgs = [...taskExecutorBaseArgs, 'run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile];
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-        deps.execCommandSync(taskExecutorCmd, executorArgs, {
+        deps.executor.executeSync(taskExecutorCmd, executorArgs, {
           timeout: (sourceDef.timeout as number) ?? 30_000,
         });
       } else {
@@ -251,10 +250,10 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
         if (!inPayload.cli) {
           throw new Error('No task-executor registered and source has no cli field — cannot probe with built-in executor');
         }
-        const cmdParts = deps.splitCommandLine(inPayload.cli as string);
+        const cmdParts = deps.executor.splitCommand(inPayload.cli as string);
         const rawCmd = cmdParts[0];
-        const { cmd, args: cliArgs } = deps.resolveCommandInvocation(rawCmd, cmdParts.slice(1));
-        const stdout = deps.execCommandSync(cmd, cliArgs, {
+        const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
+        const stdout = deps.executor.executeSync(cmd, cliArgs, {
           shell: false,
           encoding: 'utf-8',
           timeout: (sourceDef.timeout as number) ?? 30_000,
@@ -331,7 +330,7 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     }
 
     try {
-      const stdout = deps.execCommandSync(teConfig.command, [...(teConfig.args ?? []), 'describe-capabilities'], {
+      const stdout = deps.executor.executeSync(teConfig.command, [...(teConfig.args ?? []), 'describe-capabilities'], {
         timeout: 10_000,
         encoding: 'utf-8',
       });
@@ -526,11 +525,11 @@ EXAMPLES
             fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
             let stdout: string;
             try {
-              stdout = deps.execCommandSync(
+              stdout = deps.executor.executeSync(
                 teConfig.command,
                 [...(teConfig.args ?? []), 'validate-source-def', '--in', tmpFile],
                 { timeout: 10_000 },
-              ) as string;
+              );
             } catch (execErr: any) {
               stdout = typeof execErr?.stdout === 'string' ? execErr.stdout
                 : Buffer.isBuffer(execErr?.stdout) ? execErr.stdout.toString('utf-8')
