@@ -316,7 +316,8 @@ function writeRuntimeDataObjects(boardDir: string, data: Record<string, unknown>
 function writeJsonAtomic(filePath: string, payload: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+  const content = payload === undefined ? 'null' : JSON.stringify(payload, null, 2);
+  fs.writeFileSync(tmpPath, content, 'utf-8');
   fs.renameSync(tmpPath, filePath);
 }
 

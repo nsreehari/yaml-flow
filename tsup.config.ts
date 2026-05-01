@@ -16,6 +16,7 @@ export default defineConfig({
     'card-compute/index': 'src/card-compute/index.ts',
     'cli/board-live-cards-cli': 'src/cli/board-live-cards-cli.ts',
     'stores/file': 'src/stores/file.ts',
+    'storage-refs': 'src/cli/public-storage-adapter.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

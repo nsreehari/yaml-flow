@@ -83,6 +83,11 @@
       "import": "./dist/runtime-artifacts/index.js",
       "require": "./dist/runtime-artifacts/index.cjs"
     },
+    "./storage-refs": {
+      "types": "./dist/storage-refs.d.ts",
+      "import": "./dist/storage-refs.js",
+      "require": "./dist/storage-refs.cjs"
+    },
     "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
     "./package.json": "./package.json"
   },
@@ -91,6 +96,7 @@
   },
   "files": [
     "board-live-cards-cli.js",
+    "storage-refs.js",
     "step-machine-cli.js",
     "board-livecards-server-runtime.js",
     "dist",

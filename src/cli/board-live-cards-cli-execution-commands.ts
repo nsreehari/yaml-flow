@@ -4,7 +4,7 @@ import type { GraphEvent } from '../event-graph/types.js';
 import type { CommandExecutor } from './process-interface.js';
 import { injectTaskProgress } from './board-live-cards-cli-callbacks.js';
 import type { BoardConfigStore } from './board-live-cards-all-stores.js';
-import { serializeRef } from './storage-interface.js';
+import { serializeRef, parseRef } from './storage-interface.js';
 
 // ============================================================================
 // Local type aliases (mirrors non-exported types in main CLI module)
@@ -155,8 +155,25 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
           cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : path.dirname(cardFilePath || ''),
           boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
         };
-        fs.writeFileSync(inFile, JSON.stringify(sourceForExecutor, null, 2), 'utf-8');
-        const executorArgs = [...taskExecutorArgs, 'run-source-fetch', '--in', inFile, '--out', outFile, '--err', errFile];
+        // Write { source_def, callback } envelope so the executor can self-report.
+        // Resolve the board CLI script path from deps.getCliInvocation for the callback via.
+        const { cmd: _cliCmd, args: _cliArgs } = deps.getCliInvocation('_', []);
+        const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
+          ? _cliArgs[0]
+          : (_cliArgs[1] ?? _cliArgs[0]);
+        const inEnvelope = {
+          source_def: sourceForExecutor,
+          callback: {
+            token: sourceToken,
+            via: { type: 'node-cli' as const, path: boardCliScriptPath },
+          },
+        };
+        fs.writeFileSync(inFile, JSON.stringify(inEnvelope, null, 2), 'utf-8');
+        const executorArgs = [...taskExecutorArgs, 'run-source-fetch',
+          '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
+          '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
+          '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
+        ];
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
         console.log(`[run-sourcedefs-internal] task-executor: ${taskExecutorCmd} ${executorArgs.join(' ')}`);
         try {
@@ -166,16 +183,11 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
         } catch (err: unknown) {
           const reason = (err as Error).message ?? String(err);
           console.error(`[run-sourcedefs-internal] task-executor failed for source "${src.bindTo}":`, reason);
+          // Executor crashed or timed out — report failure as fallback.
           reportFailure(reason);
-          return;
         }
-        if (fs.existsSync(outFile)) {
-          reportFetched(outFile);
-        } else {
-          const errMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
-          console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
-          reportFailure(errMsg);
-        }
+        // Executor self-reports success or failure via callback.token.
+        // If executeSync threw (timeout / non-zero exit), reportFailure was called above.
         return;
       }
 
@@ -237,13 +249,19 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
   }
 
   function cmdRunInference(args: string[]): void {
-    const inIdx = args.indexOf('--in');
+    const inIdx = args.indexOf('--in-ref');
     const tokenIdx = args.indexOf('--token');
-    const inFile = inIdx !== -1 ? args[inIdx + 1] : undefined;
+    const inRaw = inIdx !== -1 ? args[inIdx + 1] : undefined;
     const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
 
-    if (!inFile || !inferenceToken) {
-      console.error('Usage: board-live-cards run-inference-internal --in <input.json> --token <inference-token>');
+    if (!inRaw || !inferenceToken) {
+      console.error('Usage: board-live-cards run-inference-internal --in-ref <::kind::value> --token <inference-token>');
+      process.exit(1);
+    }
+
+    let inRef: ReturnType<typeof parseRef>;
+    try { inRef = parseRef(inRaw); } catch (e) {
+      console.error(`[run-inference-internal] invalid --in ref: ${(e as Error).message}`);
       process.exit(1);
     }
 
@@ -273,6 +291,12 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
       spawnInferenceDone(tmpFile);
     }
 
+    if (inRef!.kind !== 'fs-path' || !inRef!.value) {
+      spawnInferenceDoneError(`inference input ref unsupported kind: ${inRef!.kind}`);
+      return;
+    }
+    const inFile = inRef!.value;
+
     if (!fs.existsSync(inFile)) {
       spawnInferenceDoneError(`inference input not found: ${inFile}`);
       return;
@@ -295,7 +319,11 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
     const adapterRawCmd = adapterParts[0];
     const adapterRawArgs = adapterParts.slice(1);
     const { cmd: adapterCmd, args: adapterArgsPrefix } = deps.executor.resolveInvocation(adapterRawCmd, adapterRawArgs);
-    const adapterArgs = [...adapterArgsPrefix, 'run-inference', '--in', inFile, '--out', outFile, '--err', errFile];
+    const adapterArgs = [...adapterArgsPrefix, 'run-inference',
+      '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
+      '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
+      '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
+    ];
 
     try {
       deps.executor.executeSync(adapterCmd, adapterArgs, {

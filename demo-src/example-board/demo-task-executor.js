@@ -58,6 +58,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/storage-refs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -103,7 +104,7 @@ function readCache(key, ttlMs = CACHE_TTL_MS) {
 
 // Shared single-URL fetch helper used by both url and url-list.
 // cacheTimeoutSec: override TTL in seconds (null → use CACHE_TTL_MS default).
-function doFetchApi(url, method, headers, cacheTimeoutSec, errFile) {
+function doFetchApi(url, method, headers, cacheTimeoutSec) {
   const ttlMs = cacheTimeoutSec != null ? cacheTimeoutSec * 1000 : CACHE_TTL_MS;
   const k = cacheKey(`url:${method}:${url}`);
   const cached = readCache(k, ttlMs);
@@ -265,14 +266,14 @@ function fail(msg, errFile) {
 }
 
 function runSourceFetchSubcommand(argv) {
-  const inIdx = argv.indexOf('--in');
-  const outIdx = argv.indexOf('--out');
-  const errIdx = argv.indexOf('--err');
+  const inIdx = argv.indexOf('--in-ref');
+  const outIdx = argv.indexOf('--out-ref');
+  const errIdx = argv.indexOf('--err-ref');
   const extraIdx = argv.indexOf('--extra');
-  const inFile = inIdx !== -1 ? argv[inIdx + 1] : undefined;
-  const outFile = outIdx !== -1 ? argv[outIdx + 1] : undefined;
-  const errFile = errIdx !== -1 ? argv[errIdx + 1] : undefined;
-  const extraB64 = extraIdx !== -1 ? argv[extraIdx + 1] : undefined;
+  const inRefStr  = inIdx  !== -1 ? argv[inIdx + 1]  : undefined;
+  const outRefStr = outIdx !== -1 ? argv[outIdx + 1] : undefined;
+  const errRefStr = errIdx !== -1 ? argv[errIdx + 1] : undefined;
+  const extraB64  = extraIdx !== -1 ? argv[extraIdx + 1] : undefined;
 
   let extra = {};
   if (extraB64) {
@@ -280,19 +281,50 @@ function runSourceFetchSubcommand(argv) {
     catch { console.warn('[demo-task-executor] bad --extra base64, ignoring'); }
   }
 
-  if (!inFile || !outFile) {
-    fail('Usage: run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]', errFile);
+  if (!inRefStr || !outRefStr) {
+    fail('Usage: run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]');
   }
 
-  if (!fs.existsSync(inFile)) {
-    fail(`Input file not found: ${inFile}`, errFile);
+  let inRef, outRef, errRef;
+  try {
+    inRef  = parseRef(inRefStr);
+    outRef = parseRef(outRefStr);
+    if (errRefStr) errRef = parseRef(errRefStr);
+  } catch (e) {
+    fail(`invalid ref argument: ${e.message}`);
   }
 
+  const inStorage  = blobStorageForRef(inRef);
+  const outStorage = blobStorageForRef(outRef);
+  const errStorage = errRef ? blobStorageForRef(errRef) : undefined;
+
+  // Local error reporter — writes to errStorage and calls back to board if callback present.
+  const failRef = (msg, callback) => {
+    if (errStorage && errRef) { try { errStorage.write(errRef.value, msg); } catch {} }
+    console.error(`[demo-task-executor] ${msg}`);
+    if (callback) { try { reportFailed(callback, msg); } catch {} }
+    process.exit(1);
+  };
+
+  const rawIn = inStorage.read(inRef.value);
+  if (rawIn === null) {
+    failRef(`Input not found: ${inRefStr}`);
+  }
+
+  // Payload may be { source_def, callback } (new protocol) or raw source def (legacy).
+  let envelope;
+  try {
+    envelope = JSON.parse(rawIn);
+  } catch (err) {
+    failRef(`Cannot parse input: ${String(err && err.message || err)}`);
+  }
+
+  const callback = envelope.source_def ? envelope.callback : undefined;
   let sourceDef;
   try {
-    sourceDef = readJson(inFile);
+    sourceDef = envelope.source_def ?? envelope;
   } catch (err) {
-    fail(`Cannot parse source file: ${String(err && err.message || err)}`, errFile);
+    failRef(`Cannot resolve source_def: ${String(err && err.message || err)}`, callback);
   }
 
   let resultValue;
@@ -321,14 +353,14 @@ function runSourceFetchSubcommand(argv) {
       }
     }
     if (sourceDef.tickersFrom && !fetchArgs.tickers) {
-      fail('url: tickersFrom resolved to empty list — skipping fetch', errFile);
+      failRef('url: tickersFrom resolved to empty list — skipping fetch', callback);
     }
     const urlContext = { ...(sourceDef._projections || {}), ...fetchArgs };
     const url = interpolatePrompt(cfg.url, urlContext);
     try {
-      resultValue = doFetchApi(url, method, headers, cacheTimeoutSec, errFile);
+      resultValue = doFetchApi(url, method, headers, cacheTimeoutSec);
     } catch (err) {
-      fail(`url failed: ${err.message}`, errFile);
+      failRef(`url failed: ${err.message}`, callback);
     }
 
   } else if (sourceDef['url-list']) {
@@ -346,15 +378,15 @@ function runSourceFetchSubcommand(argv) {
       ? sourceDef._projections.url_list : null;
 
     if (!urlList || urlList.length === 0) {
-      fail('url-list: _projections.url_list must be a non-empty string array', errFile);
+      failRef('url-list: _projections.url_list must be a non-empty string array', callback);
     }
 
     const results = [];
     for (const u of urlList) {
       try {
-        results.push(doFetchApi(u, method, headers, cacheTimeoutSec, errFile));
+        results.push(doFetchApi(u, method, headers, cacheTimeoutSec));
       } catch (err) {
-        fail(`url-list fetch failed for ${u}: ${err.message}`, errFile);
+        failRef(`url-list fetch failed for ${u}: ${err.message}`, callback);
       }
     }
     resultValue = results;
@@ -362,7 +394,7 @@ function runSourceFetchSubcommand(argv) {
   } else if (sourceDef.copilot || sourceDef.prompt_template) {
     const prompt = resolveCopilotPrompt(sourceDef);
     if (!prompt) {
-      fail('Source definition missing copilot.prompt_template (or prompt_template)', errFile);
+      failRef('Source definition missing copilot.prompt_template (or prompt_template)', callback);
     }
 
     // Use boardSetupRoot (from --extra) as copilot working directory
@@ -382,11 +414,11 @@ function runSourceFetchSubcommand(argv) {
         'copilot-sessions',
         String(sourceDef.bindTo || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'),
       );
-      const wrapperOutFile = outFile + '.wrapper-out.json';
+      const wrapperOutFile = outRef.value + '.wrapper-out.json';
       try {
         resultValue = runCopilotViaWrapper(prompt, sourceDef, wrapperOutFile, sessionDir, copilotCwd);
       } catch (err) {
-        fail(`copilot invocation failed: ${String(err && err.message || err)}`, errFile);
+        failRef(`copilot invocation failed: ${String(err && err.message || err)}`, callback);
       } finally {
         try { fs.unlinkSync(wrapperOutFile); } catch {}
       }
@@ -402,7 +434,7 @@ function runSourceFetchSubcommand(argv) {
           ...(copilotCwd ? { cwd: copilotCwd } : {}),
         });
       } catch (err) {
-        fail(`copilot invocation failed: ${String(err && err.message || err)}`, errFile);
+        failRef(`copilot invocation failed: ${String(err && err.message || err)}`, callback);
       }
       // Basic JSON extraction: find first { or [ in output
       const firstBrace = rawOutput.indexOf('{');
@@ -424,17 +456,17 @@ function runSourceFetchSubcommand(argv) {
   } else if (sourceDef.workiq) {
     const cfg = typeof sourceDef.workiq === 'object' ? sourceDef.workiq : {};
     if (!cfg.query_template || typeof cfg.query_template !== 'string') {
-      fail('Source definition missing workiq.query_template', errFile);
+      failRef('Source definition missing workiq.query_template', callback);
     }
     const interpolationContext = { ...sourceDef._projections, ...(cfg.args ?? {}) };
     const query = interpolatePrompt(cfg.query_template, interpolationContext);
 
     const wrapperPath = path.join(__dirname, 'scripts', 'workiq_wrapper.mjs');
     if (!fs.existsSync(wrapperPath)) {
-      fail('workiq source kind requires workiq_wrapper.js in scripts/', errFile);
+      failRef('workiq source kind requires workiq_wrapper.js in scripts/', callback);
     }
     try {
-      execFileSync(process.execPath, [wrapperPath, outFile], {
+      execFileSync(process.execPath, [wrapperPath, outRef.value], {
         encoding: 'utf-8',
         stdio: ['inherit', 'pipe', 'pipe'],
         maxBuffer: 10 * 1024 * 1024,
@@ -444,25 +476,34 @@ function runSourceFetchSubcommand(argv) {
           ...(extra.serverUrl ? { WORKIQ_SERVER_URL: extra.serverUrl } : {}),
         },
       });
-      return; // wrapper wrote directly to outFile
+      return; // wrapper wrote directly to out file
     } catch (err) {
-      fail(`workiq invocation failed: ${String(err && err.message || err)}`, errFile);
+      failRef(`workiq invocation failed: ${String(err && err.message || err)}`, callback);
     }
   } else if (sourceDef.mock) {
     // MOCK_DB lookup — data hardcoded at the top of this file
     resultValue = MOCK_DB[sourceDef.mock];
     if (resultValue === undefined) {
-      fail(`Key "${sourceDef.mock}" not found in MOCK_DB`, errFile);
+      failRef(`Key "${sourceDef.mock}" not found in MOCK_DB`, callback);
     }
   } else {
-    fail('Source definition has no recognised kind (url, url-list, copilot, workiq, mock)', errFile);
+    failRef('Source definition has no recognised kind (url, url-list, copilot, workiq, mock)', callback);
   }
 
-  // Write result to --out as JSON payload, same contract as current mock mode.
+  // Write result to --out via storage abstraction, then report back to board.
   try {
-    fs.writeFileSync(outFile, JSON.stringify(resultValue, null, 2));
+    outStorage.write(outRef.value, JSON.stringify(resultValue, null, 2));
   } catch (err) {
-    fail(`Cannot write output file: ${String(err && err.message || err)}`, errFile);
+    failRef(`Cannot write output: ${String(err && err.message || err)}`, callback);
+  }
+
+  if (callback) {
+    try {
+      reportComplete(callback, outRef);
+    } catch (err) {
+      console.error(`[demo-task-executor] reportComplete failed: ${String(err && err.message || err)}`);
+      process.exit(1);
+    }
   }
 
 }

@@ -25,6 +25,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { serializeRef } from './storage-interface.js';
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
 import type { InvocationAdapter, DispatchResult } from './process-interface.js';
 export type { CommandSpec };
@@ -348,7 +349,7 @@ class NodeInvocationAdapter implements InvocationAdapter {
       const { cmd, args } = buildBoardCliInvocation(
         this.cliDir,
         'run-inference-internal',
-        ['--in', inferenceInFile, '--token', inferenceToken],
+        ['--in-ref', serializeRef({ kind: 'fs-path', value: inferenceInFile }), '--token', inferenceToken],
       );
       runDetached({ command: cmd, args });
       return { dispatched: true, invocationId: randomUUID() };

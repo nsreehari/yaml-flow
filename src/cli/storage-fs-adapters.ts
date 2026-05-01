@@ -18,6 +18,25 @@ import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { lockSync } from 'proper-lockfile';
 
+/**
+ * On Windows, renameSync can fail with EPERM/EBUSY when the destination file
+ * is held open by another process. Retry with exponential back-off (~280ms max).
+ */
+function renameSync(src: string, dest: string): void {
+  if (process.platform !== 'win32') { fs.renameSync(src, dest); return; }
+  const delays = [10, 20, 40, 80, 160];
+  for (let i = 0; i <= delays.length; i++) {
+    try { fs.renameSync(src, dest); return; } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if ((code === 'EPERM' || code === 'EBUSY') && i < delays.length) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[i]);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 import type {
   AtomicRelayLock,
   BlobStorage,
@@ -55,7 +74,7 @@ export function createFsBlobStorage(rootDir: string): BlobStorage {
       const tmp = `${p}.${process.pid}.${randomUUID()}.tmp`;
       fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.writeFileSync(tmp, content, 'utf-8');
-      fs.renameSync(tmp, p);
+      renameSync(tmp, p);
     },
 
     exists(key: string): boolean {
@@ -108,7 +127,7 @@ export function createFsKvStorage(kvDir: string): KVStorage {
       const tmp = `${p}.${process.pid}.${randomUUID()}.tmp`;
       fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8');
-      fs.renameSync(tmp, p);
+      renameSync(tmp, p);
     },
 
     delete(key: string): void {
@@ -205,8 +224,9 @@ export function computeStableJsonHash(value: unknown): string {
 function writeJsonAtomic(filePath: string, payload: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, filePath);
+  const content = payload === undefined ? 'null' : JSON.stringify(payload, null, 2);
+  fs.writeFileSync(tmpPath, content, 'utf-8');
+  renameSync(tmpPath, filePath);
 }
 
 class FsOutputStore implements OutputStore {

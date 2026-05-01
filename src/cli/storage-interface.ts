@@ -55,9 +55,7 @@ export interface BlobStorage {
 // A ref describes WHERE content lives without carrying the bytes.
 // Serialized on the CLI wire as: ::kind::value
 //   kind = 'fs-path': value is an absolute file path
-//   kind = 'inline':  value is the content string itself
-//   kind = 'kv':      value is a KVStorage key
-// Other kinds can be added by new backends without changing pure-logic code.
+// Additional kinds (e.g. 'cosmos') are added in public-storage-adapter.ts as new backends are supported.
 // ============================================================================
 
 export interface KindValueRef {

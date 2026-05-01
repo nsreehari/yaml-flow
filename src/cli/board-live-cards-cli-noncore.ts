@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { parseRef, serializeRef } from './storage-interface.js';
+import { blobStorageForRef } from './public-storage-adapter.js';
 import type { CommandExecutor } from './process-interface.js';
 import type { BoardConfigStore, CardStore } from './board-live-cards-all-stores.js';
 import type { CommandResponse } from './board-live-cards-lib-types.js';
@@ -30,42 +32,62 @@ export interface NonCoreCommandHandlers {
 
 export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandHandlers {
   function cmdRunSourceFetch(args: string[]): void {
-    const inIdx = args.indexOf('--in');
-    const outIdx = args.indexOf('--out');
-    const errIdx = args.indexOf('--err');
+    const inIdx  = args.indexOf('--in-ref');
+    const outIdx = args.indexOf('--out-ref');
+    const errIdx = args.indexOf('--err-ref');
 
-    const inFile = inIdx !== -1 ? args[inIdx + 1] : undefined;
+    const inFile  = inIdx  !== -1 ? args[inIdx + 1]  : undefined;
     const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
     const errFile = errIdx !== -1 ? args[errIdx + 1] : undefined;
 
     if (!inFile || !outFile) {
-      console.error('Usage: board-live-cards run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]');
+      console.error('Usage: board-live-cards run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]');
       process.exit(1);
     }
 
-    if (!fs.existsSync(inFile)) {
-      const msg = `Input file not found: ${inFile}`;
-      if (errFile) fs.writeFileSync(errFile, msg);
+    // Parse refs
+    let inRef: ReturnType<typeof parseRef>;
+    let outRef: ReturnType<typeof parseRef>;
+    let errRef: ReturnType<typeof parseRef> | undefined;
+    try {
+      inRef = parseRef(inFile);
+      outRef = parseRef(outFile);
+      if (errFile) errRef = parseRef(errFile);
+    } catch (e) {
+      console.error(`[run-source-fetch] invalid ref: ${(e as Error).message}`);
+      process.exit(1);
+    }
+
+    const inStorage = blobStorageForRef(inRef);
+    const outStorage = blobStorageForRef(outRef);
+    const errStorage = errRef ? blobStorageForRef(errRef) : undefined;
+
+    function writeErr(msg: string): void {
+      if (errStorage && errRef) errStorage.write(errRef.value, msg);
+    }
+
+    // Read and parse source definition
+    const rawIn = inStorage.read(inRef.value);
+    if (rawIn === null) {
+      const msg = `Input not found: ${inFile}`;
+      writeErr(msg);
       console.error(`[run-source-fetch] ${msg}`);
       process.exit(1);
     }
-
-    // Parse source definition
     let source: any;
     try {
-      const raw = fs.readFileSync(inFile, 'utf-8');
-      source = JSON.parse(raw);
+      source = JSON.parse(rawIn);
     } catch (err) {
-      const msg = `Failed to parse input file: ${(err as Error).message}`;
-      if (errFile) fs.writeFileSync(errFile, msg);
+      const msg = `Failed to parse input: ${(err as Error).message}`;
+      writeErr(msg);
       console.error(`[run-source-fetch] ${msg}`);
       process.exit(1);
     }
 
-    // Source must have a cli field (not script)
+    // Source must have a cli field
     if (!source.cli) {
       const msg = 'Source definition missing cli field (board-live-cards built-in executor only understands source.cli)';
-      if (errFile) fs.writeFileSync(errFile, msg);
+      writeErr(msg);
       console.error(`[run-source-fetch] ${msg}`);
       process.exit(1);
     }
@@ -76,11 +98,10 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     const sourceCwd = typeof source.cwd === 'string' ? source.cwd : process.cwd();
     const sourceBoardDir = typeof source.boardDir === 'string' ? source.boardDir : undefined;
 
-    // Parse command with quote support to preserve args like --flag "value with spaces".
     const cmdParts = deps.executor.splitCommand(source.cli);
     if (cmdParts.length === 0) {
       const msg = 'Source cli command is empty';
-      if (errFile) fs.writeFileSync(errFile, msg);
+      writeErr(msg);
       console.error(`[run-source-fetch] ${msg}`);
       process.exit(1);
     }
@@ -102,19 +123,19 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
     } catch (err: unknown) {
       const msg = (err as Error).message ?? String(err);
       console.error(`[run-source-fetch] cli failed: ${msg}`);
-      if (errFile) fs.writeFileSync(errFile, msg);
+      writeErr(msg);
       process.exit(1);
     }
 
     // Write result to --out
-    const result = stdout.trim();
+    const result = stdout!.trim();
     try {
-      fs.writeFileSync(outFile, result);
+      outStorage.write(outRef.value, result);
       console.log(`[run-source-fetch] result written to ${outFile}`);
     } catch (err) {
-      const msg = `Failed to write output file: ${(err as Error).message}`;
+      const msg = `Failed to write output: ${(err as Error).message}`;
       console.error(`[run-source-fetch] ${msg}`);
-      if (errFile) fs.writeFileSync(errFile, msg);
+      writeErr(msg);
       process.exit(1);
     }
   }
@@ -234,13 +255,19 @@ export function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreC
 
     fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2), 'utf-8');
 
+    const inRef  = serializeRef({ kind: 'fs-path', value: inFile });
+    const outRef = serializeRef({ kind: 'fs-path', value: tmpOut });
+    const errRef = serializeRef({ kind: 'fs-path', value: errFile });
+
     let passed = false;
     let errorMsg: string | undefined;
     let resultRaw: string | undefined;
 
     try {
       if (taskExecutorCmd) {
-        const executorArgs = [...taskExecutorBaseArgs, 'run-source-fetch', '--in', inFile, '--out', tmpOut, '--err', errFile];
+        const executorArgs = [...taskExecutorBaseArgs, 'run-source-fetch',
+          '--in-ref', inRef, '--out-ref', outRef, '--err-ref', errRef,
+        ];
         if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
         deps.executor.executeSync(taskExecutorCmd, executorArgs, {
           timeout: (sourceDef.timeout as number) ?? 30_000,

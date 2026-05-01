@@ -6,6 +6,22 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+
+/** On Windows, fs.renameSync fails with EPERM when dest is held open. Retry with back-off. */
+function renameSync(src: string, dest: string): void {
+  if (process.platform !== 'win32') { fs.renameSync(src, dest); return; }
+  const delays = [10, 20, 40, 80, 160];
+  for (let i = 0; i <= delays.length; i++) {
+    try { fs.renameSync(src, dest); return; } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if ((code === 'EPERM' || code === 'EBUSY') && i < delays.length) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[i]);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 import {
   parseCommandSpec,
   makeBoardTempFilePath,
@@ -105,7 +121,7 @@ function createFsCardStorageAdapter(boardDir: string) {
       const tmp = `${indexPath}.${process.pid}.${randomUUID()}.tmp`;
       fs.mkdirSync(path.dirname(indexPath), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(index, null, 2), 'utf-8');
-      fs.renameSync(tmp, indexPath);
+      renameSync(tmp, indexPath);
     },
     readCard(key: string) {
       if (!fs.existsSync(key)) return null;
@@ -116,7 +132,7 @@ function createFsCardStorageAdapter(boardDir: string) {
       const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
       fs.mkdirSync(path.dirname(key), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(JSON.parse(json), null, 2), 'utf-8');
-      fs.renameSync(tmp, key);
+      renameSync(tmp, key);
       return createHash('sha256').update(json).digest('hex');
     },
     cardExists(key: string) { return fs.existsSync(key); },
@@ -151,7 +167,7 @@ function createFsExecutionRequestStorageAdapter(boardDir: string) {
       fs.mkdirSync(dir, { recursive: true });
       const tmp = `${fp}.${process.pid}.${randomUUID()}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), 'utf-8');
-      fs.renameSync(tmp, fp);
+      renameSync(tmp, fp);
     },
     readEntries(journalId: string) {
       const fp = entryFilePath(journalId);
@@ -636,8 +652,9 @@ function writeRuntimeDataObjects(boardDir: string, data: Record<string, unknown>
 function writeJsonAtomic(filePath: string, payload: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, filePath);
+  const content = payload === undefined ? 'null' : JSON.stringify(payload, null, 2);
+  fs.writeFileSync(tmpPath, content, 'utf-8');
+  renameSync(tmpPath, filePath);
 }
 
 // ============================================================================
@@ -850,11 +867,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Resolve a KindValueRef to its content string.
  * 'fs-path': read file from disk (FS adapter, stays in cli.ts)
- * 'inline':  value is already the content
  */
 function resolveSourceDataRef(ref: { kind: string; value: string }): string {
   if (ref.kind === 'fs-path') return fs.readFileSync(ref.value, 'utf-8');
-  if (ref.kind === 'inline') return ref.value;
   throw new Error(`Unsupported KindValueRef kind: ${ref.kind}`);
 }
 

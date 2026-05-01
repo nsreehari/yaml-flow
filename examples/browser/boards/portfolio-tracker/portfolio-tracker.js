@@ -33,7 +33,7 @@ const CARDS = path.join(RUNTIME_ROOT, 'cards');
 const TMP_FILE = path.join(BOARD, 'tmp_file1');
 const INFERENCE_TMP_FILE_2 = path.join(BOARD, 'tmp_file2');
 const INFERENCE_TMP_FILE_3 = path.join(BOARD, 'tmp_file3');
-const INFERENCE_ADAPTER = path.join(RUNTIME_ROOT, 'portfolio-tracker-inference-adapter.js');
+const INFERENCE_ADAPTER = path.join(__dirname, 'portfolio-tracker-inference-adapter.js');
 
 function parseArgs(argv) {
   let taskExecutor;
@@ -170,7 +170,7 @@ function setupRuntimeCards() {
   fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
   fs.cpSync(CARDS_TEMPLATE, CARDS, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'fetch-prices.js'), path.join(RUNTIME_ROOT, 'fetch-prices.js'));
-  fs.copyFileSync(path.join(__dirname, 'portfolio-tracker-inference-adapter.js'), INFERENCE_ADAPTER);
+  // inference adapter is registered from its source location (imports yaml-flow — must be resolvable)
 }
 
 function printTaskExecutorLog() {
