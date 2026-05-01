@@ -138,8 +138,8 @@ export function createCardHandlerFn(
           await CardCompute.run(computeNode, { sourcesData });
         }
 
-        // OutputStore enforces schema_version: 'v1' internally — call sites don't set it.
-        adapters.outputStore.writeComputedValues(boardDir, cardId, computeNode.computed_values ?? {});
+        // PublishedOutputsStore is KV-backed; call sites pass values only.
+        adapters.outputStore.writeComputedValues(cardId, computeNode.computed_values ?? {});
 
         // ---- Enrich source definitions for dispatch ----
         const enrichedCard = { ...card };
@@ -287,8 +287,8 @@ export function createCardHandlerFn(
         }
 
         // ---- All required sources delivered and no LLM inference needed ----
-        // OutputStore.writeDataObjects is idempotent.
-        adapters.outputStore.writeDataObjects(boardDir, data);
+        // PublishedOutputsStore.writeDataObjects is idempotent.
+        adapters.outputStore.writeDataObjects(data);
 
         // Spawn undelivered non-gating (optional) source_defs in background.
         const undeliveredOptional = allSources.filter(s => {

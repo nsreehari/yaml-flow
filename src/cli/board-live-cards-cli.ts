@@ -5,32 +5,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-/** On Windows, fs.renameSync fails with EPERM when dest is held open. Retry with back-off. */
-function renameSync(src: string, dest: string): void {
-  if (process.platform !== 'win32') { fs.renameSync(src, dest); return; }
-  const delays = [10, 20, 40, 80, 160];
-  for (let i = 0; i <= delays.length; i++) {
-    try { fs.renameSync(src, dest); return; } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if ((code === 'EPERM' || code === 'EBUSY') && i < delays.length) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[i]);
-        continue;
-      }
-      throw err;
-    }
-  }
-}
 import {
   parseCommandSpec,
   makeBoardTempFilePath,
   buildBoardCliInvocation,
   runDetached,
   genUUID,
-  getHash,
   resolveModuleDir,
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
-import { blobStorageForRef } from './public-storage-adapter.js';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -48,18 +31,20 @@ import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
 import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
 import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
 import {
-  createFsOutputStore,
   computeStableJsonHash,
   createFsKvStorage,
   createFsBlobStorage,
   createFsAtomicRelayLock,
+  createFsJournalStorageAdapter,
+  createFsCardStorageAdapter,
+  createFsStateSnapshotStorageAdapter,
 } from './storage-fs-adapters.js';
 import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
 import {
   createCardStore, createJournalStore, createExecutionRequestStore,
   createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
+  createPublishedOutputsStore,
   BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
-  type StateSnapshotStorageAdapter, type StateSnapshotReadView,
   type BoardConfigStore, type CardStore,
 } from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
@@ -68,106 +53,25 @@ import type { InvocationAdapter, CommandExecutor } from './process-interface.js'
 export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib-types.js';
 
-const BOARD_FILE = 'board-graph.json';
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${(value as unknown[]).map(stableJson).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
-}
-
-function createFsCardStorageAdapter(boardDir: string) {
-  const indexPath = path.join(boardDir, '.card-index.json');
-  const inventoryPath = path.join(boardDir, INVENTORY_FILE);
-
-  // Build a CardIndex from the append-only card-inventory.jsonl (legacy)
-  // and the new card-upsert KV store (new path). KV entries take precedence.
-  // The card file path IS the key — adapter.readCard(key) reads the file at that path.
-  function buildIndexFromInventory(): import('./board-live-cards-all-stores.js').CardIndex {
-    const result: import('./board-live-cards-all-stores.js').CardIndex = {};
-    // Legacy: read from cards-inventory.jsonl
-    if (fs.existsSync(inventoryPath)) {
-      const lines = fs.readFileSync(inventoryPath, 'utf-8').split('\n').filter(l => l.trim());
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line) as { cardId: string; cardFilePath: string; addedAt: string };
-          const absPath = path.resolve(entry.cardFilePath);
-          result[entry.cardId] = { key: absPath, checksum: '', updatedAt: entry.addedAt };
-        } catch { /* skip malformed lines */ }
-      }
-    }
-    // New path: read from .card-upsert-kv — overrides legacy entries
-    const upsertKv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
-    for (const cardId of upsertKv.listKeys()) {
-      const entry = upsertKv.read(cardId) as CardUpsertIndexEntry | null;
-      if (entry?.blobRef) {
-        result[cardId] = { key: entry.blobRef, checksum: entry.taskConfigHash, updatedAt: entry.updatedAt };
-      }
-    }
-    return result;
-  }
-
-  return {
-    readIndex() {
-      // Prefer explicit .card-index.json if written by writeCard; fall back to inventory.
-      if (fs.existsSync(indexPath)) {
-        try { return JSON.parse(fs.readFileSync(indexPath, 'utf-8')); } catch { /* fall through */ }
-      }
-      return buildIndexFromInventory();
-    },
-    writeIndex(index: unknown) {
-      const tmp = `${indexPath}.${process.pid}.${genUUID()}.tmp`;
-      fs.mkdirSync(path.dirname(indexPath), { recursive: true });
-      fs.writeFileSync(tmp, JSON.stringify(index, null, 2), 'utf-8');
-      renameSync(tmp, indexPath);
-    },
-    readCard(key: string) {
-      if (!fs.existsSync(key)) return null;
-      try { return JSON.parse(fs.readFileSync(key, 'utf-8')); } catch { return null; }
-    },
-    writeCard(key: string, card: unknown): string {
-      const json = stableJson(card);
-      const tmp = `${key}.${process.pid}.${genUUID()}.tmp`;
-      fs.mkdirSync(path.dirname(key), { recursive: true });
-      fs.writeFileSync(tmp, JSON.stringify(JSON.parse(json), null, 2), 'utf-8');
-      renameSync(tmp, key);
-      return getHash(json);
-    },
-    cardExists(key: string) { return fs.existsSync(key); },
-    defaultCardKey(cardId: string) { return path.join(boardDir, `${cardId}.json`); },
-  };
-}
-
-function createFsJournalStorageAdapter(boardDir: string) {
-  const journalPath = path.join(boardDir, 'board-journal.jsonl');
-  return {
-    readAllEntries() {
-      if (!fs.existsSync(journalPath)) return [];
-      const content = fs.readFileSync(journalPath, 'utf-8').trim();
-      if (!content) return [];
-      return content.split('\n').filter(Boolean).map((l: string) => JSON.parse(l));
-    },
-    appendEntry(entry: { id: string; event: unknown }) {
-      fs.appendFileSync(journalPath, JSON.stringify(entry) + '\n', 'utf-8');
-    },
-    generateId() { return genUUID(); },
-  };
-}
+const BOARD_LOCK_FILE = '.board.lock';
 
 const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
-const RUNTIME_STATUS_FILE = 'board-livegraph-status.json';
-const RUNTIME_CARDS_DIR = 'cards';
-const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
 function createBoardConfig(boardDir: string): BoardConfigStore {
   return createBoardConfigStore(createFsKvStorage(path.join(boardDir, '.config')), parseCommandSpec);
 }
 
 function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
   const base = createNodeInvocationAdapter(cliDir, encodeSourceToken);
+  // Path to the built-in source-cli executor — compiled alongside this CLI in dist/cli/.
+  const sourceCliExecutorPath = path.join(cliDir, 'source-cli-task-executor.js');
+  // Board CLI script path — used as the back-channel `via` for reportComplete() callbacks.
+  const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
+  const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
+    ? _cliArgs[0]
+    : (_cliArgs[1] ?? _cliArgs[0]);
+
   return {
     requestInference: base.requestInference.bind(base),
     requestProcessAccumulated: base.requestProcessAccumulated.bind(base),
@@ -179,24 +83,18 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
       if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return { dispatched: false, invocationId: undefined };
       try {
         const teConfig = createBoardConfig(boardDir).readTaskExecutorConfig();
-        if (!teConfig) {
-          // No task-executor: delegate to run-sourcedefs-internal (handles source.cli).
-          return base.requestSourceFetch(boardDir, enrichedCard, callbackToken);
-        }
-        // Task-executor registered: dispatch each source_def as a detached process.
-        const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
-        const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
-        const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
-          ? _cliArgs[0]
-          : (_cliArgs[1] ?? _cliArgs[0]);
-        // Re-parse teConfig as a legacy command string to correctly split 'node path.cjs' → [node, path.cjs]
-        const rawCmdStr = [teConfig.command, ...(teConfig.args ?? [])].join(' ');
-        const parsedExec = parseCommandSpec(rawCmdStr);
-        const taskExecutorExtraB64 = teConfig.extra
+        // Use configured task-executor if available; otherwise use the built-in source-cli-task-executor.
+        const parsedExec = teConfig
+          ? parseCommandSpec([teConfig.command, ...(teConfig.args ?? [])].join(' '))
+          : { command: process.execPath, args: [sourceCliExecutorPath] };
+        const taskExecutorExtraB64 = teConfig?.extra
           ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
           : undefined;
+
+        const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
         type SourceDef = { bindTo: string; outputFile?: string; [k: string]: unknown };
         const sourceDefs = (enrichedCard.source_defs ?? []) as SourceDef[];
+        let dispatched = false;
         for (const src of sourceDefs) {
           if (!src.outputFile) {
             console.warn(`[request-source-fetch] source "${src.bindTo}" has no outputFile — skipping`);
@@ -220,10 +118,11 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
             '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
           ];
           if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-          console.log(`[request-source-fetch] task-executor: ${parsedExec.command} ${executorArgs.join(' ')}`);
+          console.log(`[request-source-fetch] ${teConfig ? 'task-executor' : 'built-in'}: ${parsedExec.command} ${executorArgs.join(' ')}`);
           runDetached({ command: parsedExec.command, args: executorArgs });
+          dispatched = true;
         }
-        return { dispatched: true, invocationId: genUUID() };
+        return { dispatched, invocationId: dispatched ? genUUID() : undefined };
       } catch (err) {
         return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -239,107 +138,7 @@ export interface BoardEnvelope {
   graph: LiveGraphSnapshot;
 }
 
-/**
- * FS-backed StateSnapshotStorageAdapter.
- *
- * CLEANUP TODO: This adapter has hard-coded knowledge of two board-domain keys
- * (`board/graph` and `board/lastJournalProcessedId` — see BOARD_GRAPH_KEY /
- * BOARD_LAST_JOURNAL_PROCESSED_ID_KEY) that it packs into a single
- * `board-graph.json` file for backward compatibility with boards written before
- * the snapshot-store abstraction existed. All other keys are written as
- * `.state-snapshot/<key>.json` sidecar files.
- *
- * A pure FS storage adapter should not know about domain key names. The
- * correct long-term shape is: every key maps to its own sidecar file under
- * `.state-snapshot/`, and `board-graph.json` is retired or read-only for
- * legacy compat. Once the test suite no longer depends on the packed
- * `board-graph.json` format, remove the special-casing of BOARD_GRAPH_KEY
- * and BOARD_LAST_JOURNAL_PROCESSED_ID_KEY here.
- */
-function createFsStateSnapshotStorageAdapter(boardFileName: string): StateSnapshotStorageAdapter {
-  const sidecarRootDirName = '.state-snapshot';
-
-  function keyToSidecarPath(scopeDir: string, key: string): string {
-    return path.join(scopeDir, sidecarRootDirName, ...key.split('/').filter(Boolean)) + '.json';
-  }
-
-  function stableStringify(value: unknown): string {
-    if (value === null || typeof value !== 'object') return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${(value as unknown[]).map(stableStringify).join(',')}]`;
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
-  }
-
-  function valueToVersion(values: Record<string, unknown>): string {
-    return getHash(stableStringify(values));
-  }
-
-  function readJson(filePath: string): unknown {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  }
-
-  return {
-    readValues(scopeDir: string): StateSnapshotReadView {
-      const boardPath = path.join(scopeDir, boardFileName);
-      if (!fs.existsSync(boardPath)) return { version: null, values: {} };
-
-      const env = readJson(boardPath) as { graph: unknown; lastDrainedJournalId?: string };
-      const values: Record<string, unknown> = {
-        [BOARD_GRAPH_KEY]: env.graph,
-        [BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]: env.lastDrainedJournalId ?? '',
-      };
-
-      const sidecarRoot = path.join(scopeDir, sidecarRootDirName);
-      if (fs.existsSync(sidecarRoot)) {
-        const stack: string[] = [sidecarRoot];
-        const files: string[] = [];
-        while (stack.length > 0) {
-          const current = stack.pop()!;
-          for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-            const abs = path.join(current, entry.name);
-            if (entry.isDirectory()) { stack.push(abs); continue; }
-            if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-            files.push(abs);
-          }
-        }
-        files.sort((a, b) => a.localeCompare(b));
-        for (const abs of files) {
-          const key = path.relative(sidecarRoot, abs).replace(/\\/g, '/').replace(/\.json$/, '');
-          values[key] = readJson(abs);
-        }
-      }
-
-      return { version: valueToVersion(values), values };
-    },
-
-    writeValues(scopeDir: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
-      const graph = nextValues[BOARD_GRAPH_KEY];
-      const lastDrainedJournalId = nextValues[BOARD_LAST_JOURNAL_PROCESSED_ID_KEY] as string;
-      if (!graph || typeof graph !== 'object') throw new Error(`Snapshot missing required key: ${BOARD_GRAPH_KEY}`);
-      writeJsonAtomic(path.join(scopeDir, boardFileName), { graph, lastDrainedJournalId });
-
-      const boardKeys = new Set([BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]);
-      // Delete sidecar files for removed keys.
-      for (const key of deletedKeys) {
-        if (boardKeys.has(key)) continue;
-        const p = keyToSidecarPath(scopeDir, key);
-        if (fs.existsSync(p)) fs.unlinkSync(p);
-      }
-      // Write all non-board keys as sidecar blobs.
-      for (const [key, value] of Object.entries(nextValues)) {
-        if (boardKeys.has(key)) continue;
-        writeJsonAtomic(keyToSidecarPath(scopeDir, key), value);
-      }
-
-      return valueToVersion(nextValues);
-    },
-  };
-}
-
-const nodeStateSnapshotStore = createStateSnapshotStore(
-  createFsStateSnapshotStorageAdapter(BOARD_FILE),
-);
+const nodeStateSnapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
 
 function boardEnvelopeToSnapshotEntries(envelope: BoardEnvelope): Record<string, unknown> {
   return {
@@ -524,9 +323,9 @@ export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
  * Throws if directory exists but is non-empty and has no valid board-graph.json.
  */
 export function initBoard(dir: string): 'created' | 'exists' {
-  const boardPath = path.join(dir, BOARD_FILE);
+  const lockPath = path.join(dir, BOARD_LOCK_FILE);
 
-  if (fs.existsSync(boardPath)) {
+  if (fs.existsSync(lockPath)) {
     // Validate it's a real board envelope
     const envelope = loadBoardEnvelope(dir);
     restore(envelope.graph);
@@ -536,11 +335,13 @@ export function initBoard(dir: string): 'created' | 'exists' {
   if (fs.existsSync(dir)) {
     const entries = fs.readdirSync(dir);
     if (entries.length > 0) {
-      throw new Error(`Directory "${dir}" is not empty and has no valid ${BOARD_FILE}`);
+      throw new Error(`Directory "${dir}" is not empty and has no valid board`);
     }
   }
 
   fs.mkdirSync(dir, { recursive: true });
+  // Create lock marker file (required by proper-lockfile).
+  fs.writeFileSync(lockPath, '{}', 'utf-8');
   const live = createLiveGraph(EMPTY_CONFIG);
   const snap = snapshot(live);
   const envelope: BoardEnvelope = { lastDrainedJournalId: '', graph: snap };
@@ -574,19 +375,11 @@ export function initBoard(dir: string): 'created' | 'exists' {
  * Falls back to direct board-graph.json read for compatibility with boards created before snapshot-store wiring.
  */
 export function loadBoardEnvelope(dir: string): BoardEnvelope {
-  const boardPath = path.join(dir, BOARD_FILE);
-  if (!fs.existsSync(boardPath)) {
-    throw new Error(`Missing board file: ${boardPath}`);
-  }
-
   const snapshot = nodeStateSnapshotStore.readSnapshot(dir);
-  if (snapshot.values[BOARD_GRAPH_KEY]) {
-    return snapshotEntriesToBoardEnvelope(snapshot.values);
+  if (!snapshot.values[BOARD_GRAPH_KEY]) {
+    throw new Error(`Missing board state at: ${dir}`);
   }
-
-  // Compatibility fallback for envelopes written before snapshot-store wiring.
-  const raw = fs.readFileSync(boardPath, 'utf-8');
-  return JSON.parse(raw) as BoardEnvelope;
+  return snapshotEntriesToBoardEnvelope(snapshot.values);
 }
 
 export function loadBoard(dir: string): LiveGraph {
@@ -664,41 +457,6 @@ function configureRuntimeOutDir(boardDir: string, runtimeOut?: string): string {
   return resolved;
 }
 
-function resolveStatusSnapshotPath(boardDir: string): string {
-  return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_STATUS_FILE);
-}
-
-function resolveComputedValuesPath(boardDir: string, cardId: string): string {
-  return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_CARDS_DIR, `${cardId}.computed.json`);
-}
-
-function resolveDataObjectsDirPath(boardDir: string): string {
-  return path.join(resolveConfiguredRuntimeOutDir(boardDir), RUNTIME_DATA_OBJECTS_DIR);
-}
-
-function toDataObjectFileName(token: string): string {
-  // Keep token recognizable in filenames while avoiding path traversal.
-  return token.replace(/[\\/]/g, '__');
-}
-
-function writeRuntimeDataObjects(boardDir: string, data: Record<string, unknown>): void {
-  for (const [token, payload] of Object.entries(data)) {
-    if (!token) continue;
-    const fileName = toDataObjectFileName(token);
-    if (!fileName) continue;
-    const filePath = path.join(resolveDataObjectsDirPath(boardDir), fileName);
-    writeJsonAtomic(filePath, payload);
-  }
-}
-
-function writeJsonAtomic(filePath: string, payload: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${genUUID()}.tmp`;
-  const content = payload === undefined ? 'null' : JSON.stringify(payload, null, 2);
-  fs.writeFileSync(tmpPath, content, 'utf-8');
-  renameSync(tmpPath, filePath);
-}
-
 // ============================================================================
 // Standalone journal append + opportunistic drain
 // ============================================================================
@@ -765,8 +523,7 @@ export function getUndrainedEntries(boardDir: string, lastDrainedId: string): Jo
 }
 
 function determineLatestPendingAccumulated(boardDir: string): number {
-  const boardPath = path.join(boardDir, BOARD_FILE);
-  if (!fs.existsSync(boardPath)) return 0;
+  if (!fs.existsSync(path.join(boardDir, BOARD_LOCK_FILE))) return 0;
   try {
     const envelope = loadBoardEnvelope(boardDir);
     const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
@@ -788,9 +545,9 @@ function determineLatestPendingAccumulated(boardDir: string): number {
  * by one cycle in the relay model.
  */
 export async function processAccumulatedEvents(boardDir: string, continuation?: () => void): Promise<boolean> {
-  const boardPath = path.join(boardDir, BOARD_FILE);
+  const lockPath = path.join(boardDir, BOARD_LOCK_FILE);
   const cliDir = __dirname;
-  const lock = createFsAtomicRelayLock(boardPath);
+  const lock = createFsAtomicRelayLock(lockPath);
   return withRelayLock(lock, async () => {
     const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
@@ -811,7 +568,7 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
       cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(path.join(boardDir, '.state-snapshot'))),
       fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
-      outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath),
+      outputStore: createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(boardDir))),
       executionRequestStore,
     };
     const envelope = loadBoardEnvelope(boardDir);
@@ -823,7 +580,7 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
     await rg.dispose({ wait: true });
     saveBoard(boardDir, rg, newCursor);
     try {
-      cardHandlerAdapters.outputStore.writeStatusSnapshot(boardDir, buildBoardStatusObject(path.resolve(boardDir), restore(rg.snapshot())));
+      cardHandlerAdapters.outputStore.writeStatusSnapshot(buildBoardStatusObject(path.resolve(boardDir), restore(rg.snapshot())));
     } catch (err) {
       console.warn(`[board-live-cards] status cache publish failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -934,7 +691,6 @@ interface NonCoreCommandDeps {
 
 interface NonCoreCommandHandlers {
   cmdHelp: () => void;
-  cmdRunSourceFetch: (args: string[]) => void;
   cmdProbeSource: (args: string[]) => Promise<void>;
   cmdDescribeTaskExecutorCapabilities: (args: string[]) => void;
   cmdValidateCard: (args: string[]) => void;
@@ -943,115 +699,6 @@ interface NonCoreCommandHandlers {
 }
 
 function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandHandlers {
-  function cmdRunSourceFetch(args: string[]): void {
-    const inIdx  = args.indexOf('--in-ref');
-    const outIdx = args.indexOf('--out-ref');
-    const errIdx = args.indexOf('--err-ref');
-
-    const inFile  = inIdx  !== -1 ? args[inIdx + 1]  : undefined;
-    const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
-    const errFile = errIdx !== -1 ? args[errIdx + 1] : undefined;
-
-    if (!inFile || !outFile) {
-      console.error('Usage: board-live-cards run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]');
-      process.exit(1);
-    }
-
-    // Parse refs
-    let inRef: ReturnType<typeof parseRef>;
-    let outRef: ReturnType<typeof parseRef>;
-    let errRef: ReturnType<typeof parseRef> | undefined;
-    try {
-      inRef = parseRef(inFile);
-      outRef = parseRef(outFile);
-      if (errFile) errRef = parseRef(errFile);
-    } catch (e) {
-      console.error(`[run-source-fetch] invalid ref: ${(e as Error).message}`);
-      process.exit(1);
-    }
-
-    const inStorage = blobStorageForRef(inRef);
-    const outStorage = blobStorageForRef(outRef);
-    const errStorage = errRef ? blobStorageForRef(errRef) : undefined;
-
-    function writeErr(msg: string): void {
-      if (errStorage && errRef) errStorage.write(errRef.value, msg);
-    }
-
-    // Read and parse source definition
-    const rawIn = inStorage.read(inRef.value);
-    if (rawIn === null) {
-      const msg = `Input not found: ${inFile}`;
-      writeErr(msg);
-      console.error(`[run-source-fetch] ${msg}`);
-      process.exit(1);
-    }
-    let source: any;
-    try {
-      source = JSON.parse(rawIn);
-    } catch (err) {
-      const msg = `Failed to parse input: ${(err as Error).message}`;
-      writeErr(msg);
-      console.error(`[run-source-fetch] ${msg}`);
-      process.exit(1);
-    }
-
-    // Source must have a cli field
-    if (!source.cli) {
-      const msg = 'Source definition missing cli field (board-live-cards built-in executor only understands source.cli)';
-      writeErr(msg);
-      console.error(`[run-source-fetch] ${msg}`);
-      process.exit(1);
-    }
-
-    // Execute the source cli command
-    console.log(`[run-source-fetch] executing: ${source.cli}`);
-    const timeout = source.timeout ?? 120_000;
-    const sourceCwd = typeof source.cwd === 'string' ? source.cwd : process.cwd();
-    const sourceBoardDir = typeof source.boardDir === 'string' ? source.boardDir : undefined;
-
-    const cmdParts = deps.executor.splitCommand(source.cli);
-    if (cmdParts.length === 0) {
-      const msg = 'Source cli command is empty';
-      writeErr(msg);
-      console.error(`[run-source-fetch] ${msg}`);
-      process.exit(1);
-    }
-    const rawCmd = cmdParts[0];
-    const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
-
-    let stdout: string;
-    try {
-      stdout = deps.executor.executeSync(cmd, cliArgs, {
-        shell: false,
-        encoding: 'utf-8',
-        timeout,
-        cwd: sourceCwd,
-        env: {
-          ...process.env,
-          ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
-        },
-      }) as string;
-    } catch (err: unknown) {
-      const msg = (err as Error).message ?? String(err);
-      console.error(`[run-source-fetch] cli failed: ${msg}`);
-      writeErr(msg);
-      process.exit(1);
-    }
-
-    // Write result to --out
-    const result = stdout!.trim();
-    try {
-      outStorage.write(outRef.value, result);
-      console.log(`[run-source-fetch] result written to ${outFile}`);
-    } catch (err) {
-      const msg = `Failed to write output: ${(err as Error).message}`;
-      console.error(`[run-source-fetch] ${msg}`);
-      writeErr(msg);
-      process.exit(1);
-    }
-  }
-
   async function cmdProbeSource(args: string[]): Promise<void> {
     const cardIdx = args.indexOf('--card');
     const sourceIdxArg = args.indexOf('--source-idx');
@@ -1547,7 +1194,6 @@ EXAMPLES
 
   return {
     cmdHelp,
-    cmdRunSourceFetch,
     cmdProbeSource,
     cmdDescribeTaskExecutorCapabilities,
     cmdValidateCard,
@@ -1576,16 +1222,10 @@ interface FetchRuntimeEntryLike {
   queueRequestedAt?: string;
 }
 
-interface CardRuntimeStateLike {
-  _sources: Record<string, FetchRuntimeEntryLike>;
-  _inferenceEntry?: FetchRuntimeEntryLike;
-}
-
 interface ExecutionCommandDeps {
   getConfigStore: (boardDir: string) => BoardConfigStore;
   makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
   executor: CommandExecutor;
-  encodeSourceToken: (payload: SourceTokenPayloadLike) => string;
   decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
   decodeCallbackToken: (token: string) => { taskName: string } | null;
   getCliInvocation: (command: string, args: string[]) => { cmd: string; args: string[] };
@@ -1597,140 +1237,12 @@ interface ExecutionCommandDeps {
 }
 
 interface ExecutionCommandHandlers {
-  cmdRunSources: (args: string[]) => void;
   cmdRunInference: (args: string[]) => void;
   cmdInferenceDone: (args: string[]) => void;
   cmdTryDrain: (args: string[]) => Promise<void>;
 }
 
 function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
-  // Local helpers used only by cmdRunSources
-  function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
-    const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--ref', serializeRef({ kind: 'fs-path', value: tmpFile }), '--token', sourceToken]);
-    deps.executor.executeAsync(cmd, args, (err, stdout, stderr) => {
-      if (err) console.error(`[source-data-fetched] call failed:`, err.message);
-      if (stdout) console.log(stdout.trim());
-      if (stderr) console.error(stderr.trim());
-      callback(err);
-    });
-  }
-
-  function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err: Error | null) => void): void {
-    const { cmd, args } = deps.getCliInvocation('source-data-fetch-failure', ['--token', sourceToken, '--reason', reason]);
-    deps.executor.executeAsync(cmd, args, (err) => callback(err));
-  }
-
-  function cmdRunSources(args: string[]): void {
-    const cardIdx = args.indexOf('--card');
-    const tokenIdx = args.indexOf('--token');
-    const rgIdx = args.indexOf('--rg');
-    const sourceChecksumsIdx = args.indexOf('--source-checksums');
-    const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
-    const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-    const sourceChecksumsJson = sourceChecksumsIdx !== -1 ? args[sourceChecksumsIdx + 1] : undefined;
-    const sourceChecksums = sourceChecksumsJson ? JSON.parse(sourceChecksumsJson) as Record<string, string> : undefined;
-    if (!cardFilePath || !callbackToken || !boardDir) {
-      console.error('Usage: board-live-cards run-sourcedefs-internal --card <path> --token <token> --rg <dir> [--source-checksums <json>]');
-      process.exit(1);
-    }
-
-    const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
-    if (path.basename(cardFilePath).startsWith('card-enriched-')) {
-      try { fs.unlinkSync(cardFilePath); } catch { /* best-effort */ }
-    }
-    console.log(`[run-sourcedefs-internal] Processing card "${card.id as string}"`);
-
-    type SourceDef = {
-      cli?: string;
-      bindTo: string;
-      outputFile?: string;
-      optionalForCompletionGating?: boolean;
-      timeout?: number;
-      cwd?: string;
-      boardDir?: string;
-    };
-
-    function runSource(src: SourceDef): void {
-      const sourceChecksumForInvoke = src.outputFile ? sourceChecksums?.[src.outputFile] : undefined;
-      const sourceToken = deps.encodeSourceToken({
-        cbk: callbackToken!,
-        rg: boardDir!,
-        cid: card.id as string,
-        b: src.bindTo,
-        d: src.outputFile ?? '',
-        cs: sourceChecksumForInvoke,
-      });
-
-      function reportFailure(reason: string): void {
-        invokeSourceDataFetchFailure(sourceToken, reason, (err) => {
-          if (err) console.error(`[run-sourcedefs-internal] source-data-fetch-failure call failed:`, err.message);
-        });
-      }
-
-      function reportFetched(outFile: string): void {
-        invokeSourceDataFetched(sourceToken, outFile, () => {
-          // logging already done in helper
-        });
-      }
-
-      // Execute source.cli directly in this process.
-      if (!src.outputFile) {
-        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
-        reportFailure('no outputFile configured');
-        return;
-      }
-      const outFile = deps.makeTempFilePath(boardDir!, `source-out-${src.bindTo}`);
-      if (!src.cli) {
-        const errMsg = 'source.cli is required for built-in source execution';
-        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
-        reportFailure(errMsg);
-        return;
-      }
-
-      const timeout = src.timeout ?? 120_000;
-      const sourceCwd = typeof src.cwd === 'string' ? src.cwd : path.dirname(cardFilePath || '');
-      const sourceBoardDir = typeof src.boardDir === 'string' ? src.boardDir : boardDir;
-      const cmdParts = deps.executor.splitCommand(src.cli);
-      if (cmdParts.length === 0) {
-        const errMsg = 'source.cli command is empty';
-        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
-        reportFailure(errMsg);
-        return;
-      }
-
-      const rawCmd = cmdParts[0];
-      const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
-
-      let stdout: string;
-      try {
-        stdout = deps.executor.executeSync(cmd, cliArgs, {
-          shell: false,
-          encoding: 'utf-8',
-          timeout,
-          cwd: sourceCwd,
-          env: {
-            ...process.env,
-            ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
-          },
-        });
-      } catch (err: unknown) {
-        const reason = (err as Error).message ?? String(err);
-        console.error(`[run-sourcedefs-internal] source fetch failed for source "${src.bindTo}":`, reason);
-        reportFailure(reason);
-        return;
-      }
-
-      fs.writeFileSync(outFile, stdout.trim(), 'utf-8');
-      reportFetched(outFile);
-    }
-
-    const source_defs = (card.source_defs ?? []) as SourceDef[];
-    for (const src of source_defs) {
-      runSource(src);
-    }
-  }
-
   function cmdRunInference(args: string[]): void {
     const inIdx = args.indexOf('--in-ref');
     const tokenIdx = args.indexOf('--token');
@@ -1900,19 +1412,13 @@ function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCo
     fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
 
     // Update inference runtime entry to reflect completion
-    const runtimePath = path.join(dir, taskName, 'runtime.json');
-    let runtime: CardRuntimeStateLike = { _sources: {} };
-    if (fs.existsSync(runtimePath)) {
-      try {
-        runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf-8')) as CardRuntimeStateLike;
-      } catch {}
-    }
-
+    const runtimeStore = createCardRuntimeStore(createFsKvStorage(path.join(dir, '.state-snapshot')));
+    const runtime = runtimeStore.readRuntime(taskName);
     const inferenceEntry = runtime._inferenceEntry ?? {};
-    runtime._inferenceEntry = deps.nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt);
-
-    fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
-    fs.writeFileSync(runtimePath, JSON.stringify(runtime, null, 2), 'utf-8');
+    runtimeStore.writeRuntime(taskName, {
+      ...runtime,
+      _inferenceEntry: deps.nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt),
+    });
 
     injectTaskProgress(dir, taskName, { kind: 'inference-done', isTaskCompleted: isTaskCompletedFlag, inputChecksum }, deps);
   }
@@ -1927,7 +1433,7 @@ function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCo
     await deps.processAccumulatedEventsForced(boardDir);
   }
 
-  return { cmdRunSources, cmdRunInference, cmdInferenceDone, cmdTryDrain };
+  return { cmdRunInference, cmdInferenceDone, cmdTryDrain };
 }
 
 export async function cli(argv: string[]): Promise<void> {
@@ -1939,7 +1445,7 @@ export async function cli(argv: string[]): Promise<void> {
     initBoard,
     configureRuntimeOutDir,
     loadBoard,
-    outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath),
+    getOutputStore: (dir: string) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(dir))),
     buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(path.resolve(dir), live),
     getConfigStore: createBoardConfig,
     appendEventToJournal,
@@ -1950,7 +1456,7 @@ export async function cli(argv: string[]): Promise<void> {
     decodeSourceToken,
     getFetchedSourcesStore: (boardDir: string) => createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
     generateId: genUUID,
-    writeRuntimeDataObjects,
+    writeRuntimeDataObjects: (boardDir: string, data: Record<string, unknown>) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(boardDir))).writeDataObjects(data),
     appendEventToJournal,
     processAccumulatedEventsForced: scheduleForced,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
@@ -1990,7 +1496,6 @@ export async function cli(argv: string[]): Promise<void> {
     getConfigStore: createBoardConfig,
     makeTempFilePath: makeBoardTempFilePath,
     executor,
-    encodeSourceToken,
     decodeSourceToken,
     decodeCallbackToken,
     getCliInvocation: buildBoardCliInvocation.bind(null, __dirname),
@@ -2025,10 +1530,8 @@ export async function cli(argv: string[]): Promise<void> {
       ? compatCommandHandlers.compatSourceDataFetchedTmp(rest)
       : callbackCommandHandlers.cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return callbackCommandHandlers.cmdSourceDataFetchFailure(rest);
-    case 'run-sourcedefs-internal':      return executionCommandHandlers.cmdRunSources(rest);
     case 'run-inference-internal':    return executionCommandHandlers.cmdRunInference(rest);
     case 'inference-done':            return executionCommandHandlers.cmdInferenceDone(rest);
-    case 'run-source-fetch':          return nonCoreCommandHandlers.cmdRunSourceFetch(rest);
     case 'probe-source':               return await nonCoreCommandHandlers.cmdProbeSource(rest);
     case 'describe-task-executor-capabilities': return nonCoreCommandHandlers.cmdDescribeTaskExecutorCapabilities(rest);
     case 'process-accumulated-events': return await executionCommandHandlers.cmdTryDrain(rest);

@@ -37,18 +37,23 @@ function renameSync(src: string, dest: string): void {
   }
 }
 
+import type { GraphEvent } from '../event-graph/types.js';
 import type {
   AtomicRelayLock,
   BlobStorage,
   JournalEntry,
   JournalReadResult,
   JournalStorage,
+  JSONStorage,
   KVStorage,
   StorageProvider,
 } from './storage-interface.js';
 import type {
-  OutputStore,
-} from './board-live-cards-lib-types.js';
+  CardIndex,
+  LiveCard,
+  StateSnapshotStorageAdapter,
+  StateSnapshotReadView,
+} from './board-live-cards-all-stores.js';
 
 // ============================================================================
 // FsBlobStorage
@@ -215,63 +220,87 @@ export function computeStableJsonHash(value: unknown): string {
 }
 
 // ============================================================================
-// createFsOutputStore — FS-backed OutputStore
-//
-// Writes computed-values and data-objects JSON files atomically.
-// schema_version: 'v1' is enforced here — never at call sites.
+// createFsJsonStorage — KVStorage with JSON-aware merge and patch operations
 // ============================================================================
 
-function writeJsonAtomic(filePath: string, payload: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  const content = payload === undefined ? 'null' : JSON.stringify(payload, null, 2);
-  fs.writeFileSync(tmpPath, content, 'utf-8');
-  renameSync(tmpPath, filePath);
-}
-
-class FsOutputStore implements OutputStore {
-  constructor(
-    private readonly resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
-    private readonly resolveDataObjectsDirPath: (boardDir: string) => string,
-    private readonly resolveStatusSnapshotPath?: (boardDir: string) => string,
-  ) {}
-
-  writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void {
-    writeJsonAtomic(this.resolveComputedValuesPath(boardDir, cardId), {
-      schema_version: 'v1',
-      card_id: cardId,
-      computed_values: values,
-    });
-  }
-
-  writeDataObjects(boardDir: string, data: Record<string, unknown>): void {
-    for (const [token, payload] of Object.entries(data)) {
-      if (!token) continue;
-      const fileName = token.replace(/[\\/]/g, '__');
-      if (!fileName) continue;
-      writeJsonAtomic(path.join(this.resolveDataObjectsDirPath(boardDir), fileName), payload);
+function deepMergeObjects(target: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...target };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) &&
+        result[k] !== null && typeof result[k] === 'object' && !Array.isArray(result[k])) {
+      result[k] = deepMergeObjects(result[k] as Record<string, unknown>, v as Record<string, unknown>);
+    } else {
+      result[k] = v;
     }
   }
-
-  writeStatusSnapshot(boardDir: string, status: unknown): void {
-    if (!this.resolveStatusSnapshotPath) return;
-    writeJsonAtomic(this.resolveStatusSnapshotPath(boardDir), status);
-  }
-
-  readStatusSnapshot(boardDir: string): unknown | null {
-    if (!this.resolveStatusSnapshotPath) return null;
-    const p = this.resolveStatusSnapshotPath(boardDir);
-    if (!fs.existsSync(p)) return null;
-    try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return null; }
-  }
+  return result;
 }
 
-export function createFsOutputStore(
-  resolveComputedValuesPath: (boardDir: string, cardId: string) => string,
-  resolveDataObjectsDirPath: (boardDir: string) => string,
-  resolveStatusSnapshotPath?: (boardDir: string) => string,
-): OutputStore {
-  return new FsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath);
+function applyJsonPath(obj: Record<string, unknown>, segments: string[], value: unknown): Record<string, unknown> {
+  if (segments.length === 0) return obj;
+  const [head, ...tail] = segments;
+  if (tail.length === 0) return { ...obj, [head]: value };
+  const nested = (obj[head] !== null && typeof obj[head] === 'object' && !Array.isArray(obj[head]))
+    ? (obj[head] as Record<string, unknown>)
+    : {};
+  return { ...obj, [head]: applyJsonPath(nested, tail, value) };
+}
+
+export function createFsJsonStorage(kvDir: string): JSONStorage {
+  const kv = createFsKvStorage(kvDir);
+  return {
+    read: (key) => kv.read(key),
+    get(key, jsonPath) {
+      const obj = kv.read(key);
+      if (obj === null) return null;
+      let current: unknown = obj;
+      for (const segment of jsonPath.split('.').filter(Boolean)) {
+        if (current === null || typeof current !== 'object' || Array.isArray(current)) return null;
+        current = (current as Record<string, unknown>)[segment] ?? null;
+      }
+      return current ?? null;
+    },
+    write: (key, value) => kv.write(key, value),
+    delete: (key) => kv.delete(key),
+    listKeys: (prefix?) => kv.listKeys(prefix),
+    shallowMerge(key, patch) {
+      const existing = (kv.read(key) as Record<string, unknown> | null) ?? {};
+      kv.write(key, { ...existing, ...patch });
+    },
+    deepMerge(key, patch) {
+      const existing = (kv.read(key) as Record<string, unknown> | null) ?? {};
+      kv.write(key, deepMergeObjects(existing, patch));
+    },
+    patch(key, jsonPath, value) {
+      const existing = (kv.read(key) as Record<string, unknown> | null) ?? {};
+      const segments = jsonPath.split('.').filter(Boolean);
+      kv.write(key, applyJsonPath(existing, segments, value));
+    },
+  };
+}
+
+// ============================================================================
+// createFsJournalStorageAdapter — JournalStorageAdapter backed by a JSONL file
+// ============================================================================
+
+export function createFsJournalStorageAdapter(boardDir: string): {
+  readAllEntries(): { id: string; event: GraphEvent }[];
+  appendEntry(entry: { id: string; event: GraphEvent }): void;
+  generateId(): string;
+} {
+  const journalPath = path.join(boardDir, 'board-journal.jsonl');
+  return {
+    readAllEntries() {
+      if (!fs.existsSync(journalPath)) return [];
+      const content = fs.readFileSync(journalPath, 'utf-8').trim();
+      if (!content) return [];
+      return content.split('\n').filter(Boolean).map((l) => JSON.parse(l) as { id: string; event: GraphEvent });
+    },
+    appendEntry(entry) {
+      fs.appendFileSync(journalPath, JSON.stringify(entry) + '\n', 'utf-8');
+    },
+    generateId() { return randomUUID(); },
+  };
 }
 
 export function createFsStorageProvider(boardDir: string, journalFile: string): StorageProvider {
@@ -295,6 +324,67 @@ export function createFsAtomicRelayLock(lockTargetPath: string): AtomicRelayLock
       } catch {
         return null;
       }
+    },
+  };
+}
+
+// ============================================================================
+// createFsCardStorageAdapter — KV-backed card storage
+// Cards and index stored under <boardDir>/.cards/
+// ============================================================================
+
+export function createFsCardStorageAdapter(boardDir: string): {
+  readIndex(): CardIndex | null;
+  writeIndex(index: CardIndex): void;
+  readCard(key: string): LiveCard | null;
+  writeCard(key: string, card: LiveCard): string;
+  cardExists(key: string): boolean;
+  defaultCardKey(cardId: string): string;
+} {
+  const kv = createFsKvStorage(path.join(boardDir, '.cards'));
+  return {
+    readIndex() {
+      return kv.read('_index') as CardIndex | null;
+    },
+    writeIndex(index) {
+      kv.write('_index', index);
+    },
+    readCard(id) {
+      return kv.read(id) as LiveCard | null;
+    },
+    writeCard(id, card) {
+      kv.write(id, card);
+      return computeStableJsonHash(card);
+    },
+    cardExists(id) {
+      return kv.read(id) !== null;
+    },
+    defaultCardKey(cardId) {
+      return cardId;
+    },
+  };
+}
+
+// ============================================================================
+// createFsStateSnapshotStorageAdapter — KV-backed state snapshot storage
+// Each key stored under <scopeDir>/.state-snapshot/
+// ============================================================================
+
+export function createFsStateSnapshotStorageAdapter(): StateSnapshotStorageAdapter {
+  return {
+    readValues(scopeDir: string): StateSnapshotReadView {
+      const kv = createFsKvStorage(path.join(scopeDir, '.state-snapshot'));
+      const keys = kv.listKeys().sort();
+      if (keys.length === 0) return { version: null, values: {} };
+      const values: Record<string, unknown> = {};
+      for (const key of keys) values[key] = kv.read(key);
+      return { version: computeStableJsonHash(values), values };
+    },
+    writeValues(scopeDir: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
+      const kv = createFsKvStorage(path.join(scopeDir, '.state-snapshot'));
+      for (const key of deletedKeys) kv.delete(key);
+      for (const [key, value] of Object.entries(nextValues)) kv.write(key, value);
+      return computeStableJsonHash(nextValues);
     },
   };
 }

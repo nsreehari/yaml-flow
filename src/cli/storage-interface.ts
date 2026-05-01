@@ -136,6 +136,57 @@ export interface KVStorage {
 }
 
 // ============================================================================
+// JSONStorage — KV store with JSON-aware merge operations
+//
+// Backed by KVStorage under the hood. Adds deepMerge and shallowMerge so
+// callers never need to read-modify-write manually for partial updates.
+// ============================================================================
+
+export interface JSONStorage {
+  /** Returns the stored JSON value, or null if the key does not exist. */
+  read(key: string): unknown | null;
+
+  /**
+   * Read a nested value inside the stored object using a dot-notation path.
+   * e.g. get('myKey', 'a.b.c') returns the value at { a: { b: { c: ... } } }.
+   * Returns null if the key does not exist or the path cannot be traversed.
+   */
+  get(key: string, jsonPath: string): unknown | null;
+
+  /** Write value at key. Overwrites any existing value. */
+  write(key: string, value: unknown): void;
+
+  /** Delete the key. No-op if it does not exist. */
+  delete(key: string): void;
+
+  /** List all keys, optionally filtered by prefix. */
+  listKeys(prefix?: string): string[];
+
+  /**
+   * Shallow-merge patch into the existing object at key.
+   * Equivalent to: write(key, { ...read(key), ...patch })
+   * Creates the key if it does not exist.
+   */
+  shallowMerge(key: string, patch: Record<string, unknown>): void;
+
+  /**
+   * Deep-merge patch into the existing object at key.
+   * Recursively merges nested plain objects; arrays and primitives are replaced.
+   * Creates the key if it does not exist.
+   */
+  deepMerge(key: string, patch: Record<string, unknown>): void;
+
+  /**
+   * Set a nested value inside the stored object using a dot-notation path.
+   * e.g. patch('myKey', 'a.b.c', 42) sets { a: { b: { c: 42 } } } into the stored object.
+   * Intermediate objects are created if absent. Arrays are not traversed — use integer
+   * segments to index into them (e.g. 'items.0.name').
+   * Creates the top-level key if it does not exist.
+   */
+  patch(key: string, jsonPath: string, value: unknown): void;
+}
+
+// ============================================================================
 // StorageProvider — aggregate of all three primitives
 //
 // Adapter factories receive a StorageProvider and close over any scope (e.g.

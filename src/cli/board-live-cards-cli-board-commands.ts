@@ -1,13 +1,12 @@
 import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
-import type { BoardConfigStore } from './board-live-cards-all-stores.js';
-import type { OutputStore } from './board-live-cards-lib-types.js';
+import type { BoardConfigStore, PublishedOutputsStore } from './board-live-cards-all-stores.js';
 
 interface BoardCommandDeps {
   initBoard: (dir: string) => 'created' | 'exists';
   configureRuntimeOutDir: (dir: string, runtimeOut?: string) => string;
   loadBoard: (dir: string) => LiveGraph;
-  outputStore: OutputStore;
+  getOutputStore: (boardDir: string) => PublishedOutputsStore;
   buildBoardStatusObject: (dir: string, live: LiveGraph) => any;
   getConfigStore: (boardDir: string) => BoardConfigStore;
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
@@ -60,7 +59,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
 
     const runtimeOutDir = deps.configureRuntimeOutDir(dir, runtimeOut);
     const live = deps.loadBoard(dir);
-    deps.outputStore.writeStatusSnapshot(dir, deps.buildBoardStatusObject(dir, live));
+    deps.getOutputStore(dir).writeStatusSnapshot(deps.buildBoardStatusObject(dir, live));
 
     if (result === 'exists') {
       console.log(`Board already initialized at ${dir}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
@@ -78,10 +77,10 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       process.exit(1);
     }
 
-    let statusObject: any = deps.outputStore.readStatusSnapshot(dir);
+    let statusObject: any = deps.getOutputStore(dir).readStatusSnapshot();
     if (!statusObject) {
       statusObject = deps.buildBoardStatusObject(dir, deps.loadBoard(dir));
-      deps.outputStore.writeStatusSnapshot(dir, statusObject);
+      deps.getOutputStore(dir).writeStatusSnapshot(statusObject);
     }
 
     if (asJson) {

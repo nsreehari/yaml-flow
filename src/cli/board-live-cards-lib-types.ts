@@ -13,10 +13,8 @@
  *   - InvocationAdapter results are structured, not raw shell-centric.
  */
 
-import type { CardStore, FetchedSourcesStore, CardRuntimeStore } from './board-live-cards-all-stores.js';
-export type { CardStore, FetchedSourcesStore, CardRuntimeStore };
-import type { ExecutionRequestStore } from './board-live-cards-all-stores.js';
-export type { ExecutionRequestStore };
+import type { CardStore, FetchedSourcesStore, CardRuntimeStore, ExecutionRequestStore, PublishedOutputsStore } from './board-live-cards-all-stores.js';
+export type { CardStore, FetchedSourcesStore, CardRuntimeStore, ExecutionRequestStore, PublishedOutputsStore };
 
 // ============================================================================
 // Shared domain types
@@ -103,27 +101,6 @@ export function nextEntryAfterFetchFailure<T extends FetchRuntimeEntry>(
 }
 
 // ============================================================================
-// OutputStore — idempotent, schema-versioned writes
-//
-// Invariant: schema_version is enforced by the store, not by call sites.
-// All writes are atomic where the backing store supports it.
-// ============================================================================
-
-export interface OutputStore {
-  /** Write computed values for a card. Enforces schema_version: 'v1' internally. */
-  writeComputedValues(boardDir: string, cardId: string, values: Record<string, unknown>): void;
-  /** Write task-completed data objects. Idempotent (atomic rename on Node, blob PUT on Azure). */
-  writeDataObjects(boardDir: string, data: Record<string, unknown>): void;
-  /**
-   * Write the board status read-model cache (best-effort).
-   * Called after each successful drain pass. Failures must not fail the authoritative commit.
-   */
-  writeStatusSnapshot(boardDir: string, status: unknown): void;
-  /** Read the board status read-model cache. Returns null if absent or unreadable. */
-  readStatusSnapshot(boardDir: string): unknown | null;
-}
-
-// ============================================================================
 // InvocationAdapter — see process-interface.ts for the full contract and
 // instructions for adding a new backend.
 // ============================================================================
@@ -139,7 +116,7 @@ export interface CardHandlerAdapters {
   cardRuntimeStore: CardRuntimeStore;
   /** Blob store for fetched source payloads. Key: <cardId>/<outputFile>. */
   fetchedSourcesStore: FetchedSourcesStore;
-  outputStore: OutputStore;
+  outputStore: PublishedOutputsStore;
   executionRequestStore: ExecutionRequestStore;
 }
 

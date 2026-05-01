@@ -579,6 +579,35 @@ export function createBoardConfigStore(
 }
 
 // ============================================================================
+// PublishedOutputsStore — KV-backed store for published card outputs
+// ============================================================================
+
+export interface PublishedOutputsStore {
+  /** Write computed values for a card. Key: cards/<cardId>/computed_values */
+  writeComputedValues(cardId: string, values: Record<string, unknown>): void;
+  /** Write data objects. Each token becomes key: data-objects/<token> */
+  writeDataObjects(data: Record<string, unknown>): void;
+  /** Write the board status snapshot. Key: status */
+  writeStatusSnapshot(status: unknown): void;
+  /** Read the board status snapshot. Returns null if absent. */
+  readStatusSnapshot(): unknown | null;
+}
+
+export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStore {
+  return {
+    writeComputedValues(cardId, values) { kv.write(`cards/${cardId}/computed_values`, values); },
+    writeDataObjects(data) {
+      for (const [token, payload] of Object.entries(data)) {
+        if (!token) continue;
+        kv.write(`data-objects/${token}`, payload);
+      }
+    },
+    writeStatusSnapshot(status) { kv.write('status', status); },
+    readStatusSnapshot() { return kv.read('status'); },
+  };
+}
+
+// ============================================================================
 // Future-facing blob and read-model cache interfaces (not yet implemented)
 // ============================================================================
 
