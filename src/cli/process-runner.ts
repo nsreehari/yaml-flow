@@ -24,7 +24,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync, execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { serializeRef } from './storage-interface.js';
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
 import type { InvocationAdapter, DispatchResult } from './process-interface.js';
@@ -49,6 +49,12 @@ export function makeBoardTempFilePath(boardDir: string, label: string, ext = '.j
   fs.mkdirSync(tmpDir, { recursive: true });
   return path.join(tmpDir, `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
 }
+
+/** Generate a new random UUID. */
+export function genUUID(): string { return randomUUID(); }
+
+/** SHA-256 hex hash of a string. */
+export function getHash(x: string): string { return createHash('sha256').update(x).digest('hex'); }
 
 // ============================================================================
 // parseCommandSpec — legacy string or structured CommandSpec → normalized form

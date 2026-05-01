@@ -4,7 +4,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 /** On Windows, fs.renameSync fails with EPERM when dest is held open. Retry with back-off. */
@@ -27,10 +26,11 @@ import {
   makeBoardTempFilePath,
   buildBoardCliInvocation,
   runDetached,
+  genUUID,
+  getHash,
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import { blobStorageForRef } from './public-storage-adapter.js';
-import fg from 'fast-glob';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -118,7 +118,7 @@ function createFsCardStorageAdapter(boardDir: string) {
       return buildIndexFromInventory();
     },
     writeIndex(index: unknown) {
-      const tmp = `${indexPath}.${process.pid}.${randomUUID()}.tmp`;
+      const tmp = `${indexPath}.${process.pid}.${genUUID()}.tmp`;
       fs.mkdirSync(path.dirname(indexPath), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(index, null, 2), 'utf-8');
       renameSync(tmp, indexPath);
@@ -129,11 +129,11 @@ function createFsCardStorageAdapter(boardDir: string) {
     },
     writeCard(key: string, card: unknown): string {
       const json = stableJson(card);
-      const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
+      const tmp = `${key}.${process.pid}.${genUUID()}.tmp`;
       fs.mkdirSync(path.dirname(key), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(JSON.parse(json), null, 2), 'utf-8');
       renameSync(tmp, key);
-      return createHash('sha256').update(json).digest('hex');
+      return getHash(json);
     },
     cardExists(key: string) { return fs.existsSync(key); },
     defaultCardKey(cardId: string) { return path.join(boardDir, `${cardId}.json`); },
@@ -152,7 +152,7 @@ function createFsJournalStorageAdapter(boardDir: string) {
     appendEntry(entry: { id: string; event: unknown }) {
       fs.appendFileSync(journalPath, JSON.stringify(entry) + '\n', 'utf-8');
     },
-    generateId() { return randomUUID(); },
+    generateId() { return genUUID(); },
   };
 }
 
@@ -165,7 +165,7 @@ function createFsExecutionRequestStorageAdapter(boardDir: string) {
     writeEntries(journalId: string, entries: unknown[]): void {
       const fp = entryFilePath(journalId);
       fs.mkdirSync(dir, { recursive: true });
-      const tmp = `${fp}.${process.pid}.${randomUUID()}.tmp`;
+      const tmp = `${fp}.${process.pid}.${genUUID()}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), 'utf-8');
       renameSync(tmp, fp);
     },
@@ -247,7 +247,7 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
           console.log(`[request-source-fetch] task-executor: ${parsedExec.command} ${executorArgs.join(' ')}`);
           runDetached({ command: parsedExec.command, args: executorArgs });
         }
-        return { dispatched: true, invocationId: randomUUID() };
+        return { dispatched: true, invocationId: genUUID() };
       } catch (err) {
         return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -296,7 +296,7 @@ function createFsStateSnapshotStorageAdapter(boardFileName: string): StateSnapsh
   }
 
   function valueToVersion(values: Record<string, unknown>): string {
-    return createHash('sha256').update(stableStringify(values)).digest('hex');
+    return getHash(stableStringify(values));
   }
 
   function readJson(filePath: string): unknown {
@@ -403,7 +403,7 @@ export class BoardJournal implements Journal {
   }
 
   append(event: GraphEvent): void {
-    const entry: JournalEntry = { id: randomUUID(), event };
+    const entry: JournalEntry = { id: genUUID(), event };
     fs.appendFileSync(this.journalPath, JSON.stringify(entry) + '\n', 'utf-8');
   }
 
@@ -572,7 +572,7 @@ export function initBoard(dir: string): 'created' | 'exists' {
   const commitResult = nodeStateSnapshotStore.commitSnapshot(dir, {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION_V1,
     expectedVersion: current.version,
-    commitId: randomUUID(),
+    commitId: genUUID(),
     committedAt: new Date().toISOString(),
     deleteKeys: [],
     shallowMerge: boardEnvelopeToSnapshotEntries(envelope),
@@ -645,7 +645,7 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journalOrCursor: Board
   const commitResult = nodeStateSnapshotStore.commitSnapshot(dir, {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION_V1,
     expectedVersion: current.version,
-    commitId: randomUUID(),
+    commitId: genUUID(),
     committedAt: new Date().toISOString(),
     deleteKeys: [],
     shallowMerge: boardEnvelopeToSnapshotEntries(envelope),
@@ -717,7 +717,7 @@ function writeRuntimeDataObjects(boardDir: string, data: Record<string, unknown>
 
 function writeJsonAtomic(filePath: string, payload: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${genUUID()}.tmp`;
   const content = payload === undefined ? 'null' : JSON.stringify(payload, null, 2);
   fs.writeFileSync(tmpPath, content, 'utf-8');
   renameSync(tmpPath, filePath);
@@ -938,28 +938,6 @@ function resolveSourceDataRef(ref: { kind: string; value: string }): string {
   if (ref.kind === 'fs-path') return fs.readFileSync(ref.value, 'utf-8');
   throw new Error(`Unsupported KindValueRef kind: ${ref.kind}`);
 }
-
-/**
- * Helper function to add a single card from file.
- * Throws errors instead of calling process.exit() so it can be used in tests.
- */
-function resolveCardGlobMatches(cardGlob: string): string[] {
-  const patterns = cardGlob
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(p => p.replace(/\\/g, '/'));
-  const matches = fg.sync(patterns, {
-    absolute: true,
-    onlyFiles: true,
-    unique: true,
-    dot: false,
-  });
-  // fast-glob returns forward-slash paths; normalise to native so comparisons
-  // against inventory entries (which use path.resolve → backslash on Windows) match.
-  return [...matches].map(m => path.resolve(m)).sort((a, b) => a.localeCompare(b));
-}
-
 
 // ============================================================================
 // Non-core command handlers (inlined from board-live-cards-cli-noncore.ts)
@@ -1995,7 +1973,7 @@ export async function cli(argv: string[]): Promise<void> {
     decodeCallbackToken,
     decodeSourceToken,
     getFetchedSourcesStore: (boardDir: string) => createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
-    generateId: randomUUID,
+    generateId: genUUID,
     writeRuntimeDataObjects,
     appendEventToJournal,
     processAccumulatedEventsForced: scheduleForced,
@@ -2028,7 +2006,6 @@ export async function cli(argv: string[]): Promise<void> {
     getCardAdminStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
     upsertCardById: cardCommandHandlers.upsertCardById,
     validateCards: nonCoreCommandHandlers.validateCards,
-    resolveCardGlobMatches,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
     cmdSourceDataFetched: (args: string[]) => callbackCommandHandlers.cmdSourceDataFetched(args),
   });

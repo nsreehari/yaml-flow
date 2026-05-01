@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import fg from 'fast-glob';
 import type { LiveCard, CardAdminStore } from './board-live-cards-all-stores.js';
 import type { CommandResponse } from './board-live-cards-lib-types.js';
 import { Resp } from './board-live-cards-lib-types.js';
@@ -17,7 +18,6 @@ interface CompatDeps {
   getCardAdminStore: (boardDir: string) => CardAdminStore;
   upsertCardById: (boardDir: string, cardId: string, restart: boolean) => string;
   validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
-  resolveCardGlobMatches: (cardGlob: string) => string[];
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
   cmdSourceDataFetched: (args: string[]) => void;
 }
@@ -29,6 +29,16 @@ export interface CompatCommandHandlers {
 }
 
 export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHandlers {
+
+  function resolveCardGlobMatches(cardGlob: string): string[] {
+    const patterns = cardGlob
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(p => p.replace(/\\/g, '/'));
+    const matches = fg.sync(patterns, { absolute: true, onlyFiles: true, unique: true, dot: false });
+    return [...matches].map(m => path.resolve(m)).sort((a, b) => a.localeCompare(b));
+  }
 
   function readCardFromFile(filePath: string): BoardLiveCard {
     if (!fs.existsSync(filePath)) throw new Error(`Card file not found: ${filePath}`);
@@ -55,7 +65,7 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
 
     const files = cardFile
       ? [path.resolve(cardFile)]
-      : deps.resolveCardGlobMatches(cardGlob!);
+      : resolveCardGlobMatches(cardGlob!);
 
     if (files.length === 0) {
       console.error(`No card files matched glob: ${cardGlob}`);
@@ -133,7 +143,7 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
 
     const files = cardFile
       ? [path.resolve(cardFile)]
-      : deps.resolveCardGlobMatches(cardGlob!);
+      : resolveCardGlobMatches(cardGlob!);
 
     if (files.length === 0) {
       throw new Error(`No card files matched glob: ${cardGlob}`);
