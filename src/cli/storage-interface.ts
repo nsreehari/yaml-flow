@@ -50,6 +50,20 @@ export interface BlobStorage {
 }
 
 // ============================================================================
+// SourceDataRef — backend-neutral reference to source content
+//
+// A ref describes WHERE content lives without carrying the bytes.
+// kind = 'fs-path': value is an absolute file path (resolved by FS adapters)
+// kind = 'inline':  value is the content string itself
+// Other kinds can be added by new backends without changing pure-logic code.
+// ============================================================================
+
+export interface SourceDataRef {
+  readonly kind: string;
+  readonly value: string;
+}
+
+// ============================================================================
 // Journal — append-only log, cursor-based reads
 //
 // Each entry has a string id (UUID or monotonic token) and an opaque payload.

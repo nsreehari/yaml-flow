@@ -6,7 +6,7 @@
  * provided by the CLI entry point and passed in at construction time.
  */
 
-import type { KVStorage, BlobStorage } from './storage-interface.js';
+import type { KVStorage, BlobStorage, SourceDataRef } from './storage-interface.js';
 import type { GraphEvent } from '../event-graph/types.js';
 // ============================================================================
 // Card store — types
@@ -178,25 +178,39 @@ export function createCardStore(adapter: CardStorageAdapter): CardAdminStore {
 // ============================================================================
 
 export interface FetchedSourcesStore {
-  /** Read fetched source content. Returns parsed JSON or raw string; null if not yet fetched. */
-  readSource(cardId: string, outputFile: string): unknown;
-  /** Write fetched source content (string from executor stdout or file). */
-  writeSource(cardId: string, outputFile: string, content: string): void;
-  /** True if the source file has been fetched at least once. */
+  /** Read committed source content. Returns parsed JSON or raw string; null if not yet committed. */
+  readSourceData(cardId: string, outputFile: string): unknown;
+  /** Stage incoming source data under deliveryToken. resolveRef converts the ref to content bytes. */
+  ingestSourceDataStaged(cardId: string, outputFile: string, ref: SourceDataRef, deliveryToken: string): void;
+  /** Move staged data to live position. Returns false if staged entry is absent (stale delivery). */
+  commitSourceData(cardId: string, outputFile: string, deliveryToken: string): boolean;
+  /** True if live (committed) source data exists for this outputFile. */
   hasSource(cardId: string, outputFile: string): boolean;
 }
 
-export function createFetchedSourcesStore(blob: BlobStorage): FetchedSourcesStore {
+export function createFetchedSourcesStore(
+  blob: BlobStorage,
+  resolveRef: (ref: SourceDataRef) => string,
+): FetchedSourcesStore {
   return {
-    readSource(cardId, outputFile): unknown {
+    readSourceData(cardId, outputFile): unknown {
       const raw = blob.read(`${cardId}/${outputFile}`);
       if (raw == null) return null;
       const trimmed = raw.trim();
       if (!trimmed) return null;
       try { return JSON.parse(trimmed); } catch { return trimmed; }
     },
-    writeSource(cardId, outputFile, content): void {
+    ingestSourceDataStaged(cardId, outputFile, ref, deliveryToken): void {
+      const content = resolveRef(ref);
+      blob.write(`${cardId}/.staged/${deliveryToken}/${outputFile}`, content);
+    },
+    commitSourceData(cardId, outputFile, deliveryToken): boolean {
+      const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
+      const content = blob.read(stagedKey);
+      if (content == null) return false;
       blob.write(`${cardId}/${outputFile}`, content);
+      blob.remove(stagedKey);
+      return true;
     },
     hasSource(cardId, outputFile): boolean {
       return blob.exists(`${cardId}/${outputFile}`);

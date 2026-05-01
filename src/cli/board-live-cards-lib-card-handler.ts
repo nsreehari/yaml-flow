@@ -90,6 +90,10 @@ export function createCardHandlerFn(
             if (u.failure) {
               setSourceEntry(outputFile, nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown'));
             } else {
+              const deliveryToken = typeof u.deliveryToken === 'string' ? u.deliveryToken : undefined;
+              if (deliveryToken) {
+                adapters.fetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
+              }
               setSourceEntry(outputFile, nextEntryAfterFetchDelivery(
                 entry,
                 (u.fetchedAt as string | undefined) ?? new Date().toISOString(),
@@ -103,7 +107,7 @@ export function createCardHandlerFn(
         const sourcesData: Record<string, unknown> = {};
         for (const src of allSources) {
           if (src.outputFile) {
-            const content = adapters.fetchedSourcesStore.readSource(cardId, src.outputFile as string);
+            const content = adapters.fetchedSourcesStore.readSourceData(cardId, src.outputFile as string);
             if (content !== null) {
               sourcesData[src.bindTo] = content;
             }

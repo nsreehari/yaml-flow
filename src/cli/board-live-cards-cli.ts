@@ -781,7 +781,7 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
     const cardHandlerAdapters = {
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
       cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(path.join(boardDir, '.state-snapshot'))),
-      fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(boardDir)),
+      fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
       outputStore: createFsOutputStore(resolveComputedValuesPath, resolveDataObjectsDirPath, resolveStatusSnapshotPath),
       executionRequestStore,
     };
@@ -878,6 +878,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ============================================================================
 
 /**
+ * Resolve a SourceDataRef to its content string.
+ * 'fs-path': read file from disk (FS adapter, stays in cli.ts)
+ * 'inline':  value is already the content
+ */
+function resolveSourceDataRef(ref: { kind: string; value: string }): string {
+  if (ref.kind === 'fs-path') return fs.readFileSync(ref.value, 'utf-8');
+  if (ref.kind === 'inline') return ref.value;
+  throw new Error(`Unsupported SourceDataRef kind: ${ref.kind}`);
+}
+
+/**
  * Helper function to add a single card from file.
  * Throws errors instead of calling process.exit() so it can be used in tests.
  */
@@ -916,7 +927,8 @@ export async function cli(argv: string[]): Promise<void> {
   const callbackCommandHandlers = createCallbackCommandHandlers({
     decodeCallbackToken,
     decodeSourceToken,
-    getFetchedSourcesStore: (boardDir: string) => createFetchedSourcesStore(createFsBlobStorage(boardDir)),
+    getFetchedSourcesStore: (boardDir: string) => createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
+    generateId: randomUUID,
     writeRuntimeDataObjects,
     appendEventToJournal,
     processAccumulatedEventsForced: scheduleForced,
@@ -953,6 +965,7 @@ export async function cli(argv: string[]): Promise<void> {
     validateCards: nonCoreCommandHandlers.validateCards,
     resolveCardGlobMatches,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
+    cmdSourceDataFetched: (args: string[]) => callbackCommandHandlers.cmdSourceDataFetched(args),
   });
 
   const executionCommandHandlers = createExecutionCommandHandlers({
@@ -994,7 +1007,9 @@ export async function cli(argv: string[]): Promise<void> {
     case 'task-completed':            return callbackCommandHandlers.cmdTaskCompleted(rest);
     case 'task-failed':               return callbackCommandHandlers.cmdTaskFailed(rest);
     case 'task-progress':             return callbackCommandHandlers.cmdTaskProgress(rest);
-    case 'source-data-fetched':       return callbackCommandHandlers.cmdSourceDataFetched(rest);
+    case 'source-data-fetched':       return rest.some((a: string) => a === '--tmp')
+      ? compatCommandHandlers.compatSourceDataFetchedTmp(rest)
+      : callbackCommandHandlers.cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return callbackCommandHandlers.cmdSourceDataFetchFailure(rest);
     case 'run-sourcedefs-internal':      return executionCommandHandlers.cmdRunSources(rest);
     case 'run-inference-internal':    return executionCommandHandlers.cmdRunInference(rest);

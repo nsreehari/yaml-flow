@@ -1,4 +1,3 @@
-import * as fs from 'node:fs';
 import type { GraphEvent } from '../event-graph/types.js';
 import type { FetchedSourcesStore } from './board-live-cards-all-stores.js';
 
@@ -45,6 +44,7 @@ interface CallbackCommandDeps {
   decodeCallbackToken: (token: string) => CallbackTokenPayload | null;
   decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
   getFetchedSourcesStore: (boardDir: string) => FetchedSourcesStore;
+  generateId: () => string;
   writeRuntimeDataObjects: (boardDir: string, data: Record<string, unknown>) => void;
   appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
   processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
@@ -124,12 +124,14 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
   }
 
   function cmdSourceDataFetched(args: string[]): void {
-    const tmpIdx = args.indexOf('--tmp');
+    const refKindIdx = args.indexOf('--ref-kind');
+    const refValueIdx = args.indexOf('--ref-value');
     const tokenIdx = args.indexOf('--token');
-    const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
+    const refKind = refKindIdx !== -1 ? args[refKindIdx + 1] : undefined;
+    const refValue = refValueIdx !== -1 ? args[refValueIdx + 1] : undefined;
     const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    if (!tmpFile || !token) {
-      console.error('Usage: board-live-cards source-data-fetched --tmp <tmp-file> --token <sourceToken>');
+    if (!refKind || !refValue || !token) {
+      console.error('Usage: board-live-cards source-data-fetched --ref-kind <kind> --ref-value <value> --token <sourceToken>');
       process.exit(1);
     }
 
@@ -141,10 +143,8 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
 
     const { cbk, rg, cid, b, d, cs } = payload;
 
-    // Write fetched source content through FetchedSourcesStore (boardDir = rg)
-    const content = fs.readFileSync(tmpFile, 'utf-8');
-    deps.getFetchedSourcesStore(rg).writeSource(cid, d, content);
-    try { fs.unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
+    const deliveryToken = deps.generateId();
+    deps.getFetchedSourcesStore(rg).ingestSourceDataStaged(cid, d, { kind: refKind, value: refValue }, deliveryToken);
     console.log(`[source-data-fetched] ${cid}.${b} -> ${cid}/${d}`);
 
     const fetchedAt = new Date().toISOString();
@@ -154,7 +154,7 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
       process.exit(1);
     }
 
-    injectTaskProgress(rg, cbkDecoded.taskName, { bindTo: b, outputFile: d, fetchedAt, sourceChecksum: cs }, deps);
+    injectTaskProgress(rg, cbkDecoded.taskName, { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs }, deps);
   }
 
   function cmdSourceDataFetchFailure(args: string[]): void {

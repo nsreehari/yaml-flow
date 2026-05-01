@@ -18,11 +18,13 @@ interface CompatDeps {
   validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
   resolveCardGlobMatches: (cardGlob: string) => string[];
   processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+  cmdSourceDataFetched: (args: string[]) => void;
 }
 
 export interface CompatCommandHandlers {
   compatUpsertCard: (args: string[]) => void;
   compatValidateCard: (args: string[]) => void;
+  compatSourceDataFetchedTmp: (args: string[]) => void;
 }
 
 export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHandlers {
@@ -178,6 +180,17 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     console.log(`\n${files.length} card(s) passed validation.`);
   }
 
-  return { compatUpsertCard, compatValidateCard };
+  function compatSourceDataFetchedTmp(args: string[]): void {
+    const tmpIdx = args.indexOf('--tmp');
+    if (tmpIdx === -1 || !args[tmpIdx + 1]) {
+      console.error('Usage (compat): board-live-cards source-data-fetched --tmp <file> --token <sourceToken>');
+      process.exit(1);
+    }
+    const tmpFile = args[tmpIdx + 1];
+    const remainingArgs = args.filter((_, i) => i !== tmpIdx && i !== tmpIdx + 1);
+    deps.cmdSourceDataFetched([...remainingArgs, '--ref-kind', 'fs-path', '--ref-value', tmpFile]);
+  }
+
+  return { compatUpsertCard, compatValidateCard, compatSourceDataFetchedTmp };
 }
 

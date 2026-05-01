@@ -80,7 +80,7 @@ export interface ExecutionCommandHandlers {
 export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
   // Local helpers used only by cmdRunSources
   function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
-    const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--tmp', tmpFile, '--token', sourceToken]);
+    const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--ref-kind', 'fs-path', '--ref-value', tmpFile, '--token', sourceToken]);
     deps.execCommandAsync(cmd, args, (err, stdout, stderr) => {
       if (err) console.error(`[source-data-fetched] call failed:`, err.message);
       if (stdout) console.log(stdout.trim());
