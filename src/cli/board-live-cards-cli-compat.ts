@@ -4,6 +4,7 @@ import type { LiveCard, CardAdminStore } from './board-live-cards-all-stores.js'
 import type { CommandResponse } from './board-live-cards-lib-types.js';
 import { Resp } from './board-live-cards-lib-types.js';
 import { createFsKvStorage } from './storage-fs-adapters.js';
+import { serializeRef } from './storage-interface.js';
 
 export type BoardLiveCard = LiveCard;
 
@@ -188,7 +189,7 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     }
     const tmpFile = args[tmpIdx + 1];
     const remainingArgs = args.filter((_, i) => i !== tmpIdx && i !== tmpIdx + 1);
-    deps.cmdSourceDataFetched([...remainingArgs, '--ref-kind', 'fs-path', '--ref-value', tmpFile]);
+    deps.cmdSourceDataFetched([...remainingArgs, '--ref', serializeRef({ kind: 'fs-path', value: tmpFile })]);
   }
 
   return { compatUpsertCard, compatValidateCard, compatSourceDataFetchedTmp };

@@ -848,14 +848,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ============================================================================
 
 /**
- * Resolve a SourceDataRef to its content string.
+ * Resolve a KindValueRef to its content string.
  * 'fs-path': read file from disk (FS adapter, stays in cli.ts)
  * 'inline':  value is already the content
  */
 function resolveSourceDataRef(ref: { kind: string; value: string }): string {
   if (ref.kind === 'fs-path') return fs.readFileSync(ref.value, 'utf-8');
   if (ref.kind === 'inline') return ref.value;
-  throw new Error(`Unsupported SourceDataRef kind: ${ref.kind}`);
+  throw new Error(`Unsupported KindValueRef kind: ${ref.kind}`);
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { GraphEvent } from '../event-graph/types.js';
 import type { FetchedSourcesStore } from './board-live-cards-all-stores.js';
+import { parseRef } from './storage-interface.js';
 
 /**
  * Append a task-progress event to the board journal and schedule a drain pass.
@@ -124,16 +125,16 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
   }
 
   function cmdSourceDataFetched(args: string[]): void {
-    const refKindIdx = args.indexOf('--ref-kind');
-    const refValueIdx = args.indexOf('--ref-value');
+    const refIdx = args.indexOf('--ref');
     const tokenIdx = args.indexOf('--token');
-    const refKind = refKindIdx !== -1 ? args[refKindIdx + 1] : undefined;
-    const refValue = refValueIdx !== -1 ? args[refValueIdx + 1] : undefined;
+    const refRaw = refIdx !== -1 ? args[refIdx + 1] : undefined;
     const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    if (!refKind || !refValue || !token) {
-      console.error('Usage: board-live-cards source-data-fetched --ref-kind <kind> --ref-value <value> --token <sourceToken>');
+    if (!refRaw || !token) {
+      console.error('Usage: board-live-cards source-data-fetched --ref ::kind::value --token <sourceToken>');
       process.exit(1);
     }
+
+    const ref = parseRef(refRaw);
 
     const payload = deps.decodeSourceToken(token);
     if (!payload) {
@@ -144,7 +145,7 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
     const { cbk, rg, cid, b, d, cs } = payload;
 
     const deliveryToken = deps.generateId();
-    deps.getFetchedSourcesStore(rg).ingestSourceDataStaged(cid, d, { kind: refKind, value: refValue }, deliveryToken);
+    deps.getFetchedSourcesStore(rg).ingestSourceDataStaged(cid, d, ref, deliveryToken);
     console.log(`[source-data-fetched] ${cid}.${b} -> ${cid}/${d}`);
 
     const fetchedAt = new Date().toISOString();

@@ -6,7 +6,7 @@
  * provided by the CLI entry point and passed in at construction time.
  */
 
-import type { KVStorage, BlobStorage, SourceDataRef } from './storage-interface.js';
+import type { KVStorage, BlobStorage, KindValueRef } from './storage-interface.js';
 import type { GraphEvent } from '../event-graph/types.js';
 // ============================================================================
 // Card store — types
@@ -181,7 +181,7 @@ export interface FetchedSourcesStore {
   /** Read committed source content. Returns parsed JSON or raw string; null if not yet committed. */
   readSourceData(cardId: string, outputFile: string): unknown;
   /** Stage incoming source data under deliveryToken. resolveRef converts the ref to content bytes. */
-  ingestSourceDataStaged(cardId: string, outputFile: string, ref: SourceDataRef, deliveryToken: string): void;
+  ingestSourceDataStaged(cardId: string, outputFile: string, ref: KindValueRef, deliveryToken: string): void;
   /** Move staged data to live position. Returns false if staged entry is absent (stale delivery). */
   commitSourceData(cardId: string, outputFile: string, deliveryToken: string): boolean;
   /** True if live (committed) source data exists for this outputFile. */
@@ -190,7 +190,7 @@ export interface FetchedSourcesStore {
 
 export function createFetchedSourcesStore(
   blob: BlobStorage,
-  resolveRef: (ref: SourceDataRef) => string,
+  resolveRef: (ref: KindValueRef) => string,
 ): FetchedSourcesStore {
   return {
     readSourceData(cardId, outputFile): unknown {

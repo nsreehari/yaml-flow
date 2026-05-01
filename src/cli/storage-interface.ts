@@ -50,17 +50,33 @@ export interface BlobStorage {
 }
 
 // ============================================================================
-// SourceDataRef — backend-neutral reference to source content
+// KindValueRef — backend-neutral typed reference
 //
 // A ref describes WHERE content lives without carrying the bytes.
-// kind = 'fs-path': value is an absolute file path (resolved by FS adapters)
-// kind = 'inline':  value is the content string itself
+// Serialized on the CLI wire as: ::kind::value
+//   kind = 'fs-path': value is an absolute file path
+//   kind = 'inline':  value is the content string itself
+//   kind = 'kv':      value is a KVStorage key
 // Other kinds can be added by new backends without changing pure-logic code.
 // ============================================================================
 
-export interface SourceDataRef {
+export interface KindValueRef {
   readonly kind: string;
   readonly value: string;
+}
+
+/** Serialize a KindValueRef to the wire format: ::kind::value */
+export function serializeRef(ref: KindValueRef): string {
+  return `::${ref.kind}::${ref.value}`;
+}
+
+/** Parse a wire-format ref string (::kind::value) into a KindValueRef. */
+export function parseRef(s: string): KindValueRef {
+  if (!s.startsWith('::')) throw new Error(`Invalid ref format (expected ::kind::value): ${s}`);
+  const inner = s.slice(2);
+  const idx = inner.indexOf('::');
+  if (idx === -1) throw new Error(`Invalid ref format (expected ::kind::value): ${s}`);
+  return { kind: inner.slice(0, idx), value: inner.slice(idx + 2) };
 }
 
 // ============================================================================

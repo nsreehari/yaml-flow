@@ -4,6 +4,7 @@ import type { GraphEvent } from '../event-graph/types.js';
 import type { CommandExecutor } from './process-interface.js';
 import { injectTaskProgress } from './board-live-cards-cli-callbacks.js';
 import type { BoardConfigStore } from './board-live-cards-all-stores.js';
+import { serializeRef } from './storage-interface.js';
 
 // ============================================================================
 // Local type aliases (mirrors non-exported types in main CLI module)
@@ -63,7 +64,7 @@ export interface ExecutionCommandHandlers {
 export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
   // Local helpers used only by cmdRunSources
   function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
-    const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--ref-kind', 'fs-path', '--ref-value', tmpFile, '--token', sourceToken]);
+    const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--ref', serializeRef({ kind: 'fs-path', value: tmpFile }), '--token', sourceToken]);
     deps.executor.executeAsync(cmd, args, (err, stdout, stderr) => {
       if (err) console.error(`[source-data-fetched] call failed:`, err.message);
       if (stdout) console.log(stdout.trim());
