@@ -28,7 +28,8 @@ import {
   buildBoardCliInvocation,
   runDetached,
 } from './process-runner.js';
-import { withRelayLock, serializeRef } from './storage-interface.js';
+import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import { blobStorageForRef } from './public-storage-adapter.js';
 import fg from 'fast-glob';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
@@ -40,12 +41,10 @@ import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 import { createBoardCommandHandlers } from './board-live-cards-cli-board-commands.js';
-import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
-import { createNonCoreCommandHandlers } from './board-live-cards-cli-noncore.js';
+import { createCallbackCommandHandlers, injectTaskProgress } from './board-live-cards-cli-callbacks.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
 import { createCompatCommandHandlers } from './board-live-cards-cli-compat.js';
 import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
-import { createExecutionCommandHandlers } from './board-live-cards-cli-execution-commands.js';
 import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
 import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
 import {
@@ -61,11 +60,11 @@ import {
   createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
   BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
   type StateSnapshotStorageAdapter, type StateSnapshotReadView,
-  type BoardConfigStore,
+  type BoardConfigStore, type CardStore,
 } from './board-live-cards-all-stores.js';
 // Re-export domain types and functions for backward compatibility
-import { nextEntryAfterFetchDelivery } from './board-live-cards-lib-types.js';
-import type { InvocationAdapter } from './process-interface.js';
+import { nextEntryAfterFetchDelivery, Resp, type CommandResponse } from './board-live-cards-lib-types.js';
+import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
 export type { SourceRuntimeEntry, InferenceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib-types.js';
 
@@ -961,6 +960,1021 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
   return [...matches].map(m => path.resolve(m)).sort((a, b) => a.localeCompare(b));
 }
 
+
+// ============================================================================
+// Non-core command handlers (inlined from board-live-cards-cli-noncore.ts)
+// ============================================================================
+
+interface ValidateResultLike {
+  errors: string[];
+}
+
+interface NonCoreCommandDeps {
+  getConfigStore: (boardDir: string) => BoardConfigStore;
+  getCardStore: (boardDir: string) => CardStore;
+  executor: CommandExecutor;
+  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
+  validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
+  readStdin: () => string;
+}
+
+interface NonCoreCommandHandlers {
+  cmdHelp: () => void;
+  cmdRunSourceFetch: (args: string[]) => void;
+  cmdProbeSource: (args: string[]) => Promise<void>;
+  cmdDescribeTaskExecutorCapabilities: (args: string[]) => void;
+  cmdValidateCard: (args: string[]) => void;
+  /** Direct validate — used by compat layer to avoid stdin coupling. */
+  validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
+}
+
+function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandHandlers {
+  function cmdRunSourceFetch(args: string[]): void {
+    const inIdx  = args.indexOf('--in-ref');
+    const outIdx = args.indexOf('--out-ref');
+    const errIdx = args.indexOf('--err-ref');
+
+    const inFile  = inIdx  !== -1 ? args[inIdx + 1]  : undefined;
+    const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
+    const errFile = errIdx !== -1 ? args[errIdx + 1] : undefined;
+
+    if (!inFile || !outFile) {
+      console.error('Usage: board-live-cards run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]');
+      process.exit(1);
+    }
+
+    // Parse refs
+    let inRef: ReturnType<typeof parseRef>;
+    let outRef: ReturnType<typeof parseRef>;
+    let errRef: ReturnType<typeof parseRef> | undefined;
+    try {
+      inRef = parseRef(inFile);
+      outRef = parseRef(outFile);
+      if (errFile) errRef = parseRef(errFile);
+    } catch (e) {
+      console.error(`[run-source-fetch] invalid ref: ${(e as Error).message}`);
+      process.exit(1);
+    }
+
+    const inStorage = blobStorageForRef(inRef);
+    const outStorage = blobStorageForRef(outRef);
+    const errStorage = errRef ? blobStorageForRef(errRef) : undefined;
+
+    function writeErr(msg: string): void {
+      if (errStorage && errRef) errStorage.write(errRef.value, msg);
+    }
+
+    // Read and parse source definition
+    const rawIn = inStorage.read(inRef.value);
+    if (rawIn === null) {
+      const msg = `Input not found: ${inFile}`;
+      writeErr(msg);
+      console.error(`[run-source-fetch] ${msg}`);
+      process.exit(1);
+    }
+    let source: any;
+    try {
+      source = JSON.parse(rawIn);
+    } catch (err) {
+      const msg = `Failed to parse input: ${(err as Error).message}`;
+      writeErr(msg);
+      console.error(`[run-source-fetch] ${msg}`);
+      process.exit(1);
+    }
+
+    // Source must have a cli field
+    if (!source.cli) {
+      const msg = 'Source definition missing cli field (board-live-cards built-in executor only understands source.cli)';
+      writeErr(msg);
+      console.error(`[run-source-fetch] ${msg}`);
+      process.exit(1);
+    }
+
+    // Execute the source cli command
+    console.log(`[run-source-fetch] executing: ${source.cli}`);
+    const timeout = source.timeout ?? 120_000;
+    const sourceCwd = typeof source.cwd === 'string' ? source.cwd : process.cwd();
+    const sourceBoardDir = typeof source.boardDir === 'string' ? source.boardDir : undefined;
+
+    const cmdParts = deps.executor.splitCommand(source.cli);
+    if (cmdParts.length === 0) {
+      const msg = 'Source cli command is empty';
+      writeErr(msg);
+      console.error(`[run-source-fetch] ${msg}`);
+      process.exit(1);
+    }
+    const rawCmd = cmdParts[0];
+    const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
+
+    let stdout: string;
+    try {
+      stdout = deps.executor.executeSync(cmd, cliArgs, {
+        shell: false,
+        encoding: 'utf-8',
+        timeout,
+        cwd: sourceCwd,
+        env: {
+          ...process.env,
+          ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
+        },
+      }) as string;
+    } catch (err: unknown) {
+      const msg = (err as Error).message ?? String(err);
+      console.error(`[run-source-fetch] cli failed: ${msg}`);
+      writeErr(msg);
+      process.exit(1);
+    }
+
+    // Write result to --out
+    const result = stdout!.trim();
+    try {
+      outStorage.write(outRef.value, result);
+      console.log(`[run-source-fetch] result written to ${outFile}`);
+    } catch (err) {
+      const msg = `Failed to write output: ${(err as Error).message}`;
+      console.error(`[run-source-fetch] ${msg}`);
+      writeErr(msg);
+      process.exit(1);
+    }
+  }
+
+  async function cmdProbeSource(args: string[]): Promise<void> {
+    const cardIdx = args.indexOf('--card');
+    const sourceIdxArg = args.indexOf('--source-idx');
+    const sourceBindArg = args.indexOf('--source-bind');
+    const mockProjectionsIdx = args.indexOf('--mock-projections');
+    const rgIdx = args.indexOf('--rg');
+    const outIdx = args.indexOf('--out');
+
+    const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+    const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
+    const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
+    const mockProjectionsRaw = mockProjectionsIdx !== -1 ? args[mockProjectionsIdx + 1] : undefined;
+    const boardDirArg = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
+
+    if (!cardFilePath) {
+      console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-projections <json>] [--rg <boardDir>] [--out <result.json>]');
+      process.exit(1);
+    }
+
+    // Read card
+    let card: any;
+    try {
+      card = JSON.parse(fs.readFileSync(path.resolve(cardFilePath), 'utf-8'));
+    } catch (e) {
+      console.error(`[probe-source] Cannot read card: ${(e as Error).message}`);
+      process.exit(1);
+    }
+
+    const source_defs: any[] = card.source_defs ?? [];
+    if (source_defs.length === 0) {
+      console.error(`[probe-source] Card "${card.id}" has no source_defs`);
+      process.exit(1);
+    }
+
+    // Select source by index or bindTo name
+    let sourceIdx: number;
+    if (sourceBindVal) {
+      sourceIdx = source_defs.findIndex((s: any) => s.bindTo === sourceBindVal);
+      if (sourceIdx === -1) {
+        console.error(`[probe-source] No source with bindTo="${sourceBindVal}" in card "${card.id}"`);
+        process.exit(1);
+      }
+    } else {
+      sourceIdx = sourceIdxVal;
+      if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= source_defs.length) {
+        console.error(`[probe-source] --source-idx ${sourceIdxVal} out of range (card has ${source_defs.length} source(s))`);
+        process.exit(1);
+      }
+    }
+
+    const sourceDef = source_defs[sourceIdx];
+    const cardDir = path.resolve(path.dirname(cardFilePath));
+    const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
+
+    // Parse --mock-projections (JSON string or @file.json) — pre-resolved _projections values for testing
+    let mockProjections: Record<string, unknown> = {};
+    if (mockProjectionsRaw) {
+      const raw = mockProjectionsRaw.startsWith('@')
+        ? fs.readFileSync(path.resolve(mockProjectionsRaw.slice(1)), 'utf-8')
+        : mockProjectionsRaw;
+      try {
+        mockProjections = JSON.parse(raw);
+      } catch (e) {
+        console.error(`[probe-source] --mock-projections is not valid JSON: ${(e as Error).message}`);
+        process.exit(1);
+      }
+    }
+
+    // Detect registered task-executor
+    const teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
+    const taskExecutorCmd = teConfig?.command;
+    const taskExecutorBaseArgs = teConfig?.args ?? [];
+    const taskExecutorExtraB64 = teConfig?.extra
+      ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
+      : undefined;
+
+    // Build --in payload — mirrors exactly what run-sourcedefs-internal passes to the executor
+    const inPayload: Record<string, unknown> = {
+      ...sourceDef,
+      cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
+      boardDir: typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : boardDir,
+      _projections: mockProjections,
+    };
+
+    // Derive sourceKind from executor's describe-capabilities rather than hardcoding.
+    // Call describe-capabilities, get sourceKinds keys, find which one appears in sourceDef.
+    // Falls back to 'unknown' if executor is unavailable or call fails.
+    let sourceKind = 'unknown';
+    if (taskExecutorCmd) {
+      try {
+        const capRaw = deps.executor.executeSync(taskExecutorCmd, [...taskExecutorBaseArgs, 'describe-capabilities'], {
+          timeout: 8_000, encoding: 'utf-8',
+        });
+        const caps = JSON.parse(String(capRaw));
+        const knownKinds: string[] = caps?.sourceKinds ? Object.keys(caps.sourceKinds) : [];
+        const defKeys = new Set(Object.keys(sourceDef));
+        sourceKind = knownKinds.find(k => defKeys.has(k)) ?? 'unknown';
+      } catch {
+        // describe-capabilities failed — fall back to 'unknown'; probe execution still proceeds
+      }
+    }
+
+    console.log(`[probe-source] card:        ${card.id}`);
+    console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
+    console.log(`[probe-source] _projections:       ${JSON.stringify(mockProjections)}`);
+    console.log(`[probe-source] executor:    ${taskExecutorCmd ?? 'built-in (source.cli only)'}`);
+    console.log('[probe-source] running fetch...');
+
+    const inFile = deps.makeTempFilePath(boardDir, `probe-in-${sourceDef.bindTo}`);
+    const tmpOut = deps.makeTempFilePath(boardDir, `probe-out-${sourceDef.bindTo}`);
+    const errFile = deps.makeTempFilePath(boardDir, `probe-err-${sourceDef.bindTo}`, '.txt');
+
+    fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2), 'utf-8');
+
+    const inRef  = serializeRef({ kind: 'fs-path', value: inFile });
+    const outRef = serializeRef({ kind: 'fs-path', value: tmpOut });
+    const errRef = serializeRef({ kind: 'fs-path', value: errFile });
+
+    let passed = false;
+    let errorMsg: string | undefined;
+    let resultRaw: string | undefined;
+
+    try {
+      if (taskExecutorCmd) {
+        const executorArgs = [...taskExecutorBaseArgs, 'run-source-fetch',
+          '--in-ref', inRef, '--out-ref', outRef, '--err-ref', errRef,
+        ];
+        if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
+        deps.executor.executeSync(taskExecutorCmd, executorArgs, {
+          timeout: (sourceDef.timeout as number) ?? 30_000,
+        });
+      } else {
+        // Built-in path: only source.cli is supported
+        if (!inPayload.cli) {
+          throw new Error('No task-executor registered and source has no cli field — cannot probe with built-in executor');
+        }
+        const cmdParts = deps.executor.splitCommand(inPayload.cli as string);
+        const rawCmd = cmdParts[0];
+        const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
+        const stdout = deps.executor.executeSync(cmd, cliArgs, {
+          shell: false,
+          encoding: 'utf-8',
+          timeout: (sourceDef.timeout as number) ?? 30_000,
+          cwd: inPayload.cwd as string,
+        });
+        fs.writeFileSync(tmpOut, String(stdout).trim(), 'utf-8');
+      }
+
+      passed = fs.existsSync(tmpOut);
+      if (passed) {
+        resultRaw = fs.readFileSync(tmpOut, 'utf-8');
+      } else {
+        errorMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
+      }
+    } catch (e) {
+      errorMsg = (e as Error).message ?? String(e);
+      if (!errorMsg && fs.existsSync(errFile)) {
+        errorMsg = fs.readFileSync(errFile, 'utf-8').trim();
+      }
+    }
+
+    // Cleanup temp inputs
+    for (const f of [inFile, errFile]) {
+      try { fs.unlinkSync(f); } catch { /* best-effort */ }
+    }
+
+    // Report
+    if (passed && resultRaw !== undefined) {
+      const resultSize = resultRaw.length;
+      const sample = resultRaw.slice(0, 300);
+      console.log('[probe-source] STATUS:      PROBE_PASS');
+      console.log(`[probe-source] result size: ${resultSize} bytes`);
+      console.log(`[probe-source] sample:      ${sample}${resultSize > 300 ? '...' : ''}`);
+      if (outFile) {
+        fs.writeFileSync(path.resolve(outFile), resultRaw);
+        console.log(`[probe-source] result written to: ${outFile}`);
+      } else {
+        try { fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+      }
+    } else {
+      console.log('[probe-source] STATUS:      PROBE_FAIL');
+      if (errorMsg) console.log(`[probe-source] error:       ${errorMsg}`);
+      try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+    }
+
+    // Machine-readable summary line — agents parse this
+    const summary = {
+      status: passed ? 'PROBE_PASS' : 'PROBE_FAIL',
+      cardId: card.id as string,
+      sourceIdx,
+      bindTo: sourceDef.bindTo as string,
+      sourceKind,
+      mockProjectionsKeys: Object.keys(mockProjections),
+      resultSizeBytes: resultRaw !== undefined ? resultRaw.length : 0,
+      error: errorMsg ?? undefined,
+    };
+    console.log(`[probe-source:result] ${JSON.stringify(summary)}`);
+
+    process.exit(passed ? 0 : 1);
+  }
+
+  function cmdDescribeTaskExecutorCapabilities(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const boardDir = rgIdx !== -1 ? path.resolve(args[rgIdx + 1]) : undefined;
+    if (!boardDir) {
+      console.error('Usage: board-live-cards describe-task-executor-capabilities --rg <dir>');
+      process.exit(1);
+    }
+
+    const teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
+    if (!teConfig) {
+      console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${boardDir}`);
+      process.exit(1);
+    }
+
+    try {
+      const stdout = deps.executor.executeSync(teConfig.command, [...(teConfig.args ?? []), 'describe-capabilities'], {
+        timeout: 10_000,
+        encoding: 'utf-8',
+      });
+      // Pass through the executor's JSON output directly
+      process.stdout.write(String(stdout));
+      if (!String(stdout).endsWith('\n')) process.stdout.write('\n');
+    } catch (e) {
+      console.error(`[describe-task-executor-capabilities] Executor failed: ${(e as Error).message ?? e}`);
+      process.exit(1);
+    }
+  }
+
+  function cmdHelp(): void {
+    console.log(`
+board-live-cards-cli — LiveCards board CLI
+
+USAGE
+  board-live-cards-cli <command> [options]
+
+BOARD MANAGEMENT
+  init <dir> [--task-executor <script>] [--chat-handler <script>] [--inference-adapter <script>] [--runtime-out <dir>]
+    Create a new board in <dir>.
+    If --task-executor is given, writes <dir>/.task-executor with the script path.
+    If --chat-handler is given, writes <dir>/.chat-handler with the script path.
+    If --inference-adapter is given, writes <dir>/.inference-adapter with the script path.
+    Writes <dir>/.runtime-out (default: <dir>/runtime-out).
+    Published runtime files:
+      <runtime-out>/board-livegraph-status.json
+      <runtime-out>/cards/<card-id>.computed.json
+    Re-running init on an existing board is safe; handler registrations are updated.
+
+  status --rg <dir> [--json]
+    Read and print the published status snapshot from <runtime-out>/board-livegraph-status.json.
+    --json emits the stable machine-readable status object.
+
+CARD MANAGEMENT
+  upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]
+    Insert or update one or many cards.
+    Enforces strict one-to-one mapping between card id and file path:
+      - same id + same file path: update
+      - new id + new file path: insert
+      - id remap or file remap: rejected
+    If --card-id is provided, it must match the id inside the file.
+    --card-id is valid only with --card (single file), not with --card-glob.
+    --restart clears the task so it re-triggers from scratch.
+
+  validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]
+    Validate one or many card JSON files without adding them to a board.
+    Checks JSON Schema structure, runtime expression syntax, and provides.ref namespaces.
+    When --rg is provided, also invokes the board's task executor validate-source-def
+    subcommand to structurally validate each source definition against supported kinds.
+    Exits with code 1 if any card fails validation.
+
+  remove-card --rg <dir> --id <card-id>
+    Remove a card and its task from the board.
+
+  retrigger --rg <dir> --task <task-name>
+    Mark a task not-started and drain to re-trigger it.
+
+TASK CALLBACKS  (called by task executor scripts)
+  task-completed --token <callbackToken> [--data <json>]
+    Signal successful task completion with optional JSON result data.
+
+  task-failed --token <callbackToken> [--error <message>]
+    Signal task failure with an optional error message.
+
+  task-progress --rg <dir> --token <callbackToken> [--update <json>]
+    Signal task progress with optional update payload (for waiting on more evidence, etc.).
+
+SOURCE CALLBACKS  (called internally by run-sourcedefs-internal)
+  source-data-fetched --tmp <file> --token <sourceToken>
+    Atomically rename <file> into the outputFile destination and record delivery
+    via journal events. Appends a task-progress event to re-invoke the card handler.
+
+  source-data-fetch-failure --token <sourceToken> [--reason <message>]
+    Record a source fetch failure via journal events and append a task-progress event.
+
+INTERNAL COMMANDS
+  process-accumulated-events --rg <dir>
+    Executes forced drain for this board.
+    This command is also used as the background relay worker.
+    By default it schedules a detached worker and returns quickly.
+    Internal workers run with --inline-loop to perform the settle loop.
+
+    Eventual-progress guarantee is relay-based (not per-call blocking guarantee):
+    1) at least one runner continues processing,
+    2) no crash/forced exit in relay window,
+    3) lock stays healthy,
+    4) event production eventually quiesces.
+
+  run-sourcedefs-internal --card <card.json> --token <callbackToken> --rg <dir>
+    Execute all source[] entries for a card, then report delivery or failure.
+    (Internal command — invoked by the card-handler. Not intended for direct use.)
+
+    If <dir>/.task-executor exists, invokes it with run-source-fetch subcommand:
+      <executor> run-source-fetch --in <source_json> --out <outfile> --err <errfile>
+
+    If no .task-executor is registered, uses board-live-cards built-in run-source-fetch.
+
+  run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
+    Execute a source definition. Board-live-cards reads source.cli and executes it.
+    Writes result to --out. Presence of --out after exit indicates success.
+
+  describe-task-executor-capabilities --rg <dir>
+    Invoke the registered task-executor's describe-capabilities subcommand and
+    print its capabilities JSON to stdout.  Requires a .task-executor file in <dir>.
+
+  probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
+               [--mock-projections <json>] [--rg <boardDir>] [--out <result.json>]
+    Validate that a card source can be fetched successfully.
+    Reads the card file, extracts the chosen source (default: index 0), builds the
+    run-source-fetch --in payload with the supplied _projections data, invokes the
+    registered task-executor (or built-in executor for source.cli), and reports pass/fail.
+    --mock-projections:     JSON string (or @file.json) providing pre-resolved _projections values
+                     the source needs.  Craft the minimal payload that exercises the
+                     source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
+                     If omitted, _projections is passed as empty ({}).
+    --source-idx:    0-based index into card.source_defs[]. Default: 0.
+    --source-bind:   Select source by its bindTo name instead of index.
+    --rg:            Board directory used to find .task-executor. Defaults to the
+                     directory containing the card file.
+    --out:           Optional path to write the raw fetch result JSON.
+    Prints a structured report ending with a [probe-source:result] JSON line.
+    Exits 0 on PROBE_PASS, 1 on PROBE_FAIL.
+
+  run-inference-internal --in <input.json> --token <inferenceToken>
+    Execute inference via registered .inference-adapter and forward result to inference-done.
+    inferenceToken encodes boardDir (rg), cardId (cid), callbackToken (cbk), checksum (cs).
+    (Internal command — invoked by the card-handler when custom completion rule is used.)
+
+  inference-done --tmp <result.json> --token <inferenceToken>
+    Persist llm_task_completion_inference on the card and append a task-progress event.
+    Reads boardDir/callbackToken/checksum from decoded inferenceToken; deletes --tmp file after reading.
+    (Internal command — invoked by run-inference-internal.)
+
+RUN-SOURCE-FETCH PROTOCOL
+  External task-executors implement:
+    <executor> run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
+
+  INPUT:   --in file contains the full source_defs[x] definition object
+  OUTPUT:  --out file is written with the result to signal success.
+           --err file may be written to explain failure.
+
+  Exit code and --out presence determine success:
+    Exit 0 + --out file present → source delivery recorded, card re-evaluated.
+    Exit non-zero OR --out absent → source-data-fetch-failure recorded.
+
+BOARD-LIVE-CARDS BUILT-IN EXECUTOR
+  Understands source.cli field only:
+    "source_defs": [{ "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
+
+  The source.cli command is executed with:
+    - Direct command invocation (no shell; quote-aware argument parsing)
+    - Stdout is captured and delivered to the card as-is
+    - Timeout from source.timeout (default 120s)
+
+  The source.cli command must:
+    - Execute successfully (exit 0)
+    - Write output to stdout
+    - Complete within the timeout
+
+  The output format is the concern of the card's compute function to interpret.
+
+  External task-executors can interpret source definitions however they want.
+
+EXAMPLES
+  board-live-cards-cli init ./my-board
+  board-live-cards-cli init ./my-board --task-executor ./executors/my-runner.py
+  board-live-cards-cli upsert-card --rg ./my-board --card cards/prices.json
+  board-live-cards-cli status --rg ./my-board
+  board-live-cards-cli retrigger --rg ./my-board --task price-fetch
+  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
+`.trimStart());
+  }
+
+  function validateCardObjects(
+    cards: Record<string, unknown>[],
+    boardDir: string | undefined,
+  ): CommandResponse<{ cardId: string; errors: string[] }>[] {
+    const teConfig = boardDir ? deps.getConfigStore(boardDir).readTaskExecutorConfig() : undefined;
+
+    return cards.map((card) => {
+      const cardId = typeof card.id === 'string' ? card.id : '(unknown)';
+      const schemaErrors = deps.validateLiveCardDefinition(card).errors;
+      const sourceErrors: string[] = [];
+
+      if (teConfig && Array.isArray(card.source_defs)) {
+        for (const src of card.source_defs as Array<Record<string, unknown>>) {
+          const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
+          const tmpFile = deps.makeTempFilePath(boardDir!, `validate-src-${bindTo}`);
+          try {
+            fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
+            let stdout: string;
+            try {
+              stdout = deps.executor.executeSync(
+                teConfig.command,
+                [...(teConfig.args ?? []), 'validate-source-def', '--in', tmpFile],
+                { timeout: 10_000 },
+              );
+            } catch (execErr: any) {
+              stdout = typeof execErr?.stdout === 'string' ? execErr.stdout
+                : Buffer.isBuffer(execErr?.stdout) ? execErr.stdout.toString('utf-8')
+                : '';
+              if (!stdout.trim()) {
+                sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${execErr instanceof Error ? execErr.message : String(execErr)}`);
+                continue;
+              }
+            }
+            const parsed = JSON.parse(stdout.trim());
+            if (!parsed.ok && Array.isArray(parsed.errors)) {
+              for (const error of parsed.errors) {
+                sourceErrors.push(`source "${bindTo}": ${error}`);
+              }
+            }
+          } catch (err) {
+            sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+          }
+        }
+      }
+
+      const allErrors = [...schemaErrors, ...sourceErrors];
+      if (allErrors.length === 0) {
+        return Resp.success({ cardId, errors: [] as string[] });
+      }
+      return Resp.error(allErrors.join('; '), { cardId, errors: allErrors }) as CommandResponse<{ cardId: string; errors: string[] }>;
+    });
+  }
+
+  function cmdValidateCard(args: string[]): void {
+    const rgIdx = args.indexOf('--rg');
+    const cardIdIdx = args.indexOf('--card-id');
+    const stdioMode = args.includes('--cards-stdio');
+    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+
+    if (stdioMode) {
+      // --cards-stdio: read JSON array of card objects from stdin, write results to stdout
+      let cards: Record<string, unknown>[];
+      try {
+        const raw = deps.readStdin();
+        cards = JSON.parse(raw) as Record<string, unknown>[];
+        if (!Array.isArray(cards)) throw new Error('stdin must be a JSON array');
+      } catch (err) {
+        const resp = Resp.error(`Failed to parse stdin: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(JSON.stringify([resp]));
+        return;
+      }
+      const results = validateCardObjects(cards, boardDir);
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    if (cardIdIdx !== -1) {
+      // --card-id: read from CardStore
+      const cardId = args[cardIdIdx + 1];
+      if (!cardId || !boardDir) {
+        throw new Error('Usage: board-live-cards validate-card --rg <boardDir> --card-id <id>');
+      }
+      const card = deps.getCardStore(boardDir).readCard(cardId);
+      if (!card) {
+        throw new Error(`Card "${cardId}" not found in board at ${boardDir}`);
+      }
+      const [result] = validateCardObjects([card as Record<string, unknown>], boardDir);
+      if (result.status === 'error') {
+        for (const err of result.data.errors) console.error(`  ${err}`);
+        throw new Error(`Card "${cardId}" failed validation.`);
+      }
+      console.log(`OK    ${cardId}`);
+      return;
+    }
+
+    throw new Error('Usage: board-live-cards validate-card (--card-id <id> --rg <boardDir>) | (--cards-stdio [--rg <boardDir>])');
+  }
+
+  return {
+    cmdHelp,
+    cmdRunSourceFetch,
+    cmdProbeSource,
+    cmdDescribeTaskExecutorCapabilities,
+    cmdValidateCard,
+    validateCards: validateCardObjects,
+  };
+}
+
+// ============================================================================
+// Execution command handlers (inlined from board-live-cards-cli-execution-commands.ts)
+// ============================================================================
+
+// Local type aliases (mirrors non-exported types in main CLI module)
+interface SourceTokenPayloadLike {
+  cbk: string;
+  rg: string;
+  cid: string;
+  b: string;
+  d: string;
+  cs?: string;
+}
+
+interface FetchRuntimeEntryLike {
+  lastRequestedAt?: string;
+  lastFetchedAt?: string;
+  lastError?: string;
+  queueRequestedAt?: string;
+}
+
+interface CardRuntimeStateLike {
+  _sources: Record<string, FetchRuntimeEntryLike>;
+  _inferenceEntry?: FetchRuntimeEntryLike;
+}
+
+interface ExecutionCommandDeps {
+  getConfigStore: (boardDir: string) => BoardConfigStore;
+  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
+  executor: CommandExecutor;
+  encodeSourceToken: (payload: SourceTokenPayloadLike) => string;
+  decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
+  decodeCallbackToken: (token: string) => { taskName: string } | null;
+  getCliInvocation: (command: string, args: string[]) => { cmd: string; args: string[] };
+  appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
+  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+  processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
+  lookupCardPath: (boardDir: string, cardId: string) => string | null;
+  nextEntryAfterFetchDelivery: <T extends FetchRuntimeEntryLike>(entry: T, fetchedAt: string) => T;
+}
+
+interface ExecutionCommandHandlers {
+  cmdRunSources: (args: string[]) => void;
+  cmdRunInference: (args: string[]) => void;
+  cmdInferenceDone: (args: string[]) => void;
+  cmdTryDrain: (args: string[]) => Promise<void>;
+}
+
+function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
+  // Local helpers used only by cmdRunSources
+  function invokeSourceDataFetched(sourceToken: string, tmpFile: string, callback: (err: Error | null) => void): void {
+    const { cmd, args } = deps.getCliInvocation('source-data-fetched', ['--ref', serializeRef({ kind: 'fs-path', value: tmpFile }), '--token', sourceToken]);
+    deps.executor.executeAsync(cmd, args, (err, stdout, stderr) => {
+      if (err) console.error(`[source-data-fetched] call failed:`, err.message);
+      if (stdout) console.log(stdout.trim());
+      if (stderr) console.error(stderr.trim());
+      callback(err);
+    });
+  }
+
+  function invokeSourceDataFetchFailure(sourceToken: string, reason: string, callback: (err: Error | null) => void): void {
+    const { cmd, args } = deps.getCliInvocation('source-data-fetch-failure', ['--token', sourceToken, '--reason', reason]);
+    deps.executor.executeAsync(cmd, args, (err) => callback(err));
+  }
+
+  function cmdRunSources(args: string[]): void {
+    const cardIdx = args.indexOf('--card');
+    const tokenIdx = args.indexOf('--token');
+    const rgIdx = args.indexOf('--rg');
+    const sourceChecksumsIdx = args.indexOf('--source-checksums');
+    const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
+    const callbackToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const sourceChecksumsJson = sourceChecksumsIdx !== -1 ? args[sourceChecksumsIdx + 1] : undefined;
+    const sourceChecksums = sourceChecksumsJson ? JSON.parse(sourceChecksumsJson) as Record<string, string> : undefined;
+    if (!cardFilePath || !callbackToken || !boardDir) {
+      console.error('Usage: board-live-cards run-sourcedefs-internal --card <path> --token <token> --rg <dir> [--source-checksums <json>]');
+      process.exit(1);
+    }
+
+    const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
+    if (path.basename(cardFilePath).startsWith('card-enriched-')) {
+      try { fs.unlinkSync(cardFilePath); } catch { /* best-effort */ }
+    }
+    console.log(`[run-sourcedefs-internal] Processing card "${card.id as string}"`);
+
+    type SourceDef = {
+      cli?: string;
+      bindTo: string;
+      outputFile?: string;
+      optionalForCompletionGating?: boolean;
+      timeout?: number;
+      cwd?: string;
+      boardDir?: string;
+    };
+
+    function runSource(src: SourceDef): void {
+      const sourceChecksumForInvoke = src.outputFile ? sourceChecksums?.[src.outputFile] : undefined;
+      const sourceToken = deps.encodeSourceToken({
+        cbk: callbackToken!,
+        rg: boardDir!,
+        cid: card.id as string,
+        b: src.bindTo,
+        d: src.outputFile ?? '',
+        cs: sourceChecksumForInvoke,
+      });
+
+      function reportFailure(reason: string): void {
+        invokeSourceDataFetchFailure(sourceToken, reason, (err) => {
+          if (err) console.error(`[run-sourcedefs-internal] source-data-fetch-failure call failed:`, err.message);
+        });
+      }
+
+      function reportFetched(outFile: string): void {
+        invokeSourceDataFetched(sourceToken, outFile, () => {
+          // logging already done in helper
+        });
+      }
+
+      // Execute source.cli directly in this process.
+      if (!src.outputFile) {
+        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
+        reportFailure('no outputFile configured');
+        return;
+      }
+      const outFile = deps.makeTempFilePath(boardDir!, `source-out-${src.bindTo}`);
+      if (!src.cli) {
+        const errMsg = 'source.cli is required for built-in source execution';
+        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
+        reportFailure(errMsg);
+        return;
+      }
+
+      const timeout = src.timeout ?? 120_000;
+      const sourceCwd = typeof src.cwd === 'string' ? src.cwd : path.dirname(cardFilePath || '');
+      const sourceBoardDir = typeof src.boardDir === 'string' ? src.boardDir : boardDir;
+      const cmdParts = deps.executor.splitCommand(src.cli);
+      if (cmdParts.length === 0) {
+        const errMsg = 'source.cli command is empty';
+        console.warn(`[run-sourcedefs-internal] source "${src.bindTo}": ${errMsg}`);
+        reportFailure(errMsg);
+        return;
+      }
+
+      const rawCmd = cmdParts[0];
+      const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
+
+      let stdout: string;
+      try {
+        stdout = deps.executor.executeSync(cmd, cliArgs, {
+          shell: false,
+          encoding: 'utf-8',
+          timeout,
+          cwd: sourceCwd,
+          env: {
+            ...process.env,
+            ...(sourceBoardDir ? { BOARD_DIR: sourceBoardDir } : {}),
+          },
+        });
+      } catch (err: unknown) {
+        const reason = (err as Error).message ?? String(err);
+        console.error(`[run-sourcedefs-internal] source fetch failed for source "${src.bindTo}":`, reason);
+        reportFailure(reason);
+        return;
+      }
+
+      fs.writeFileSync(outFile, stdout.trim(), 'utf-8');
+      reportFetched(outFile);
+    }
+
+    const source_defs = (card.source_defs ?? []) as SourceDef[];
+    for (const src of source_defs) {
+      runSource(src);
+    }
+  }
+
+  function cmdRunInference(args: string[]): void {
+    const inIdx = args.indexOf('--in-ref');
+    const tokenIdx = args.indexOf('--token');
+    const inRaw = inIdx !== -1 ? args[inIdx + 1] : undefined;
+    const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+
+    if (!inRaw || !inferenceToken) {
+      console.error('Usage: board-live-cards run-inference-internal --in-ref <::kind::value> --token <inference-token>');
+      process.exit(1);
+    }
+
+    let inRef: ReturnType<typeof parseRef>;
+    try { inRef = parseRef(inRaw); } catch (e) {
+      console.error(`[run-inference-internal] invalid --in ref: ${(e as Error).message}`);
+      process.exit(1);
+    }
+
+    // Decode inference token (encoded via encodeSourceToken: cbk, rg, cid, b='', d='', cs)
+    const decodedToken = deps.decodeSourceToken(inferenceToken);
+    if (!decodedToken) {
+      console.error('Invalid inference token');
+      process.exit(1);
+    }
+    const callbackToken = decodedToken.cbk;
+    const boardDir = decodedToken.rg;
+
+    const cbkDecoded = deps.decodeCallbackToken(callbackToken);
+    if (!cbkDecoded) {
+      console.error('Invalid callback token embedded in inference token');
+      process.exit(1);
+    }
+
+    function spawnInferenceDone(tmpFile: string): void {
+      const { cmd, args: cliArgs } = deps.getCliInvocation('inference-done', ['--tmp', tmpFile, '--token', inferenceToken!]);
+      deps.executor.spawnDetached(cmd, cliArgs);
+    }
+
+    function spawnInferenceDoneError(reason: string): void {
+      const tmpFile = deps.makeTempFilePath(boardDir, 'inference-err');
+      fs.writeFileSync(tmpFile, JSON.stringify({ isTaskCompleted: false, reason }), 'utf-8');
+      spawnInferenceDone(tmpFile);
+    }
+
+    if (inRef!.kind !== 'fs-path' || !inRef!.value) {
+      spawnInferenceDoneError(`inference input ref unsupported kind: ${inRef!.kind}`);
+      return;
+    }
+    const inFile = inRef!.value;
+
+    if (!fs.existsSync(inFile)) {
+      spawnInferenceDoneError(`inference input not found: ${inFile}`);
+      return;
+    }
+
+    const inferenceAdapter = deps.getConfigStore(boardDir).readInferenceAdapter();
+    if (!inferenceAdapter) {
+      spawnInferenceDoneError(`inference adapter is not configured (.inference-adapter)`);;
+      return;
+    }
+
+    const outFile = deps.makeTempFilePath(boardDir, 'inference-out');
+    const errFile = deps.makeTempFilePath(boardDir, 'inference-err', '.txt');
+    const adapterParts = deps.executor.splitCommand(inferenceAdapter);
+    if (adapterParts.length === 0) {
+      spawnInferenceDoneError('inference adapter command is empty');
+      return;
+    }
+
+    const adapterRawCmd = adapterParts[0];
+    const adapterRawArgs = adapterParts.slice(1);
+    const { cmd: adapterCmd, args: adapterArgsPrefix } = deps.executor.resolveInvocation(adapterRawCmd, adapterRawArgs);
+    const adapterArgs = [...adapterArgsPrefix, 'run-inference',
+      '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
+      '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
+      '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
+    ];
+
+    try {
+      deps.executor.executeSync(adapterCmd, adapterArgs, {
+        shell: false,
+        timeout: 120_000,
+        cwd: boardDir,
+        env: {
+          ...process.env,
+          BOARD_DIR: boardDir,
+        },
+      });
+    } catch (err: unknown) {
+      const reason = (err as Error).message ?? String(err);
+      spawnInferenceDoneError(reason);
+      return;
+    }
+
+    if (!fs.existsSync(outFile)) {
+      const errMsg = fs.existsSync(errFile)
+        ? fs.readFileSync(errFile, 'utf-8').trim()
+        : 'inference adapter produced no output file';
+      spawnInferenceDoneError(errMsg);
+      return;
+    }
+
+    // Adapter wrote outFile — pass it directly as --tmp; cmdInferenceDone reads and deletes it.
+    spawnInferenceDone(outFile);
+  }
+
+  function cmdInferenceDone(args: string[]): void {
+    const tmpIdx = args.indexOf('--tmp');
+    const tokenIdx = args.indexOf('--token');
+
+    const tmpFile = tmpIdx !== -1 ? args[tmpIdx + 1] : undefined;
+    const inferenceToken = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+
+    if (!tmpFile || !inferenceToken) {
+      console.error('Usage: board-live-cards inference-done --tmp <result.json> --token <inference-token>');
+      process.exit(1);
+    }
+
+    const decodedToken = deps.decodeSourceToken(inferenceToken);
+    if (!decodedToken) {
+      console.error('Invalid inference token');
+      process.exit(1);
+    }
+
+    const { cbk: callbackToken, rg: dir, cs: inputChecksum } = decodedToken;
+
+    const decoded = deps.decodeCallbackToken(callbackToken);
+    if (!decoded) {
+      console.error('Invalid callback token embedded in inference token');
+      process.exit(1);
+    }
+
+    const taskName = decoded.taskName;
+    const cardPath = deps.lookupCardPath(dir, taskName);
+    if (!cardPath) {
+      console.error(`Card file for task "${taskName}" not found in inventory`);
+      process.exit(1);
+    }
+
+    let result: { isTaskCompleted?: boolean; reason?: string; evidence?: string; data?: Record<string, unknown> } = {};
+    if (fs.existsSync(tmpFile)) {
+      try {
+        result = JSON.parse(fs.readFileSync(tmpFile, 'utf-8').trim());
+      } catch (err) {
+        result = { isTaskCompleted: false, reason: `failed to parse inference result: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      try { fs.unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
+    } else {
+      result = { isTaskCompleted: false, reason: `inference result file not found: ${tmpFile}` };
+    }
+
+    const isTaskCompletedFlag = result.isTaskCompleted === true;
+    const inferenceCompletedAt = new Date().toISOString();
+
+    const card = JSON.parse(fs.readFileSync(cardPath, 'utf-8')) as Record<string, unknown>;
+    if (!card.card_data) card.card_data = {};
+    const cardData = card.card_data as Record<string, unknown>;
+    const existingInference = (cardData.llm_task_completion_inference && typeof cardData.llm_task_completion_inference === 'object')
+      ? (cardData.llm_task_completion_inference as Record<string, unknown>)
+      : {};
+    cardData.llm_task_completion_inference = {
+      ...existingInference,
+      isTaskCompleted: isTaskCompletedFlag,
+      reason: typeof result.reason === 'string' ? result.reason : '',
+      evidence: typeof result.evidence === 'string' ? result.evidence : '',
+      inferenceCompletedAt,
+    };
+    fs.writeFileSync(cardPath, JSON.stringify(card, null, 2), 'utf-8');
+
+    // Update inference runtime entry to reflect completion
+    const runtimePath = path.join(dir, taskName, 'runtime.json');
+    let runtime: CardRuntimeStateLike = { _sources: {} };
+    if (fs.existsSync(runtimePath)) {
+      try {
+        runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf-8')) as CardRuntimeStateLike;
+      } catch {}
+    }
+
+    const inferenceEntry = runtime._inferenceEntry ?? {};
+    runtime._inferenceEntry = deps.nextEntryAfterFetchDelivery(inferenceEntry, inferenceCompletedAt);
+
+    fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
+    fs.writeFileSync(runtimePath, JSON.stringify(runtime, null, 2), 'utf-8');
+
+    injectTaskProgress(dir, taskName, { kind: 'inference-done', isTaskCompleted: isTaskCompletedFlag, inputChecksum }, deps);
+  }
+
+  async function cmdTryDrain(args: string[]): Promise<void> {
+    const rgIdx = args.indexOf('--rg');
+    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    if (!boardDir) {
+      console.error('Usage: board-live-cards process-accumulated-events --rg <dir>');
+      process.exit(1);
+    }
+    await deps.processAccumulatedEventsForced(boardDir);
+  }
+
+  return { cmdRunSources, cmdRunInference, cmdInferenceDone, cmdTryDrain };
+}
 
 export async function cli(argv: string[]): Promise<void> {
   const processAccumulatedAdapter = createBoardInvocationAdapter(__dirname);
