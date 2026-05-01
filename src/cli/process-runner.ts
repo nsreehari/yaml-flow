@@ -23,6 +23,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { serializeRef } from './storage-interface.js';
@@ -55,6 +56,9 @@ export function genUUID(): string { return randomUUID(); }
 
 /** SHA-256 hex hash of a string. */
 export function getHash(x: string): string { return createHash('sha256').update(x).digest('hex'); }
+
+/** Resolve the directory of an ESM module from its import.meta.url. */
+export function resolveModuleDir(importMetaUrl: string): string { return path.dirname(fileURLToPath(importMetaUrl)); }
 
 // ============================================================================
 // parseCommandSpec — legacy string or structured CommandSpec → normalized form

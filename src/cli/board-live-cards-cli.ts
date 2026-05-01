@@ -4,7 +4,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 /** On Windows, fs.renameSync fails with EPERM when dest is held open. Retry with back-off. */
 function renameSync(src: string, dest: string): void {
@@ -28,6 +27,7 @@ import {
   runDetached,
   genUUID,
   getHash,
+  resolveModuleDir,
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import { blobStorageForRef } from './public-storage-adapter.js';
@@ -920,7 +920,7 @@ export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
 // Reactive graph factory
 // ============================================================================
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = resolveModuleDir(import.meta.url);
 
 /**
  * Generalized CLI invocation: determines how to invoke this script in current environment.
