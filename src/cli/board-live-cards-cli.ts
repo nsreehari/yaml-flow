@@ -26,8 +26,9 @@ import {
   parseCommandSpec,
   makeBoardTempFilePath,
   buildBoardCliInvocation,
+  runDetached,
 } from './process-runner.js';
-import { withRelayLock } from './storage-interface.js';
+import { withRelayLock, serializeRef } from './storage-interface.js';
 import fg from 'fast-glob';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
@@ -189,6 +190,72 @@ const RUNTIME_DATA_OBJECTS_DIR = 'data-objects';
 function createBoardConfig(boardDir: string): BoardConfigStore {
   return createBoardConfigStore(createFsKvStorage(path.join(boardDir, '.config')), parseCommandSpec);
 }
+
+function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
+  const base = createNodeInvocationAdapter(cliDir, encodeSourceToken);
+  return {
+    requestInference: base.requestInference.bind(base),
+    requestProcessAccumulated: base.requestProcessAccumulated.bind(base),
+    async requestSourceFetch(
+      boardDir: string,
+      enrichedCard: Record<string, unknown>,
+      callbackToken: string,
+    ) {
+      if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return { dispatched: false, invocationId: undefined };
+      try {
+        const teConfig = createBoardConfig(boardDir).readTaskExecutorConfig();
+        if (!teConfig) {
+          // No task-executor: delegate to run-sourcedefs-internal (handles source.cli).
+          return base.requestSourceFetch(boardDir, enrichedCard, callbackToken);
+        }
+        // Task-executor registered: dispatch each source_def as a detached process.
+        const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
+        const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
+        const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
+          ? _cliArgs[0]
+          : (_cliArgs[1] ?? _cliArgs[0]);
+        // Re-parse teConfig as a legacy command string to correctly split 'node path.cjs' → [node, path.cjs]
+        const rawCmdStr = [teConfig.command, ...(teConfig.args ?? [])].join(' ');
+        const parsedExec = parseCommandSpec(rawCmdStr);
+        const taskExecutorExtraB64 = teConfig.extra
+          ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
+          : undefined;
+        type SourceDef = { bindTo: string; outputFile?: string; [k: string]: unknown };
+        const sourceDefs = (enrichedCard.source_defs ?? []) as SourceDef[];
+        for (const src of sourceDefs) {
+          if (!src.outputFile) {
+            console.warn(`[request-source-fetch] source "${src.bindTo}" has no outputFile — skipping`);
+            continue;
+          }
+          const sourceToken = encodeSourceToken({
+            cbk: callbackToken, rg: boardDir, cid: cardId,
+            b: src.bindTo, d: src.outputFile, cs: undefined,
+          });
+          const inFile  = makeBoardTempFilePath(boardDir, `source-in-${src.bindTo}`);
+          const outFile = makeBoardTempFilePath(boardDir, `source-out-${src.bindTo}`);
+          const errFile = makeBoardTempFilePath(boardDir, `source-err-${src.bindTo}`, '.txt');
+          const inEnvelope = {
+            source_def: src,
+            callback: { token: sourceToken, via: { type: 'node-cli' as const, path: boardCliScriptPath } },
+          };
+          fs.writeFileSync(inFile, JSON.stringify(inEnvelope, null, 2), 'utf-8');
+          const executorArgs = [...(parsedExec.args ?? []), 'run-source-fetch',
+            '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
+            '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
+            '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
+          ];
+          if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
+          console.log(`[request-source-fetch] task-executor: ${parsedExec.command} ${executorArgs.join(' ')}`);
+          runDetached({ command: parsedExec.command, args: executorArgs });
+        }
+        return { dispatched: true, invocationId: randomUUID() };
+      } catch (err) {
+        return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  };
+}
+
 const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
 
 /** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
@@ -775,7 +842,7 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
     const envelope = loadBoardEnvelope(boardDir);
     const live = restore(envelope.graph);
     const { events: undrained, newCursor } = journalStore.readEntriesAfterCursor(envelope.lastDrainedJournalId);
-    const invocationAdapter = createNodeInvocationAdapter(cliDir, encodeSourceToken);
+    const invocationAdapter = createBoardInvocationAdapter(cliDir);
     const rg = createReactiveGraph(live, { handlers: { 'card-handler': createCardHandlerFn(boardDir, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn) } });
     rg.pushAll(undrained);
     await rg.dispose({ wait: true });
@@ -896,7 +963,7 @@ function resolveCardGlobMatches(cardGlob: string): string[] {
 
 
 export async function cli(argv: string[]): Promise<void> {
-  const processAccumulatedAdapter = createNodeInvocationAdapter(__dirname, encodeSourceToken);
+  const processAccumulatedAdapter = createBoardInvocationAdapter(__dirname);
   const executor = createNodeCommandExecutor();
   const scheduleInfinitePass = (boardDir: string) => processAccumulatedEventsInfinitePass(boardDir, processAccumulatedAdapter);
   const scheduleForced = (boardDir: string) => processAccumulatedEventsForced(boardDir, processAccumulatedAdapter);

@@ -99,14 +99,6 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
     }
     console.log(`[run-sourcedefs-internal] Processing card "${card.id as string}"`);
 
-    // Load registered task-executor (if any)
-    const teConfig = deps.getConfigStore(boardDir!).readTaskExecutorConfig();
-    const taskExecutorCmd = teConfig?.command;
-    const taskExecutorArgs = teConfig?.args ?? [];
-    const taskExecutorExtraB64 = teConfig?.extra
-      ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
-      : undefined;
-
     type SourceDef = {
       cli?: string;
       bindTo: string;
@@ -140,58 +132,7 @@ export function createExecutionCommandHandlers(deps: ExecutionCommandDeps): Exec
         });
       }
 
-      if (taskExecutorCmd) {
-        // External task-executor registered: invoke run-source-fetch subcommand
-        if (!src.outputFile) {
-          console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
-          reportFailure('no outputFile configured');
-          return;
-        }
-        const inFile  = deps.makeTempFilePath(boardDir!, `source-in-${src.bindTo}`);
-        const outFile = deps.makeTempFilePath(boardDir!, `source-out-${src.bindTo}`);
-        const errFile = deps.makeTempFilePath(boardDir!, `source-err-${src.bindTo}`, '.txt');
-        const sourceForExecutor = {
-          ...src,
-          cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : path.dirname(cardFilePath || ''),
-          boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
-        };
-        // Write { source_def, callback } envelope so the executor can self-report.
-        // Resolve the board CLI script path from deps.getCliInvocation for the callback via.
-        const { cmd: _cliCmd, args: _cliArgs } = deps.getCliInvocation('_', []);
-        const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
-          ? _cliArgs[0]
-          : (_cliArgs[1] ?? _cliArgs[0]);
-        const inEnvelope = {
-          source_def: sourceForExecutor,
-          callback: {
-            token: sourceToken,
-            via: { type: 'node-cli' as const, path: boardCliScriptPath },
-          },
-        };
-        fs.writeFileSync(inFile, JSON.stringify(inEnvelope, null, 2), 'utf-8');
-        const executorArgs = [...taskExecutorArgs, 'run-source-fetch',
-          '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
-          '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
-          '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
-        ];
-        if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-        console.log(`[run-sourcedefs-internal] task-executor: ${taskExecutorCmd} ${executorArgs.join(' ')}`);
-        try {
-          deps.executor.executeSync(taskExecutorCmd, executorArgs, {
-            timeout: src.timeout ?? 120_000,
-          });
-        } catch (err: unknown) {
-          const reason = (err as Error).message ?? String(err);
-          console.error(`[run-sourcedefs-internal] task-executor failed for source "${src.bindTo}":`, reason);
-          // Executor crashed or timed out — report failure as fallback.
-          reportFailure(reason);
-        }
-        // Executor self-reports success or failure via callback.token.
-        // If executeSync threw (timeout / non-zero exit), reportFailure was called above.
-        return;
-      }
-
-      // No external executor: execute source.cli directly in this process.
+      // Execute source.cli directly in this process.
       if (!src.outputFile) {
         console.warn(`[run-sourcedefs-internal] source "${src.bindTo}" has no outputFile configured — cannot deliver`);
         reportFailure('no outputFile configured');
