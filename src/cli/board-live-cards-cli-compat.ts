@@ -54,7 +54,8 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     const cardIdx = args.indexOf('--card');
     const globIdx = args.indexOf('--card-glob');
     const restart = args.includes('--restart');
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const boardDirRaw = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const boardDir = boardDirRaw ? path.resolve(boardDirRaw) : undefined;
     const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
     const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
 
@@ -101,7 +102,7 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
       plans.push({ card, absPath });
     }
 
-    // Phase 2: write to CardStore then upsert via clean handler
+    // Phase 2: write to CardStore then upsert via clean handler (which expects --base-ref)
     const store = deps.getCardAdminStore(boardDir);
     let changedCount = 0;
     let skippedCount = 0;
@@ -133,7 +134,9 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     const rgIdx = args.indexOf('--rg');
     const cardIdx = args.indexOf('--card');
     const globIdx = args.indexOf('--card-glob');
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const boardDirRaw = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    // Internally resolve --rg to an absolute path; downstream validateCards receives the resolved string
+    const boardDir = boardDirRaw ? path.resolve(boardDirRaw) : undefined;
     const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
     const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
 

@@ -33,8 +33,10 @@ export type FetchRuntimeEntry = SourceRuntimeEntry;
 export interface SourceTokenPayload {
   /** Original callback token from the reactive graph (encodes taskName) */
   cbk: string;
-  /** Board directory (absolute path) */
+  /** Board directory (absolute path) — kept for back-compat decoding of existing tokens */
   rg: string;
+  /** Serialized KindValueRef for the board base directory (::fs-path::<path>) */
+  br: string;
   /** Card id */
   cid: string;
   /** source_defs[].bindTo */

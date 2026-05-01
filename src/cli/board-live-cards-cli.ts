@@ -13,7 +13,7 @@ import {
   genUUID,
   resolveModuleDir,
 } from './process-runner.js';
-import { withRelayLock, serializeRef } from './storage-interface.js';
+import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -100,7 +100,7 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
             continue;
           }
           const sourceToken = encodeSourceToken({
-            cbk: callbackToken, rg: boardDir, cid: cardId,
+            cbk: callbackToken, rg: boardDir, br: serializeRef({ kind: 'fs-path', value: boardDir }), cid: cardId,
             b: src.bindTo, d: src.outputFile, cs: undefined,
           });
           const inFile  = makeBoardTempFilePath(boardDir, `source-in-${src.bindTo}`);
@@ -108,6 +108,7 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
           const errFile = makeBoardTempFilePath(boardDir, `source-err-${src.bindTo}`, '.txt');
           const inEnvelope = {
             source_def: src,
+            base_ref: serializeRef({ kind: 'fs-path', value: boardDir }),
             callback: { token: sourceToken, via: { type: 'node-cli' as const, path: boardCliScriptPath } },
           };
           fs.writeFileSync(inFile, JSON.stringify(inEnvelope, null, 2), 'utf-8');
@@ -696,18 +697,18 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     const sourceIdxArg = args.indexOf('--source-idx');
     const sourceBindArg = args.indexOf('--source-bind');
     const mockProjectionsIdx = args.indexOf('--mock-projections');
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const outIdx = args.indexOf('--out');
 
     const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
     const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
     const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
     const mockProjectionsRaw = mockProjectionsIdx !== -1 ? args[mockProjectionsIdx + 1] : undefined;
-    const boardDirArg = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const boardDirArg = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
     const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
 
     if (!cardFilePath) {
-      console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-projections <json>] [--rg <boardDir>] [--out <result.json>]');
+      console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-projections <json>] [--base-ref <::kind::value>] [--out <result.json>]');
       process.exit(1);
     }
 
@@ -894,10 +895,10 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
   }
 
   function cmdDescribeTaskExecutorCapabilities(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
-    const boardDir = rgIdx !== -1 ? path.resolve(args[rgIdx + 1]) : undefined;
+    const brIdx = args.indexOf('--base-ref');
+    const boardDir = brIdx !== -1 ? path.resolve(parseRef(args[brIdx + 1]).value) : undefined;
     if (!boardDir) {
-      console.error('Usage: board-live-cards describe-task-executor-capabilities --rg <dir>');
+      console.error('Usage: board-live-cards describe-task-executor-capabilities --base-ref <::kind::value>');
       process.exit(1);
     }
 
@@ -939,12 +940,12 @@ BOARD MANAGEMENT
       <runtime-out>/cards/<card-id>.computed.json
     Re-running init on an existing board is safe; handler registrations are updated.
 
-  status --rg <dir> [--json]
+  status --base-ref <::kind::value> [--json]
     Read and print the published status snapshot from <runtime-out>/board-livegraph-status.json.
     --json emits the stable machine-readable status object.
 
 CARD MANAGEMENT
-  upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]
+  upsert-card --base-ref <::kind::value> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]
     Insert or update one or many cards.
     Enforces strict one-to-one mapping between card id and file path:
       - same id + same file path: update
@@ -954,17 +955,17 @@ CARD MANAGEMENT
     --card-id is valid only with --card (single file), not with --card-glob.
     --restart clears the task so it re-triggers from scratch.
 
-  validate-card (--card <card.json> | --card-glob <glob>) [--rg <boardDir>]
+  validate-card (--card <card.json> | --card-glob <glob>) [--base-ref <::kind::value>]
     Validate one or many card JSON files without adding them to a board.
     Checks JSON Schema structure, runtime expression syntax, and provides.ref namespaces.
-    When --rg is provided, also invokes the board's task executor validate-source-def
+    When --base-ref is provided, also invokes the board's task executor validate-source-def
     subcommand to structurally validate each source definition against supported kinds.
     Exits with code 1 if any card fails validation.
 
-  remove-card --rg <dir> --id <card-id>
+  remove-card --base-ref <::kind::value> --id <card-id>
     Remove a card and its task from the board.
 
-  retrigger --rg <dir> --task <task-name>
+  retrigger --base-ref <::kind::value> --task <task-name>
     Mark a task not-started and drain to re-trigger it.
 
 TASK CALLBACKS  (called by task executor scripts)
@@ -974,7 +975,7 @@ TASK CALLBACKS  (called by task executor scripts)
   task-failed --token <callbackToken> [--error <message>]
     Signal task failure with an optional error message.
 
-  task-progress --rg <dir> --token <callbackToken> [--update <json>]
+  task-progress --base-ref <::kind::value> --token <callbackToken> [--update <json>]
     Signal task progress with optional update payload (for waiting on more evidence, etc.).
 
 SOURCE CALLBACKS  (called internally by run-sourcedefs-internal)
@@ -986,7 +987,7 @@ SOURCE CALLBACKS  (called internally by run-sourcedefs-internal)
     Record a source fetch failure via journal events and append a task-progress event.
 
 INTERNAL COMMANDS
-  process-accumulated-events --rg <dir>
+  process-accumulated-events --base-ref <::kind::value>
     Executes forced drain for this board.
     This command is also used as the background relay worker.
     By default it schedules a detached worker and returns quickly.
@@ -998,7 +999,7 @@ INTERNAL COMMANDS
     3) lock stays healthy,
     4) event production eventually quiesces.
 
-  run-sourcedefs-internal --card <card.json> --token <callbackToken> --rg <dir>
+  run-sourcedefs-internal --card <card.json> --token <callbackToken> --base-ref <::kind::value>
     Execute all source[] entries for a card, then report delivery or failure.
     (Internal command — invoked by the card-handler. Not intended for direct use.)
 
@@ -1011,12 +1012,12 @@ INTERNAL COMMANDS
     Execute a source definition. Board-live-cards reads source.cli and executes it.
     Writes result to --out. Presence of --out after exit indicates success.
 
-  describe-task-executor-capabilities --rg <dir>
+  describe-task-executor-capabilities --base-ref <::kind::value>
     Invoke the registered task-executor's describe-capabilities subcommand and
-    print its capabilities JSON to stdout.  Requires a .task-executor file in <dir>.
+    print its capabilities JSON to stdout.  Requires a .task-executor file in <::kind::value>.
 
   probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
-               [--mock-projections <json>] [--rg <boardDir>] [--out <result.json>]
+               [--mock-projections <json>] [--base-ref <::kind::value>] [--out <result.json>]
     Validate that a card source can be fetched successfully.
     Reads the card file, extracts the chosen source (default: index 0), builds the
     run-source-fetch --in payload with the supplied _projections data, invokes the
@@ -1027,7 +1028,7 @@ INTERNAL COMMANDS
                      If omitted, _projections is passed as empty ({}).
     --source-idx:    0-based index into card.source_defs[]. Default: 0.
     --source-bind:   Select source by its bindTo name instead of index.
-    --rg:            Board directory used to find .task-executor. Defaults to the
+    --base-ref:      Board directory used to find .task-executor. Defaults to the
                      directory containing the card file.
     --out:           Optional path to write the raw fetch result JSON.
     Prints a structured report ending with a [probe-source:result] JSON line.
@@ -1066,10 +1067,10 @@ BOARD-LIVE-CARDS BUILT-IN EXECUTOR
 EXAMPLES
   board-live-cards-cli init ./my-board
   board-live-cards-cli init ./my-board --task-executor ./executors/my-runner.py
-  board-live-cards-cli upsert-card --rg ./my-board --card cards/prices.json
-  board-live-cards-cli status --rg ./my-board
-  board-live-cards-cli retrigger --rg ./my-board --task price-fetch
-  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --rg ./my-board --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
+  board-live-cards-cli upsert-card --base-ref ::fs-path::./my-board --card cards/prices.json
+  board-live-cards-cli status --base-ref ::fs-path::./my-board
+  board-live-cards-cli retrigger --base-ref ::fs-path::./my-board --task price-fetch
+  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --base-ref ::fs-path::./my-board --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
 `.trimStart());
   }
 
@@ -1129,10 +1130,10 @@ EXAMPLES
   }
 
   function cmdValidateCard(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const cardIdIdx = args.indexOf('--card-id');
     const stdioMode = args.includes('--cards-stdio');
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const boardDir = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
 
     if (stdioMode) {
       // --cards-stdio: read JSON array of card objects from stdin, write results to stdout
@@ -1155,7 +1156,7 @@ EXAMPLES
       // --card-id: read from CardStore
       const cardId = args[cardIdIdx + 1];
       if (!cardId || !boardDir) {
-        throw new Error('Usage: board-live-cards validate-card --rg <boardDir> --card-id <id>');
+        throw new Error('Usage: board-live-cards validate-card --base-ref <::kind::value> --card-id <id>');
       }
       const card = deps.getCardStore(boardDir).readCard(cardId);
       if (!card) {
@@ -1170,7 +1171,7 @@ EXAMPLES
       return;
     }
 
-    throw new Error('Usage: board-live-cards validate-card (--card-id <id> --rg <boardDir>) | (--cards-stdio [--rg <boardDir>])');
+    throw new Error('Usage: board-live-cards validate-card (--card-id <id> --base-ref <::kind::value>) | (--cards-stdio [--base-ref <::kind::value>])');
   }
 
   return {
@@ -1196,10 +1197,10 @@ interface ExecutionCommandHandlers {
 
 function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
   async function cmdTryDrain(args: string[]): Promise<void> {
-    const rgIdx = args.indexOf('--rg');
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const brIdx = args.indexOf('--base-ref');
+    const boardDir = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
     if (!boardDir) {
-      console.error('Usage: board-live-cards process-accumulated-events --rg <dir>');
+      console.error('Usage: board-live-cards process-accumulated-events --base-ref <::kind::value>');
       process.exit(1);
     }
     await deps.processAccumulatedEventsForced(boardDir);

@@ -1,6 +1,7 @@
 import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
 import type { BoardConfigStore, PublishedOutputsStore } from './board-live-cards-all-stores.js';
+import { parseRef } from './storage-interface.js';
 
 interface BoardCommandDeps {
   initBoard: (dir: string) => 'created' | 'exists';
@@ -64,11 +65,12 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
   }
 
   function cmdStatus(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const asJson = args.includes('--json');
-    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     if (!dir) {
-      console.error('Usage: board-live-cards status --rg <dir>');
+      console.error('Usage: board-live-cards status --base-ref <::kind::value>');
       process.exit(1);
     }
 
@@ -97,12 +99,13 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
   }
 
   function cmdRemoveCard(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const idIdx = args.indexOf('--id');
-    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     const cardId = idIdx !== -1 ? args[idIdx + 1] : undefined;
     if (!dir || !cardId) {
-      console.error('Usage: board-live-cards remove-card --rg <dir> --id <card-id>');
+      console.error('Usage: board-live-cards remove-card --base-ref <::kind::value> --id <card-id>');
       process.exit(1);
     }
 
@@ -117,12 +120,13 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
   }
 
   function cmdRetrigger(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const taskIdx = args.indexOf('--task');
-    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     const taskName = taskIdx !== -1 ? args[taskIdx + 1] : undefined;
     if (!dir || !taskName) {
-      console.error('Usage: board-live-cards retrigger --rg <dir> --task <task-name>');
+      console.error('Usage: board-live-cards retrigger --base-ref <::kind::value> --task <task-name>');
       process.exit(1);
     }
 

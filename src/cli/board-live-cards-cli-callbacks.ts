@@ -62,13 +62,14 @@ export interface CallbackCommandHandlers {
 
 export function createCallbackCommandHandlers(deps: CallbackCommandDeps): CallbackCommandHandlers {
   function cmdTaskCompleted(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const tokenIdx = args.indexOf('--token');
     const dataIdx = args.indexOf('--data');
-    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
     if (!dir || !token) {
-      console.error('Usage: board-live-cards task-completed --rg <dir> --token <token> [--data <json>]');
+      console.error('Usage: board-live-cards task-completed --base-ref <::kind::value> --token <token> [--data <json>]');
       process.exit(1);
     }
 
@@ -96,14 +97,15 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
   }
 
   function cmdTaskFailed(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const tokenIdx = args.indexOf('--token');
     const errorIdx = args.indexOf('--error');
-    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
     const errorMsg = errorIdx !== -1 ? args[errorIdx + 1] : 'unknown error';
     if (!dir || !token) {
-      console.error('Usage: board-live-cards task-failed --rg <dir> --token <token> [--error <message>]');
+      console.error('Usage: board-live-cards task-failed --base-ref <::kind::value> --token <token> [--error <message>]');
       process.exit(1);
     }
 
@@ -187,16 +189,17 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
   }
 
   function cmdTaskProgress(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const tokenIdx = args.indexOf('--token');
     const updateIdx = args.indexOf('--update');
 
-    const dir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
     const updateJson = updateIdx !== -1 ? args[updateIdx + 1] : '{}';
 
     if (!dir || !token) {
-      console.error('Usage: board-live-cards task-progress --rg <dir> --token <token> [--update <json>]');
+      console.error('Usage: board-live-cards task-progress --base-ref <::kind::value> --token <token> [--update <json>]');
       process.exit(1);
     }
 

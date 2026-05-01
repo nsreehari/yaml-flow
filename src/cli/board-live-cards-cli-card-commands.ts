@@ -1,6 +1,7 @@
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
 import type { CardUpsertIndexEntry, CardStore } from './board-live-cards-all-stores.js';
+import { parseRef } from './storage-interface.js';
 
 export type BoardLiveCard = LiveCard;
 
@@ -76,14 +77,15 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
   }
 
   function cmdUpsertCard(args: string[]): void {
-    const rgIdx = args.indexOf('--rg');
+    const brIdx = args.indexOf('--base-ref');
     const cardIdIdx = args.indexOf('--card-id');
     const restart = args.includes('--restart');
-    const boardDir = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const boardDir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
     const cardId = cardIdIdx !== -1 ? args[cardIdIdx + 1] : undefined;
 
     if (!boardDir || !cardId) {
-      console.error('Usage: board-live-cards upsert-card --rg <dir> --card-id <id> [--restart]');
+      console.error('Usage: board-live-cards upsert-card --base-ref <::kind::value> --card-id <id> [--restart]');
       process.exit(1);
     }
 
