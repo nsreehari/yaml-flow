@@ -13,6 +13,9 @@
  *     --yaml            treat stdin as YAML multi-doc (default stdin format is JSON)
  *     When neither --ref nor --ref-yaml is given, input is read from stdin.
  *     Each card must contain a string `id` field.
+ *
+ *   card-store del --store-ref <ref> --id <card-id> [--id <card-id> ...]
+ *     Delete one or more cards from the store by ID.
  */
 
 import * as fs from 'node:fs';
@@ -57,6 +60,9 @@ const HELP = [
   '    --ref-yaml <file>  YAML multi-doc file',
   '    --yaml             treat stdin as YAML (default stdin format is JSON)',
   '    Each card must contain a string `id` field.',
+  '',
+  '  card-store del --store-ref <ref> --id <card-id> [--id <card-id> ...]',
+  '    Delete one or more cards by ID.',
 ].join('\n');
 
 export async function cli(argv: string[]): Promise<void> {
@@ -138,6 +144,25 @@ export async function cli(argv: string[]): Promise<void> {
       store.writeCard(card['id'], card as { id: string; [key: string]: unknown });
     }
     console.error(`card-store set: wrote ${cards.length} card(s)`);
+    return;
+  }
+
+  // ── del ──────────────────────────────────────────────────────────────────
+  if (cmd === 'del' || cmd === 'delete') {
+    const ids: string[] = [];
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--id' && rest[i + 1]) {
+        ids.push(rest[++i]);
+      }
+    }
+    if (ids.length === 0) {
+      console.error('card-store del: at least one --id <card-id> is required');
+      process.exit(1);
+    }
+    for (const id of ids) {
+      store.removeCard(id);
+    }
+    console.error(`card-store del: removed ${ids.length} card(s)`);
     return;
   }
 
