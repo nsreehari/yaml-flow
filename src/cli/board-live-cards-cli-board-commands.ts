@@ -1,7 +1,6 @@
 import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
 import type { BoardConfigStore, PublishedOutputsStore } from './board-live-cards-all-stores.js';
-import * as path from 'node:path';
 import { parseRef } from './storage-interface.js';
 import type { KindValueRef } from './storage-interface.js';
 import { executionRefFromScriptPath } from './execution-interface.js';
@@ -26,9 +25,13 @@ export interface BoardCommandHandlers {
 
 export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommandHandlers {
   function cmdInit(args: string[]): void {
-    const dir = args[0];
+    const brIdx = args.indexOf('--base-ref');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const dir = baseRef?.value;
     if (!dir) {
-      throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+      console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+      process.exit(1);
     }
 
     const teIdx = args.indexOf('--task-executor');
@@ -38,12 +41,13 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     const roIdx = args.indexOf('--runtime-out');
     const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
     if (roIdx !== -1 && !runtimeOut) {
-      throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+      console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+      process.exit(1);
     }
 
-    const result = deps.initBoard({ kind: 'fs-path', value: path.resolve(dir) });
+    const result = deps.initBoard(baseRef);
 
-    const config = deps.getConfigStore(path.resolve(dir));
+    const config = deps.getConfigStore(dir);
     if (taskExecutor) {
       const teExtraIdx = args.indexOf('--task-executor-extra');
       let teExtra: Record<string, unknown> | undefined;
