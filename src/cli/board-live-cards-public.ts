@@ -67,6 +67,7 @@ import type {
   BoardEnvelope,
   SourceTokenPayload,
   BoardStatusObject,
+  LiveCard,
 } from './board-live-cards-lib.js';
 
 // ============================================================================
@@ -173,7 +174,6 @@ export interface BoardLiveCardsPublic {
 
   // Card management
   upsertCard(cardId: string, restart?: boolean): CommandResult;
-  validateCard(cardId: string): CommandResult;
 
   // Task callbacks — token encodes the baseRef, no separate baseRef param
   taskCompleted(token: string, data?: Record<string, unknown>): CommandResult;
@@ -248,7 +248,7 @@ export function createBoardLiveCardsPublic(
     return {
       readIndex: () => kv.read('_index') as CardIndex | null,
       writeIndex: (index: CardIndex) => kv.write('_index', index),
-      readCard: (key) => kv.read(key) as import('./board-live-cards-lib.js').LiveCard | null,
+      readCard: (key) => kv.read(key) as LiveCard | null,
       writeCard: (key, card) => { kv.write(key, card); return stableHash(card); },
       cardExists: (key) => kv.read(key) !== null,
       defaultCardKey: (cardId) => cardId,
@@ -469,15 +469,6 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
-  function validateCard(cardId: string): CommandResult {
-    try {
-      const card = cardStore().readCard(cardId);
-      if (!card) return fail(`Card "${cardId}" not found`);
-      // Schema validation only — executor-based source validation is a future extension.
-      return ok({ cardId, errors: [] as string[] });
-    } catch (e) { return err(e); }
-  }
-
   function taskCompleted(token: string, data: Record<string, unknown> = {}): CommandResult {
     try {
       const decoded = decodeCallbackToken(token);
@@ -564,8 +555,257 @@ export function createBoardLiveCardsPublic(
 
   return {
     init, status, removeCard, retrigger, processAccumulatedEvents,
-    upsertCard, validateCard,
+    upsertCard,
     taskCompleted, taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,
+  };
+}
+
+// ============================================================================
+// BoardNonCorePlatformAdapter — extends the base adapter with synchronous
+// executor dispatch and schema validation.
+//
+// The 5 non-core commands all require blocking sub-process invocation which
+// is not available in fire-and-forget async dispatch contexts (Azure Fn, etc.)
+// so they live in a separate interface and factory.
+// ============================================================================
+
+export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
+  /**
+   * Synchronously invoke a task executor subcommand and return stdout.
+   * Throws on non-zero exit or timeout.
+   */
+  invokeExecutorSync(
+    ref: ExecutionRef,
+    subcommand: string,
+    args: string[],
+    opts?: { timeout?: number },
+  ): string;
+
+  /** Schema-only card validator (no executor invocation). */
+  validateSchema(card: Record<string, unknown>): { ok: boolean; errors: string[] };
+
+  /** Create a temp file path for I/O staging — absolute, board-scoped. */
+  makeTempFilePath(label: string, ext?: string): string;
+
+  /** Absolute-path blob I/O for temp files and card file references. */
+  absoluteBlob: BlobStorage;
+}
+
+// ============================================================================
+// BoardLiveCardsNonCorePublic — 5 commands requiring synchronous dispatch
+// ============================================================================
+
+export interface BoardLiveCardsNonCorePublic {
+  /** Schema + executor validate-source-def for a card already in the board. */
+  validateCard(cardId: string): CommandResult<{ cardId: string; errors: string[] }>;
+
+  /** Schema + executor validate-source-def for a card file by KindValueRef string. */
+  validateTmpCard(cardRef: string): CommandResult<{ cardId: string; errors: string[] }>;
+
+  /** Run run-source-fetch probe for a card already in the board. */
+  probeSource(
+    cardId: string,
+    sourceIdx: number,
+    mockProjections: Record<string, unknown>,
+    outRef?: string,
+  ): CommandResult;
+
+  /** Run run-source-fetch probe for an ad-hoc source def (no board card needed). */
+  probeTmpSource(
+    sourceDef: Record<string, unknown>,
+    mockProjections: Record<string, unknown>,
+    outRef?: string,
+  ): CommandResult;
+
+  /** Invoke the registered task-executor's describe-capabilities subcommand. */
+  describeTaskExecutorCapabilities(): CommandResult;
+}
+
+// ============================================================================
+// createBoardLiveCardsNonCorePublic — factory
+// ============================================================================
+
+export function createBoardLiveCardsNonCorePublic(
+  baseRef: KindValueRef,
+  adapter: BoardNonCorePlatformAdapter,
+): BoardLiveCardsNonCorePublic {
+  // Mirror the same internal helpers as the core factory.
+  function makeCardAdapterNC(): CardStorageAdapter {
+    const kv = adapter.kvStorage('cards');
+    return {
+      readIndex: () => kv.read('_index') as CardIndex | null,
+      writeIndex: (index: CardIndex) => kv.write('_index', index),
+      readCard: (key) => kv.read(key) as LiveCard | null,
+      writeCard: (key, card) => { kv.write(key, card); return stableHash(card); },
+      cardExists: (key) => kv.read(key) !== null,
+      defaultCardKey: (cardId) => cardId,
+    };
+  }
+  const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
+  const cardStore = () => createCardStore(makeCardAdapterNC(), adapter.onWarn ?? (() => { /* no-op */ }));
+
+  // ── Shared validation helper ───────────────────────────────────────────────
+
+  function validateCardObject(
+    cardId: string,
+    card: Record<string, unknown>,
+  ): CommandResult<{ cardId: string; errors: string[] }> {
+    const schemaResult = adapter.validateSchema(card);
+    const sourceErrors: string[] = [];
+
+    const teRef = configStore().readTaskExecutorRef();
+    if (teRef && Array.isArray(card['source_defs'])) {
+      for (const src of card['source_defs'] as Array<Record<string, unknown>>) {
+        const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : '(unknown)';
+        const tmpFile = adapter.makeTempFilePath(`validate-src-${bindTo}`);
+        try {
+          adapter.absoluteBlob.write(tmpFile, JSON.stringify(src));
+          let stdout: string;
+          try {
+            stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', ['--in', tmpFile], { timeout: 10_000 });
+          } catch (execErr: unknown) {
+            const se = execErr as { stdout?: string | Buffer };
+            stdout = typeof se?.stdout === 'string' ? se.stdout
+              : Buffer.isBuffer(se?.stdout) ? se.stdout.toString('utf-8')
+              : '';
+            if (!stdout.trim()) {
+              sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${execErr instanceof Error ? execErr.message : String(execErr)}`);
+              continue;
+            }
+          }
+          const parsed = JSON.parse(stdout.trim()) as { ok?: boolean; errors?: string[] };
+          if (!parsed.ok && Array.isArray(parsed.errors)) {
+            for (const e of parsed.errors) sourceErrors.push(`source "${bindTo}": ${e}`);
+          }
+        } catch (e) {
+          sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+          try { adapter.absoluteBlob.remove(tmpFile); } catch { /* best-effort */ }
+        }
+      }
+    }
+
+    const allErrors = [...schemaResult.errors, ...sourceErrors];
+    return ok({ cardId, errors: allErrors }) as CommandResult<{ cardId: string; errors: string[] }>;
+  }
+
+  // ── Shared probe helper ────────────────────────────────────────────────────
+
+  function runSourceProbe(
+    src: Record<string, unknown>,
+    mockProjections: Record<string, unknown>,
+    cardDir: string,
+    outRef?: string,
+  ): CommandResult {
+    const teRef = configStore().readTaskExecutorRef();
+    if (!teRef) return fail('No task-executor registered for this board');
+
+    const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
+    const inFile  = adapter.makeTempFilePath(`probe-in-${bindTo}`);
+    const outFile = adapter.makeTempFilePath(`probe-out-${bindTo}`);
+    const errFile = adapter.makeTempFilePath(`probe-err-${bindTo}`, '.txt');
+
+    const inPayload: Record<string, unknown> = {
+      ...src,
+      cwd: typeof src['cwd'] === 'string' && src['cwd'] ? src['cwd'] : cardDir,
+      boardDir: baseRef.value,
+      _projections: mockProjections,
+    };
+
+    const inRefStr  = serializeRef({ kind: 'fs-path', value: inFile });
+    const outRefStr = serializeRef({ kind: 'fs-path', value: outFile });
+    const errRefStr = serializeRef({ kind: 'fs-path', value: errFile });
+
+    adapter.absoluteBlob.write(inFile, JSON.stringify(inPayload, null, 2));
+
+    let result: string | null = null;
+    try {
+      adapter.invokeExecutorSync(teRef, 'run-source-fetch',
+        ['--in-ref', inRefStr, '--out-ref', outRefStr, '--err-ref', errRefStr],
+        { timeout: (src['timeout'] as number | undefined) ?? 30_000 },
+      );
+      result = adapter.absoluteBlob.read(outFile);
+      if (result === null) return fail('Executor produced no output file');
+    } catch (e) {
+      const errMsg = adapter.absoluteBlob.read(errFile)?.trim()
+        ?? (e instanceof Error ? e.message : String(e));
+      return fail(`Probe failed: ${errMsg}`);
+    } finally {
+      try { adapter.absoluteBlob.remove(inFile); } catch { /* best-effort */ }
+      try { adapter.absoluteBlob.remove(errFile); } catch { /* best-effort */ }
+    }
+
+    if (outRef) {
+      const parsed = parseRef(outRef);
+      adapter.absoluteBlob.write(parsed.value, result);
+    } else {
+      try { adapter.absoluteBlob.remove(outFile); } catch { /* best-effort */ }
+    }
+
+    return ok({ bindTo, resultSizeBytes: result.length });
+  }
+
+  // ── Public methods ─────────────────────────────────────────────────────────
+
+  function validateCard(cardId: string): CommandResult<{ cardId: string; errors: string[] }> {
+    try {
+      const card = cardStore().readCard(cardId);
+      if (!card) return fail(`Card "${cardId}" not found`) as CommandResult<{ cardId: string; errors: string[] }>;
+      return validateCardObject(cardId, card as Record<string, unknown>);
+    } catch (e) { return err(e) as CommandResult<{ cardId: string; errors: string[] }>; }
+  }
+
+  function validateTmpCard(cardRef: string): CommandResult<{ cardId: string; errors: string[] }> {
+    try {
+      const ref = parseRef(cardRef);
+      const raw = adapter.absoluteBlob.read(ref.value);
+      if (!raw) return fail(`Card not found at ${cardRef}`) as CommandResult<{ cardId: string; errors: string[] }>;
+      const card = JSON.parse(raw) as Record<string, unknown>;
+      const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
+      return validateCardObject(cardId, card);
+    } catch (e) { return err(e) as CommandResult<{ cardId: string; errors: string[] }>; }
+  }
+
+  function probeSource(
+    cardId: string,
+    sourceIdx: number,
+    mockProjections: Record<string, unknown>,
+    outRef?: string,
+  ): CommandResult {
+    try {
+      const card = cardStore().readCard(cardId) as Record<string, unknown> | null;
+      if (!card) return fail(`Card "${cardId}" not found`);
+      const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
+      if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
+        return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
+      }
+      return runSourceProbe(sourceDefs[sourceIdx], mockProjections, baseRef.value, outRef);
+    } catch (e) { return err(e); }
+  }
+
+  function probeTmpSource(
+    sourceDef: Record<string, unknown>,
+    mockProjections: Record<string, unknown>,
+    outRef?: string,
+  ): CommandResult {
+    try {
+      return runSourceProbe(sourceDef, mockProjections, baseRef.value, outRef);
+    } catch (e) { return err(e); }
+  }
+
+  function describeTaskExecutorCapabilities(): CommandResult {
+    try {
+      const teRef = configStore().readTaskExecutorRef();
+      if (!teRef) return fail('No task-executor registered for this board');
+      const stdout = adapter.invokeExecutorSync(teRef, 'describe-capabilities', [], { timeout: 10_000 });
+      return ok(JSON.parse(stdout.trim()) as Record<string, unknown>);
+    } catch (e) { return err(e); }
+  }
+
+  return {
+    validateCard, validateTmpCard,
+    probeSource, probeTmpSource,
+    describeTaskExecutorCapabilities,
   };
 }

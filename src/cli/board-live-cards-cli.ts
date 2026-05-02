@@ -58,7 +58,9 @@ import {
 import { executionRefFromScriptPath } from './execution-interface.js';
 import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
 import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
-import type { BoardPlatformAdapter } from './board-live-cards-public.js';
+import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from './board-live-cards-public.js';
+export type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from './board-live-cards-public.js';
+export { createBoardLiveCardsPublic, createBoardLiveCardsNonCorePublic } from './board-live-cards-public.js';
 export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib.js';
 
@@ -199,7 +201,39 @@ export function createFsBoardPlatformAdapter(
   };
 }
 
+// ============================================================================
+// createFsBoardNonCorePlatformAdapter — extends the FS adapter with synchronous
+// executor dispatch, schema validation, temp file factory, and absolute blob I/O.
+// Required for: validateCard, validateTmpCard, probeSource, probeTmpSource,
+//               describeTaskExecutorCapabilities
+// ============================================================================
 
+export function createFsBoardNonCorePlatformAdapter(
+  baseRef: KindValueRef,
+  cliDir: string,
+  opts?: { onWarn?: (msg: string) => void },
+): BoardNonCorePlatformAdapter {
+  const base = createFsBoardPlatformAdapter(baseRef, cliDir, opts);
+  const executor = createNodeCommandExecutor();
+  return {
+    ...base,
+    invokeExecutorSync(ref, subcommand, args, execOpts) {
+      const { command, baseArgs } = buildLocalBaseSpec(ref, cliDir);
+      return executor.executeSync(command, [...baseArgs, subcommand, ...args], {
+        timeout: execOpts?.timeout ?? 30_000,
+        encoding: 'utf-8',
+      });
+    },
+    validateSchema(card) {
+      const result = validateLiveCardDefinition(card);
+      return { ok: result.errors.length === 0, errors: result.errors };
+    },
+    makeTempFilePath(label, ext) {
+      return makeBoardTempFilePath(baseRef.value, label, ext);
+    },
+    absoluteBlob: createFsAbsolutePathBlobStorage(),
+  };
+}
 
 export interface JournalEntry {
   id: string;
