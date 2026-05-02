@@ -13,6 +13,7 @@ import {
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import { dispatchTaskExecutorDetached, buildLocalBaseSpec, builtInSourceCliExecutorRef } from './execution-adapter.js';
+import { blobStorageForRef } from './public-storage-adapter.js';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -104,10 +105,10 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
               via: { howToRun: 'local-node' as const, whatToRun: serializeRef({ kind: 'fs-path', value: boardCliScriptPath }) },
             },
           };
-          fs.writeFileSync(inFile, JSON.stringify(inEnvelope, null, 2), 'utf-8');
           const inRef  = serializeRef({ kind: 'fs-path', value: inFile });
           const outRef = serializeRef({ kind: 'fs-path', value: outFile });
           const errRef = serializeRef({ kind: 'fs-path', value: errFile });
+          blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(inEnvelope, null, 2));
           console.log(`[request-source-fetch] ${executorRef.meta ?? executorRef.howToRun}: ${executorRef.whatToRun}`);
           dispatchTaskExecutorDetached(executorRef, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, cliDir);
           dispatched = true;
@@ -648,11 +649,13 @@ const __dirname = resolveModuleDir(import.meta.url);
 
 /**
  * Resolve a KindValueRef to its content string.
- * 'fs-path': read file from disk (FS adapter, stays in cli.ts)
+ * Delegates to blobStorageForRef so all storage kinds are supported uniformly.
  */
 function resolveSourceDataRef(ref: { kind: string; value: string }): string {
-  if (ref.kind === 'fs-path') return fs.readFileSync(ref.value, 'utf-8');
-  throw new Error(`Unsupported KindValueRef kind: ${ref.kind}`);
+  const storage = blobStorageForRef(ref);
+  const content = storage.read(ref.value);
+  if (content === null) throw new Error(`resolveSourceDataRef: not found: ::${ref.kind}::${ref.value}`);
+  return content;
 }
 
 // ============================================================================
