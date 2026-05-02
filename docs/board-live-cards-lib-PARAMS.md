@@ -1,78 +1,126 @@
 # board-live-cards — Function Signature Reference
 
-All functions return:
+All methods share the same `CommandInput` / `CommandResult` envelope:
+
 ```ts
+type CommandInput = {
+  params?: Record<string, string | number | boolean>;  // identity / routing args
+  body?:   unknown;                                    // structured payload
+};
+
 type CommandResult<T = undefined> =
-  | { status: "success"; data?: T }
-  | { status: "fail";    error: string }
-  | { status: "error";   error: string }
+  | { status: 'success'; data?: T }      // completed normally
+  | { status: 'fail';    error: string } // bad caller input
+  | { status: 'error';   error: string } // unexpected internal error
+```
+
+Transport adapters (CLI, HTTP, in-process) build `CommandInput` before calling any method.  
+The public layer never knows how data arrived.
+
+---
+
+## `BoardLiveCardsPublic`
+> Created via `createBoardLiveCardsPublic(baseRef, adapter)`
+
+### Board management
+
+```ts
+init(input: CommandInput): CommandResult
+  body:   { "task-executor-ref"?: ExecutionRef, "chat-handler-ref"?: ExecutionRef }
+
+status(input: CommandInput): CommandResult<BoardStatusObject>
+  (no params / no body)
+
+removeCard(input: CommandInput): CommandResult
+  params: { id }
+
+retrigger(input: CommandInput): CommandResult
+  params: { id }
+
+processAccumulatedEvents(input: CommandInput): Promise<CommandResult>
+  (no params / no body)
+```
+
+### Card management
+
+```ts
+upsertCard(input: CommandInput): CommandResult
+  params: { cardId?, all?, restart? }   // cardId or all required; atomic across all cards
+```
+
+### Task callbacks
+> `params.token` encodes the base-ref — no separate `baseRef` needed.
+
+```ts
+taskCompleted(input: CommandInput): CommandResult
+  params: { token }
+  body:   { data: <data-object> }
+
+taskFailed(input: CommandInput): CommandResult
+  params: { token, error? }
+
+taskProgress(input: CommandInput): CommandResult
+  params: { token }
+  body:   { update: <update-object> }
+```
+
+### Source callbacks
+> `params.token` encodes the base-ref — no separate `baseRef` needed.
+
+```ts
+sourceDataFetched(input: CommandInput): CommandResult
+  params: { token, ref }   // ref is a ::kind::value string
+
+sourceDataFetchFailure(input: CommandInput): CommandResult
+  params: { token, reason? }
 ```
 
 ---
 
-## Board management
+## `BoardLiveCardsNonCorePublic`
+> Created via `createBoardLiveCardsNonCorePublic(baseRef, adapter)`
+
+### Card validation
 
 ```ts
-init(baseRef: string, taskExecutor?: string, chatHandler?: string): CommandResult
+validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>
+  params: { cardId?, all? }             // cardId or all required
 
-status(baseRef: string): CommandResult<BoardStatus>
-
-removeCard(baseRef: string, id: string): CommandResult
-
-retrigger(baseRef: string, id: string): CommandResult
-
-processAccumulatedEvents(baseRef: string): CommandResult
+validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>
+  body:   { "card-content": <card object> }
 ```
 
-## Card management
+### Source probing
 
 ```ts
-upsertCard(baseRef: string, cardId: string, restart?: boolean): CommandResult
+probeSource(input: CommandInput): CommandResult
+  params: { cardId, sourceIdx, outRef }
+  body:   { "mock-projections": <object> }   // from stdin
 
-validateCard(baseRef: string, cardId: string): CommandResult
-
-validateTmpCard(cardRef: string): CommandResult
+probeTmpSource(input: CommandInput): CommandResult
+  params: { outRef }
+  body:   { "source-def": <object>, "mock-projections": <object> }   // from stdin
 ```
 
-## Source probing
+### Task executor introspection
 
 ```ts
-probeSource(cardId: string, sourceIdx: number, mockProjections: object, outRef: string,
-            baseRef?: string): CommandResult
-
-probeTmpSource(sourceDef: object, mockProjections: object, outRef: string): CommandResult
+describeTaskExecutorCapabilities(input: CommandInput): CommandResult
+  (no params / no body)
 ```
 
-## Card store (direct read/write)
+### Card store (direct read/write)
 
 ```ts
-updateInCardStore(baseRef: string, cardId: string, card: object): CommandResult
+// Replaces updateInCardStore — handles both single and batch mutations.
+updatesInCardStore(input: CommandInput): CommandResult
+  body:   {
+    "ops": Array<
+      | { op: 'update'; id: string; 'card-content': unknown }
+      | { op: 'delete'; id: string }
+    >
+  }   // from stdin
 
-readFromCardStore(baseRef: string, cardId: string): CommandResult<object>
-```
-
-## Task executor introspection
-
-```ts
-describeTaskExecutorCapabilities(baseRef: string): CommandResult
-```
-
-## Task callbacks
-> `token` encodes the base-ref — no `baseRef` param needed.
-
-```ts
-taskCompleted(token: string, data?: object): CommandResult
-
-taskFailed(token: string, error?: string): CommandResult
-
-taskProgress(token: string, update?: object): CommandResult
-```
-
-## Source callbacks
-> `token` encodes the base-ref — no `baseRef` param needed.
-
-```ts
-sourceDataFetched(token: string, ref: string): CommandResult
-
-sourceDataFetchFailure(token: string, reason?: string): CommandResult
+readFromCardStore(input: CommandInput): CommandResult<{ cards: Array<{ id: string; 'card-content': unknown }> }>
+  body:   { "ids": string[] }   // from stdin
 ```
