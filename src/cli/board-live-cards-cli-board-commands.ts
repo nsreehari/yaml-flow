@@ -7,13 +7,13 @@ import { executionRefFromScriptPath } from './execution-interface.js';
 
 interface BoardCommandDeps {
   initBoard: (baseRef: KindValueRef) => 'created' | 'exists';
-  configureRuntimeOutDir: (dir: string, runtimeOut?: string) => string;
-  loadBoard: (dir: string) => LiveGraph;
-  getOutputStore: (boardDir: string) => PublishedOutputsStore;
-  buildBoardStatusObject: (dir: string, live: LiveGraph) => any;
-  getConfigStore: (boardDir: string) => BoardConfigStore;
-  appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
-  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+  configureRuntimeOutDir: (baseRef: KindValueRef, runtimeOut?: string) => string;
+  loadBoard: (baseRef: KindValueRef) => LiveGraph;
+  getOutputStore: (baseRef: KindValueRef) => PublishedOutputsStore;
+  buildBoardStatusObject: (baseRef: KindValueRef, live: LiveGraph) => any;
+  getConfigStore: (baseRef: KindValueRef) => BoardConfigStore;
+  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
+  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
 }
 
 export interface BoardCommandHandlers {
@@ -28,8 +28,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     const brIdx = args.indexOf('--base-ref');
     const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
     const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const dir = baseRef?.value;
-    if (!dir) {
+    if (!baseRef) {
       console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
       process.exit(1);
     }
@@ -47,7 +46,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
 
     const result = deps.initBoard(baseRef);
 
-    const config = deps.getConfigStore(dir);
+    const config = deps.getConfigStore(baseRef);
     if (taskExecutor) {
       const teExtraIdx = args.indexOf('--task-executor-extra');
       let teExtra: Record<string, unknown> | undefined;
@@ -60,14 +59,14 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       config.writeChatHandler(chatHandler);
     }
 
-    const runtimeOutDir = deps.configureRuntimeOutDir(dir, runtimeOut);
-    const live = deps.loadBoard(dir);
-    deps.getOutputStore(dir).writeStatusSnapshot(deps.buildBoardStatusObject(dir, live));
+    const runtimeOutDir = deps.configureRuntimeOutDir(baseRef, runtimeOut);
+    const live = deps.loadBoard(baseRef);
+    deps.getOutputStore(baseRef).writeStatusSnapshot(deps.buildBoardStatusObject(baseRef, live));
 
     if (result === 'exists') {
-      console.log(`Board already initialized at ${dir}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
+      console.log(`Board already initialized at ${baseRef.value}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
     } else {
-      console.log(`Board initialized at ${dir}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
+      console.log(`Board initialized at ${baseRef.value}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
     }
   }
 
@@ -75,16 +74,16 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     const brIdx = args.indexOf('--base-ref');
     const asJson = args.includes('--json');
     const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
-    if (!dir) {
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    if (!baseRef) {
       console.error('Usage: board-live-cards status --base-ref <::kind::value>');
       process.exit(1);
     }
 
-    let statusObject: any = deps.getOutputStore(dir).readStatusSnapshot();
+    let statusObject: any = deps.getOutputStore(baseRef).readStatusSnapshot();
     if (!statusObject) {
-      statusObject = deps.buildBoardStatusObject(dir, deps.loadBoard(dir));
-      deps.getOutputStore(dir).writeStatusSnapshot(statusObject);
+      statusObject = deps.buildBoardStatusObject(baseRef, deps.loadBoard(baseRef));
+      deps.getOutputStore(baseRef).writeStatusSnapshot(statusObject);
     }
 
     if (asJson) {
@@ -109,20 +108,20 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     const brIdx = args.indexOf('--base-ref');
     const idIdx = args.indexOf('--id');
     const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
     const cardId = idIdx !== -1 ? args[idIdx + 1] : undefined;
-    if (!dir || !cardId) {
+    if (!baseRef || !cardId) {
       console.error('Usage: board-live-cards remove-card --base-ref <::kind::value> --id <card-id>');
       process.exit(1);
     }
 
-    deps.appendEventToJournal(dir, {
+    deps.appendEventToJournal(baseRef, {
       type: 'task-removal',
       taskName: cardId,
       timestamp: new Date().toISOString(),
     });
 
-    void deps.processAccumulatedEventsInfinitePass(dir);
+    void deps.processAccumulatedEventsInfinitePass(baseRef);
     console.log(`Card "${cardId}" removed.`);
   }
 
@@ -130,20 +129,20 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
     const brIdx = args.indexOf('--base-ref');
     const taskIdx = args.indexOf('--task');
     const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const dir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
     const taskName = taskIdx !== -1 ? args[taskIdx + 1] : undefined;
-    if (!dir || !taskName) {
+    if (!baseRef || !taskName) {
       console.error('Usage: board-live-cards retrigger --base-ref <::kind::value> --task <task-name>');
       process.exit(1);
     }
 
-    deps.appendEventToJournal(dir, {
+    deps.appendEventToJournal(baseRef, {
       type: 'task-restart',
       taskName,
       timestamp: new Date().toISOString(),
     });
 
-    void deps.processAccumulatedEventsInfinitePass(dir);
+    void deps.processAccumulatedEventsInfinitePass(baseRef);
     console.log(`Task "${taskName}" retriggered.`);
   }
 

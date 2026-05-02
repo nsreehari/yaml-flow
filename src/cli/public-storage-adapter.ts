@@ -66,10 +66,6 @@ export interface BlobStorage {
   read(key: string): string | null;
   /** Write content at key. */
   write(key: string, content: string): void;
-  /** Returns true if a blob exists at key. */
-  exists(key: string): boolean;
-  /** Delete the blob at key. No-op if it does not exist. */
-  remove(key: string): void;
 }
 
 // ============================================================================
@@ -85,12 +81,6 @@ function createFsPathBlobStorage(): BlobStorage {
     write(key: string, content: string): void {
       fs.mkdirSync(path.dirname(key), { recursive: true });
       fs.writeFileSync(key, content, 'utf-8');
-    },
-    exists(key: string): boolean {
-      return fs.existsSync(key);
-    },
-    remove(key: string): void {
-      try { if (fs.existsSync(key)) fs.unlinkSync(key); } catch { /* best-effort */ }
     },
   };
 }

@@ -24,6 +24,8 @@ import {
   nextEntryAfterFetchDelivery,
   nextEntryAfterFetchFailure,
 } from './board-live-cards-lib-types.js';
+import type { KindValueRef } from './storage-interface.js';
+import { serializeRef } from './storage-interface.js';
 
 /**
  * Create the 'card-handler' TaskHandlerFn to inject into a ReactiveGraph.
@@ -34,7 +36,7 @@ import {
  *   const rg = createReactiveGraph(live, { handlers: { 'card-handler': handlerFn } });
  */
 export function createCardHandlerFn(
-  boardDir: string,
+  baseRef: KindValueRef,
   journalId: string,
   adapters: CardHandlerAdapters,
   taskCompletedFn: (taskName: string, data: Record<string, unknown>) => void,
@@ -150,15 +152,16 @@ export function createCardHandlerFn(
 
         // Derive the card's directory from its registered path for relative cwd resolution.
         // We use a simple string operation (split on / or \) to stay Node-free.
+        const dir = baseRef.value;
         const registeredPath = adapters.cardStore.readCardKey(input.nodeId);
         const sourceCwd = registeredPath
           ? registeredPath.replace(/[\\/][^\\/]*$/, '')
-          : boardDir;
+          : dir;
         enrichedCard.source_defs = Array.isArray(enrichedSources)
           ? enrichedSources.map(src => ({
               ...src,
               cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
-              boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : boardDir,
+              boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : dir,
             }))
           : enrichedSources;
 
@@ -194,7 +197,7 @@ export function createCardHandlerFn(
           if (stampedAny) flush();
           if (!stampedAny) return 'task-initiated';
 
-          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardDir, enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
+          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
           adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
           return 'task-initiated';
         }
@@ -219,7 +222,7 @@ export function createCardHandlerFn(
           return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
         if (undeliveredOptional.length > 0) {
-          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardDir, enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
+          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
         }
 
         // Notify board of task completion via injected callback.

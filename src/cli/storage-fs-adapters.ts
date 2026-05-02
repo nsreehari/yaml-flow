@@ -93,6 +93,32 @@ export function createFsBlobStorage(rootDir: string): BlobStorage {
   };
 }
 
+/**
+ * Create a BlobStorage where the key IS the absolute file path.
+ * Implements the full BlobStorage interface (read, write, exists, remove).
+ * Use this for operations on known absolute paths (e.g., temp file cleanup).
+ */
+export function createFsAbsolutePathBlobStorage(): BlobStorage {
+  return {
+    read(key: string): string | null {
+      if (!fs.existsSync(key)) return null;
+      try { return fs.readFileSync(key, 'utf-8'); } catch { return null; }
+    },
+    write(key: string, content: string): void {
+      const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
+      fs.mkdirSync(path.dirname(key), { recursive: true });
+      fs.writeFileSync(tmp, content, 'utf-8');
+      renameSync(tmp, key);
+    },
+    exists(key: string): boolean {
+      return fs.existsSync(key);
+    },
+    remove(key: string): void {
+      try { if (fs.existsSync(key)) fs.unlinkSync(key); } catch { /* best-effort */ }
+    },
+  };
+}
+
 // ============================================================================
 // FsKvStorage
 //

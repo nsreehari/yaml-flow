@@ -15,6 +15,8 @@
  * The Node implementation lives in process-runner.ts (`createNodeInvocationAdapter`).
  */
 
+import type { KindValueRef } from './storage-interface.js';
+
 // ============================================================================
 // DispatchResult — structured result returned by every InvocationAdapter method
 // ============================================================================
@@ -43,7 +45,7 @@ export interface InvocationAdapter {
    * `enrichedCard` is passed by value; the adapter owns temp file management if needed.
    */
   requestSourceFetch(
-    boardDir: string,
+    baseRef: KindValueRef,
     enrichedCard: Record<string, unknown>,
     callbackToken: string,
   ): Promise<DispatchResult>;
@@ -54,7 +56,7 @@ export interface InvocationAdapter {
    * Azure: enqueues a function trigger / storage-queue message.
    * In-process test double: calls the handler synchronously or records the call.
    */
-  requestProcessAccumulated(boardDir: string): Promise<DispatchResult>;
+  requestProcessAccumulated(baseRef: KindValueRef): Promise<DispatchResult>;
 }
 
 // ============================================================================

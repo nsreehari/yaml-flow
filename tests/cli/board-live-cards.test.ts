@@ -19,6 +19,9 @@ import type { GraphConfig } from '../../src/event-graph/types.js';
 
 process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
 
+/** Create a KindValueRef for fs-path boards (test helper). */
+const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
+
 const ts = () => new Date().toISOString();
 const ticks = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -38,7 +41,7 @@ const validateCardRuntimeArtifact = ajv.compile(cardRuntimeSchema);
 async function pollBoard(dir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const live = loadBoard(dir);
+    const live = loadBoard(ref(dir));
     if (pred(live.config.tasks as Record<string, unknown>)) return;
     await ticks(100);
   }
@@ -82,7 +85,7 @@ describe('board-live-cards', () => {
   it('initBoard creates dir and board-graph.json with envelope format', () => {
     const dir = freshDir();
     const sub = path.join(dir, 'nested');
-    const result = initBoard(sub);
+    const result = initBoard(ref(sub));
 
     expect(result).toBe('created');
     expect(fs.existsSync(path.join(sub, 'board-graph.json'))).toBe(true);
@@ -96,36 +99,36 @@ describe('board-live-cards', () => {
   it('initBoard is idempotent — returns exists on second call', () => {
     const dir = freshDir();
     const sub = path.join(dir, 'nested');
-    expect(initBoard(sub)).toBe('created');
-    expect(initBoard(sub)).toBe('exists');
+    expect(initBoard(ref(sub))).toBe('created');
+    expect(initBoard(ref(sub))).toBe('exists');
   });
 
   it('initBoard throws if dir is non-empty without valid board-graph.json', () => {
     const dir = freshDir();
     fs.writeFileSync(path.join(dir, 'some-file.txt'), 'hello');
-    expect(() => initBoard(dir)).toThrow('not empty');
+    expect(() => initBoard(ref(dir))).toThrow('not empty');
   });
 
   it('loadBoardEnvelope returns the full envelope', () => {
     const dir = freshDir();
-    initBoard(path.join(dir, 'b'));
-    const envelope = loadBoardEnvelope(path.join(dir, 'b'));
+    initBoard(ref(path.join(dir, 'b')));
+    const envelope = loadBoardEnvelope(ref(path.join(dir, 'b')));
     expect(envelope.lastDrainedJournalId).toBe('');
     expect(envelope.graph.version).toBe(1);
   });
 
   it('loadBoard returns a LiveGraph from board-graph.json', () => {
     const dir = freshDir();
-    initBoard(path.join(dir, 'b'));
-    const live = loadBoard(path.join(dir, 'b'));
+    initBoard(ref(path.join(dir, 'b')));
+    const live = loadBoard(ref(path.join(dir, 'b')));
     expect(Object.keys(live.config.tasks)).toHaveLength(0);
   });
 
   it('full roundtrip: init → addNode → run → save → load → state preserved', async () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
-    const live = loadBoard(dir);
+    const live = loadBoard(ref(dir));
     const journalPath = path.join(dir, 'board-journal.jsonl');
     const journal = new BoardJournal(journalPath, '');
     const gRef = { rg: null as ReactiveGraph | null };
@@ -148,18 +151,18 @@ describe('board-live-cards', () => {
     expect(rg.getState().state.tasks.src.status).toBe('completed');
     expect(rg.getState().state.tasks.calc.status).toBe('completed');
 
-    saveBoard(dir, rg, journal);
+    saveBoard(ref(dir), rg, journal);
     rg.dispose();
 
     // Load again — state intact
-    const live2 = loadBoard(dir);
+    const live2 = loadBoard(ref(dir));
     expect(live2.state.tasks.src.status).toBe('completed');
     expect(live2.state.tasks.src.data).toEqual({ v: 1 });
     expect(live2.state.tasks.calc.status).toBe('completed');
     expect(live2.state.tasks.calc.data).toEqual({ result: 42 });
 
     // No external journal drain happened in this roundtrip, so the pointer stays empty.
-    const envelope = loadBoardEnvelope(dir);
+    const envelope = loadBoardEnvelope(ref(dir));
     expect(envelope.lastDrainedJournalId).toBe('');
   });
 });
@@ -185,7 +188,7 @@ describe('board-live-cards CLI', () => {
     cli(['init', dir]);
 
     expect(fs.existsSync(path.join(dir, 'board-graph.json'))).toBe(true);
-    const live = loadBoard(dir);
+    const live = loadBoard(ref(dir));
     expect(Object.keys(live.config.tasks)).toHaveLength(0);
   });
 
@@ -237,7 +240,7 @@ describe('board-live-cards CLI', () => {
 
   it('cli status --rg <dir> prints task info', () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
@@ -252,7 +255,7 @@ describe('board-live-cards CLI', () => {
 
   it('cli status --rg <dir> --json prints stable status object', () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
@@ -543,10 +546,10 @@ describe('appendEventToJournal + getUndrainedEntries', () => {
 
   it('appendEventToJournal blind-appends without reading', () => {
     const dir = freshDir();
-    appendEventToJournal(dir, { type: 'inject-tokens', tokens: [], timestamp: ts() });
-    appendEventToJournal(dir, { type: 'inject-tokens', tokens: ['a'], timestamp: ts() });
+    appendEventToJournal(ref(dir), { type: 'inject-tokens', tokens: [], timestamp: ts() });
+    appendEventToJournal(ref(dir), { type: 'inject-tokens', tokens: ['a'], timestamp: ts() });
 
-    const entries = getUndrainedEntries(dir, '');
+    const entries = getUndrainedEntries(ref(dir), '');
     expect(entries).toHaveLength(2);
     expect(entries[0].id).toBeTruthy();
     expect(entries[1].id).toBeTruthy();
@@ -555,25 +558,25 @@ describe('appendEventToJournal + getUndrainedEntries', () => {
 
   it('getUndrainedEntries returns [] for no journal file', () => {
     const dir = freshDir();
-    expect(getUndrainedEntries(dir, '')).toEqual([]);
+    expect(getUndrainedEntries(ref(dir), '')).toEqual([]);
   });
 
   it('getUndrainedEntries filters by lastDrainedId', () => {
     const dir = freshDir();
-    appendEventToJournal(dir, { type: 'inject-tokens', tokens: [], timestamp: ts() });
-    appendEventToJournal(dir, { type: 'inject-tokens', tokens: [], timestamp: ts() });
-    appendEventToJournal(dir, { type: 'inject-tokens', tokens: [], timestamp: ts() });
+    appendEventToJournal(ref(dir), { type: 'inject-tokens', tokens: [], timestamp: ts() });
+    appendEventToJournal(ref(dir), { type: 'inject-tokens', tokens: [], timestamp: ts() });
+    appendEventToJournal(ref(dir), { type: 'inject-tokens', tokens: [], timestamp: ts() });
 
-    const all = getUndrainedEntries(dir, '');
+    const all = getUndrainedEntries(ref(dir), '');
     expect(all).toHaveLength(3);
 
     // Skip first two
-    const afterSecond = getUndrainedEntries(dir, all[1].id);
+    const afterSecond = getUndrainedEntries(ref(dir), all[1].id);
     expect(afterSecond).toHaveLength(1);
     expect(afterSecond[0].id).toBe(all[2].id);
 
     // Skip all
-    const afterLast = getUndrainedEntries(dir, all[2].id);
+    const afterLast = getUndrainedEntries(ref(dir), all[2].id);
     expect(afterLast).toHaveLength(0);
   });
 });
@@ -596,15 +599,15 @@ describe('cards-inventory', () => {
 
   it('readCardInventory returns [] when no file exists', () => {
     const dir = freshDir();
-    expect(readCardInventory(dir)).toEqual([]);
+    expect(readCardInventory(ref(dir))).toEqual([]);
   });
 
   it('appendCardInventory + readCardInventory roundtrip', () => {
     const dir = freshDir();
-    appendCardInventory(dir, { cardId: 'a', cardFilePath: '/abs/a.json', addedAt: '2026-01-01T00:00:00Z' });
-    appendCardInventory(dir, { cardId: 'b', cardFilePath: '/abs/b.json', addedAt: '2026-01-02T00:00:00Z' });
+    appendCardInventory(ref(dir), { cardId: 'a', cardFilePath: '/abs/a.json', addedAt: '2026-01-01T00:00:00Z' });
+    appendCardInventory(ref(dir), { cardId: 'b', cardFilePath: '/abs/b.json', addedAt: '2026-01-02T00:00:00Z' });
 
-    const entries = readCardInventory(dir);
+    const entries = readCardInventory(ref(dir));
     expect(entries).toHaveLength(2);
     expect(entries[0].cardId).toBe('a');
     expect(entries[0].cardFilePath).toBe(path.resolve('/abs/a.json'));
@@ -613,13 +616,13 @@ describe('cards-inventory', () => {
 
   it('lookupCardPath returns path for known card', () => {
     const dir = freshDir();
-    appendCardInventory(dir, { cardId: 'x', cardFilePath: '/some/x.json', addedAt: '2026-01-01T00:00:00Z' });
-    expect(lookupCardPath(dir, 'x')).toBe(path.resolve('/some/x.json'));
+    appendCardInventory(ref(dir), { cardId: 'x', cardFilePath: '/some/x.json', addedAt: '2026-01-01T00:00:00Z' });
+    expect(lookupCardPath(ref(dir), 'x')).toBe(path.resolve('/some/x.json'));
   });
 
   it('lookupCardPath returns null for unknown card', () => {
     const dir = freshDir();
-    expect(lookupCardPath(dir, 'missing')).toBeNull();
+    expect(lookupCardPath(ref(dir), 'missing')).toBeNull();
   });
 });
 
@@ -641,7 +644,7 @@ describe('cli remove-card', () => {
 
   it('removes a card that was previously added', async () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
     const cardFile = path.join(tmpDir, 'temp.json');
     fs.writeFileSync(cardFile, JSON.stringify({ id: 'temp', card_data: {} }));
@@ -779,7 +782,7 @@ describe('cli upsert-card atomicity', () => {
 
   it('does not partially apply glob upsert when one file violates id->path mapping', async () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
     // Seed existing mapping: x -> existing.json
     const existingCard = path.join(tmpDir, 'existing.json');
@@ -803,18 +806,18 @@ describe('cli upsert-card atomicity', () => {
     errSpy.mockRestore();
 
     // Atomicity assertion: only original mapping remains; y must not be inserted.
-    const upsertIdx = readCardUpsertIndex(dir);
+    const upsertIdx = readCardUpsertIndex(ref(dir));
     expect(Object.keys(upsertIdx).sort()).toEqual(['x']);
 
     await cli(['process-accumulated-events', '--rg', dir, '--inline-loop']);
-    const live = loadBoard(dir);
+    const live = loadBoard(ref(dir));
     expect(live.config.tasks.x).toBeDefined();
     expect(live.config.tasks.y).toBeUndefined();
   });
 
   it('fails atomically when glob contains duplicate ids across different files', async () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
     const cardsDir = path.join(tmpDir, 'dupes');
     fs.mkdirSync(cardsDir, { recursive: true });
@@ -828,7 +831,7 @@ describe('cli upsert-card atomicity', () => {
     errSpy.mockRestore();
 
     // Atomicity assertion: no KV entries written.
-    expect(Object.keys(readCardUpsertIndex(dir))).toHaveLength(0);
+    expect(Object.keys(readCardUpsertIndex(ref(dir)))).toHaveLength(0);
   });
 });
 
@@ -850,7 +853,7 @@ describe('cli retrigger', () => {
 
   it('appends task-restart event and drains', () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(dir);
+    initBoard(ref(dir));
 
     // Add a card so the task exists
     const cardFile = path.join(tmpDir, 'src.json');

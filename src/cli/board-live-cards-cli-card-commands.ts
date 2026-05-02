@@ -2,6 +2,7 @@ import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
 import type { CardUpsertIndexEntry, CardStore } from './board-live-cards-all-stores.js';
 import { parseRef } from './storage-interface.js';
+import type { KindValueRef } from './storage-interface.js';
 
 export type BoardLiveCard = LiveCard;
 
@@ -10,24 +11,24 @@ interface CardCommandDeps {
   /** Compute a stable content hash of a TaskConfig for dedup. Injected to keep this module platform-free. */
   hashTaskConfig: (taskConfig: TaskConfig) => string;
   /** Read a card from the board's authoritative CardStore. */
-  getCardStore: (boardDir: string) => CardStore;
+  getCardStore: (baseRef: KindValueRef) => CardStore;
   /**
    * Read the KV dedup entry for a card. Returns null if the card has never been upserted.
    */
-  readCardUpsertEntry: (boardDir: string, cardId: string) => CardUpsertIndexEntry | null;
+  readCardUpsertEntry: (baseRef: KindValueRef, cardId: string) => CardUpsertIndexEntry | null;
   /**
    * Write the KV dedup entry AFTER the journal entry has been appended.
    */
-  writeCardUpsertEntry: (boardDir: string, cardId: string, entry: CardUpsertIndexEntry) => void;
+  writeCardUpsertEntry: (baseRef: KindValueRef, cardId: string, entry: CardUpsertIndexEntry) => void;
   liveCardToTaskConfig: (card: BoardLiveCard) => TaskConfig;
-  appendEventToJournal: (boardDir: string, event: GraphEvent) => void;
-  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
+  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
 }
 
 export interface CardCommandHandlers {
   cmdUpsertCard: (args: string[]) => void;
   /** Core upsert: card must already be in CardStore. Used by compat layer and clean CLI. */
-  upsertCardById: (boardDir: string, cardId: string, restart: boolean) => string;
+  upsertCardById: (baseRef: KindValueRef, cardId: string, restart: boolean) => string;
 }
 
 export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHandlers {
@@ -35,15 +36,15 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
    * Core upsert logic: given a card already in CardStore, hash, dedup, journal.
    * Called by clean CLI (--card-id) and by compat layer (after writing card to store).
    */
-  function upsertCardById(boardDir: string, cardId: string, restart: boolean): string {
-    const card = deps.getCardStore(boardDir).readCard(cardId);
+  function upsertCardById(baseRef: KindValueRef, cardId: string, restart: boolean): string {
+    const card = deps.getCardStore(baseRef).readCard(cardId);
     if (!card) {
-      throw new Error(`Card "${cardId}" not found in CardStore at ${boardDir}`);
+      throw new Error(`Card "${cardId}" not found in CardStore at ${baseRef.value}`);
     }
 
     const taskConfig = deps.liveCardToTaskConfig(card);
     const taskConfigHash = deps.hashTaskConfig(taskConfig);
-    const existing = deps.readCardUpsertEntry(boardDir, cardId);
+    const existing = deps.readCardUpsertEntry(baseRef, cardId);
     const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
 
     if (!taskConfigChanged && !restart) {
@@ -51,10 +52,10 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
     }
 
     if (taskConfigChanged) {
-      const blobRef = existing?.blobRef ?? deps.getCardStore(boardDir).readCardKey(cardId) ?? cardId;
+      const blobRef = existing?.blobRef ?? deps.getCardStore(baseRef).readCardKey(cardId) ?? cardId;
 
       // 1. Journal first — card blob is already in CardStore
-      deps.appendEventToJournal(boardDir, {
+      deps.appendEventToJournal(baseRef, {
         type: 'task-upsert',
         taskName: cardId,
         taskConfig,
@@ -62,11 +63,11 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
       });
 
       // 2. KV second — dedup cache update
-      deps.writeCardUpsertEntry(boardDir, cardId, { blobRef, taskConfigHash, updatedAt: new Date().toISOString() });
+      deps.writeCardUpsertEntry(baseRef, cardId, { blobRef, taskConfigHash, updatedAt: new Date().toISOString() });
     }
 
     if (restart) {
-      deps.appendEventToJournal(boardDir, {
+      deps.appendEventToJournal(baseRef, {
         type: 'task-restart',
         taskName: cardId,
         timestamp: new Date().toISOString(),
@@ -81,16 +82,16 @@ export function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHan
     const cardIdIdx = args.indexOf('--card-id');
     const restart = args.includes('--restart');
     const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const boardDir = baseRefRaw ? parseRef(baseRefRaw).value : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
     const cardId = cardIdIdx !== -1 ? args[cardIdIdx + 1] : undefined;
 
-    if (!boardDir || !cardId) {
+    if (!baseRef || !cardId) {
       console.error('Usage: board-live-cards upsert-card --base-ref <::kind::value> --card-id <id> [--restart]');
       process.exit(1);
     }
 
-    const msg = upsertCardById(boardDir, cardId, restart);
-    void deps.processAccumulatedEventsInfinitePass(boardDir);
+    const msg = upsertCardById(baseRef, cardId, restart);
+    void deps.processAccumulatedEventsInfinitePass(baseRef);
     console.log(msg);
   }
 

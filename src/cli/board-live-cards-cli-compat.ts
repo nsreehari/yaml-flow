@@ -6,6 +6,7 @@ import type { CommandResponse } from './board-live-cards-lib-types.js';
 import { Resp } from './board-live-cards-lib-types.js';
 import { createFsKvStorage } from './storage-fs-adapters.js';
 import { serializeRef } from './storage-interface.js';
+import type { KindValueRef } from './storage-interface.js';
 
 export type BoardLiveCard = LiveCard;
 
@@ -15,10 +16,10 @@ function getCompatSourceKv(boardDir: string) {
 }
 
 interface CompatDeps {
-  getCardAdminStore: (boardDir: string) => CardAdminStore;
-  upsertCardById: (boardDir: string, cardId: string, restart: boolean) => string;
-  validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
-  processAccumulatedEventsInfinitePass: (boardDir: string) => Promise<boolean>;
+  getCardAdminStore: (baseRef: KindValueRef) => CardAdminStore;
+  upsertCardById: (baseRef: KindValueRef, cardId: string, restart: boolean) => string;
+  validateCards: (cards: Record<string, unknown>[], baseRef: KindValueRef | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
+  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
   cmdSourceDataFetched: (args: string[]) => void;
 }
 
@@ -55,11 +56,11 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     const globIdx = args.indexOf('--card-glob');
     const restart = args.includes('--restart');
     const boardDirRaw = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-    const boardDir = boardDirRaw ? path.resolve(boardDirRaw) : undefined;
+    const boardRef: KindValueRef | undefined = boardDirRaw ? { kind: 'fs-path', value: path.resolve(boardDirRaw) } : undefined;
     const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
     const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
 
-    if (!boardDir || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
+    if (!boardRef || (!cardFile && !cardGlob) || (cardFile && cardGlob)) {
       console.error('Usage: board-live-cards upsert-card --rg <dir> (--card <card.json> | --card-glob <glob>) [--restart]');
       process.exit(1);
     }
@@ -76,7 +77,7 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     // Phase 1: parse all files, check for duplicates and id→path remapping
     const plans: Array<{ card: BoardLiveCard; absPath: string }> = [];
     const seenIds = new Map<string, string>(); // cardId → absPath
-    const compatKv = getCompatSourceKv(boardDir!);
+    const compatKv = getCompatSourceKv(boardRef.value);
 
     for (const absPath of files) {
       const card = readCardFromFile(absPath);
@@ -103,21 +104,21 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     }
 
     // Phase 2: write to CardStore then upsert via clean handler (which expects --base-ref)
-    const store = deps.getCardAdminStore(boardDir);
+    const store = deps.getCardAdminStore(boardRef);
     let changedCount = 0;
     let skippedCount = 0;
     const logs: string[] = [];
 
     for (const { card } of plans) {
       store.writeCard(card.id, card);
-      const msg = deps.upsertCardById(boardDir, card.id, restart);
+      const msg = deps.upsertCardById(boardRef, card.id, restart);
       if (msg.includes('skipped')) { skippedCount++; } else { changedCount++; }
       logs.push(msg);
       compatKv.write(card.id, plans.find(p => p.card === card)!.absPath);
     }
 
     if (changedCount > 0) {
-      void deps.processAccumulatedEventsInfinitePass(boardDir);
+      void deps.processAccumulatedEventsInfinitePass(boardRef);
     }
 
     if (cardGlob) {
@@ -135,8 +136,8 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     const cardIdx = args.indexOf('--card');
     const globIdx = args.indexOf('--card-glob');
     const boardDirRaw = rgIdx !== -1 ? args[rgIdx + 1] : undefined;
-    // Internally resolve --rg to an absolute path; downstream validateCards receives the resolved string
-    const boardDir = boardDirRaw ? path.resolve(boardDirRaw) : undefined;
+    // Internally resolve --rg to an absolute path; downstream validateCards receives the ref
+    const boardRef: KindValueRef | undefined = boardDirRaw ? { kind: 'fs-path', value: path.resolve(boardDirRaw) } : undefined;
     const cardFile = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
     const cardGlob = globIdx !== -1 ? args[globIdx + 1] : undefined;
 
@@ -174,7 +175,7 @@ export function createCompatCommandHandlers(deps: CompatDeps): CompatCommandHand
     }
 
     // Validate parsed cards via clean handler
-    const results = deps.validateCards(cards, boardDir);
+    const results = deps.validateCards(cards, boardRef);
     let failures = fileErrors.length;
 
     for (const r of results) {

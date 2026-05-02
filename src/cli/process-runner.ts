@@ -29,6 +29,8 @@ import { randomUUID, createHash } from 'node:crypto';
 
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
 import type { InvocationAdapter, DispatchResult } from './process-interface.js';
+import type { KindValueRef } from './storage-interface.js';
+import { serializeRef } from './storage-interface.js';
 export type { CommandSpec };
 
 // ============================================================================
@@ -334,12 +336,13 @@ class NodeInvocationAdapter implements InvocationAdapter {
   ) {}
 
   async requestSourceFetch(
-    boardDir: string,
+    baseRef: KindValueRef,
     enrichedCard: Record<string, unknown>,
     callbackToken: string,
   ): Promise<DispatchResult> {
     if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
     try {
+      const boardDir = baseRef.value;
       const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
       const enrichedCardPath = makeBoardTempFilePath(boardDir, `card-enriched-${cardId}`);
       fs.writeFileSync(enrichedCardPath, JSON.stringify(enrichedCard, null, 2), 'utf-8');
@@ -352,10 +355,10 @@ class NodeInvocationAdapter implements InvocationAdapter {
     }
   }
 
-  async requestProcessAccumulated(boardDir: string): Promise<DispatchResult> {
+  async requestProcessAccumulated(baseRef: KindValueRef): Promise<DispatchResult> {
     if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
     try {
-      const { cmd, args } = buildBoardCliInvocation(this.cliDir, 'process-accumulated-events', ['--rg', boardDir]);
+      const { cmd, args } = buildBoardCliInvocation(this.cliDir, 'process-accumulated-events', ['--base-ref', serializeRef(baseRef)]);
       runDetached({ command: cmd, args });
       return { dispatched: true, invocationId: randomUUID() };
     } catch (err) {

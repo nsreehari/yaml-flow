@@ -36,6 +36,7 @@ import {
   computeStableJsonHash,
   createFsKvStorage,
   createFsBlobStorage,
+  createFsAbsolutePathBlobStorage,
   createFsAtomicRelayLock,
   createFsJournalStorageAdapter,
   createFsCardStorageAdapter,
@@ -60,8 +61,8 @@ const BOARD_LOCK_FILE = '.board.lock';
 const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
-function createBoardConfig(boardDir: string): BoardConfigStore {
-  return createBoardConfigStore(createFsKvStorage(joinPath(boardDir, '.config')));
+function createBoardConfig(baseRef: KindValueRef): BoardConfigStore {
+  return createBoardConfigStore(createFsKvStorage(joinPath(baseRef.value, '.config')));
 }
 
 function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
@@ -75,13 +76,14 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
   return {
     requestProcessAccumulated: base.requestProcessAccumulated.bind(base),
     async requestSourceFetch(
-      boardDir: string,
+      baseRef: KindValueRef,
       enrichedCard: Record<string, unknown>,
       callbackToken: string,
     ) {
       if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return { dispatched: false, invocationId: undefined };
       try {
-        const executorRef = createBoardConfig(boardDir).readTaskExecutorRef() ?? builtInSourceCliExecutorRef();
+        const dir = baseRef.value;
+        const executorRef = createBoardConfig(baseRef).readTaskExecutorRef() ?? builtInSourceCliExecutorRef();
 
         const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
         type SourceDef = { bindTo: string; outputFile?: string; [k: string]: unknown };
@@ -93,15 +95,15 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
             continue;
           }
           const sourceToken = encodeSourceToken({
-            cbk: callbackToken, rg: boardDir, br: serializeRef({ kind: 'fs-path', value: boardDir }), cid: cardId,
+            cbk: callbackToken, rg: dir, br: serializeRef(baseRef), cid: cardId,
             b: src.bindTo, d: src.outputFile, cs: undefined,
           });
-          const inFile  = makeBoardTempFilePath(boardDir, `source-in-${src.bindTo}`);
-          const outFile = makeBoardTempFilePath(boardDir, `source-out-${src.bindTo}`);
-          const errFile = makeBoardTempFilePath(boardDir, `source-err-${src.bindTo}`, '.txt');
+          const inFile  = makeBoardTempFilePath(dir, `source-in-${src.bindTo}`);
+          const outFile = makeBoardTempFilePath(dir, `source-out-${src.bindTo}`);
+          const errFile = makeBoardTempFilePath(dir, `source-err-${src.bindTo}`, '.txt');
           const inEnvelope = {
             source_def: src,
-            base_ref: serializeRef({ kind: 'fs-path', value: boardDir }),
+            base_ref: serializeRef(baseRef),
             callback: {
               token: sourceToken,
               via: { howToRun: 'local-node' as const, whatToRun: serializeRef({ kind: 'fs-path', value: boardCliScriptPath }) },
@@ -215,27 +217,27 @@ export interface CardInventoryIndex {
   byCardPath: Map<string, CardInventoryEntry>;
 }
 
-export function readCardInventory(boardDir: string): CardInventoryEntry[] {
-  const inventoryPath = joinPath(boardDir, INVENTORY_FILE);
+export function readCardInventory(baseRef: KindValueRef): CardInventoryEntry[] {
+  const inventoryPath = joinPath(baseRef.value, INVENTORY_FILE);
   const raw = blobStorageForRef({ kind: 'fs-path', value: inventoryPath }).read(inventoryPath);
   if (!raw) return [];
   return raw.split('\n').filter(l => l.trim()).map(l => JSON.parse(l) as CardInventoryEntry);
 }
 
-export function lookupCardPath(boardDir: string, cardId: string): string | null {
+export function lookupCardPath(baseRef: KindValueRef, cardId: string): string | null {
   // Check new KV store first
-  const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
+  const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
   const kvEntry = kv.read(cardId) as CardUpsertIndexEntry | null;
   if (kvEntry?.blobRef) return kvEntry.blobRef;
   // Fall back to legacy inventory
-  const entries = readCardInventory(boardDir);
+  const entries = readCardInventory(baseRef);
   const entry = entries.find(e => e.cardId === cardId);
   return entry?.cardFilePath ?? null;
 }
 
 /** Read all entries from the card-upsert KV dedup cache. Keyed by cardId. */
-export function readCardUpsertIndex(boardDir: string): Record<string, CardUpsertIndexEntry> {
-  const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
+export function readCardUpsertIndex(baseRef: KindValueRef): Record<string, CardUpsertIndexEntry> {
+  const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
   const result: Record<string, CardUpsertIndexEntry> = {};
   for (const cardId of kv.listKeys()) {
     const entry = kv.read(cardId) as CardUpsertIndexEntry | null;
@@ -244,19 +246,19 @@ export function readCardUpsertIndex(boardDir: string): Record<string, CardUpsert
   return result;
 }
 
-export function appendCardInventory(boardDir: string, entry: CardInventoryEntry): void {
-  const inventoryPath = joinPath(boardDir, INVENTORY_FILE);
+export function appendCardInventory(baseRef: KindValueRef, entry: CardInventoryEntry): void {
+  const inventoryPath = joinPath(baseRef.value, INVENTORY_FILE);
   const storage = blobStorageForRef({ kind: 'fs-path', value: inventoryPath });
   const existing = storage.read(inventoryPath) ?? '';
   const normalized: CardInventoryEntry = { ...entry, cardFilePath: resolvePath(entry.cardFilePath) };
   storage.write(inventoryPath, existing + JSON.stringify(normalized) + '\n');
 }
 
-export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
+export function buildCardInventoryIndex(baseRef: KindValueRef): CardInventoryIndex {
   const byCardId = new Map<string, CardInventoryEntry>();
   const byCardPath = new Map<string, CardInventoryEntry>();
 
-  for (const entry of readCardInventory(boardDir)) {
+  for (const entry of readCardInventory(baseRef)) {
     const normalizedPath = resolvePath(entry.cardFilePath);
     const normalizedEntry: CardInventoryEntry = {
       ...entry,
@@ -317,7 +319,7 @@ export function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
 
   if (lockStorage.read(lockPath) !== null) {
     // Validate it's a real board envelope
-    const envelope = loadBoardEnvelope(dir);
+    const envelope = loadBoardEnvelope(baseRef);
     restore(envelope.graph);
     return 'exists';
   }
@@ -362,7 +364,8 @@ export function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
  *
  * Falls back to direct board-graph.json read for compatibility with boards created before snapshot-store wiring.
  */
-export function loadBoardEnvelope(dir: string): BoardEnvelope {
+export function loadBoardEnvelope(baseRef: KindValueRef): BoardEnvelope {
+  const dir = baseRef.value;
   const snapshot = nodeStateSnapshotStore.readSnapshot(dir);
   if (!snapshot.values[BOARD_GRAPH_KEY]) {
     throw new Error(`Missing board state at: ${dir}`);
@@ -370,8 +373,8 @@ export function loadBoardEnvelope(dir: string): BoardEnvelope {
   return snapshotEntriesToBoardEnvelope(snapshot.values);
 }
 
-export function loadBoard(dir: string): LiveGraph {
-  const envelope = loadBoardEnvelope(dir);
+export function loadBoard(baseRef: KindValueRef): LiveGraph {
+  const envelope = loadBoardEnvelope(baseRef);
   return restore(envelope.graph);
 }
 
@@ -391,7 +394,8 @@ export function loadBoard(dir: string): LiveGraph {
  *
  * Throws if version mismatch detected (concurrent modification from another host/process).
  */
-export function saveBoard(dir: string, rg: ReactiveGraph, journalOrCursor: BoardJournal | string): void {
+export function saveBoard(baseRef: KindValueRef, rg: ReactiveGraph, journalOrCursor: BoardJournal | string): void {
+  const dir = baseRef.value;
   const newCursor = typeof journalOrCursor === 'string' ? journalOrCursor : journalOrCursor.lastDrainedJournalId;
   const snap = rg.snapshot();
   const envelope: BoardEnvelope = {
@@ -414,30 +418,28 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journalOrCursor: Board
   }
 }
 
-function runtimeOutConfigPath(boardDir: string): string {
-  return joinPath(boardDir, RUNTIME_OUT_FILE);
-}
-
-function resolveConfiguredRuntimeOutDir(boardDir: string): string {
-  const cfgPath = runtimeOutConfigPath(boardDir);
+function resolveConfiguredRuntimeOutDir(baseRef: KindValueRef): string {
+  const dir = baseRef.value;
+  const cfgPath = joinPath(dir, RUNTIME_OUT_FILE);
   const cfgStorage = blobStorageForRef({ kind: 'fs-path', value: cfgPath });
   const configured = cfgStorage.read(cfgPath)?.trim();
   if (configured) {
-    return isAbsolutePath(configured) ? configured : resolvePath(boardDir, configured);
+    return isAbsolutePath(configured) ? configured : resolvePath(dir, configured);
   }
-  const defaultDir = joinPath(boardDir, DEFAULT_RUNTIME_OUT_DIR);
+  const defaultDir = joinPath(dir, DEFAULT_RUNTIME_OUT_DIR);
   cfgStorage.write(cfgPath, defaultDir);
   return defaultDir;
 }
 
-function configureRuntimeOutDir(boardDir: string, runtimeOut?: string): string {
+function configureRuntimeOutDir(baseRef: KindValueRef, runtimeOut?: string): string {
+  const dir = baseRef.value;
   const resolved = runtimeOut
-    ? (isAbsolutePath(runtimeOut) ? runtimeOut : resolvePath(boardDir, runtimeOut))
-    : joinPath(boardDir, DEFAULT_RUNTIME_OUT_DIR);
+    ? (isAbsolutePath(runtimeOut) ? runtimeOut : resolvePath(dir, runtimeOut))
+    : joinPath(dir, DEFAULT_RUNTIME_OUT_DIR);
   // ensure dir exists by writing a sentinel via blobStorage (mkdirSync is in storage layer)
   const sentinelPath = joinPath(resolved, '.keep');
   blobStorageForRef({ kind: 'fs-path', value: sentinelPath }).write(sentinelPath, '');
-  const cfgPath = runtimeOutConfigPath(boardDir);
+  const cfgPath = joinPath(dir, RUNTIME_OUT_FILE);
   blobStorageForRef({ kind: 'fs-path', value: cfgPath }).write(cfgPath, resolved);
   return resolved;
 }
@@ -489,26 +491,27 @@ export function decodeSourceToken(token: string): SourceTokenPayload | null {
  * Append a raw event to the journal file. No lock, no file read.
  * Safe for hundreds of concurrent callers (appendFileSync is atomic for small writes).
  */
-export function appendEventToJournal(boardDir: string, event: GraphEvent): void {
-  createJournalStore(createFsJournalStorageAdapter(boardDir)).appendEvent(event);
+export function appendEventToJournal(baseRef: KindValueRef, event: GraphEvent): void {
+  createJournalStore(createFsJournalStorageAdapter(baseRef.value)).appendEvent(event);
 }
 
 /**
  * Read journal entries after the given ID. Pure file read, no mutation.
  */
-export function getUndrainedEntries(boardDir: string, lastDrainedId: string): JournalEntry[] {
-  const entries = createFsJournalStorageAdapter(boardDir).readAllEntries();
+export function getUndrainedEntries(baseRef: KindValueRef, lastDrainedId: string): JournalEntry[] {
+  const entries = createFsJournalStorageAdapter(baseRef.value).readAllEntries();
   if (!lastDrainedId) return entries;
   const idx = entries.findIndex(e => e.id === lastDrainedId);
   return idx === -1 ? entries : entries.slice(idx + 1);
 }
 
-function determineLatestPendingAccumulated(boardDir: string): number {
-  const lockPath = joinPath(boardDir, BOARD_LOCK_FILE);
+function determineLatestPendingAccumulated(baseRef: KindValueRef): number {
+  const dir = baseRef.value;
+  const lockPath = joinPath(dir, BOARD_LOCK_FILE);
   if (blobStorageForRef({ kind: 'fs-path', value: lockPath }).read(lockPath) === null) return 0;
   try {
-    const envelope = loadBoardEnvelope(boardDir);
-    const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
+    const envelope = loadBoardEnvelope(baseRef);
+    const journalStore = createJournalStore(createFsJournalStorageAdapter(dir));
     return journalStore.pendingCount(envelope.lastDrainedJournalId);
   } catch {
     return 0;
@@ -526,17 +529,18 @@ function determineLatestPendingAccumulated(boardDir: string): number {
  * This function does NOT guarantee full settlement; it only advances the baton
  * by one cycle in the relay model.
  */
-export async function processAccumulatedEvents(boardDir: string, continuation?: () => void): Promise<boolean> {
-  const lockPath = joinPath(boardDir, BOARD_LOCK_FILE);
+export async function processAccumulatedEvents(baseRef: KindValueRef, continuation?: () => void): Promise<boolean> {
+  const dir = baseRef.value;
+  const lockPath = joinPath(dir, BOARD_LOCK_FILE);
   const cliDir = __dirname;
   const lock = createFsAtomicRelayLock(lockPath);
   return withRelayLock(lock, async () => {
-    const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
+    const journalStore = createJournalStore(createFsJournalStorageAdapter(dir));
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
-      appendEventToJournal(boardDir, { type: 'task-completed', taskName, data, timestamp: new Date().toISOString() });
+      appendEventToJournal(baseRef, { type: 'task-completed', taskName, data, timestamp: new Date().toISOString() });
     };
     const taskFailedFn = (taskName: string, error: string): void => {
-      appendEventToJournal(boardDir, { type: 'task-failed', taskName, error, timestamp: new Date().toISOString() });
+      appendEventToJournal(baseRef, { type: 'task-failed', taskName, error, timestamp: new Date().toISOString() });
     };
     const onDispatchFailed = (entry: import('./board-live-cards-all-stores.js').ExecutionRequestEntry, error: string): void => {
       const p = entry.payload as Record<string, unknown>;
@@ -545,31 +549,31 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
         ?? 'unknown';
       taskFailedFn(taskName, error);
     };
-    const executionRequestStore = createExecutionRequestStore(createFsKvStorage(joinPath(boardDir, '.execution-requests')), onDispatchFailed);
+    const executionRequestStore = createExecutionRequestStore(createFsKvStorage(joinPath(dir, '.execution-requests')), onDispatchFailed);
     const cardHandlerAdapters = {
-      cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
-      cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(joinPath(boardDir, '.state-snapshot'))),
-      fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
-      outputStore: createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(boardDir))),
+      cardStore: createCardStore(createFsCardStorageAdapter(dir)),
+      cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(joinPath(dir, '.state-snapshot'))),
+      fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(dir), resolveSourceDataRef),
+      outputStore: createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))),
       executionRequestStore,
     };
-    const envelope = loadBoardEnvelope(boardDir);
+    const envelope = loadBoardEnvelope(baseRef);
     const live = restore(envelope.graph);
     const { events: undrained, newCursor } = journalStore.readEntriesAfterCursor(envelope.lastDrainedJournalId);
     const invocationAdapter = createBoardInvocationAdapter(cliDir);
-    const rg = createReactiveGraph(live, { handlers: { 'card-handler': createCardHandlerFn(boardDir, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn) } });
+    const rg = createReactiveGraph(live, { handlers: { 'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn) } });
     rg.pushAll(undrained);
     await rg.dispose({ wait: true });
-    saveBoard(boardDir, rg, newCursor);
+    saveBoard(baseRef, rg, newCursor);
     try {
-      cardHandlerAdapters.outputStore.writeStatusSnapshot(buildBoardStatusObject(resolvePath(boardDir), restore(rg.snapshot())));
+      cardHandlerAdapters.outputStore.writeStatusSnapshot(buildBoardStatusObject(serializeRef(baseRef), restore(rg.snapshot())));
     } catch (err) {
       console.warn(`[board-live-cards] status cache publish failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     executionRequestStore.dispatchEntriesForJournalId(newCursor, (entry) => {
       if (entry.taskKind === 'source-fetch') {
-        const p = entry.payload as { boardDir: string; enrichedCard: Record<string, unknown>; callbackToken: string };
-        invocationAdapter.requestSourceFetch(p.boardDir, p.enrichedCard, p.callbackToken)
+        const p = entry.payload as { boardRef: string; enrichedCard: Record<string, unknown>; callbackToken: string };
+        invocationAdapter.requestSourceFetch(parseRef(p.boardRef), p.enrichedCard, p.callbackToken)
           .catch((err: unknown) => taskFailedFn(
             (p.enrichedCard?.id as string | undefined) ?? 'unknown',
             err instanceof Error ? err.message : String(err),
@@ -586,17 +590,17 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
  * via the adapter to continue — allowing the current process to exit immediately after.
  * If nothing is pending, returns without doing anything.
  */
-export async function processAccumulatedEventsInfinitePass(boardDir: string, adapter: InvocationAdapter): Promise<boolean> {
-  if (determineLatestPendingAccumulated(boardDir) === 0) return true;
-  return processAccumulatedEvents(boardDir, () => { void adapter.requestProcessAccumulated(boardDir); });
+export async function processAccumulatedEventsInfinitePass(baseRef: KindValueRef, adapter: InvocationAdapter): Promise<boolean> {
+  if (determineLatestPendingAccumulated(baseRef) === 0) return true;
+  return processAccumulatedEvents(baseRef, () => { void adapter.requestProcessAccumulated(baseRef); });
 }
 
 /**
  * Run one immediate drain pass then schedule infinite-pass continuation.
  */
-export async function processAccumulatedEventsForced(boardDir: string, adapter: InvocationAdapter): Promise<void> {
-  await processAccumulatedEvents(boardDir);
-  await processAccumulatedEventsInfinitePass(boardDir, adapter);
+export async function processAccumulatedEventsForced(baseRef: KindValueRef, adapter: InvocationAdapter): Promise<void> {
+  await processAccumulatedEvents(baseRef);
+  await processAccumulatedEventsInfinitePass(baseRef, adapter);
 }
 
 // ============================================================================
@@ -658,10 +662,10 @@ interface ValidateResultLike {
 }
 
 interface NonCoreCommandDeps {
-  getConfigStore: (boardDir: string) => BoardConfigStore;
-  getCardStore: (boardDir: string) => CardStore;
+  getConfigStore: (baseRef: KindValueRef) => BoardConfigStore;
+  getCardStore: (baseRef: KindValueRef) => CardStore;
   executor: CommandExecutor;
-  makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
+  makeTempFilePath: (baseRef: KindValueRef, label: string, ext?: string) => string;
   validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
   readStdin: () => string;
   cliDir: string;
@@ -673,7 +677,7 @@ interface NonCoreCommandHandlers {
   cmdDescribeTaskExecutorCapabilities: (args: string[]) => void;
   cmdValidateCard: (args: string[]) => void;
   /** Direct validate — used by compat layer to avoid stdin coupling. */
-  validateCards: (cards: Record<string, unknown>[], boardDir: string | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
+  validateCards: (cards: Record<string, unknown>[], baseRef: KindValueRef | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
 }
 
 function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandHandlers {
@@ -689,7 +693,7 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
     const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
     const mockProjectionsRaw = mockProjectionsIdx !== -1 ? args[mockProjectionsIdx + 1] : undefined;
-    const boardDirArg = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
+    const boardDirArg = brIdx !== -1 ? args[brIdx + 1] : undefined;
     const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
 
     if (!cardFilePath) {
@@ -733,7 +737,8 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
 
     const sourceDef = source_defs[sourceIdx];
     const cardDir = resolvePath(dirnamePath(cardFilePath));
-    const boardDir = boardDirArg ?? cardDir;
+    const baseRef: KindValueRef = boardDirArg ? parseRef(boardDirArg) : { kind: 'fs-path', value: cardDir };
+    const boardDir = baseRef.value; // used for inPayload.boardDir (executor string compat)
 
     // Parse --mock-projections (JSON string or @file.json) — pre-resolved _projections values for testing
     let mockProjections: Record<string, unknown> = {};
@@ -759,7 +764,7 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     }
 
     // Detect registered task-executor
-    const teRef = deps.getConfigStore(boardDir).readTaskExecutorRef();
+    const teRef = deps.getConfigStore(baseRef).readTaskExecutorRef();
     const teSpec = teRef ? buildLocalBaseSpec(teRef, deps.cliDir) : undefined;
     const taskExecutorCmd = teSpec?.command;
     const taskExecutorBaseArgs = teSpec?.baseArgs ?? [];
@@ -799,9 +804,9 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     console.log(`[probe-source] executor:    ${taskExecutorCmd ?? 'built-in (source.cli only)'}`);
     console.log('[probe-source] running fetch...');
 
-    const inFile = deps.makeTempFilePath(boardDir, `probe-in-${sourceDef.bindTo}`);
-    const tmpOut = deps.makeTempFilePath(boardDir, `probe-out-${sourceDef.bindTo}`);
-    const errFile = deps.makeTempFilePath(boardDir, `probe-err-${sourceDef.bindTo}`, '.txt');
+    const inFile = deps.makeTempFilePath(baseRef, `probe-in-${sourceDef.bindTo}`);
+    const tmpOut = deps.makeTempFilePath(baseRef, `probe-out-${sourceDef.bindTo}`);
+    const errFile = deps.makeTempFilePath(baseRef, `probe-err-${sourceDef.bindTo}`, '.txt');
 
     blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(inPayload, null, 2));
 
@@ -854,7 +859,7 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
 
     // Cleanup temp inputs
     for (const f of [inFile, errFile]) {
-      try { blobStorageForRef({ kind: 'fs-path', value: f }).remove(f); } catch { /* best-effort */ }
+      try { createFsAbsolutePathBlobStorage().remove(f); } catch { /* best-effort */ }
     }
 
     // Report
@@ -869,12 +874,12 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
         blobStorageForRef({ kind: 'fs-path', value: absOut }).write(absOut, resultRaw);
         console.log(`[probe-source] result written to: ${outFile}`);
       } else {
-        try { blobStorageForRef({ kind: 'fs-path', value: tmpOut }).remove(tmpOut); } catch { /* best-effort */ }
+        try { createFsAbsolutePathBlobStorage().remove(tmpOut); } catch { /* best-effort */ }
       }
     } else {
       console.log('[probe-source] STATUS:      PROBE_FAIL');
       if (errorMsg) console.log(`[probe-source] error:       ${errorMsg}`);
-      try { blobStorageForRef({ kind: 'fs-path', value: tmpOut }).remove(tmpOut); } catch { /* best-effort */ }
+      try { createFsAbsolutePathBlobStorage().remove(tmpOut); } catch { /* best-effort */ }
     }
 
     // Machine-readable summary line — agents parse this
@@ -895,15 +900,15 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
 
   function cmdDescribeTaskExecutorCapabilities(args: string[]): void {
     const brIdx = args.indexOf('--base-ref');
-    const boardDir = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
-    if (!boardDir) {
+    const baseRef = brIdx !== -1 ? parseRef(args[brIdx + 1]) : undefined;
+    if (!baseRef) {
       console.error('Usage: board-live-cards describe-task-executor-capabilities --base-ref <::kind::value>');
       process.exit(1);
     }
 
-    const teRef = deps.getConfigStore(boardDir).readTaskExecutorRef();
+    const teRef = deps.getConfigStore(baseRef).readTaskExecutorRef();
     if (!teRef) {
-      console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${boardDir}`);
+      console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${baseRef.value}`);
       process.exit(1);
     }
 
@@ -1076,9 +1081,9 @@ EXAMPLES
 
   function validateCardObjects(
     cards: Record<string, unknown>[],
-    boardDir: string | undefined,
+    baseRef: KindValueRef | undefined,
   ): CommandResponse<{ cardId: string; errors: string[] }>[] {
-    const teRef = boardDir ? deps.getConfigStore(boardDir).readTaskExecutorRef() : undefined;
+    const teRef = baseRef ? deps.getConfigStore(baseRef).readTaskExecutorRef() : undefined;
     const teSpec = teRef ? buildLocalBaseSpec(teRef, deps.cliDir) : undefined;
 
     return cards.map((card) => {
@@ -1089,7 +1094,7 @@ EXAMPLES
       if (teSpec && Array.isArray(card.source_defs)) {
         for (const src of card.source_defs as Array<Record<string, unknown>>) {
           const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
-          const tmpFile = deps.makeTempFilePath(boardDir!, `validate-src-${bindTo}`);
+          const tmpFile = deps.makeTempFilePath(baseRef!, `validate-src-${bindTo}`);
           try {
             blobStorageForRef({ kind: 'fs-path', value: tmpFile }).write(tmpFile, JSON.stringify(src));
             let stdout: string;
@@ -1117,7 +1122,7 @@ EXAMPLES
           } catch (err) {
             sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${err instanceof Error ? err.message : String(err)}`);
           } finally {
-            try { blobStorageForRef({ kind: 'fs-path', value: tmpFile }).remove(tmpFile); } catch { /* ignore */ }
+            try { createFsAbsolutePathBlobStorage().remove(tmpFile); } catch { /* ignore */ }
           }
         }
       }
@@ -1134,7 +1139,7 @@ EXAMPLES
     const brIdx = args.indexOf('--base-ref');
     const cardIdIdx = args.indexOf('--card-id');
     const stdioMode = args.includes('--cards-stdio');
-    const boardDir = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
+    const baseRef = brIdx !== -1 ? parseRef(args[brIdx + 1]) : undefined;
 
     if (stdioMode) {
       // --cards-stdio: read JSON array of card objects from stdin, write results to stdout
@@ -1148,7 +1153,7 @@ EXAMPLES
         console.log(JSON.stringify([resp]));
         return;
       }
-      const results = validateCardObjects(cards, boardDir);
+      const results = validateCardObjects(cards, baseRef);
       console.log(JSON.stringify(results, null, 2));
       return;
     }
@@ -1156,14 +1161,14 @@ EXAMPLES
     if (cardIdIdx !== -1) {
       // --card-id: read from CardStore
       const cardId = args[cardIdIdx + 1];
-      if (!cardId || !boardDir) {
+      if (!cardId || !baseRef) {
         throw new Error('Usage: board-live-cards validate-card --base-ref <::kind::value> --card-id <id>');
       }
-      const card = deps.getCardStore(boardDir).readCard(cardId);
+      const card = deps.getCardStore(baseRef).readCard(cardId);
       if (!card) {
-        throw new Error(`Card "${cardId}" not found in board at ${boardDir}`);
+        throw new Error(`Card "${cardId}" not found in board at ${baseRef.value}`);
       }
-      const [result] = validateCardObjects([card as Record<string, unknown>], boardDir);
+      const [result] = validateCardObjects([card as Record<string, unknown>], baseRef);
       if (result.status === 'error') {
         for (const err of result.data.errors) console.error(`  ${err}`);
         throw new Error(`Card "${cardId}" failed validation.`);
@@ -1189,7 +1194,7 @@ EXAMPLES
 // ============================================================================
 
 interface ExecutionCommandDeps {
-  processAccumulatedEventsForced: (boardDir: string) => Promise<void>;
+  processAccumulatedEventsForced: (baseRef: KindValueRef) => Promise<void>;
 }
 
 interface ExecutionCommandHandlers {
@@ -1199,12 +1204,12 @@ interface ExecutionCommandHandlers {
 function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
   async function cmdTryDrain(args: string[]): Promise<void> {
     const brIdx = args.indexOf('--base-ref');
-    const boardDir = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
-    if (!boardDir) {
+    const baseRef = brIdx !== -1 ? parseRef(args[brIdx + 1]) : undefined;
+    if (!baseRef) {
       console.error('Usage: board-live-cards process-accumulated-events --base-ref <::kind::value>');
       process.exit(1);
     }
-    await deps.processAccumulatedEventsForced(boardDir);
+    await deps.processAccumulatedEventsForced(baseRef);
   }
 
   return { cmdTryDrain };
@@ -1213,14 +1218,14 @@ function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCo
 export async function cli(argv: string[]): Promise<void> {
   const processAccumulatedAdapter = createBoardInvocationAdapter(__dirname);
   const executor = createNodeCommandExecutor();
-  const scheduleInfinitePass = (boardDir: string) => processAccumulatedEventsInfinitePass(boardDir, processAccumulatedAdapter);
-  const scheduleForced = (boardDir: string) => processAccumulatedEventsForced(boardDir, processAccumulatedAdapter);
+  const scheduleInfinitePass = (baseRef: KindValueRef) => processAccumulatedEventsInfinitePass(baseRef, processAccumulatedAdapter);
+  const scheduleForced = (baseRef: KindValueRef) => processAccumulatedEventsForced(baseRef, processAccumulatedAdapter);
   const boardCommandHandlers = createBoardCommandHandlers({
     initBoard,
     configureRuntimeOutDir,
     loadBoard,
-    getOutputStore: (dir: string) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(dir))),
-    buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(resolvePath(dir), live),
+    getOutputStore: (baseRef: KindValueRef) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))),
+    buildBoardStatusObject: (baseRef: KindValueRef, live: LiveGraph) => buildBoardStatusObject(serializeRef(baseRef), live),
     getConfigStore: createBoardConfig,
     appendEventToJournal,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
@@ -1228,30 +1233,30 @@ export async function cli(argv: string[]): Promise<void> {
   const callbackCommandHandlers = createCallbackCommandHandlers({
     decodeCallbackToken,
     decodeSourceToken,
-    getFetchedSourcesStore: (boardDir: string) => createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
+    getFetchedSourcesStore: (baseRef: KindValueRef) => createFetchedSourcesStore(createFsBlobStorage(baseRef.value), resolveSourceDataRef),
     generateId: genUUID,
-    writeRuntimeDataObjects: (boardDir: string, data: Record<string, unknown>) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(boardDir))).writeDataObjects(data),
+    writeRuntimeDataObjects: (baseRef: KindValueRef, data: Record<string, unknown>) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))).writeDataObjects(data),
     appendEventToJournal,
     processAccumulatedEventsForced: scheduleForced,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
   const nonCoreCommandHandlers = createNonCoreCommandHandlers({
     getConfigStore: createBoardConfig,
-    getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
+    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value)),
     executor,
-    makeTempFilePath: makeBoardTempFilePath,
+    makeTempFilePath: (baseRef: KindValueRef, label: string, ext?: string) => makeBoardTempFilePath(baseRef.value, label, ext),
     validateLiveCardDefinition,
     readStdin: () => blobStorageForRef({ kind: 'fs-path', value: '/dev/stdin' }).read('/dev/stdin') ?? '',
     cliDir: __dirname,
   });
   const cardCommandHandlers = createCardCommandHandlers({
-    getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
-    readCardUpsertEntry: (boardDir: string, cardId: string): CardUpsertIndexEntry | null => {
-      const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
+    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value)),
+    readCardUpsertEntry: (baseRef: KindValueRef, cardId: string): CardUpsertIndexEntry | null => {
+      const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
       return kv.read(cardId) as CardUpsertIndexEntry | null;
     },
-    writeCardUpsertEntry: (boardDir: string, cardId: string, entry: CardUpsertIndexEntry): void => {
-      const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
+    writeCardUpsertEntry: (baseRef: KindValueRef, cardId: string, entry: CardUpsertIndexEntry): void => {
+      const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
       kv.write(cardId, entry);
     },
     liveCardToTaskConfig,
@@ -1260,7 +1265,7 @@ export async function cli(argv: string[]): Promise<void> {
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
   const compatCommandHandlers = createCompatCommandHandlers({
-    getCardAdminStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
+    getCardAdminStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value)),
     upsertCardById: cardCommandHandlers.upsertCardById,
     validateCards: nonCoreCommandHandlers.validateCards,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
