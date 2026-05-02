@@ -812,8 +812,9 @@ export async function cli(argv: string[]): Promise<void> {
   switch (cmd) {
     case 'init': {
       const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value>');
+      const outputsStoreRef = optFlag(rest, '--outputs-store-ref');
       const body = await readStdinBody();
-      printResult(board().init({ params: { cardStoreRef }, body }));
+      printResult(board().init({ params: { cardStoreRef, ...(outputsStoreRef ? { outputsStoreRef } : {}) }, body }));
       return;
     }
     case 'status': {
@@ -822,6 +823,10 @@ export async function cli(argv: string[]): Promise<void> {
     }
     case 'get-card-store-ref': {
       printResult(board().getCardStoreRef({}));
+      return;
+    }
+    case 'get-outputs-store-ref': {
+      printResult(board().getOutputsStoreRef({}));
       return;
     }
     case 'remove-card': {

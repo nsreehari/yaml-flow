@@ -209,6 +209,7 @@ export interface BoardLiveCardsPublic {
   status(input: CommandInput): CommandResult<BoardStatusObject>;
   // no params needed
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
+  getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   // params: id
   removeCard(input: CommandInput): CommandResult;
   // params: id
@@ -463,6 +464,8 @@ export function createBoardLiveCardsPublic(
       }
       const cfg = configStore();
       cfg.writeCardStoreRef(storeRef);
+      const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
+      if (outputsStoreRef) cfg.writeOutputsStoreRef(outputsStoreRef);
       const body = (input.body ?? {}) as Record<string, unknown>;
       if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
       if (body['chat-handler-ref'])  cfg.writeChatHandlerRef(body['chat-handler-ref'] as ExecutionRef);
@@ -649,8 +652,16 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
   }
 
+  function getOutputsStoreRef(_input: CommandInput): CommandResult<{ storeRef: string }> {
+    try {
+      const storeRef = configStore().readOutputsStoreRef();
+      if (!storeRef) return fail(`Board at ${baseRef.value} has no outputs store configured`) as CommandResult<{ storeRef: string }>;
+      return ok({ storeRef });
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
+  }
+
   return {
-    init, status, getCardStoreRef, removeCard, retrigger, processAccumulatedEvents,
+    init, status, getCardStoreRef, getOutputsStoreRef, removeCard, retrigger, processAccumulatedEvents,
     upsertCard,
     taskCompleted, taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,

@@ -453,6 +453,8 @@ export interface BoardConfigStore {
   writeChatHandlerRef(ref: ExecutionRef): void;
   readCardStoreRef(): string | null;
   writeCardStoreRef(ref: string): void;
+  readOutputsStoreRef(): string | null;
+  writeOutputsStoreRef(ref: string): void;
   /** @deprecated use readChatHandlerRef */
   readChatHandler(): string | undefined;
   /** @deprecated use writeChatHandlerRef */
@@ -493,6 +495,14 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 
     writeCardStoreRef(ref: string): void {
       kv.write('card-store-ref', ref);
+    },
+
+    readOutputsStoreRef(): string | null {
+      return readKey('outputs-store-ref');
+    },
+
+    writeOutputsStoreRef(ref: string): void {
+      kv.write('outputs-store-ref', ref);
     },
 
     readChatHandler(): string | undefined {

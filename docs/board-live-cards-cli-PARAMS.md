@@ -43,9 +43,9 @@ All other commands have no body.
 ## Board management
 
 ```
-init --base-ref <ref> --card-store-ref <ref>                 # body via stdin (optional)
-  params: { cardStoreRef }                                   # --card-store-ref is required
-  body: {                                                    # stdin
+init --base-ref <ref> --card-store-ref <ref> [--outputs-store-ref <ref>]  # body via stdin (optional)
+  params: { cardStoreRef, outputsStoreRef? }                # --card-store-ref is required
+  body: {                                                   # stdin
     "task-executor-ref"?: { "howToRun": "...", "whatToRun": "...", ... },
     "chat-handler-ref"?:  { "howToRun": "...", "whatToRun": "...", ... }
   }
@@ -54,6 +54,9 @@ status --base-ref <ref>
   → data: BoardStatus JSON
 
 get-card-store-ref --base-ref <ref>
+  → data: { "storeRef": "<::kind::value>" }
+
+get-outputs-store-ref --base-ref <ref>
   → data: { "storeRef": "<::kind::value>" }
 
 remove-card --base-ref <ref> --id <card-id>
