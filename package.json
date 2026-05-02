@@ -88,6 +88,11 @@
       "import": "./dist/storage-refs.js",
       "require": "./dist/storage-refs.cjs"
     },
+    "./execution-refs": {
+      "types": "./dist/execution-refs.d.ts",
+      "import": "./dist/execution-refs.js",
+      "require": "./dist/execution-refs.cjs"
+    },
     "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
     "./package.json": "./package.json"
   },

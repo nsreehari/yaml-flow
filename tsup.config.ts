@@ -18,6 +18,7 @@ export default defineConfig({
     'cli/source-cli-task-executor': 'src/cli/source-cli-task-executor.ts',
     'stores/file': 'src/stores/file.ts',
     'storage-refs': 'src/cli/public-storage-adapter.ts',
+    'execution-refs': 'src/cli/execution-interface.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
