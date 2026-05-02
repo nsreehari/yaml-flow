@@ -53,7 +53,7 @@ import type {
   LiveCard,
   StateSnapshotStorageAdapter,
   StateSnapshotReadView,
-} from './board-live-cards-all-stores.js';
+} from './board-live-cards-lib.js';
 
 // ============================================================================
 // FsBlobStorage

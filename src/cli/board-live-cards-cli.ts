@@ -25,12 +25,21 @@ import type { GraphConfig, TaskConfig, GraphEvent } from '../event-graph/types.j
 import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
-import { createBoardCommandHandlers } from './board-live-cards-cli-board-commands.js';
-import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
-import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
-import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
-import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
-import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
+import {
+  createBoardCommandHandlers,
+  createCallbackCommandHandlers,
+  createCardCommandHandlers,
+  createCardHandlerFn,
+  buildBoardStatusObject,
+  createCardStore, createJournalStore, createExecutionRequestStore,
+  createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
+  createPublishedOutputsStore,
+  BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
+  Resp,
+  type CardUpsertIndexEntry,
+  type BoardConfigStore, type CardStore,
+  type CommandResponse,
+} from './board-live-cards-lib.js';
 import {
   computeStableJsonHash,
   createFsKvStorage,
@@ -42,18 +51,9 @@ import {
   createFsStateSnapshotStorageAdapter,
 } from './storage-fs-adapters.js';
 import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
-import {
-  createCardStore, createJournalStore, createExecutionRequestStore,
-  createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
-  createPublishedOutputsStore,
-  BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
-  type BoardConfigStore, type CardStore,
-} from './board-live-cards-all-stores.js';
-// Re-export domain types and functions for backward compatibility
-import { Resp, type CommandResponse } from './board-live-cards-lib-types.js';
 import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
-export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib-types.js';
-export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib-types.js';
+export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib.js';
+export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib.js';
 
 const BOARD_LOCK_FILE = '.board.lock';
 
@@ -464,7 +464,7 @@ function decodeCallbackToken(token: string): { taskName: string } | null {
 // (SourceTokenPayload interface is re-exported from board-live-cards-lib-types)
 // ============================================================================
 
-import type { SourceTokenPayload } from './board-live-cards-lib-types.js';
+import type { SourceTokenPayload } from './board-live-cards-lib.js';
 
 export function encodeSourceToken(payload: SourceTokenPayload): string {
   return Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -541,7 +541,7 @@ export async function processAccumulatedEvents(baseRef: KindValueRef, continuati
     const taskFailedFn = (taskName: string, error: string): void => {
       appendEventToJournal(baseRef, { type: 'task-failed', taskName, error, timestamp: new Date().toISOString() });
     };
-    const onDispatchFailed = (entry: import('./board-live-cards-all-stores.js').ExecutionRequestEntry, error: string): void => {
+    const onDispatchFailed = (entry: import('./board-live-cards-lib.js').ExecutionRequestEntry, error: string): void => {
       const p = entry.payload as Record<string, unknown>;
       const taskName = (p?.enrichedCard as Record<string, unknown> | undefined)?.id as string | undefined
         ?? p?.cardId as string | undefined
@@ -982,7 +982,7 @@ TASK CALLBACKS  (called by task executor scripts)
   task-progress --base-ref <::kind::value> --token <callbackToken> [--update <json>]
     Signal task progress with optional update payload (for waiting on more evidence, etc.).
 
-SOURCE CALLBACKS  (called internally by run-sourcedefs-internal)
+SOURCE CALLBACKS  (called by executor subprocesses)
   source-data-fetched --tmp <file> --token <sourceToken>
     Atomically rename <file> into the outputFile destination and record delivery
     via journal events. Appends a task-progress event to re-invoke the card handler.
