@@ -16,7 +16,6 @@ export function runBoardCli(args, options = {}) {
     stdio: capture ? 'pipe' : 'pipe',
     env: {
       ...process.env,
-      BOARD_LIVE_CARDS_NO_SPAWN: process.env.BOARD_LIVE_CARDS_NO_SPAWN ?? '1',
       BOARD_DIR: process.env.BOARD_DIR ?? '',
     },
   });

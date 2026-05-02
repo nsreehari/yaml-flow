@@ -43,6 +43,14 @@ probe-source [--base-ref <::kind::value>] --card-id <id> --source-idx <n>
 probe-tmp-source --source-def <sourcedef> --mock-projections <json> --out-ref <resultref>
 ```
 
+## Card store (direct read/write)
+
+```
+update-in-card-store --base-ref <::kind::value> --card-id <id>  # reads card JSON from stdin
+
+read-from-card-store  --base-ref <::kind::value> --card-id <id>
+```
+
 ## Task executor introspection
 
 ```

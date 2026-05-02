@@ -32,6 +32,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import * as path from 'node:path';
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
@@ -313,6 +314,16 @@ export function createBoardLiveCardsPublic(
     },
   };
 
+  // Resolves a blob ref to its string contents.
+  // Absolute paths go directly through absoluteBlob; relative keys are joined to boardDir.
+  const resolveBlobRef = (ref: { kind: string; value: string }): string => {
+    const content = path.isAbsolute(ref.value)
+      ? adapter.absoluteBlob.read(ref.value)
+      : adapter.blobStorage('').read(ref.value);
+    if (content === null) throw new Error(`resolveBlobRef: not found: ::${ref.kind}::${ref.value}`);
+    return content;
+  };
+
   // Store factory helpers — no long-lived singletons, created per call
   const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
   const snapshotStore = () => createStateSnapshotStore(snapshotAdapterImpl);
@@ -368,11 +379,7 @@ export function createBoardLiveCardsPublic(
       cardRuntimeStore: createCardRuntimeStore(adapter.kvStorage('card-runtime')),
       fetchedSourcesStore: createFetchedSourcesStore(
         adapter.blobStorage('sources'),
-        (ref) => {
-          const content = adapter.absoluteBlob.read(ref.value);
-          if (content === null) throw new Error(`resolveBlobRef: not found: ::${ref.kind}::${ref.value}`);
-          return content;
-        },
+        resolveBlobRef,
       ),
       outputStore: outputStore(),
       executionRequestStore,
@@ -578,11 +585,7 @@ export function createBoardLiveCardsPublic(
 
       const fetchedSourcesStore = createFetchedSourcesStore(
         adapter.blobStorage('sources'),
-        (r) => {
-          const content = adapter.absoluteBlob.read(r.value);
-          if (content === null) throw new Error(`resolveBlobRef: not found: ::${r.kind}::${r.value}`);
-          return content;
-        },
+        resolveBlobRef,
       );
 
       const deliveryToken = genId();
@@ -765,7 +768,6 @@ export function createBoardLiveCardsNonCorePublic(
   function runSourceProbe(
     src: Record<string, unknown>,
     mockProjections: Record<string, unknown>,
-    cardDir: string,
     outRef?: string,
   ): CommandResult {
     const teRef = configStore().readTaskExecutorRef();
@@ -778,7 +780,6 @@ export function createBoardLiveCardsNonCorePublic(
 
     const inPayload: Record<string, unknown> = {
       ...src,
-      cwd: typeof src['cwd'] === 'string' && src['cwd'] ? src['cwd'] : cardDir,
       boardDir: baseRef.value,
       _projections: mockProjections,
     };
@@ -854,7 +855,7 @@ export function createBoardLiveCardsNonCorePublic(
       if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
         return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
       }
-      return runSourceProbe(sourceDefs[sourceIdx], mockProjections, baseRef.value, outRef);
+      return runSourceProbe(sourceDefs[sourceIdx], mockProjections, outRef);
     } catch (e) { return err(e); }
   }
 
@@ -866,7 +867,7 @@ export function createBoardLiveCardsNonCorePublic(
       const sourceDef = b['sourceDef'] as Record<string, unknown> | undefined;
       const mockProjections = (b['mockProjections'] ?? {}) as Record<string, unknown>;
       if (!sourceDef) return fail('probeTmpSource body requires sourceDef');
-      return runSourceProbe(sourceDef, mockProjections, baseRef.value, outRef);
+      return runSourceProbe(sourceDef, mockProjections, outRef);
     } catch (e) { return err(e); }
   }
 

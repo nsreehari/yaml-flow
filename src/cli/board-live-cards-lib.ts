@@ -920,17 +920,9 @@ export function createCardHandlerFn(
         );
 
         const dir = baseRef.value;
-        const registeredPath = adapters.cardStore.readCardKey(input.nodeId);
-        // registeredPath may be a full file path (old --card behaviour) or a bare key (id-only).
-        // Only use dirname(registeredPath) when it actually contains a path separator.
-        const isFilePath = registeredPath != null && /[\\/]/.test(registeredPath);
-        const sourceCwd = isFilePath
-          ? registeredPath.replace(/[\\/][^\\/]*$/, '')
-          : dir;
         enrichedCard.source_defs = Array.isArray(enrichedSources)
           ? enrichedSources.map(src => ({
               ...src,
-              cwd: typeof src.cwd === 'string' && src.cwd ? src.cwd : sourceCwd,
               boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : dir,
             }))
           : enrichedSources;

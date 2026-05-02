@@ -43,6 +43,14 @@ probeSource(cardId: string, sourceIdx: number, mockProjections: object, outRef: 
 probeTmpSource(sourceDef: object, mockProjections: object, outRef: string): CommandResult
 ```
 
+## Card store (direct read/write)
+
+```ts
+updateInCardStore(baseRef: string, cardId: string, card: object): CommandResult
+
+readFromCardStore(baseRef: string, cardId: string): CommandResult<object>
+```
+
 ## Task executor introspection
 
 ```ts

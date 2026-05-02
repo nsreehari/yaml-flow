@@ -126,8 +126,8 @@ function runSourceFetch(argv: string[]): void {
   }
 
   const timeout    = typeof sourceDef.timeout === 'number' ? sourceDef.timeout : 120_000;
-  const cwd        = typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : process.cwd();
   const boardDir   = typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : undefined;
+  const cwd        = boardDir ?? process.cwd();
   const bindTo     = typeof sourceDef.bindTo === 'string' ? sourceDef.bindTo : 'unknown';
 
   const parts = splitCommand(sourceDef.cli);
