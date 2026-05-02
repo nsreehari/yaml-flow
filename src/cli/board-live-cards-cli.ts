@@ -518,7 +518,7 @@ export async function processAccumulatedEvents(baseRef: KindValueRef, continuati
     };
     const executionRequestStore = createExecutionRequestStore(createFsKvStorage(joinPath(dir, '.execution-requests')), onDispatchFailed);
     const cardHandlerAdapters = {
-      cardStore: createCardStore(createFsCardStorageAdapter(dir)),
+      cardStore: createCardStore(createFsCardStorageAdapter(dir), console.warn),
       cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(joinPath(dir, '.state-snapshot'))),
       fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(dir), resolveSourceDataRef),
       outputStore: createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))),
@@ -1634,7 +1634,7 @@ export async function cli(argv: string[]): Promise<void> {
   });
   const nonCoreCommandHandlers = createNonCoreCommandHandlers({
     getConfigStore: createBoardConfig,
-    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value)),
+    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value), console.warn),
     executor,
     makeTempFilePath: (baseRef: KindValueRef, label: string, ext?: string) => makeBoardTempFilePath(baseRef.value, label, ext),
     validateLiveCardDefinition,
@@ -1642,7 +1642,7 @@ export async function cli(argv: string[]): Promise<void> {
     cliDir: __dirname,
   });
   const cardCommandHandlers = createCardCommandHandlers({
-    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value)),
+    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value), console.warn),
     readCardUpsertEntry: (baseRef: KindValueRef, cardId: string): CardUpsertIndexEntry | null => {
       const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
       return kv.read(cardId) as CardUpsertIndexEntry | null;

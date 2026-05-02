@@ -113,7 +113,7 @@ export interface CardAdminStore extends CardStore {
 // createCardStore — pure logic factory
 // ============================================================================
 
-export function createCardStore(adapter: CardStorageAdapter): CardAdminStore {
+export function createCardStore(adapter: CardStorageAdapter, onWarn?: (msg: string) => void): CardAdminStore {
   function loadIndex(): CardIndex {
     return adapter.readIndex() ?? {};
   }
@@ -135,7 +135,7 @@ export function createCardStore(adapter: CardStorageAdapter): CardAdminStore {
         if (!adapter.cardExists(entry.key)) continue;
         const card = adapter.readCard(entry.key);
         if (card) cards.push(card);
-        else console.warn(`[card-store] could not read card "${id}" at key "${entry.key}"`);
+        else onWarn?.(`[card-store] could not read card "${id}" at key "${entry.key}"`);
       }
       return cards;
     },
@@ -316,7 +316,6 @@ export function createExecutionRequestStore(
       for (const entry of entries) {
         try { processorFn(entry); } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[execution-request-store] dispatch failed for taskKind "${entry.taskKind}":`, msg);
           try { onDispatchFailed(entry, msg); } catch { /* guard against failure in error handler */ }
         }
       }
