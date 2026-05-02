@@ -30,8 +30,6 @@ type CommandInput = {
 | `validate-tmp-card` | `{ "card-content": <card object> }` |
 | `probe-source` | `{ "mock-projections": <object> }` |
 | `probe-tmp-source` | `{ "source-def": <object>, "mock-projections": <object> }` |
-| `updates-in-card-store` | `{ "ops": [ { op, id, "card-content"? }, ... ] }` |
-| `read-from-card-store` | `{ "ids": ["<card-id>", ...] }` |
 | `task-completed` | `{ "data": <data-object> }` |
 | `task-progress` | `{ "update": <update-object> }` |
 | `init` | `{ "task-executor-ref"?: <ExecutionRef>, "chat-handler-ref"?: <ExecutionRef> }` |
@@ -45,7 +43,8 @@ All other commands have no body.
 ## Board management
 
 ```
-init --base-ref <ref>                                        # body via stdin (optional)
+init --base-ref <ref> --card-store-ref <ref>                 # body via stdin (optional)
+  params: { cardStoreRef }                                   # --card-store-ref is required
   body: {                                                    # stdin
     "task-executor-ref"?: { "howToRun": "...", "whatToRun": "...", ... },
     "chat-handler-ref"?:  { "howToRun": "...", "whatToRun": "...", ... }
@@ -53,6 +52,9 @@ init --base-ref <ref>                                        # body via stdin (o
 
 status --base-ref <ref>
   → data: BoardStatus JSON
+
+get-card-store-ref --base-ref <ref>
+  → data: { "storeRef": "<::kind::value>" }
 
 remove-card --base-ref <ref> --id <card-id>
   params: { id }
@@ -89,22 +91,6 @@ probe-source --base-ref <ref> --card-id <card-id> --source-idx <n> --out-ref <re
 probe-tmp-source --out-ref <ref>
   params: { outRef }
   body: { "source-def": <object>, "mock-projections": <object> }  # stdin
-```
-
-## Card store
-
-```
-updates-in-card-store --base-ref <ref>
-  body: {                                              # stdin
-    "ops": [
-      { "op": "update", "id": "<card-id>", "card-content": <card object> },
-      { "op": "delete", "id": "<card-id>" }
-    ]
-  }
-
-read-from-card-store --base-ref <ref>
-  body: { "ids": ["<card-id>", ...] }                 # stdin
-  → data: { "cards": [{ "id": "<card-id>", "card-content": <card object> }] }
 ```
 
 ## Task executor introspection

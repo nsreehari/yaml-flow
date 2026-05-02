@@ -64,9 +64,10 @@ try {
     output = execSync(sourceCliCommand, {
       encoding: 'utf-8',
       timeout: (sourceDef.timeout ?? 120) * 1000,
-      cwd: sourceDef.cwd,
+      cwd: sourceDef.boardDir ?? sourceDef.cwd,
       shell: true,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, ...(sourceDef.boardDir ? { BOARD_DIR: sourceDef.boardDir } : {}) },
     });
   } catch (execErr) {
     output = execErr.stdout || '';

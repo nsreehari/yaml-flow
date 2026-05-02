@@ -33,7 +33,7 @@ export function runBoardCli(args, options = {}) {
   return capture ? (result.stdout ?? '') : '';
 }
 
-/** Spawn CLI with JSON piped to stdin (used by update-in-card-store). */
+/** Spawn CLI with JSON piped to stdin. */
 export function runBoardCliWithInput(args, inputJson, options = {}) {
   const { cwd = process.cwd() } = options;
   const result = spawnSync(process.execPath, [boardCliPath, ...args], {

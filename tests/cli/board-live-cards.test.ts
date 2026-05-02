@@ -63,7 +63,7 @@ async function pollForFile(filePath: string, timeoutMs = 5000): Promise<void> {
 function writeCardToStore(boardDir: string, card: { id: string } & Record<string, unknown>): void {
   const br = ref(boardDir);
   const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, testDir, { onWarn: () => {} }));
-  nonCore.updateInCardStore({ params: { cardId: card.id }, body: card });
+  nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: card.id, 'card-content': card }] } });
 }
 
 function schemaErrors(validate: { errors?: Array<{ instancePath?: string; message?: string }> }): string {
@@ -684,8 +684,9 @@ describe('cli validate-card', () => {
       card_data: {},
     } });
     expect(result.status).toBe('success');
-    const data = (result as { status: string; data: { errors: string[] } }).data;
-    expect(data.errors.length).toBeGreaterThan(0);
+    const data = (result as { status: string; data: { isValid: boolean; issues: string[] } }).data;
+    expect(data.isValid).toBe(false);
+    expect(data.issues.length).toBeGreaterThan(0);
   });
 
   it('rejects a card with an unparseable compute expression', () => {
@@ -696,8 +697,9 @@ describe('cli validate-card', () => {
       card_data: {},
     } });
     expect(result.status).toBe('success');
-    const data = (result as { status: string; data: { errors: string[] } }).data;
-    expect(data.errors.length).toBeGreaterThan(0);
+    const data = (result as { status: string; data: { isValid: boolean; issues: string[] } }).data;
+    expect(data.isValid).toBe(false);
+    expect(data.issues.length).toBeGreaterThan(0);
   });
 
   it('rejects a card missing the id field', () => {
@@ -705,7 +707,7 @@ describe('cli validate-card', () => {
     const result = makeNonCore().validateTmpCard({ body: { card_data: { x: 1 } } });
     // id is '(unknown)' when missing — schema validation should still catch that
     expect(result.status).toBe('success');
-    const data = (result as { status: string; data: { errors: string[] } }).data;
+    const data = (result as { status: string; data: { cardId: string; isValid: boolean; issues: string[] } }).data;
     expect(data.cardId).toBe('(unknown)');
   });
 

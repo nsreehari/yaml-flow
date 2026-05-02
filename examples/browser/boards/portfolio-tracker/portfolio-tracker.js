@@ -106,7 +106,7 @@ function cli(...args) {
   runCli(args, false);
 }
 
-/** Spawn CLI with JSON piped to stdin (used by update-in-card-store). */
+/** Spawn CLI with JSON piped to stdin. */
 function runCliWithInput(args, inputJson) {
   const { cmd, prefixArgs } = cliCommand();
   const env = { ...process.env };
@@ -137,8 +137,8 @@ function upsertCardFromFile(boardDir, cardFilePath, restart = false) {
   const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
   const baseRef = `::fs-path::${boardDir}`;
   runCliWithInput(
-    ['update-in-card-store', '--base-ref', baseRef, '--card-id', card.id],
-    JSON.stringify(card),
+    ['updates-in-card-store', '--base-ref', baseRef],
+    JSON.stringify({ ops: [{ op: 'update', id: card.id, 'card-content': card }] }),
   );
   const args = ['upsert-card', '--base-ref', baseRef, '--card-id', card.id];
   if (restart) args.push('--restart');
@@ -272,7 +272,14 @@ function printTaskExecutorLog() {
   fs.rmSync(BOARD, { recursive: true, force: true });
 
   if (options.taskExecutor) {
-    cli('init', '--base-ref', `::fs-path::${BOARD}`, '--task-executor', options.taskExecutor);
+    // Convert legacy "node /path/to/script" value to ExecutionRef JSON body
+    let scriptPath = options.taskExecutor.trim();
+    if (scriptPath.startsWith('node ')) scriptPath = scriptPath.slice(5).trim();
+    const taskExecutorRef = { meta: 'task-executor', howToRun: 'local-node', whatToRun: `::fs-path::${scriptPath}` };
+    runCliWithInput(
+      ['init', '--base-ref', `::fs-path::${BOARD}`],
+      JSON.stringify({ 'task-executor-ref': taskExecutorRef }),
+    );
   } else {
     cli('init', '--base-ref', `::fs-path::${BOARD}`);
   }

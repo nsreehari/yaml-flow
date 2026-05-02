@@ -449,7 +449,13 @@ export function createStateSnapshotStore(adapter: StateSnapshotStorageAdapter): 
 export interface BoardConfigStore {
   readTaskExecutorRef(): ExecutionRef | undefined;
   writeTaskExecutorRef(ref: ExecutionRef): void;
+  readChatHandlerRef(): ExecutionRef | undefined;
+  writeChatHandlerRef(ref: ExecutionRef): void;
+  readCardStoreRef(): string | null;
+  writeCardStoreRef(ref: string): void;
+  /** @deprecated use readChatHandlerRef */
   readChatHandler(): string | undefined;
+  /** @deprecated use writeChatHandlerRef */
   writeChatHandler(value: string): void;
 }
 
@@ -469,6 +475,24 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 
     writeTaskExecutorRef(ref: ExecutionRef): void {
       kv.write('task-executor', serializeExecutionRef(ref));
+    },
+
+    readChatHandlerRef(): ExecutionRef | undefined {
+      const raw = readKey('chat-handler');
+      if (!raw?.trim()) return undefined;
+      return parseExecutionRef(raw.trim());
+    },
+
+    writeChatHandlerRef(ref: ExecutionRef): void {
+      kv.write('chat-handler', serializeExecutionRef(ref));
+    },
+
+    readCardStoreRef(): string | null {
+      return readKey('card-store-ref');
+    },
+
+    writeCardStoreRef(ref: string): void {
+      kv.write('card-store-ref', ref);
     },
 
     readChatHandler(): string | undefined {

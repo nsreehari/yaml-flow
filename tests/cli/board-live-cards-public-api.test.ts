@@ -93,12 +93,12 @@ describe('BoardLiveCardsPublic — init and status', () => {
     if (result.status === 'fail') expect(result.error).toMatch(/params\.id/);
   });
 
-  it('upsertCard({}) fails — params.cardId is missing', () => {
+  it('upsertCard({}) fails — --card-id or --all is required', () => {
     const { board } = freshBoard();
     board.init({});
     const result = board.upsertCard({});
     expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/params\.cardId/);
+    if (result.status === 'fail') expect(result.error).toMatch(/--card-id.*--all|--all.*--card-id/);
   });
 
   it('upsertCard fails when card is not yet in the store', () => {
@@ -118,10 +118,10 @@ describe('BoardLiveCardsPublic — init and status', () => {
 });
 
 // ============================================================================
-// BoardLiveCardsNonCorePublic — updateInCardStore
+// BoardLiveCardsNonCorePublic — updatesInCardStore
 // ============================================================================
 
-describe('BoardLiveCardsNonCorePublic — updateInCardStore', () => {
+describe('BoardLiveCardsNonCorePublic — updatesInCardStore', () => {
   let tmpDir = '';
 
   function freshNonCore() {
@@ -137,52 +137,29 @@ describe('BoardLiveCardsNonCorePublic — updateInCardStore', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('writes a card and returns success with cardId', () => {
+  it('writes a card via update op and returns success', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ params: { cardId: 'my-card' }, body: minCard('my-card') });
+    const result = nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'my-card', 'card-content': minCard('my-card') }] } });
     expect(result.status).toBe('success');
-    if (result.status === 'success') {
-      expect((result.data as Record<string, unknown>)['cardId']).toBe('my-card');
-    }
   });
 
-  it('fails when params.cardId is missing', () => {
+  it('fails when body has no ops array', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ body: minCard('x') });
+    const result = nonCore.updatesInCardStore({});
     expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/params\.cardId/);
+    if (result.status === 'fail') expect(result.error).toMatch(/ops/);
   });
 
-  it('fails when body is absent', () => {
+  it('fails when an op is missing id', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ params: { cardId: 'x' } });
+    const result = nonCore.updatesInCardStore({ body: { ops: [{ op: 'update' }] } });
     expect(result.status).toBe('fail');
   });
 
-  it('fails when body is a string (not an object)', () => {
+  it('fails on unknown op type', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ params: { cardId: 'x' }, body: 'not-an-object' });
+    const result = nonCore.updatesInCardStore({ body: { ops: [{ op: 'noop', id: 'x' }] } });
     expect(result.status).toBe('fail');
-  });
-
-  it('fails when body is an array', () => {
-    const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ params: { cardId: 'x' }, body: [] });
-    expect(result.status).toBe('fail');
-  });
-
-  it('fails when card body id does not match params.cardId', () => {
-    const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ params: { cardId: 'card-a' }, body: minCard('card-b') });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/does not match/);
-  });
-
-  it('fails when card body lacks an id field', () => {
-    const { nonCore } = freshNonCore();
-    const result = nonCore.updateInCardStore({ params: { cardId: 'x' }, body: { card_data: {} } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/string id/);
   });
 });
 
@@ -206,29 +183,31 @@ describe('BoardLiveCardsNonCorePublic — readFromCardStore', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('returns a previously written card', () => {
+  it('returns previously written cards by id array', () => {
     const { nonCore } = freshNonCore();
-    nonCore.updateInCardStore({ params: { cardId: 'stored' }, body: minCard('stored') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'stored', 'card-content': minCard('stored') }] } });
 
-    const result = nonCore.readFromCardStore({ params: { cardId: 'stored' } });
+    const result = nonCore.readFromCardStore({ body: { ids: ['stored'] } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect((result.data.card as Record<string, unknown>)['id']).toBe('stored');
+      expect(result.data.cards[0].id).toBe('stored');
     }
   });
 
-  it('fails when card is not in the store', () => {
+  it('returns null card-content for ids not in the store', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.readFromCardStore({ params: { cardId: 'ghost' } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/not found/);
+    const result = nonCore.readFromCardStore({ body: { ids: ['ghost'] } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cards[0]['card-content']).toBeNull();
+    }
   });
 
-  it('fails when params.cardId is missing', () => {
+  it('fails when body has no ids array', () => {
     const { nonCore } = freshNonCore();
     const result = nonCore.readFromCardStore({});
     expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/params\.cardId/);
+    if (result.status === 'fail') expect(result.error).toMatch(/ids/);
   });
 });
 
@@ -258,7 +237,7 @@ describe('BoardLiveCardsNonCorePublic — validateTmpCard', () => {
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('tmp-card');
-      expect(Array.isArray(result.data.errors)).toBe(true);
+      expect(Array.isArray(result.data.issues)).toBe(true);
     }
   });
 
@@ -314,28 +293,30 @@ describe('BoardLiveCardsNonCorePublic — validateCard', () => {
 
   it('returns success for a card written to the store', () => {
     const { nonCore } = freshNonCore();
-    nonCore.updateInCardStore({ params: { cardId: 'known' }, body: minCard('known') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'known', 'card-content': minCard('known') }] } });
 
     const result = nonCore.validateCard({ params: { cardId: 'known' } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.data.cardId).toBe('known');
-      expect(Array.isArray(result.data.errors)).toBe(true);
+      expect(result.data[0].cardId).toBe('known');
+      expect(Array.isArray(result.data[0].issues)).toBe(true);
     }
   });
 
   it('fails when card is not in the store', () => {
     const { nonCore } = freshNonCore();
     const result = nonCore.validateCard({ params: { cardId: 'missing' } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/not found/);
+    expect(result.status).toBe('success');  // returns success with isValid:false, not fail
+    if (result.status === 'success') {
+      expect(result.data[0].isValid).toBe(false);
+    }
   });
 
-  it('fails when params.cardId is missing', () => {
+  it('fails when --card-id or --all is missing', () => {
     const { nonCore } = freshNonCore();
     const result = nonCore.validateCard({});
     expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/params\.cardId/);
+    if (result.status === 'fail') expect(result.error).toMatch(/--card-id.*--all|--all.*--card-id/);
   });
 });
 
@@ -364,10 +345,10 @@ describe('BoardLiveCardsNonCorePublic — describeTaskExecutorCapabilities', () 
 });
 
 // ============================================================================
-// Integration: updateInCardStore → upsertCard workflow
+// Integration: updatesInCardStore → upsertCard workflow
 // ============================================================================
 
-describe('integration: updateInCardStore → board operations', () => {
+describe('integration: updatesInCardStore → board operations', () => {
   let tmpDir = '';
 
   function freshAll() {
@@ -386,39 +367,41 @@ describe('integration: updateInCardStore → board operations', () => {
 
   it('write card to store then upsert succeeds', () => {
     const { board, nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'data-card' }, body: minCard('data-card') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'data-card', 'card-content': minCard('data-card') }] } });
     const result = board.upsertCard({ params: { cardId: 'data-card' } });
     expect(result.status).toBe('success');
   });
 
   it('overwrite a card and confirm updated data is returned by readFromCardStore', () => {
     const { nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'mutable' }, body: minCard('mutable', { card_data: { v: 1 } }) });
-    nonCore.updateInCardStore({ params: { cardId: 'mutable' }, body: minCard('mutable', { card_data: { v: 2 } }) });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'mutable', 'card-content': minCard('mutable', { card_data: { v: 1 } }) }] } });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'mutable', 'card-content': minCard('mutable', { card_data: { v: 2 } }) }] } });
 
-    const result = nonCore.readFromCardStore({ params: { cardId: 'mutable' } });
+    const result = nonCore.readFromCardStore({ body: { ids: ['mutable'] } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      const stored = result.data.card as { card_data: { v: number } };
+      const stored = result.data.cards[0]['card-content'] as { card_data: { v: number } };
       expect(stored.card_data.v).toBe(2);
     }
   });
 
-  it('write + validate roundtrip: card written via updateInCardStore passes validateCard', () => {
+  it('write + validate roundtrip: card written via updatesInCardStore passes validateCard', () => {
     const { nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'validated' }, body: minCard('validated') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'validated', 'card-content': minCard('validated') }] } });
 
     const result = nonCore.validateCard({ params: { cardId: 'validated' } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.data.cardId).toBe('validated');
+      expect(result.data[0].cardId).toBe('validated');
     }
   });
 
   it('status reflects card count after upsert', () => {
     const { board, nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'c1' }, body: minCard('c1') });
-    nonCore.updateInCardStore({ params: { cardId: 'c2' }, body: minCard('c2') });
+    nonCore.updatesInCardStore({ body: { ops: [
+      { op: 'update', id: 'c1', 'card-content': minCard('c1') },
+      { op: 'update', id: 'c2', 'card-content': minCard('c2') },
+    ] } });
     board.upsertCard({ params: { cardId: 'c1' } });
     board.upsertCard({ params: { cardId: 'c2' } });
 
@@ -456,7 +439,7 @@ describe('BoardLiveCardsPublic — removeCard', () => {
 
   it('returns success when removing a card that was upserted', () => {
     const { board, nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'rm-card' }, body: minCard('rm-card') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'rm-card', 'card-content': minCard('rm-card') }] } });
     board.upsertCard({ params: { cardId: 'rm-card' } });
     const result = board.removeCard({ params: { id: 'rm-card' } });
     expect(result.status).toBe('success');
@@ -493,7 +476,7 @@ describe('BoardLiveCardsPublic — retrigger', () => {
 
   it('returns success when retriggering a known card', () => {
     const { board, nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'rt-card' }, body: minCard('rt-card') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'rt-card', 'card-content': minCard('rt-card') }] } });
     board.upsertCard({ params: { cardId: 'rt-card' } });
     const result = board.retrigger({ params: { id: 'rt-card' } });
     expect(result.status).toBe('success');
@@ -819,7 +802,7 @@ describe('BoardLiveCardsNonCorePublic — probeSource', () => {
 
   it('fails when sourceIdx is out of range', () => {
     const { nonCore } = freshAll();
-    nonCore.updateInCardStore({ params: { cardId: 'no-sources' }, body: minCard('no-sources') });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'no-sources', 'card-content': minCard('no-sources') }] } });
     const result = nonCore.probeSource({ params: { cardId: 'no-sources', sourceIdx: 0 } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/out of range/);
@@ -828,7 +811,7 @@ describe('BoardLiveCardsNonCorePublic — probeSource', () => {
   it('fails with no-executor message when sourceIdx is valid but no executor registered', () => {
     const { nonCore } = freshAll();
     const card = minCard('src-card', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
-    nonCore.updateInCardStore({ params: { cardId: 'src-card' }, body: card });
+    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'src-card', 'card-content': card }] } });
     const result = nonCore.probeSource({ params: { cardId: 'src-card', sourceIdx: 0 } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
@@ -858,17 +841,17 @@ describe('BoardLiveCardsNonCorePublic — probeTmpSource', () => {
     if (result.status === 'fail') expect(result.error).toMatch(/body/);
   });
 
-  it('fails when body.sourceDef is missing', () => {
+  it('fails when body."source-def" is missing', () => {
     const { nonCore } = freshAll();
-    const result = nonCore.probeTmpSource({ body: { mockProjections: {} } });
+    const result = nonCore.probeTmpSource({ body: { 'mock-projections': {} } });
     expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/sourceDef/);
+    if (result.status === 'fail') expect(result.error).toMatch(/source-def/);
   });
 
   it('fails with no-executor message when body is valid but no executor registered', () => {
     const { nonCore } = freshAll();
     const result = nonCore.probeTmpSource({
-      body: { sourceDef: { cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }, mockProjections: {} },
+      body: { 'source-def': { cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }, 'mock-projections': {} },
     });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);

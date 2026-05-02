@@ -61,14 +61,12 @@ import type {
   JournalStorageAdapter,
   StateSnapshotStorageAdapter,
   CardStorageAdapter,
-  CardIndex,
   StateSnapshotReadView,
   CardUpsertIndexEntry,
   ExecutionRequestEntry,
   BoardEnvelope,
   SourceTokenPayload,
   BoardStatusObject,
-  LiveCard,
 } from './board-live-cards-lib.js';
 
 // ============================================================================
@@ -120,15 +118,21 @@ export interface BoardPlatformAdapter {
   /**
    * KV storage factory — scoped by namespace.
    * Namespaces used by the public layer:
-   *   'cards'              — card index + card content (CardStorageAdapter, built internally)
    *   'state-snapshot'     — board graph snapshot (StateSnapshotStorageAdapter, built internally)
-   *   'config'             — board configuration (.task-executor, .chat-handler)
+   *   'config'             — board configuration (.task-executor, .chat-handler, .card-store-ref)
    *   'card-upsert'        — card upsert dedup index
    *   'execution-requests' — queued execution requests (keyed by journalId)
    *   'card-runtime'       — card runtime state snapshots
    *   'output'             — published board status + card computed outputs
    */
   kvStorage(namespace: string): KVStorage;
+
+  /**
+   * Build a CardStorageAdapter for the board-configured card store ref.
+   * Called by the public layer after reading storeRef from config.
+   *   FS: createFsCardStorageAdapter(parseRef(storeRef).value)
+   */
+  cardStorageForRef(storeRef: string): CardStorageAdapter;
 
   /**
    * Blob storage factory — scoped by namespace.
@@ -203,6 +207,8 @@ export interface BoardLiveCardsPublic {
   init(input: CommandInput): CommandResult;
   // no params needed
   status(input: CommandInput): CommandResult<BoardStatusObject>;
+  // no params needed
+  getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   // params: id
   removeCard(input: CommandInput): CommandResult;
   // params: id
@@ -284,15 +290,9 @@ export function createBoardLiveCardsPublic(
   // The public layer builds them here so BoardPlatformAdapter stays minimal.
 
   function makeCardAdapter(): CardStorageAdapter {
-    const kv = adapter.kvStorage('cards');
-    return {
-      readIndex: () => kv.read('_index') as CardIndex | null,
-      writeIndex: (index: CardIndex) => kv.write('_index', index),
-      readCard: (key) => kv.read(key) as LiveCard | null,
-      writeCard: (key, card) => { kv.write(key, card); return stableHash(card); },
-      cardExists: (key) => kv.read(key) !== null,
-      defaultCardKey: (cardId) => cardId,
-    };
+    const storeRef = configStore().readCardStoreRef();
+    if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <::kind::value>`);
+    return adapter.cardStorageForRef(storeRef);
   }
 
   // scopeId is intentionally ignored — the adapter is already board-scoped via
@@ -455,15 +455,17 @@ export function createBoardLiveCardsPublic(
 
   function init(input: CommandInput): CommandResult {
     try {
-      const taskExecutor = input.params?.['taskExecutor'] as string | undefined;
-      const chatHandler  = input.params?.['chatHandler']  as string | undefined;
+      const storeRef = input.params?.['cardStoreRef'] as string | undefined;
+      if (!storeRef) return fail('init requires params.cardStoreRef (pass --card-store-ref <::kind::value>)');
       if (!boardExists()) {
         const live = createLiveGraph(EMPTY_CONFIG);
         commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(live) }, null);
       }
       const cfg = configStore();
-      if (taskExecutor) cfg.writeTaskExecutorRef({ howToRun: 'local-node', whatToRun: `::fs-path::${taskExecutor}` });
-      if (chatHandler) cfg.writeChatHandler(chatHandler);
+      cfg.writeCardStoreRef(storeRef);
+      const body = (input.body ?? {}) as Record<string, unknown>;
+      if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
+      if (body['chat-handler-ref'])  cfg.writeChatHandlerRef(body['chat-handler-ref'] as ExecutionRef);
       try { outputStore().writeStatusSnapshot(buildBoardStatusObject(boardPath, restore(loadEnvelope().graph))); } catch { /* best-effort */ }
       return ok();
     } catch (e) { return err(e); }
@@ -507,29 +509,37 @@ export function createBoardLiveCardsPublic(
   function upsertCard(input: CommandInput): CommandResult {
     try {
       const cardId  = input.params?.['cardId']  as string | undefined;
+      const all     = input.params?.['all'];
       const restart = !!input.params?.['restart'];
-      if (!cardId) return fail('upsertCard requires params.cardId');
+      if (!cardId && !all) return fail('upsertCard requires --card-id <id> or --all');
 
-      const card = cardStore().readCard(cardId);
-      if (!card) return fail(`Card "${cardId}" not found in board at ${baseRef.value}`);
+      const ids = all ? cardStore().readAllCards().map(c => c.id) : [cardId as string];
 
-      const taskConfig = liveCardToTaskConfig(card);
-      const taskConfigHash = stableHash(taskConfig);
-      const upsertKv = adapter.kvStorage('card-upsert');
-      const existing = upsertKv.read(cardId) as CardUpsertIndexEntry | null;
-      const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
-
-      if (!taskConfigChanged && !restart) return ok({ message: `Card "${cardId}" unchanged — skipped.` });
-
-      if (taskConfigChanged) {
-        const blobRef = existing?.blobRef ?? cardStore().readCardKey(cardId) ?? cardId;
-        appendJournalEvent({ type: 'task-upsert', taskName: cardId, taskConfig, timestamp: nowIso() });
-        upsertKv.write(cardId, { blobRef, taskConfigHash, updatedAt: nowIso() } satisfies CardUpsertIndexEntry);
+      // Validate all cards exist before writing anything (atomicity)
+      for (const id of ids) {
+        if (!cardStore().readCard(id)) return fail(`Card "${id}" not found in board at ${baseRef.value}`);
       }
-      if (restart) appendJournalEvent({ type: 'task-restart', taskName: cardId, timestamp: nowIso() });
+
+      for (const id of ids) {
+        const card = cardStore().readCard(id)!;
+        const taskConfig = liveCardToTaskConfig(card);
+        const taskConfigHash = stableHash(taskConfig);
+        const upsertKv = adapter.kvStorage('card-upsert');
+        const existing = upsertKv.read(id) as CardUpsertIndexEntry | null;
+        const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
+
+        if (!taskConfigChanged && !restart) continue;
+
+        if (taskConfigChanged) {
+          const blobRef = existing?.blobRef ?? cardStore().readCardKey(id) ?? id;
+          appendJournalEvent({ type: 'task-upsert', taskName: id, taskConfig, timestamp: nowIso() });
+          upsertKv.write(id, { blobRef, taskConfigHash, updatedAt: nowIso() } satisfies CardUpsertIndexEntry);
+        }
+        if (restart) appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
+      }
 
       void drain();
-      return ok({ message: `Card "${cardId}" ${existing ? 'updated' : 'inserted'}${restart ? ' (restarted)' : ''}.` });
+      return ok();
     } catch (e) { return err(e); }
   }
 
@@ -537,7 +547,8 @@ export function createBoardLiveCardsPublic(
     try {
       const token = input.params?.['token'] as string | undefined;
       if (!token) return fail('taskCompleted requires params.token');
-      const data = (input.body ?? {}) as Record<string, unknown>;
+      const b = (input.body ?? {}) as Record<string, unknown>;
+      const data = (b['data'] ?? {}) as Record<string, unknown>;
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       try { outputStore().writeDataObjects(data); } catch { /* best-effort */ }
@@ -564,7 +575,8 @@ export function createBoardLiveCardsPublic(
     try {
       const token = input.params?.['token'] as string | undefined;
       if (!token) return fail('taskProgress requires params.token');
-      const update = (input.body ?? {}) as Record<string, unknown>;
+      const b = (input.body ?? {}) as Record<string, unknown>;
+      const update = (b['update'] ?? {}) as Record<string, unknown>;
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-progress', taskName: decoded.taskName, update, timestamp: nowIso() });
@@ -629,8 +641,16 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
+  function getCardStoreRef(_input: CommandInput): CommandResult<{ storeRef: string }> {
+    try {
+      const storeRef = configStore().readCardStoreRef();
+      if (!storeRef) return fail(`Board at ${baseRef.value} has no card store configured`) as CommandResult<{ storeRef: string }>;
+      return ok({ storeRef });
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
+  }
+
   return {
-    init, status, removeCard, retrigger, processAccumulatedEvents,
+    init, status, getCardStoreRef, removeCard, retrigger, processAccumulatedEvents,
     upsertCard,
     taskCompleted, taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,
@@ -673,11 +693,11 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
 // ============================================================================
 
 export interface BoardLiveCardsNonCorePublic {
-  /** params.cardId — card already in the board */
-  validateCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }>;
+  /** params: cardId? or all?; returns array even for single card */
+  validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
 
-  /** body — card JSON object (arrives via stdin / HTTP body / in-process) */
-  validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }>;
+  /** body: { "card-content": <card> } — card JSON arrives via stdin */
+  validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
 
   /** params: cardId, sourceIdx, outRef?; body — mockProjections object */
   probeSource(input: CommandInput): CommandResult;
@@ -687,12 +707,6 @@ export interface BoardLiveCardsNonCorePublic {
 
   /** no params needed */
   describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
-
-  /** params.cardId; body — card JSON object */
-  updateInCardStore(input: CommandInput): CommandResult;
-
-  /** params.cardId */
-  readFromCardStore(input: CommandInput): CommandResult<{ card: unknown }>;
 }
 
 // ============================================================================
@@ -704,18 +718,12 @@ export function createBoardLiveCardsNonCorePublic(
   adapter: BoardNonCorePlatformAdapter,
 ): BoardLiveCardsNonCorePublic {
   // Mirror the same internal helpers as the core factory.
-  function makeCardAdapterNC(): CardStorageAdapter {
-    const kv = adapter.kvStorage('cards');
-    return {
-      readIndex: () => kv.read('_index') as CardIndex | null,
-      writeIndex: (index: CardIndex) => kv.write('_index', index),
-      readCard: (key) => kv.read(key) as LiveCard | null,
-      writeCard: (key, card) => { kv.write(key, card); return stableHash(card); },
-      cardExists: (key) => kv.read(key) !== null,
-      defaultCardKey: (cardId) => cardId,
-    };
-  }
   const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
+  function makeCardAdapterNC(): CardStorageAdapter {
+    const storeRef = configStore().readCardStoreRef();
+    if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <::kind::value>`);
+    return adapter.cardStorageForRef(storeRef);
+  }
   const cardStore = () => createCardStore(makeCardAdapterNC(), adapter.onWarn ?? (() => { /* no-op */ }));
 
   // ── Shared validation helper ───────────────────────────────────────────────
@@ -723,7 +731,7 @@ export function createBoardLiveCardsNonCorePublic(
   function validateCardObject(
     cardId: string,
     card: Record<string, unknown>,
-  ): CommandResult<{ cardId: string; errors: string[] }> {
+  ): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }> {
     const schemaResult = adapter.validateSchema(card);
     const sourceErrors: string[] = [];
 
@@ -760,7 +768,7 @@ export function createBoardLiveCardsNonCorePublic(
     }
 
     const allErrors = [...schemaResult.errors, ...sourceErrors];
-    return ok({ cardId, errors: allErrors }) as CommandResult<{ cardId: string; errors: string[] }>;
+    return ok({ cardId, isValid: allErrors.length === 0, issues: allErrors }) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
   }
 
   // ── Shared probe helper ────────────────────────────────────────────────────
@@ -819,25 +827,34 @@ export function createBoardLiveCardsNonCorePublic(
 
   // ── Public methods ─────────────────────────────────────────────────────────
 
-  function validateCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }> {
+  function validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>> {
     try {
       const cardId = input.params?.['cardId'] as string | undefined;
-      if (!cardId) return fail('validateCard requires params.cardId') as CommandResult<{ cardId: string; errors: string[] }>;
-      const card = cardStore().readCard(cardId);
-      if (!card) return fail(`Card "${cardId}" not found`) as CommandResult<{ cardId: string; errors: string[] }>;
-      return validateCardObject(cardId, card as Record<string, unknown>);
-    } catch (e) { return err(e) as CommandResult<{ cardId: string; errors: string[] }>; }
+      const all    = input.params?.['all'];
+      if (!cardId && !all) return fail('validateCard requires --card-id <id> or --all') as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
+      const ids = all ? cardStore().readAllCards().map(c => c.id) : [cardId as string];
+      const results: Array<{ cardId: string; isValid: boolean; issues: string[] }> = [];
+      for (const id of ids) {
+        const card = cardStore().readCard(id);
+        if (!card) { results.push({ cardId: id, isValid: false, issues: [`Card "${id}" not found`] }); continue; }
+        const r = validateCardObject(id, card as Record<string, unknown>);
+        if (r.status !== 'success') return r as unknown as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
+        results.push(r.data!);
+      }
+      return ok(results) as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
+    } catch (e) { return err(e) as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>; }
   }
 
-  function validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }> {
+  function validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }> {
     try {
       if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
-        return fail('validateTmpCard requires card JSON object in body') as CommandResult<{ cardId: string; errors: string[] }>;
+        return fail('validateTmpCard requires card JSON object in body') as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
       }
-      const card = input.body as Record<string, unknown>;
+      const body = input.body as Record<string, unknown>;
+      const card = (body['card-content'] ?? body) as Record<string, unknown>;
       const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
       return validateCardObject(cardId, card);
-    } catch (e) { return err(e) as CommandResult<{ cardId: string; errors: string[] }>; }
+    } catch (e) { return err(e) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>; }
   }
 
   function probeSource(input: CommandInput): CommandResult {
@@ -847,7 +864,8 @@ export function createBoardLiveCardsNonCorePublic(
       const outRef    = input.params?.['outRef']    as string | undefined;
       if (!cardId) return fail('probeSource requires params.cardId');
       if (sourceIdx === undefined) return fail('probeSource requires params.sourceIdx');
-      const mockProjections = (input.body ?? {}) as Record<string, unknown>;
+      const b = (input.body ?? {}) as Record<string, unknown>;
+      const mockProjections = (b['mock-projections'] ?? {}) as Record<string, unknown>;
 
       const card = cardStore().readCard(cardId) as Record<string, unknown> | null;
       if (!card) return fail(`Card "${cardId}" not found`);
@@ -863,10 +881,10 @@ export function createBoardLiveCardsNonCorePublic(
     try {
       const outRef = input.params?.['outRef'] as string | undefined;
       const b = input.body as Record<string, unknown> | undefined;
-      if (!b) return fail('probeTmpSource requires body with sourceDef and mockProjections');
-      const sourceDef = b['sourceDef'] as Record<string, unknown> | undefined;
-      const mockProjections = (b['mockProjections'] ?? {}) as Record<string, unknown>;
-      if (!sourceDef) return fail('probeTmpSource body requires sourceDef');
+      if (!b) return fail('probeTmpSource requires body with "source-def" and "mock-projections"');
+      const sourceDef = b['source-def'] as Record<string, unknown> | undefined;
+      const mockProjections = (b['mock-projections'] ?? {}) as Record<string, unknown>;
+      if (!sourceDef) return fail('probeTmpSource body requires "source-def"');
       return runSourceProbe(sourceDef, mockProjections, outRef);
     } catch (e) { return err(e); }
   }
@@ -880,35 +898,9 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
-  function updateInCardStore(input: CommandInput): CommandResult {
-    try {
-      const cardId = input.params?.['cardId'] as string | undefined;
-      if (!cardId) return fail('updateInCardStore requires params.cardId');
-      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
-        return fail('updateInCardStore requires card JSON object in body');
-      }
-      const card = input.body as LiveCard;
-      if (typeof card.id !== 'string') return fail('Card body must have a string id field');
-      if (card.id !== cardId) return fail(`Card body id "${card.id}" does not match params.cardId "${cardId}"`);
-      cardStore().writeCard(cardId, card);
-      return ok({ cardId, message: `Card "${cardId}" written to store.` });
-    } catch (e) { return err(e); }
-  }
-
-  function readFromCardStore(input: CommandInput): CommandResult<{ card: unknown }> {
-    try {
-      const cardId = input.params?.['cardId'] as string | undefined;
-      if (!cardId) return fail('readFromCardStore requires params.cardId') as CommandResult<{ card: unknown }>;
-      const card = cardStore().readCard(cardId);
-      if (!card) return fail(`Card "${cardId}" not found`) as CommandResult<{ card: unknown }>;
-      return ok({ card }) as CommandResult<{ card: unknown }>;
-    } catch (e) { return err(e) as CommandResult<{ card: unknown }>; }
-  }
-
   return {
     validateCard, validateTmpCard,
     probeSource, probeTmpSource,
     describeTaskExecutorCapabilities,
-    updateInCardStore, readFromCardStore,
   };
 }

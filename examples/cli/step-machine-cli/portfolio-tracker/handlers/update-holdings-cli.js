@@ -24,8 +24,8 @@ try {
 
   const baseRef = `::fs-path::${boardDir}`;
   runBoardCliWithInput(
-    ['update-in-card-store', '--base-ref', baseRef, '--card-id', card.id],
-    JSON.stringify(card),
+    ['updates-in-card-store', '--base-ref', baseRef],
+    JSON.stringify({ ops: [{ op: 'update', id: card.id, 'card-content': card }] }),
   );
   runBoardCli(['upsert-card', '--base-ref', baseRef, '--card-id', card.id, '--restart']);
 

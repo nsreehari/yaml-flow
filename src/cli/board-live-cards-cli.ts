@@ -193,6 +193,8 @@ export function createFsBoardPlatformAdapter(
 
     absoluteBlob: createFsAbsolutePathBlobStorage(),
 
+    cardStorageForRef: (storeRef: string) => createFsCardStorageAdapter(parseRef(storeRef).value),
+
     requestProcessAccumulated() {
       if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
       const nodeAdapter = createNodeInvocationAdapter(cliDir);
@@ -606,8 +608,12 @@ export async function processAccumulatedEvents(baseRef: KindValueRef, continuati
       taskFailedFn(taskName, error);
     };
     const executionRequestStore = createExecutionRequestStore(createFsKvStorage(joinPath(dir, '.execution-requests')), onDispatchFailed);
+    const boardCfg = createBoardConfigStore(createFsKvStorage(joinPath(dir, '.config')));
+    const cardStoreRef = boardCfg.readCardStoreRef();
+    if (!cardStoreRef) throw new Error(`Board at ${dir} has no card store configured. Run: board-live-cards init --base-ref <ref> --card-store-ref <::kind::value>`);
+    const cardStoreDir = parseRef(cardStoreRef).value;
     const cardHandlerAdapters = {
-      cardStore: createCardStore(createFsCardStorageAdapter(dir), console.warn),
+      cardStore: createCardStore(createFsCardStorageAdapter(cardStoreDir), console.warn),
       cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(joinPath(dir, '.state-snapshot'))),
       fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(dir), resolveSourceDataRef),
       outputStore: createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))),
@@ -787,17 +793,13 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── probe-tmp-source — flags supply source-def + mock-projections ───────────
+  // ── probe-tmp-source — source-def + mock-projections arrive via stdin ──────
   if (cmd === 'probe-tmp-source') {
-    const sourceDefRaw = requireFlag(rest, '--source-def', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
-    const mockRaw      = requireFlag(rest, '--mock-projections', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
-    const outRef       = requireFlag(rest, '--out-ref', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
-    const tmpRef = baseRef ?? { kind: 'fs-path', value: resolvePath('.') };
+    const outRef  = requireFlag(rest, '--out-ref', 'probe-tmp-source --out-ref <ref>');
+    const tmpRef  = baseRef ?? { kind: 'fs-path', value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
-    printResult(nonCore.probeTmpSource({
-      params: { outRef },
-      body: { sourceDef: JSON.parse(sourceDefRaw), mockProjections: JSON.parse(mockRaw) },
-    }));
+    const body    = await readStdinBody();
+    printResult(nonCore.probeTmpSource({ params: { outRef }, body }));
     return;
   }
 
@@ -809,16 +811,17 @@ export async function cli(argv: string[]): Promise<void> {
 
   switch (cmd) {
     case 'init': {
-      const params: Record<string, string | number | boolean> = {};
-      const te = optFlag(rest, '--task-executor');
-      const ch = optFlag(rest, '--chat-handler');
-      if (te) params['taskExecutor'] = te;
-      if (ch) params['chatHandler'] = ch;
-      printResult(board().init({ params }));
+      const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value>');
+      const body = await readStdinBody();
+      printResult(board().init({ params: { cardStoreRef }, body }));
       return;
     }
     case 'status': {
       printResult(board().status({}));
+      return;
+    }
+    case 'get-card-store-ref': {
+      printResult(board().getCardStoreRef({}));
       return;
     }
     case 'remove-card': {
@@ -836,42 +839,39 @@ export async function cli(argv: string[]): Promise<void> {
       return;
     }
     case 'upsert-card': {
-      const cardId  = requireFlag(rest, '--card-id', 'upsert-card --base-ref <ref> --card-id <id> [--restart]');
+      const cardId  = optFlag(rest, '--card-id');
+      const all     = rest.includes('--all');
       const restart = rest.includes('--restart');
-      const params: Record<string, string | number | boolean> = { cardId };
+      if (!cardId && !all) throw new Error('upsert-card requires --card-id <id> or --all');
+      const params: Record<string, string | number | boolean> = {};
+      if (cardId)  params['cardId']  = cardId;
+      if (all)     params['all']     = true;
       if (restart) params['restart'] = true;
       printResult(board().upsertCard({ params }));
       return;
     }
     case 'validate-card': {
-      const cardId = requireFlag(rest, '--card-id', 'validate-card --base-ref <ref> --card-id <id>');
-      printResult(nonCore().validateCard({ params: { cardId } }));
+      const cardId = optFlag(rest, '--card-id');
+      const all    = rest.includes('--all');
+      if (!cardId && !all) throw new Error('validate-card requires --card-id <id> or --all');
+      const params: Record<string, string | number | boolean> = {};
+      if (cardId) params['cardId'] = cardId;
+      if (all)    params['all']    = true;
+      printResult(nonCore().validateCard({ params }));
       return;
     }
     case 'probe-source': {
-      const cardId    = requireFlag(rest, '--card-id', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
-      const idxRaw    = requireFlag(rest, '--source-idx', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
-      const mockRaw   = requireFlag(rest, '--mock-projections', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
-      const outRef    = requireFlag(rest, '--out-ref', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
-      printResult(nonCore().probeSource({
-        params: { cardId, sourceIdx: parseInt(idxRaw, 10), outRef },
-        body: JSON.parse(mockRaw),
-      }));
+      const cardId    = requireFlag(rest, '--card-id', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --out-ref <ref>');
+      const idxRaw    = requireFlag(rest, '--source-idx', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --out-ref <ref>');
+      const outRef    = optFlag(rest, '--out-ref');
+      const body      = await readStdinBody();
+      const params: Record<string, string | number | boolean> = { cardId, sourceIdx: parseInt(idxRaw, 10) };
+      if (outRef) params['outRef'] = outRef;
+      printResult(nonCore().probeSource({ params, body }));
       return;
     }
     case 'describe-task-executor-capabilities': {
       printResult(nonCore().describeTaskExecutorCapabilities({}));
-      return;
-    }
-    case 'update-in-card-store': {
-      const cardId = requireFlag(rest, '--card-id', 'update-in-card-store --base-ref <ref> --card-id <id>');
-      const body = await readStdinBody();
-      printResult(nonCore().updateInCardStore({ params: { cardId }, body }));
-      return;
-    }
-    case 'read-from-card-store': {
-      const cardId = requireFlag(rest, '--card-id', 'read-from-card-store --base-ref <ref> --card-id <id>');
-      printResult(nonCore().readFromCardStore({ params: { cardId } }));
       return;
     }
     default:
