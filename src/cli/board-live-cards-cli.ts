@@ -21,13 +21,11 @@ import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createLiveGraph, snapshot } from '../continuous-event-graph/core.js';
-import type { GraphEvent } from '../event-graph/types.js';
+import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
+import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 import {
-  createBoardCommandHandlers,
-  createCallbackCommandHandlers,
-  createCardCommandHandlers,
   createCardHandlerFn,
   buildBoardStatusObject,
   createCardStore, createJournalStore, createExecutionRequestStore,
@@ -39,8 +37,11 @@ import {
   boardEnvelopeToSnapshotEntries, snapshotEntriesToBoardEnvelope,
   liveCardToTaskConfig,
   type BoardEnvelope,
+  type LiveCard as LibLiveCard,
   type CardUpsertIndexEntry,
   type CardInventoryEntry, type CardInventoryIndex,
+  type FetchedSourcesStore,
+  type PublishedOutputsStore,
   type BoardConfigStore, type CardStore,
   type CommandResponse,
 } from './board-live-cards-lib.js';
@@ -54,6 +55,7 @@ import {
   createFsCardStorageAdapter,
   createFsStateSnapshotStorageAdapter,
 } from './storage-fs-adapters.js';
+import { executionRefFromScriptPath } from './execution-interface.js';
 import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
 import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
 export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib.js';
@@ -1126,6 +1128,456 @@ EXAMPLES
     cmdDescribeTaskExecutorCapabilities,
     cmdValidateCard,
     validateCards: validateCardObjects,
+  };
+}
+
+// ============================================================================
+// Board command handlers
+// ============================================================================
+
+interface BoardCommandDeps {
+  initBoard: (baseRef: KindValueRef) => 'created' | 'exists';
+  configureRuntimeOutDir: (baseRef: KindValueRef, runtimeOut?: string) => string;
+  loadBoard: (baseRef: KindValueRef) => LiveGraph;
+  getOutputStore: (baseRef: KindValueRef) => PublishedOutputsStore;
+  buildBoardStatusObject: (baseRef: KindValueRef, live: LiveGraph) => any;
+  getConfigStore: (baseRef: KindValueRef) => BoardConfigStore;
+  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
+  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
+}
+
+interface BoardCommandHandlers {
+  cmdInit: (args: string[]) => void;
+  cmdStatus: (args: string[]) => void;
+  cmdRemoveCard: (args: string[]) => void;
+  cmdRetrigger: (args: string[]) => void;
+}
+
+function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommandHandlers {
+  function cmdInit(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    if (!baseRef) {
+      console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+      process.exit(1);
+    }
+
+    const teIdx = args.indexOf('--task-executor');
+    const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
+    const chIdx = args.indexOf('--chat-handler');
+    const chatHandler = chIdx !== -1 ? args[chIdx + 1] : undefined;
+    const roIdx = args.indexOf('--runtime-out');
+    const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
+    if (roIdx !== -1 && !runtimeOut) {
+      console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
+      process.exit(1);
+    }
+
+    const result = deps.initBoard(baseRef);
+
+    const config = deps.getConfigStore(baseRef);
+    if (taskExecutor) {
+      const teExtraIdx = args.indexOf('--task-executor-extra');
+      let teExtra: Record<string, unknown> | undefined;
+      if (teExtraIdx !== -1 && args[teExtraIdx + 1]) {
+        try { teExtra = JSON.parse(args[teExtraIdx + 1]); } catch { /* ignore bad JSON */ }
+      }
+      config.writeTaskExecutorRef(executionRefFromScriptPath(taskExecutor, teExtra));
+    }
+    if (chatHandler) {
+      config.writeChatHandler(chatHandler);
+    }
+
+    const runtimeOutDir = deps.configureRuntimeOutDir(baseRef, runtimeOut);
+    const live = deps.loadBoard(baseRef);
+    deps.getOutputStore(baseRef).writeStatusSnapshot(deps.buildBoardStatusObject(baseRef, live));
+
+    if (result === 'exists') {
+      console.log(`Board already initialized at ${baseRef.value}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
+    } else {
+      console.log(`Board initialized at ${baseRef.value}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
+    }
+  }
+
+  function cmdStatus(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const asJson = args.includes('--json');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    if (!baseRef) {
+      console.error('Usage: board-live-cards status --base-ref <::kind::value>');
+      process.exit(1);
+    }
+
+    let statusObject: any = deps.getOutputStore(baseRef).readStatusSnapshot();
+    if (!statusObject) {
+      statusObject = deps.buildBoardStatusObject(baseRef, deps.loadBoard(baseRef));
+      deps.getOutputStore(baseRef).writeStatusSnapshot(statusObject);
+    }
+
+    if (asJson) {
+      console.log(JSON.stringify(statusObject, null, 2));
+      return;
+    }
+
+    console.log(`Board: ${statusObject.meta.board.path}`);
+    console.log(`Tasks: ${statusObject.summary.card_count}`);
+    console.log('');
+
+    for (const card of statusObject.cards) {
+      const dataKeys = card.provides_runtime.join(', ');
+      console.log(`  ${card.status.padEnd(12)} ${card.name}${dataKeys ? ` — [${dataKeys}]` : ''}`);
+    }
+
+    console.log('');
+    console.log(`Schedule: ${statusObject.summary.eligible} eligible, ${statusObject.summary.pending} pending, ${statusObject.summary.blocked} blocked, ${statusObject.summary.unresolved} unresolved`);
+  }
+
+  function cmdRemoveCard(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const idIdx = args.indexOf('--id');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const cardId = idIdx !== -1 ? args[idIdx + 1] : undefined;
+    if (!baseRef || !cardId) {
+      console.error('Usage: board-live-cards remove-card --base-ref <::kind::value> --id <card-id>');
+      process.exit(1);
+    }
+
+    deps.appendEventToJournal(baseRef, {
+      type: 'task-removal',
+      taskName: cardId,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsInfinitePass(baseRef);
+    console.log(`Card "${cardId}" removed.`);
+  }
+
+  function cmdRetrigger(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const taskIdx = args.indexOf('--task');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const taskName = taskIdx !== -1 ? args[taskIdx + 1] : undefined;
+    if (!baseRef || !taskName) {
+      console.error('Usage: board-live-cards retrigger --base-ref <::kind::value> --task <task-name>');
+      process.exit(1);
+    }
+
+    deps.appendEventToJournal(baseRef, {
+      type: 'task-restart',
+      taskName,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsInfinitePass(baseRef);
+    console.log(`Task "${taskName}" retriggered.`);
+  }
+
+  return { cmdInit, cmdStatus, cmdRemoveCard, cmdRetrigger };
+}
+
+// ============================================================================
+// Card command handlers
+// ============================================================================
+
+export type BoardLiveCard = LiveCard;
+
+interface CardCommandDeps {
+  hashTaskConfig: (taskConfig: TaskConfig) => string;
+  getCardStore: (baseRef: KindValueRef) => CardStore;
+  readCardUpsertEntry: (baseRef: KindValueRef, cardId: string) => CardUpsertIndexEntry | null;
+  writeCardUpsertEntry: (baseRef: KindValueRef, cardId: string, entry: CardUpsertIndexEntry) => void;
+  liveCardToTaskConfig: (card: LibLiveCard) => TaskConfig;
+  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
+  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
+}
+
+interface CardCommandHandlers {
+  cmdUpsertCard: (args: string[]) => void;
+  upsertCardById: (baseRef: KindValueRef, cardId: string, restart: boolean) => string;
+}
+
+function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHandlers {
+  function upsertCardById(baseRef: KindValueRef, cardId: string, restart: boolean): string {
+    const card = deps.getCardStore(baseRef).readCard(cardId);
+    if (!card) {
+      throw new Error(`Card "${cardId}" not found in CardStore at ${baseRef.value}`);
+    }
+
+    const taskConfig = deps.liveCardToTaskConfig(card);
+    const taskConfigHash = deps.hashTaskConfig(taskConfig);
+    const existing = deps.readCardUpsertEntry(baseRef, cardId);
+    const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
+
+    if (!taskConfigChanged && !restart) {
+      return `Card "${cardId}" unchanged — skipped.`;
+    }
+
+    if (taskConfigChanged) {
+      const blobRef = existing?.blobRef ?? deps.getCardStore(baseRef).readCardKey(cardId) ?? cardId;
+
+      deps.appendEventToJournal(baseRef, {
+        type: 'task-upsert',
+        taskName: cardId,
+        taskConfig,
+        timestamp: new Date().toISOString(),
+      });
+
+      deps.writeCardUpsertEntry(baseRef, cardId, { blobRef, taskConfigHash, updatedAt: new Date().toISOString() });
+    }
+
+    if (restart) {
+      deps.appendEventToJournal(baseRef, {
+        type: 'task-restart',
+        taskName: cardId,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    return `Card "${cardId}" ${existing ? 'upserted (updated)' : 'upserted (inserted)'}${restart ? ' (restarted)' : ''}.`;
+  }
+
+  function cmdUpsertCard(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const cardIdIdx = args.indexOf('--card-id');
+    const restart = args.includes('--restart');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const cardId = cardIdIdx !== -1 ? args[cardIdIdx + 1] : undefined;
+
+    if (!baseRef || !cardId) {
+      console.error('Usage: board-live-cards upsert-card --base-ref <::kind::value> --card-id <id> [--restart]');
+      process.exit(1);
+    }
+
+    const msg = upsertCardById(baseRef, cardId, restart);
+    void deps.processAccumulatedEventsInfinitePass(baseRef);
+    console.log(msg);
+  }
+
+  return { cmdUpsertCard, upsertCardById };
+}
+
+// ============================================================================
+// Callback command handlers
+// ============================================================================
+
+function injectTaskProgress(
+  baseRef: KindValueRef,
+  taskName: string,
+  update: Record<string, unknown>,
+  deps: {
+    appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
+    processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
+  },
+): void {
+  deps.appendEventToJournal(baseRef, {
+    type: 'task-progress',
+    taskName,
+    update,
+    timestamp: new Date().toISOString(),
+  });
+  void deps.processAccumulatedEventsInfinitePass(baseRef);
+}
+
+interface CallbackTokenPayload {
+  taskName: string;
+}
+
+interface SourceTokenPayloadLike {
+  cbk: string;
+  rg: string;
+  br: string;
+  cid: string;
+  b: string;
+  d: string;
+  cs?: string;
+}
+
+interface CallbackCommandDeps {
+  decodeCallbackToken: (token: string) => CallbackTokenPayload | null;
+  decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
+  getFetchedSourcesStore: (baseRef: KindValueRef) => FetchedSourcesStore;
+  generateId: () => string;
+  writeRuntimeDataObjects: (baseRef: KindValueRef, data: Record<string, unknown>) => void;
+  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
+  processAccumulatedEventsForced: (baseRef: KindValueRef) => Promise<void>;
+  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
+}
+
+interface CallbackCommandHandlers {
+  cmdTaskCompleted: (args: string[]) => void;
+  cmdTaskFailed: (args: string[]) => void;
+  cmdTaskProgress: (args: string[]) => void;
+  cmdSourceDataFetched: (args: string[]) => void;
+  cmdSourceDataFetchFailure: (args: string[]) => void;
+}
+
+function createCallbackCommandHandlers(deps: CallbackCommandDeps): CallbackCommandHandlers {
+  function cmdTaskCompleted(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const tokenIdx = args.indexOf('--token');
+    const dataIdx = args.indexOf('--data');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    if (!baseRef || !token) {
+      console.error('Usage: board-live-cards task-completed --base-ref <::kind::value> --token <token> [--data <json>]');
+      process.exit(1);
+    }
+
+    const decoded = deps.decodeCallbackToken(token);
+    if (!decoded) {
+      console.error('Invalid callback token');
+      process.exit(1);
+    }
+
+    const data: Record<string, unknown> = dataIdx !== -1
+      ? JSON.parse(args[dataIdx + 1])
+      : {};
+
+    deps.writeRuntimeDataObjects(baseRef, data);
+
+    deps.appendEventToJournal(baseRef, {
+      type: 'task-completed',
+      taskName: decoded.taskName,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsForced(baseRef);
+    console.log('Task completed.');
+  }
+
+  function cmdTaskFailed(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const tokenIdx = args.indexOf('--token');
+    const errorIdx = args.indexOf('--error');
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const errorMsg = errorIdx !== -1 ? args[errorIdx + 1] : 'unknown error';
+    if (!baseRef || !token) {
+      console.error('Usage: board-live-cards task-failed --base-ref <::kind::value> --token <token> [--error <message>]');
+      process.exit(1);
+    }
+
+    const decoded = deps.decodeCallbackToken(token);
+    if (!decoded) {
+      console.error('Invalid callback token');
+      process.exit(1);
+    }
+
+    deps.appendEventToJournal(baseRef, {
+      type: 'task-failed',
+      taskName: decoded.taskName,
+      error: errorMsg,
+      timestamp: new Date().toISOString(),
+    });
+
+    void deps.processAccumulatedEventsForced(baseRef);
+    console.log('Task failed.');
+  }
+
+  function cmdSourceDataFetched(args: string[]): void {
+    const refIdx = args.indexOf('--ref');
+    const tokenIdx = args.indexOf('--token');
+    const refRaw = refIdx !== -1 ? args[refIdx + 1] : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    if (!refRaw || !token) {
+      console.error('Usage: board-live-cards source-data-fetched --ref ::kind::value --token <sourceToken>');
+      process.exit(1);
+    }
+
+    const ref = parseRef(refRaw);
+
+    const payload = deps.decodeSourceToken(token);
+    if (!payload) {
+      console.error('Invalid source token');
+      process.exit(1);
+    }
+
+    const { cbk, cid, b, d, cs } = payload;
+    const boardRef = parseRef(payload.br);
+
+    const deliveryToken = deps.generateId();
+    deps.getFetchedSourcesStore(boardRef).ingestSourceDataStaged(cid, d, ref, deliveryToken);
+    console.log(`[source-data-fetched] ${cid}.${b} -> ${cid}/${d}`);
+
+    const fetchedAt = new Date().toISOString();
+    const cbkDecoded = deps.decodeCallbackToken(cbk);
+    if (!cbkDecoded) {
+      console.error('Invalid callback token embedded in source token');
+      process.exit(1);
+    }
+
+    injectTaskProgress(boardRef, cbkDecoded.taskName, { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs }, deps);
+  }
+
+  function cmdSourceDataFetchFailure(args: string[]): void {
+    const tokenIdx = args.indexOf('--token');
+    const reasonIdx = args.indexOf('--reason');
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const reason = reasonIdx !== -1 ? args[reasonIdx + 1] : 'unknown';
+    if (!token) {
+      console.error('Usage: board-live-cards source-data-fetch-failure --token <sourceToken> [--reason <msg>]');
+      process.exit(1);
+    }
+
+    const payload = deps.decodeSourceToken(token);
+    if (!payload) {
+      console.error('Invalid source token');
+      process.exit(1);
+    }
+
+    const { cbk, cid, b, d, cs } = payload;
+    const boardRef = parseRef(payload.br);
+    console.log(`[source-data-fetch-failure] ${cid}.${b}: ${reason}`);
+
+    const cbkDecoded = deps.decodeCallbackToken(cbk);
+    if (!cbkDecoded) {
+      console.error('Invalid callback token embedded in source token');
+      process.exit(1);
+    }
+
+    injectTaskProgress(boardRef, cbkDecoded.taskName, { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs }, deps);
+  }
+
+  function cmdTaskProgress(args: string[]): void {
+    const brIdx = args.indexOf('--base-ref');
+    const tokenIdx = args.indexOf('--token');
+    const updateIdx = args.indexOf('--update');
+
+    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
+    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
+    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
+    const updateJson = updateIdx !== -1 ? args[updateIdx + 1] : '{}';
+
+    if (!baseRef || !token) {
+      console.error('Usage: board-live-cards task-progress --base-ref <::kind::value> --token <token> [--update <json>]');
+      process.exit(1);
+    }
+
+    const decoded = deps.decodeCallbackToken(token);
+    if (!decoded) {
+      console.error('Invalid callback token');
+      process.exit(1);
+    }
+
+    const update = updateJson ? JSON.parse(updateJson) : {};
+
+    injectTaskProgress(baseRef, decoded.taskName, update, deps);
+  }
+
+  return {
+    cmdTaskCompleted,
+    cmdTaskFailed,
+    cmdTaskProgress,
+    cmdSourceDataFetched,
+    cmdSourceDataFetchFailure,
   };
 }
 
