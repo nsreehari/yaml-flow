@@ -744,7 +744,7 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
 
     const sourceDef = source_defs[sourceIdx];
     const cardDir = path.resolve(path.dirname(cardFilePath));
-    const boardDir = boardDirArg ? path.resolve(boardDirArg) : cardDir;
+    const boardDir = boardDirArg ?? cardDir;
 
     // Parse --mock-projections (JSON string or @file.json) — pre-resolved _projections values for testing
     let mockProjections: Record<string, unknown> = {};
@@ -896,7 +896,7 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
 
   function cmdDescribeTaskExecutorCapabilities(args: string[]): void {
     const brIdx = args.indexOf('--base-ref');
-    const boardDir = brIdx !== -1 ? path.resolve(parseRef(args[brIdx + 1]).value) : undefined;
+    const boardDir = brIdx !== -1 ? parseRef(args[brIdx + 1]).value : undefined;
     if (!boardDir) {
       console.error('Usage: board-live-cards describe-task-executor-capabilities --base-ref <::kind::value>');
       process.exit(1);
@@ -931,11 +931,11 @@ USAGE
   board-live-cards-cli <command> [options]
 
 BOARD MANAGEMENT
-  init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]
-    Create a new board in <dir>.
-    If --task-executor is given, writes <dir>/.task-executor with the script path.
-    If --chat-handler is given, writes <dir>/.chat-handler with the script path.
-    Writes <dir>/.runtime-out (default: <dir>/runtime-out).
+  init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]
+    Create a new board at the location identified by <::kind::value>.
+    If --task-executor is given, registers the script as the board's task executor.
+    If --chat-handler is given, registers the script as the board's chat handler.
+    Writes runtime-out config (default: <board-dir>/runtime-out).
     Published runtime files:
       <runtime-out>/board-livegraph-status.json
       <runtime-out>/cards/<card-id>.computed.json
