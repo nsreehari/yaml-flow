@@ -1,11 +1,13 @@
 import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
 import type { BoardConfigStore, PublishedOutputsStore } from './board-live-cards-all-stores.js';
+import * as path from 'node:path';
 import { parseRef } from './storage-interface.js';
+import type { KindValueRef } from './storage-interface.js';
 import { executionRefFromScriptPath } from './execution-interface.js';
 
 interface BoardCommandDeps {
-  initBoard: (dir: string) => 'created' | 'exists';
+  initBoard: (baseRef: KindValueRef) => 'created' | 'exists';
   configureRuntimeOutDir: (dir: string, runtimeOut?: string) => string;
   loadBoard: (dir: string) => LiveGraph;
   getOutputStore: (boardDir: string) => PublishedOutputsStore;
@@ -39,9 +41,9 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       throw new Error('Usage: board-live-cards init <dir> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
     }
 
-    const result = deps.initBoard(dir);
+    const result = deps.initBoard({ kind: 'fs-path', value: path.resolve(dir) });
 
-    const config = deps.getConfigStore(dir);
+    const config = deps.getConfigStore(path.resolve(dir));
     if (taskExecutor) {
       const teExtraIdx = args.indexOf('--task-executor-extra');
       let teExtra: Record<string, unknown> | undefined;

@@ -12,6 +12,7 @@ import {
   resolveModuleDir,
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import type { KindValueRef } from './storage-interface.js';
 import { dispatchTaskExecutorDetached, buildLocalBaseSpec, builtInSourceCliExecutorRef } from './execution-adapter.js';
 import { blobStorageForRef } from './public-storage-adapter.js';
 import { restore } from '../continuous-event-graph/core.js';
@@ -313,7 +314,11 @@ export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
  * Returns 'created' if new board was created, 'exists' if board already existed.
  * Throws if directory exists but is non-empty and has no valid board-graph.json.
  */
-export function initBoard(dir: string): 'created' | 'exists' {
+export function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
+  if (baseRef.kind !== 'fs-path') {
+    throw new Error(`initBoard: unsupported board ref kind "${baseRef.kind}" — only fs-path is supported`);
+  }
+  const dir = baseRef.value;
   const lockPath = path.join(dir, BOARD_LOCK_FILE);
 
   if (fs.existsSync(lockPath)) {
