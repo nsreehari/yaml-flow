@@ -28,7 +28,6 @@ import { validateLiveCardDefinition } from '../card-compute/schema-validator.js'
 import { createBoardCommandHandlers } from './board-live-cards-cli-board-commands.js';
 import { createCallbackCommandHandlers } from './board-live-cards-cli-callbacks.js';
 import { createCardCommandHandlers } from './board-live-cards-cli-card-commands.js';
-import { createCompatCommandHandlers } from './board-live-cards-cli-compat.js';
 import type { CardUpsertIndexEntry } from './board-live-cards-all-stores.js';
 import { createCardHandlerFn } from './board-live-cards-lib-card-handler.js';
 import { buildBoardStatusObject } from './board-live-cards-lib-board-status.js';
@@ -1264,14 +1263,6 @@ export async function cli(argv: string[]): Promise<void> {
     appendEventToJournal,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
   });
-  const compatCommandHandlers = createCompatCommandHandlers({
-    getCardAdminStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value)),
-    upsertCardById: cardCommandHandlers.upsertCardById,
-    validateCards: nonCoreCommandHandlers.validateCards,
-    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
-    cmdSourceDataFetched: (args: string[]) => callbackCommandHandlers.cmdSourceDataFetched(args),
-  });
-
   const executionCommandHandlers = createExecutionCommandHandlers({
     processAccumulatedEventsForced: scheduleForced,
   });
@@ -1285,20 +1276,14 @@ export async function cli(argv: string[]): Promise<void> {
     case '-h':            return nonCoreCommandHandlers.cmdHelp();
     case 'init':           return boardCommandHandlers.cmdInit(rest);
     case 'status':         return boardCommandHandlers.cmdStatus(rest);
-    case 'upsert-card':    return rest.some((a: string) => a === '--card' || a === '--card-glob')
-      ? compatCommandHandlers.compatUpsertCard(rest)
-      : cardCommandHandlers.cmdUpsertCard(rest);
-    case 'validate-card':  return rest.some((a: string) => a === '--card' || a === '--card-glob')
-      ? compatCommandHandlers.compatValidateCard(rest)
-      : nonCoreCommandHandlers.cmdValidateCard(rest);
+    case 'upsert-card':    return cardCommandHandlers.cmdUpsertCard(rest);
+    case 'validate-card':  return nonCoreCommandHandlers.cmdValidateCard(rest);
     case 'remove-card':              return boardCommandHandlers.cmdRemoveCard(rest);
     case 'retrigger':                 return boardCommandHandlers.cmdRetrigger(rest);
     case 'task-completed':            return callbackCommandHandlers.cmdTaskCompleted(rest);
     case 'task-failed':               return callbackCommandHandlers.cmdTaskFailed(rest);
     case 'task-progress':             return callbackCommandHandlers.cmdTaskProgress(rest);
-    case 'source-data-fetched':       return rest.some((a: string) => a === '--tmp')
-      ? compatCommandHandlers.compatSourceDataFetchedTmp(rest)
-      : callbackCommandHandlers.cmdSourceDataFetched(rest);
+    case 'source-data-fetched':       return callbackCommandHandlers.cmdSourceDataFetched(rest);
     case 'source-data-fetch-failure': return callbackCommandHandlers.cmdSourceDataFetchFailure(rest);
     case 'probe-source':               return await nonCoreCommandHandlers.cmdProbeSource(rest);
     case 'describe-task-executor-capabilities': return nonCoreCommandHandlers.cmdDescribeTaskExecutorCapabilities(rest);
