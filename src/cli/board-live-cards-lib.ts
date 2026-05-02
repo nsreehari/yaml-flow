@@ -18,8 +18,8 @@ import type { KVStorage, BlobStorage, KindValueRef } from './storage-interface.j
 import { parseRef, serializeRef } from './storage-interface.js';
 import { parseExecutionRef, serializeExecutionRef, executionRefFromScriptPath } from './execution-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
-import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
-import type { LiveGraph } from '../continuous-event-graph/types.js';
+import type { GraphEvent, TaskConfig, GraphConfig } from '../event-graph/types.js';
+import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import { schedule } from '../continuous-event-graph/schedule.js';
 import type { TaskHandlerFn } from '../continuous-event-graph/reactive.js';
 import { CardCompute } from '../card-compute/index.js';
@@ -1441,5 +1441,63 @@ export function createCallbackCommandHandlers(deps: CallbackCommandDeps): Callba
     cmdTaskProgress,
     cmdSourceDataFetched,
     cmdSourceDataFetchFailure,
+  };
+}
+
+// ============================================================================
+// ---- pure constants / codecs lifted from board-live-cards-cli.ts ----
+// ============================================================================
+
+export const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
+
+/** Envelope stored in the snapshot store — wraps the LiveGraph snapshot with journal pointer. */
+export interface BoardEnvelope {
+  lastDrainedJournalId: string;
+  graph: LiveGraphSnapshot;
+}
+
+export function boardEnvelopeToSnapshotEntries(envelope: BoardEnvelope): Record<string, unknown> {
+  return {
+    [BOARD_GRAPH_KEY]: envelope.graph,
+    [BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]: envelope.lastDrainedJournalId,
+  };
+}
+
+export function snapshotEntriesToBoardEnvelope(entries: Record<string, unknown>): BoardEnvelope {
+  const graph = entries[BOARD_GRAPH_KEY] as LiveGraphSnapshot | undefined;
+  const lastDrainedJournalId = entries[BOARD_LAST_JOURNAL_PROCESSED_ID_KEY] as string | undefined;
+  if (!graph || typeof graph !== 'object') {
+    throw new Error(`State snapshot is missing required key: ${BOARD_GRAPH_KEY}`);
+  }
+  return {
+    graph,
+    lastDrainedJournalId: typeof lastDrainedJournalId === 'string' ? lastDrainedJournalId : '',
+  };
+}
+
+export interface CardInventoryEntry {
+  cardId: string;
+  cardFilePath: string;
+  addedAt: string;
+}
+
+export interface CardInventoryIndex {
+  byCardId: Map<string, CardInventoryEntry>;
+  byCardPath: Map<string, CardInventoryEntry>;
+}
+
+/**
+ * Transform a LiveCard into a TaskConfig for the reactive graph.
+ * Every card gets handler: 'card-handler'.
+ */
+export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
+  const requires = card.requires as string[] | undefined;
+  const provides = (card.provides as Array<{ bindTo: string }> | undefined)?.map(p => p.bindTo) ?? [];
+
+  return {
+    requires: requires && requires.length > 0 ? requires : undefined,
+    provides,
+    taskHandlers: ['card-handler'],
+    description: (card.meta as { title?: string } | undefined)?.title ?? card.id,
   };
 }

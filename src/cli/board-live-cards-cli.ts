@@ -17,12 +17,11 @@ import type { KindValueRef } from './storage-interface.js';
 import { dispatchTaskExecutorDetached, buildLocalBaseSpec, builtInSourceCliExecutorRef } from './execution-adapter.js';
 import { blobStorageForRef } from './public-storage-adapter.js';
 import { restore } from '../continuous-event-graph/core.js';
-import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
+import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createLiveGraph, snapshot } from '../continuous-event-graph/core.js';
-import type { GraphConfig, TaskConfig, GraphEvent } from '../event-graph/types.js';
-import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
+import type { GraphEvent } from '../event-graph/types.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 import {
@@ -34,9 +33,14 @@ import {
   createCardStore, createJournalStore, createExecutionRequestStore,
   createStateSnapshotStore, createBoardConfigStore, createFetchedSourcesStore, createCardRuntimeStore,
   createPublishedOutputsStore,
-  BOARD_GRAPH_KEY, BOARD_LAST_JOURNAL_PROCESSED_ID_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
+  BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
+  EMPTY_CONFIG,
   Resp,
+  boardEnvelopeToSnapshotEntries, snapshotEntriesToBoardEnvelope,
+  liveCardToTaskConfig,
+  type BoardEnvelope,
   type CardUpsertIndexEntry,
+  type CardInventoryEntry, type CardInventoryIndex,
   type BoardConfigStore, type CardStore,
   type CommandResponse,
 } from './board-live-cards-lib.js';
@@ -124,34 +128,7 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
   };
 }
 
-const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', refreshStrategy: 'data-changed' }, tasks: {} } as GraphConfig;
-
-/** Envelope stored in board-graph.json — wraps the LiveGraph snapshot with journal pointer. */
-export interface BoardEnvelope {
-  lastDrainedJournalId: string;
-  graph: LiveGraphSnapshot;
-}
-
 const nodeStateSnapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
-
-function boardEnvelopeToSnapshotEntries(envelope: BoardEnvelope): Record<string, unknown> {
-  return {
-    [BOARD_GRAPH_KEY]: envelope.graph,
-    [BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]: envelope.lastDrainedJournalId,
-  };
-}
-
-function snapshotEntriesToBoardEnvelope(entries: Record<string, unknown>): BoardEnvelope {
-  const graph = entries[BOARD_GRAPH_KEY] as LiveGraphSnapshot | undefined;
-  const lastDrainedJournalId = entries[BOARD_LAST_JOURNAL_PROCESSED_ID_KEY] as string | undefined;
-  if (!graph || typeof graph !== 'object') {
-    throw new Error(`State snapshot is missing required key: ${BOARD_GRAPH_KEY}`);
-  }
-  return {
-    graph,
-    lastDrainedJournalId: typeof lastDrainedJournalId === 'string' ? lastDrainedJournalId : '',
-  };
-}
 
 // ============================================================================
 // Board Journal — append-only JSONL with GUID IDs
@@ -204,17 +181,6 @@ export class BoardJournal implements Journal {
 // ============================================================================
 // Cards inventory
 // ============================================================================
-
-export interface CardInventoryEntry {
-  cardId: string;
-  cardFilePath: string;
-  addedAt: string;
-}
-
-export interface CardInventoryIndex {
-  byCardId: Map<string, CardInventoryEntry>;
-  byCardPath: Map<string, CardInventoryEntry>;
-}
 
 export function readCardInventory(baseRef: KindValueRef): CardInventoryEntry[] {
   const inventoryPath = joinPath(baseRef.value, INVENTORY_FILE);
@@ -600,31 +566,6 @@ export async function processAccumulatedEventsInfinitePass(baseRef: KindValueRef
 export async function processAccumulatedEventsForced(baseRef: KindValueRef, adapter: InvocationAdapter): Promise<void> {
   await processAccumulatedEvents(baseRef);
   await processAccumulatedEventsInfinitePass(baseRef, adapter);
-}
-
-// ============================================================================
-// Card transform
-// ============================================================================
-
-export type BoardLiveCard = LiveCard;
-
-/**
- * Transform a LiveCard into a TaskConfig for the reactive graph.
- *
- * Every card gets handler: 'card-handler'.
- * The handler inspects the card and decides what to do:
- * run compute, invoke source_defs.
- */
-export function liveCardToTaskConfig(card: BoardLiveCard): TaskConfig {
-  const requires = card.requires;
-  const provides = card.provides?.map(p => p.bindTo) ?? [];
-
-  return {
-    requires: requires && requires.length > 0 ? requires : undefined,
-    provides,
-    taskHandlers: ['card-handler'],
-    description: card.meta?.title ?? card.id,
-  };
 }
 
 // ============================================================================
