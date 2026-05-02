@@ -172,10 +172,6 @@ export function createFsBoardPlatformAdapter(
 
     journalAdapter: () => createFsJournalStorageAdapter(dir),
 
-    cardAdapter: () => createFsCardStorageAdapter(dir),
-
-    snapshotAdapter: createFsStateSnapshotStorageAdapter(),
-
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
 
     selfRef,

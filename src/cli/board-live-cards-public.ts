@@ -60,6 +60,8 @@ import type {
   JournalStorageAdapter,
   StateSnapshotStorageAdapter,
   CardStorageAdapter,
+  CardIndex,
+  StateSnapshotReadView,
   CardUpsertIndexEntry,
   ExecutionRequestEntry,
   BoardEnvelope,
@@ -98,7 +100,9 @@ function err(e: unknown): CommandResult { return { status: 'error', error: e ins
 export interface BoardPlatformAdapter {
   /**
    * KV storage factory — scoped by namespace.
-   * Namespaces used:
+   * Namespaces used by the public layer:
+   *   'cards'              — card index + card content (CardStorageAdapter, built internally)
+   *   'state-snapshot'     — board graph snapshot (StateSnapshotStorageAdapter, built internally)
    *   'config'             — board configuration (.task-executor, .chat-handler)
    *   'card-upsert'        — card upsert dedup index
    *   'execution-requests' — queued execution requests (keyed by journalId)
@@ -109,8 +113,7 @@ export interface BoardPlatformAdapter {
 
   /**
    * Blob storage factory — scoped by namespace.
-   * Namespaces used:
-   *   'cards'   — card JSON definition files
+   * Namespaces used by the public layer:
    *   'sources' — fetched source data files (keyed by cardId/outputFile)
    *   ''        — root-scoped blob access (for resolving arbitrary KindValueRef blobs)
    */
@@ -122,21 +125,6 @@ export interface BoardPlatformAdapter {
    * One journal per board — no namespace parameter needed.
    */
   journalAdapter(): JournalStorageAdapter;
-
-  /**
-   * Card storage adapter — composes kv index + card blobs.
-   * Injected directly because the composition is domain-specific.
-   */
-  cardAdapter(): CardStorageAdapter;
-
-  /**
-   * State snapshot adapter — platform provides this because atomic multi-key
-   * commit semantics are platform-specific:
-   *   FS:        atomic file writes with version checksum
-   *   Azure:     Cosmos DB ETags / optimistic concurrency
-   *   Firestore: Firestore transactions
-   */
-  snapshotAdapter: StateSnapshotStorageAdapter;
 
   /**
    * AtomicRelayLock — non-blocking try-acquire with relay-on-busy semantics.
@@ -249,11 +237,48 @@ export function createBoardLiveCardsPublic(
   const warn = adapter.onWarn ?? (() => { /* no-op */ });
   const boardPath = serializeRef(baseRef);
 
+  // ── Inline storage adapters built from the three primitives ─────────────────
+  //
+  // Both CardStorageAdapter and StateSnapshotStorageAdapter are pure KV
+  // compositions — no platform-specific atomicity needed at this layer.
+  // The public layer builds them here so BoardPlatformAdapter stays minimal.
+
+  function makeCardAdapter(): CardStorageAdapter {
+    const kv = adapter.kvStorage('cards');
+    return {
+      readIndex: () => kv.read('_index') as CardIndex | null,
+      writeIndex: (index: CardIndex) => kv.write('_index', index),
+      readCard: (key) => kv.read(key) as import('./board-live-cards-lib.js').LiveCard | null,
+      writeCard: (key, card) => { kv.write(key, card); return stableHash(card); },
+      cardExists: (key) => kv.read(key) !== null,
+      defaultCardKey: (cardId) => cardId,
+    };
+  }
+
+  // scopeId is intentionally ignored — the adapter is already board-scoped via
+  // adapter.kvStorage('state-snapshot'), which closes over baseRef's directory.
+  const snapshotAdapterImpl: StateSnapshotStorageAdapter = {
+    readValues(_scopeId: string): StateSnapshotReadView {
+      const kv = adapter.kvStorage('state-snapshot');
+      const keys = kv.listKeys().sort();
+      if (keys.length === 0) return { version: null, values: {} };
+      const values: Record<string, unknown> = {};
+      for (const key of keys) values[key] = kv.read(key);
+      return { version: stableHash(values), values };
+    },
+    writeValues(_scopeId: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
+      const kv = adapter.kvStorage('state-snapshot');
+      for (const key of deletedKeys) kv.delete(key);
+      for (const [key, value] of Object.entries(nextValues)) kv.write(key, value);
+      return stableHash(nextValues);
+    },
+  };
+
   // Store factory helpers — no long-lived singletons, created per call
   const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
-  const snapshotStore = () => createStateSnapshotStore(adapter.snapshotAdapter);
+  const snapshotStore = () => createStateSnapshotStore(snapshotAdapterImpl);
   const journalStore = () => createJournalStore(adapter.journalAdapter());
-  const cardStore = () => createCardStore(adapter.cardAdapter(), warn);
+  const cardStore = () => createCardStore(makeCardAdapter(), warn);
   const outputStore = () => createPublishedOutputsStore(adapter.kvStorage('output'));
 
   function boardExists(): boolean {
