@@ -2,14 +2,15 @@
  * Board Live Cards — Disk persistence + CLI for ReactiveGraph.
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-
 import {
   makeBoardTempFilePath,
   buildBoardCliInvocation,
   genUUID,
   resolveModuleDir,
+  joinPath,
+  resolvePath,
+  dirnamePath,
+  isAbsolutePath,
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { KindValueRef } from './storage-interface.js';
@@ -60,7 +61,7 @@ const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
 function createBoardConfig(boardDir: string): BoardConfigStore {
-  return createBoardConfigStore(createFsKvStorage(path.join(boardDir, '.config')));
+  return createBoardConfigStore(createFsKvStorage(joinPath(boardDir, '.config')));
 }
 
 function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
@@ -161,47 +162,37 @@ export interface JournalEntry {
 }
 
 export class BoardJournal implements Journal {
-  private readonly journalPath: string;
+  private readonly adapter: ReturnType<typeof createFsJournalStorageAdapter>;
   private lastDrainedId: string;
 
   constructor(journalPath: string, lastDrainedJournalId: string) {
-    this.journalPath = journalPath;
+    // journalPath is the full path; derive boardDir by stripping the filename
+    this.adapter = createFsJournalStorageAdapter(dirnamePath(journalPath));
     this.lastDrainedId = lastDrainedJournalId;
   }
 
   append(event: GraphEvent): void {
-    const entry: JournalEntry = { id: genUUID(), event };
-    fs.appendFileSync(this.journalPath, JSON.stringify(entry) + '\n', 'utf-8');
+    this.adapter.appendEntry({ id: genUUID(), event });
   }
 
   drain(): GraphEvent[] {
-    if (!fs.existsSync(this.journalPath)) return [];
-    const content = fs.readFileSync(this.journalPath, 'utf-8').trim();
-    if (!content) return [];
-    const entries: JournalEntry[] = content.split('\n').map(l => JSON.parse(l));
-
-    // Find the index of the last drained entry; take everything after it
+    const all = this.adapter.readAllEntries();
+    if (all.length === 0) return [];
     let startIdx = 0;
     if (this.lastDrainedId) {
-      const drainedIdx = entries.findIndex(e => e.id === this.lastDrainedId);
+      const drainedIdx = all.findIndex(e => e.id === this.lastDrainedId);
       if (drainedIdx !== -1) startIdx = drainedIdx + 1;
     }
-
-    const undrained = entries.slice(startIdx);
-    if (undrained.length > 0) {
-      this.lastDrainedId = undrained[undrained.length - 1].id;
-    }
+    const undrained = all.slice(startIdx);
+    if (undrained.length > 0) this.lastDrainedId = undrained[undrained.length - 1].id;
     return undrained.map(e => e.event);
   }
 
   get size(): number {
-    if (!fs.existsSync(this.journalPath)) return 0;
-    const content = fs.readFileSync(this.journalPath, 'utf-8').trim();
-    if (!content) return 0;
-    const entries: JournalEntry[] = content.split('\n').map(l => JSON.parse(l));
-    if (!this.lastDrainedId) return entries.length;
-    const drainedIdx = entries.findIndex(e => e.id === this.lastDrainedId);
-    return drainedIdx === -1 ? entries.length : entries.length - drainedIdx - 1;
+    const all = this.adapter.readAllEntries();
+    if (!this.lastDrainedId) return all.length;
+    const drainedIdx = all.findIndex(e => e.id === this.lastDrainedId);
+    return drainedIdx === -1 ? all.length : all.length - drainedIdx - 1;
   }
 
   get lastDrainedJournalId(): string {
@@ -225,15 +216,15 @@ export interface CardInventoryIndex {
 }
 
 export function readCardInventory(boardDir: string): CardInventoryEntry[] {
-  const inventoryPath = path.join(boardDir, INVENTORY_FILE);
-  if (!fs.existsSync(inventoryPath)) return [];
-  const lines = fs.readFileSync(inventoryPath, 'utf-8').split('\n').filter(l => l.trim());
-  return lines.map(l => JSON.parse(l) as CardInventoryEntry);
+  const inventoryPath = joinPath(boardDir, INVENTORY_FILE);
+  const raw = blobStorageForRef({ kind: 'fs-path', value: inventoryPath }).read(inventoryPath);
+  if (!raw) return [];
+  return raw.split('\n').filter(l => l.trim()).map(l => JSON.parse(l) as CardInventoryEntry);
 }
 
 export function lookupCardPath(boardDir: string, cardId: string): string | null {
   // Check new KV store first
-  const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+  const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
   const kvEntry = kv.read(cardId) as CardUpsertIndexEntry | null;
   if (kvEntry?.blobRef) return kvEntry.blobRef;
   // Fall back to legacy inventory
@@ -244,7 +235,7 @@ export function lookupCardPath(boardDir: string, cardId: string): string | null 
 
 /** Read all entries from the card-upsert KV dedup cache. Keyed by cardId. */
 export function readCardUpsertIndex(boardDir: string): Record<string, CardUpsertIndexEntry> {
-  const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+  const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
   const result: Record<string, CardUpsertIndexEntry> = {};
   for (const cardId of kv.listKeys()) {
     const entry = kv.read(cardId) as CardUpsertIndexEntry | null;
@@ -254,9 +245,11 @@ export function readCardUpsertIndex(boardDir: string): Record<string, CardUpsert
 }
 
 export function appendCardInventory(boardDir: string, entry: CardInventoryEntry): void {
-  const inventoryPath = path.join(boardDir, INVENTORY_FILE);
-  const normalized: CardInventoryEntry = { ...entry, cardFilePath: path.resolve(entry.cardFilePath) };
-  fs.appendFileSync(inventoryPath, JSON.stringify(normalized) + '\n');
+  const inventoryPath = joinPath(boardDir, INVENTORY_FILE);
+  const storage = blobStorageForRef({ kind: 'fs-path', value: inventoryPath });
+  const existing = storage.read(inventoryPath) ?? '';
+  const normalized: CardInventoryEntry = { ...entry, cardFilePath: resolvePath(entry.cardFilePath) };
+  storage.write(inventoryPath, existing + JSON.stringify(normalized) + '\n');
 }
 
 export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
@@ -264,7 +257,7 @@ export function buildCardInventoryIndex(boardDir: string): CardInventoryIndex {
   const byCardPath = new Map<string, CardInventoryEntry>();
 
   for (const entry of readCardInventory(boardDir)) {
-    const normalizedPath = path.resolve(entry.cardFilePath);
+    const normalizedPath = resolvePath(entry.cardFilePath);
     const normalizedEntry: CardInventoryEntry = {
       ...entry,
       cardFilePath: normalizedPath,
@@ -319,25 +312,24 @@ export function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
     throw new Error(`initBoard: unsupported board ref kind "${baseRef.kind}" — only fs-path is supported`);
   }
   const dir = baseRef.value;
-  const lockPath = path.join(dir, BOARD_LOCK_FILE);
+  const lockPath = joinPath(dir, BOARD_LOCK_FILE);
+  const lockStorage = blobStorageForRef({ kind: 'fs-path', value: lockPath });
 
-  if (fs.existsSync(lockPath)) {
+  if (lockStorage.read(lockPath) !== null) {
     // Validate it's a real board envelope
     const envelope = loadBoardEnvelope(dir);
     restore(envelope.graph);
     return 'exists';
   }
 
-  if (fs.existsSync(dir)) {
-    const entries = fs.readdirSync(dir);
-    if (entries.length > 0) {
-      throw new Error(`Directory "${dir}" is not empty and has no valid board`);
-    }
+  // If dir exists and is non-empty with no lock file, refuse
+  const existingKeys = createFsKvStorage(dir).listKeys();
+  if (existingKeys.length > 0) {
+    throw new Error(`Directory "${dir}" is not empty and has no valid board`);
   }
 
-  fs.mkdirSync(dir, { recursive: true });
-  // Create lock marker file (required by proper-lockfile).
-  fs.writeFileSync(lockPath, '{}', 'utf-8');
+  // Create dir + lock marker file (required by proper-lockfile).
+  lockStorage.write(lockPath, '{}');
   const live = createLiveGraph(EMPTY_CONFIG);
   const snap = snapshot(live);
   const envelope: BoardEnvelope = { lastDrainedJournalId: '', graph: snap };
@@ -423,33 +415,30 @@ export function saveBoard(dir: string, rg: ReactiveGraph, journalOrCursor: Board
 }
 
 function runtimeOutConfigPath(boardDir: string): string {
-  return path.join(boardDir, RUNTIME_OUT_FILE);
+  return joinPath(boardDir, RUNTIME_OUT_FILE);
 }
 
 function resolveConfiguredRuntimeOutDir(boardDir: string): string {
   const cfgPath = runtimeOutConfigPath(boardDir);
-  if (fs.existsSync(cfgPath)) {
-    const configured = fs.readFileSync(cfgPath, 'utf-8').trim();
-    if (configured) {
-      return path.isAbsolute(configured) ? configured : path.resolve(boardDir, configured);
-    }
+  const cfgStorage = blobStorageForRef({ kind: 'fs-path', value: cfgPath });
+  const configured = cfgStorage.read(cfgPath)?.trim();
+  if (configured) {
+    return isAbsolutePath(configured) ? configured : resolvePath(boardDir, configured);
   }
-
-  const defaultDir = path.join(boardDir, DEFAULT_RUNTIME_OUT_DIR);
-  fs.writeFileSync(cfgPath, defaultDir, 'utf-8');
+  const defaultDir = joinPath(boardDir, DEFAULT_RUNTIME_OUT_DIR);
+  cfgStorage.write(cfgPath, defaultDir);
   return defaultDir;
 }
 
 function configureRuntimeOutDir(boardDir: string, runtimeOut?: string): string {
-  let resolved: string;
-  if (runtimeOut) {
-    resolved = path.isAbsolute(runtimeOut) ? runtimeOut : path.resolve(boardDir, runtimeOut);
-  } else {
-    resolved = path.join(boardDir, DEFAULT_RUNTIME_OUT_DIR);
-  }
-
-  fs.mkdirSync(resolved, { recursive: true });
-  fs.writeFileSync(runtimeOutConfigPath(boardDir), resolved, 'utf-8');
+  const resolved = runtimeOut
+    ? (isAbsolutePath(runtimeOut) ? runtimeOut : resolvePath(boardDir, runtimeOut))
+    : joinPath(boardDir, DEFAULT_RUNTIME_OUT_DIR);
+  // ensure dir exists by writing a sentinel via blobStorage (mkdirSync is in storage layer)
+  const sentinelPath = joinPath(resolved, '.keep');
+  blobStorageForRef({ kind: 'fs-path', value: sentinelPath }).write(sentinelPath, '');
+  const cfgPath = runtimeOutConfigPath(boardDir);
+  blobStorageForRef({ kind: 'fs-path', value: cfgPath }).write(cfgPath, resolved);
   return resolved;
 }
 
@@ -508,18 +497,15 @@ export function appendEventToJournal(boardDir: string, event: GraphEvent): void 
  * Read journal entries after the given ID. Pure file read, no mutation.
  */
 export function getUndrainedEntries(boardDir: string, lastDrainedId: string): JournalEntry[] {
-  const journalPath = path.join(boardDir, 'board-journal.jsonl');
-  if (!fs.existsSync(journalPath)) return [];
-  const content = fs.readFileSync(journalPath, 'utf-8').trim();
-  if (!content) return [];
-  const entries: JournalEntry[] = content.split('\n').map(l => JSON.parse(l));
+  const entries = createFsJournalStorageAdapter(boardDir).readAllEntries();
   if (!lastDrainedId) return entries;
   const idx = entries.findIndex(e => e.id === lastDrainedId);
   return idx === -1 ? entries : entries.slice(idx + 1);
 }
 
 function determineLatestPendingAccumulated(boardDir: string): number {
-  if (!fs.existsSync(path.join(boardDir, BOARD_LOCK_FILE))) return 0;
+  const lockPath = joinPath(boardDir, BOARD_LOCK_FILE);
+  if (blobStorageForRef({ kind: 'fs-path', value: lockPath }).read(lockPath) === null) return 0;
   try {
     const envelope = loadBoardEnvelope(boardDir);
     const journalStore = createJournalStore(createFsJournalStorageAdapter(boardDir));
@@ -541,7 +527,7 @@ function determineLatestPendingAccumulated(boardDir: string): number {
  * by one cycle in the relay model.
  */
 export async function processAccumulatedEvents(boardDir: string, continuation?: () => void): Promise<boolean> {
-  const lockPath = path.join(boardDir, BOARD_LOCK_FILE);
+  const lockPath = joinPath(boardDir, BOARD_LOCK_FILE);
   const cliDir = __dirname;
   const lock = createFsAtomicRelayLock(lockPath);
   return withRelayLock(lock, async () => {
@@ -559,10 +545,10 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
         ?? 'unknown';
       taskFailedFn(taskName, error);
     };
-    const executionRequestStore = createExecutionRequestStore(createFsKvStorage(path.join(boardDir, '.execution-requests')), onDispatchFailed);
+    const executionRequestStore = createExecutionRequestStore(createFsKvStorage(joinPath(boardDir, '.execution-requests')), onDispatchFailed);
     const cardHandlerAdapters = {
       cardStore: createCardStore(createFsCardStorageAdapter(boardDir)),
-      cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(path.join(boardDir, '.state-snapshot'))),
+      cardRuntimeStore: createCardRuntimeStore(createFsKvStorage(joinPath(boardDir, '.state-snapshot'))),
       fetchedSourcesStore: createFetchedSourcesStore(createFsBlobStorage(boardDir), resolveSourceDataRef),
       outputStore: createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(boardDir))),
       executionRequestStore,
@@ -576,7 +562,7 @@ export async function processAccumulatedEvents(boardDir: string, continuation?: 
     await rg.dispose({ wait: true });
     saveBoard(boardDir, rg, newCursor);
     try {
-      cardHandlerAdapters.outputStore.writeStatusSnapshot(buildBoardStatusObject(path.resolve(boardDir), restore(rg.snapshot())));
+      cardHandlerAdapters.outputStore.writeStatusSnapshot(buildBoardStatusObject(resolvePath(boardDir), restore(rg.snapshot())));
     } catch (err) {
       console.warn(`[board-live-cards] status cache publish failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -714,7 +700,10 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     // Read card
     let card: any;
     try {
-      card = JSON.parse(fs.readFileSync(path.resolve(cardFilePath), 'utf-8'));
+      const absCardPath = resolvePath(cardFilePath);
+      const raw = blobStorageForRef({ kind: 'fs-path', value: absCardPath }).read(absCardPath);
+      if (raw === null) throw new Error(`File not found: ${absCardPath}`);
+      card = JSON.parse(raw);
     } catch (e) {
       console.error(`[probe-source] Cannot read card: ${(e as Error).message}`);
       process.exit(1);
@@ -743,15 +732,24 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     }
 
     const sourceDef = source_defs[sourceIdx];
-    const cardDir = path.resolve(path.dirname(cardFilePath));
+    const cardDir = resolvePath(dirnamePath(cardFilePath));
     const boardDir = boardDirArg ?? cardDir;
 
     // Parse --mock-projections (JSON string or @file.json) — pre-resolved _projections values for testing
     let mockProjections: Record<string, unknown> = {};
     if (mockProjectionsRaw) {
-      const raw = mockProjectionsRaw.startsWith('@')
-        ? fs.readFileSync(path.resolve(mockProjectionsRaw.slice(1)), 'utf-8')
-        : mockProjectionsRaw;
+      let raw: string;
+      if (mockProjectionsRaw.startsWith('@')) {
+        const absPath = resolvePath(mockProjectionsRaw.slice(1));
+        const content = blobStorageForRef({ kind: 'fs-path', value: absPath }).read(absPath);
+        if (content === null) {
+          console.error(`[probe-source] --mock-projections file not found: ${absPath}`);
+          process.exit(1);
+        }
+        raw = content;
+      } else {
+        raw = mockProjectionsRaw;
+      }
       try {
         mockProjections = JSON.parse(raw);
       } catch (e) {
@@ -805,7 +803,7 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     const tmpOut = deps.makeTempFilePath(boardDir, `probe-out-${sourceDef.bindTo}`);
     const errFile = deps.makeTempFilePath(boardDir, `probe-err-${sourceDef.bindTo}`, '.txt');
 
-    fs.writeFileSync(inFile, JSON.stringify(inPayload, null, 2), 'utf-8');
+    blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(inPayload, null, 2));
 
     const inRef  = serializeRef({ kind: 'fs-path', value: inFile });
     const outRef = serializeRef({ kind: 'fs-path', value: tmpOut });
@@ -838,25 +836,25 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
           timeout: (sourceDef.timeout as number) ?? 30_000,
           cwd: inPayload.cwd as string,
         });
-        fs.writeFileSync(tmpOut, String(stdout).trim(), 'utf-8');
+        blobStorageForRef({ kind: 'fs-path', value: tmpOut }).write(tmpOut, String(stdout).trim());
       }
 
-      passed = fs.existsSync(tmpOut);
-      if (passed) {
-        resultRaw = fs.readFileSync(tmpOut, 'utf-8');
-      } else {
-        errorMsg = fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf-8').trim() : 'executor produced no output file';
+      resultRaw = blobStorageForRef({ kind: 'fs-path', value: tmpOut }).read(tmpOut) ?? undefined;
+      passed = resultRaw !== undefined;
+      if (!passed) {
+        errorMsg = blobStorageForRef({ kind: 'fs-path', value: errFile }).read(errFile)?.trim()
+          ?? 'executor produced no output file';
       }
     } catch (e) {
       errorMsg = (e as Error).message ?? String(e);
-      if (!errorMsg && fs.existsSync(errFile)) {
-        errorMsg = fs.readFileSync(errFile, 'utf-8').trim();
+      if (!errorMsg) {
+        errorMsg = blobStorageForRef({ kind: 'fs-path', value: errFile }).read(errFile)?.trim();
       }
     }
 
     // Cleanup temp inputs
     for (const f of [inFile, errFile]) {
-      try { fs.unlinkSync(f); } catch { /* best-effort */ }
+      try { blobStorageForRef({ kind: 'fs-path', value: f }).remove(f); } catch { /* best-effort */ }
     }
 
     // Report
@@ -867,15 +865,16 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
       console.log(`[probe-source] result size: ${resultSize} bytes`);
       console.log(`[probe-source] sample:      ${sample}${resultSize > 300 ? '...' : ''}`);
       if (outFile) {
-        fs.writeFileSync(path.resolve(outFile), resultRaw);
+        const absOut = resolvePath(outFile);
+        blobStorageForRef({ kind: 'fs-path', value: absOut }).write(absOut, resultRaw);
         console.log(`[probe-source] result written to: ${outFile}`);
       } else {
-        try { fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+        try { blobStorageForRef({ kind: 'fs-path', value: tmpOut }).remove(tmpOut); } catch { /* best-effort */ }
       }
     } else {
       console.log('[probe-source] STATUS:      PROBE_FAIL');
       if (errorMsg) console.log(`[probe-source] error:       ${errorMsg}`);
-      try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+      try { blobStorageForRef({ kind: 'fs-path', value: tmpOut }).remove(tmpOut); } catch { /* best-effort */ }
     }
 
     // Machine-readable summary line — agents parse this
@@ -1092,7 +1091,7 @@ EXAMPLES
           const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
           const tmpFile = deps.makeTempFilePath(boardDir!, `validate-src-${bindTo}`);
           try {
-            fs.writeFileSync(tmpFile, JSON.stringify(src), 'utf-8');
+            blobStorageForRef({ kind: 'fs-path', value: tmpFile }).write(tmpFile, JSON.stringify(src));
             let stdout: string;
             try {
               stdout = deps.executor.executeSync(
@@ -1118,7 +1117,7 @@ EXAMPLES
           } catch (err) {
             sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${err instanceof Error ? err.message : String(err)}`);
           } finally {
-            try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+            try { blobStorageForRef({ kind: 'fs-path', value: tmpFile }).remove(tmpFile); } catch { /* ignore */ }
           }
         }
       }
@@ -1221,7 +1220,7 @@ export async function cli(argv: string[]): Promise<void> {
     configureRuntimeOutDir,
     loadBoard,
     getOutputStore: (dir: string) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(dir))),
-    buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(path.resolve(dir), live),
+    buildBoardStatusObject: (dir: string, live: LiveGraph) => buildBoardStatusObject(resolvePath(dir), live),
     getConfigStore: createBoardConfig,
     appendEventToJournal,
     processAccumulatedEventsInfinitePass: scheduleInfinitePass,
@@ -1242,17 +1241,17 @@ export async function cli(argv: string[]): Promise<void> {
     executor,
     makeTempFilePath: makeBoardTempFilePath,
     validateLiveCardDefinition,
-    readStdin: () => fs.readFileSync('/dev/stdin', 'utf-8'),
+    readStdin: () => blobStorageForRef({ kind: 'fs-path', value: '/dev/stdin' }).read('/dev/stdin') ?? '',
     cliDir: __dirname,
   });
   const cardCommandHandlers = createCardCommandHandlers({
     getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),
     readCardUpsertEntry: (boardDir: string, cardId: string): CardUpsertIndexEntry | null => {
-      const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+      const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
       return kv.read(cardId) as CardUpsertIndexEntry | null;
     },
     writeCardUpsertEntry: (boardDir: string, cardId: string, entry: CardUpsertIndexEntry): void => {
-      const kv = createFsKvStorage(path.join(boardDir, '.card-upsert-kv'));
+      const kv = createFsKvStorage(joinPath(boardDir, '.card-upsert-kv'));
       kv.write(cardId, entry);
     },
     liveCardToTaskConfig,
@@ -1305,7 +1304,7 @@ export async function cli(argv: string[]): Promise<void> {
 }
 
 // Run when invoked directly
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
+const isMain = process.argv[1] && resolvePath(process.argv[1]) === resolvePath(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 if (isMain) {
   cli(process.argv.slice(2)).catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);

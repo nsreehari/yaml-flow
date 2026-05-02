@@ -51,6 +51,18 @@ export function makeBoardTempFilePath(boardDir: string, label: string, ext = '.j
   return path.join(tmpDir, `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
 }
 
+/** Join path segments — thin wrapper so callers don't need to import node:path. */
+export function joinPath(...segments: string[]): string { return path.join(...segments); }
+
+/** Resolve a path to absolute — thin wrapper so callers don't need to import node:path. */
+export function resolvePath(...segments: string[]): string { return path.resolve(...segments); }
+
+/** Return the directory name of a path. */
+export function dirnamePath(p: string): string { return path.dirname(p); }
+
+/** Return true if the path is absolute. */
+export function isAbsolutePath(p: string): boolean { return path.isAbsolute(p); }
+
 /** Generate a new random UUID. */
 export function genUUID(): string { return randomUUID(); }
 
@@ -356,6 +368,14 @@ export function createNodeInvocationAdapter(
   cliDir: string,
 ): InvocationAdapter {
   return new NodeInvocationAdapter(cliDir);
+}
+
+/**
+ * Returns the command + args to invoke the built-in source-cli task executor.
+ * Used as the default when no .task-executor is configured on the board.
+ */
+export function getBuiltInTaskExecutorSpec(cliDir: string): { command: string; args: string[] } {
+  return { command: process.execPath, args: [path.join(cliDir, 'source-cli-task-executor.js')] };
 }
 
 // ============================================================================
