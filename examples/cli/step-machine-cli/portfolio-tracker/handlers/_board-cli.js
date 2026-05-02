@@ -34,6 +34,35 @@ export function runBoardCli(args, options = {}) {
   return capture ? (result.stdout ?? '') : '';
 }
 
+/** Spawn CLI with JSON piped to stdin (used by update-in-card-store). */
+export function runBoardCliWithInput(args, inputJson, options = {}) {
+  const { cwd = process.cwd() } = options;
+  const result = spawnSync(process.execPath, [boardCliPath, ...args], {
+    input: inputJson,
+    cwd,
+    encoding: 'utf-8',
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      BOARD_LIVE_CARDS_NO_SPAWN: process.env.BOARD_LIVE_CARDS_NO_SPAWN ?? '1',
+      BOARD_DIR: process.env.BOARD_DIR ?? '',
+    },
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to launch board-live-cards-cli: ${result.error.message}`);
+  }
+
+  if ((result.status ?? 1) !== 0) {
+    const stderr = (result.stderr ?? '').trim();
+    const stdout = (result.stdout ?? '').trim();
+    throw new Error(`board-live-cards-cli failed (${result.status}): ${stderr || stdout || 'no output'}`);
+  }
+
+  return result.stdout ?? '';
+}
+
 export async function readStdinJson() {
   let raw = '';
   process.stdin.setEncoding('utf-8');

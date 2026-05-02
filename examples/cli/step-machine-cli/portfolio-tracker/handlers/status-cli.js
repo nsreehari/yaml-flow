@@ -11,7 +11,7 @@ try {
     process.exit(0);
   }
 
-  const status = runBoardCli(['status', '--rg', boardDir], { capture: true });
+  const status = runBoardCli(['status', '--base-ref', `::fs-path::${boardDir}`], { capture: true });
 
   writeResult({
     result: 'success',

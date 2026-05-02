@@ -28,12 +28,11 @@ steps:
     expects_data: [board_dir]
     produces_data: [board_dir]
     handler:
-      cli: node %%BOARDCLI_CMD%% init "%%BOARD_DIR%%"
-      result-mode: exit-code
+      cli: node ./handlers/init-board-cli.js
       input-transforms:
         BOARD_DIR: board_dir
       output-transforms:
-        board_dir: BOARD_DIR
+        board_dir: data.board_dir
     transitions:
       success: t0_add_cards
     failure_transitions:
@@ -44,8 +43,7 @@ steps:
     expects_data: [board_dir, cards_template_dir]
     produces_data: [cards_dir]
     handler:
-      cli: node %%BOARDCLI_CMD%% upsert-card --rg "%%BOARD_DIR%%" --card-glob "%%CARDS_GLOB%%"
-      result-mode: exit-code
+      cli: node ./handlers/add-cards-cli.js
       input-transforms:
         BOARD_DIR: board_dir
         CARDS_GLOB: cards_template_dir & "/*.json"
@@ -152,13 +150,12 @@ steps:
     expects_data: [board_dir, price_fetch_task]
     produces_data: [t3_retriggered]
     handler:
-      cli: node %%BOARDCLI_CMD%% retrigger --rg "%%BOARD_DIR%%" --task "%%TASK%%"
-      result-mode: exit-code
+      cli: node ./handlers/retrigger-cli.js
       input-transforms:
         BOARD_DIR: board_dir
         TASK: price_fetch_task
       output-transforms:
-        t3_retriggered: true
+        t3_retriggered: data.retriggered
     transitions:
       success: t3_write_prices
     failure_transitions:
@@ -206,12 +203,11 @@ steps:
     expects_data: [board_dir]
     produces_data: [final_status]
     handler:
-      cli: node %%BOARDCLI_CMD%% status --rg "%%BOARD_DIR%%"
-      result-mode: exit-code
+      cli: node ./handlers/status-cli.js
       input-transforms:
         BOARD_DIR: board_dir
       output-transforms:
-        final_status: stdout
+        final_status: data.status
     transitions:
       success: success_state
     failure_transitions:

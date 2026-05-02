@@ -346,6 +346,11 @@ export function createFsAtomicRelayLock(lockTargetPath: string): AtomicRelayLock
   return {
     tryAcquire() {
       try {
+        // proper-lockfile requires the target file to exist before locking.
+        if (!fs.existsSync(lockTargetPath)) {
+          fs.mkdirSync(path.dirname(lockTargetPath), { recursive: true });
+          try { fs.writeFileSync(lockTargetPath, '{}', { flag: 'wx' }); } catch { /* race: another init won */ }
+        }
         return lockSync(lockTargetPath, { retries: 0 });
       } catch {
         return null;

@@ -11,7 +11,7 @@ try {
     process.exit(0);
   }
 
-  runBoardCli(['init', boardDir]);
+  runBoardCli(['init', '--base-ref', `::fs-path::${boardDir}`]);
   writeResult({
     result: 'success',
     data: {

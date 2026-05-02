@@ -22,8 +22,12 @@ try {
   const started = Date.now();
 
   while (Date.now() - started < timeoutMs) {
-    const status = runBoardCli(['status', '--rg', boardDir], { capture: true });
-    const complete = tasks.every((task) => new RegExp(`\\bcompleted\\s+${task}\\b`).test(status));
+    const statusJson = runBoardCli(['status', '--base-ref', `::fs-path::${boardDir}`], { capture: true });
+    let cards = [];
+    try {
+      cards = JSON.parse(statusJson)?.data?.cards ?? [];
+    } catch { /* ignore parse errors */ }
+    const complete = tasks.every((task) => cards.some(c => c.name === task && c.status === 'completed'));
 
     if (complete) {
       writeResult({

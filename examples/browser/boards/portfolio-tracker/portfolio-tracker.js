@@ -31,9 +31,6 @@ const RUNTIME_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-tracker-')
 const BOARD = path.join(RUNTIME_ROOT, 'board-runtime');
 const CARDS = path.join(RUNTIME_ROOT, 'cards');
 const TMP_FILE = path.join(BOARD, 'tmp_file1');
-const INFERENCE_TMP_FILE_2 = path.join(BOARD, 'tmp_file2');
-const INFERENCE_TMP_FILE_3 = path.join(BOARD, 'tmp_file3');
-const INFERENCE_ADAPTER = path.join(__dirname, 'portfolio-tracker-inference-adapter.js');
 
 function parseArgs(argv) {
   let taskExecutor;
@@ -109,8 +106,94 @@ function cli(...args) {
   runCli(args, false);
 }
 
+/** Spawn CLI with JSON piped to stdin (used by update-in-card-store). */
+function runCliWithInput(args, inputJson) {
+  const { cmd, prefixArgs } = cliCommand();
+  const env = { ...process.env };
+  delete env.BOARD_LIVE_CARDS_NO_SPAWN;
+  const result = spawnSync(cmd, [...prefixArgs, ...args], {
+    input: inputJson,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    shell: false,
+    windowsHide: true,
+    env,
+    encoding: 'utf-8',
+  });
+  if (result.error) {
+    console.error(`[ERROR] Failed to run CLI ${args[0]}: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    console.error(`\n[ERROR] board-live-cards-cli ${args[0]} exited with status ${result.status}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Write card to board's card store then upsert it.
+ * Replaces old --card <file> flag (now removed from CLI).
+ */
+function upsertCardFromFile(boardDir, cardFilePath, restart = false) {
+  const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
+  const baseRef = `::fs-path::${boardDir}`;
+  runCliWithInput(
+    ['update-in-card-store', '--base-ref', baseRef, '--card-id', card.id],
+    JSON.stringify(card),
+  );
+  const args = ['upsert-card', '--base-ref', baseRef, '--card-id', card.id];
+  if (restart) args.push('--restart');
+  cli(...args);
+}
+
+/**
+ * Expand a simple glob pattern (*.ext) and upsert each matching file.
+ * Replaces old --card-glob <pattern> flag (now removed from CLI).
+ */
+function upsertCardsFromGlob(boardDir, globPattern) {
+  const dir = path.dirname(globPattern);
+  const basename = path.basename(globPattern);
+  let files;
+  if (basename.startsWith('*.')) {
+    const ext = basename.slice(1);
+    files = fs.readdirSync(dir).filter(f => f.endsWith(ext)).map(f => path.join(dir, f));
+  } else if (basename === '*') {
+    files = fs.readdirSync(dir).map(f => path.join(dir, f)).filter(f => fs.statSync(f).isFile());
+  } else {
+    files = [globPattern];
+  }
+  for (const file of files) {
+    upsertCardFromFile(boardDir, file);
+  }
+}
+
+/** Parse the JSON status response from the CLI. */
+function parseStatusData(jsonText) {
+  try {
+    return JSON.parse(jsonText)?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Format the JSON status output as a human-readable table matching the
+ * old text-mode status format:  "<status>  <name>  [<provides>]"
+ */
+function formatStatusTable(jsonText) {
+  const statusData = parseStatusData(jsonText);
+  if (!statusData?.cards) return jsonText;
+  return statusData.cards
+    .map(card => {
+      const provides = card.provides_declared?.length
+        ? `[${card.provides_declared.join(', ')}]`
+        : '[]';
+      return `${card.status}  ${card.name}  ${provides}`;
+    })
+    .join('\n') + '\n';
+}
+
 function statusText() {
-  return runCli(['status', '--rg', BOARD], true) ?? '';
+  return runCli(['status', '--base-ref', `::fs-path::${BOARD}`], true) ?? '';
 }
 
 async function waitForAllCompleted(label, timeoutMs = 90000, pollMs = 500) {
@@ -119,22 +202,25 @@ async function waitForAllCompleted(label, timeoutMs = 90000, pollMs = 500) {
     && fs.existsSync(path.join(CARDS, 'rebalancing-strategy.json'));
 
   while (Date.now() - start < timeoutMs) {
-    const out = statusText();
+    const json = statusText();
+    const statusData = parseStatusData(json);
+    const cards = statusData?.cards ?? [];
+    const isCompleted = (name) => cards.some(c => c.name === name && c.status === 'completed');
+
     const requiredCards = [
-      /\bcompleted\s+portfolio-form\b/.test(out),
-      /\bcompleted\s+price-fetch\b/.test(out),
-      /\bcompleted\s+holdings-table\b/.test(out),
-      /\bcompleted\s+portfolio-value\b/.test(out),
+      isCompleted('portfolio-form'),
+      isCompleted('price-fetch'),
+      isCompleted('holdings-table'),
+      isCompleted('portfolio-value'),
     ];
     if (includeInferenceCards) {
       requiredCards.push(
-        /\bcompleted\s+portfolio-risk-assessment\b/.test(out),
-        /\bcompleted\s+rebalancing-strategy\b/.test(out),
+        isCompleted('portfolio-risk-assessment'),
+        isCompleted('rebalancing-strategy'),
       );
     }
-    const completed = requiredCards.every(Boolean);
 
-    if (completed) {
+    if (requiredCards.every(Boolean)) {
       console.log(`${label}: all cards completed.`);
       return;
     }
@@ -143,7 +229,7 @@ async function waitForAllCompleted(label, timeoutMs = 90000, pollMs = 500) {
   }
 
   console.error(`[ERROR] ${label}: timed out waiting for all cards to complete.`);
-  console.error(statusText());
+  console.error(formatStatusTable(statusText()));
   process.exit(1);
 }
 
@@ -155,22 +241,11 @@ function writePrices(prices) {
   console.log(`Wrote prices: ${JSON.stringify(prices)}`);
 }
 
-function releaseInferenceAdapters(label) {
-  if (!fs.existsSync(BOARD)) {
-    fs.mkdirSync(BOARD, { recursive: true });
-  }
-  const signal = JSON.stringify({ stage: label, releasedAt: new Date().toISOString() });
-  fs.writeFileSync(INFERENCE_TMP_FILE_2, signal, 'utf-8');
-  fs.writeFileSync(INFERENCE_TMP_FILE_3, signal, 'utf-8');
-  console.log(`Released inference adapters for ${label}`);
-}
-
 function setupRuntimeCards() {
   fs.rmSync(CARDS, { recursive: true, force: true });
   fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
   fs.cpSync(CARDS_TEMPLATE, CARDS, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'fetch-prices.js'), path.join(RUNTIME_ROOT, 'fetch-prices.js'));
-  // inference adapter is registered from its source location (imports yaml-flow — must be resolvable)
 }
 
 function printTaskExecutorLog() {
@@ -197,22 +272,21 @@ function printTaskExecutorLog() {
   fs.rmSync(BOARD, { recursive: true, force: true });
 
   if (options.taskExecutor) {
-    cli('init', BOARD, '--task-executor', options.taskExecutor, '--inference-adapter', INFERENCE_ADAPTER);
+    cli('init', '--base-ref', `::fs-path::${BOARD}`, '--task-executor', options.taskExecutor);
   } else {
-    cli('init', BOARD, '--inference-adapter', INFERENCE_ADAPTER);
+    cli('init', '--base-ref', `::fs-path::${BOARD}`);
   }
-  cli('upsert-card', '--rg', BOARD, '--card-glob', path.join(CARDS, '*.json'));
+  upsertCardsFromGlob(BOARD, path.join(CARDS, '*.json'));
 
   console.log('\n--- T0 Status (after upsert-card) ---');
-  process.stdout.write(statusText());
+  process.stdout.write(formatStatusTable(statusText()));
 
   console.log('\n=== T1: Writing market prices ===');
   writePrices({ AAPL: 198.50, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
-  releaseInferenceAdapters('T1');
   await waitForAllCompleted('T1');
 
   console.log('\n--- T1 Status ---');
-  process.stdout.write(statusText());
+  process.stdout.write(formatStatusTable(statusText()));
 
   console.log('\n=== T2: Adding GOOG (100 shares) ===');
   const portfolioFormPath = path.join(CARDS, 'portfolio-form.json');
@@ -235,24 +309,22 @@ function printTaskExecutorLog() {
   };
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV2, null, 2));
 
-  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
+  upsertCardFromFile(BOARD, portfolioFormPath, true);
   await sleep(500);
   writePrices({ AAPL: 198.50, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
-  releaseInferenceAdapters('T2');
   await waitForAllCompleted('T2');
 
   console.log('\n--- T2 Status ---');
-  process.stdout.write(statusText());
+  process.stdout.write(formatStatusTable(statusText()));
 
   console.log('\n=== T3: Force price refresh — AAPL now 205.00 ===');
-  cli('retrigger', '--rg', BOARD, '--task', 'price-fetch');
+  cli('retrigger', '--base-ref', `::fs-path::${BOARD}`, '--id', 'price-fetch');
   await sleep(500);
   writePrices({ AAPL: 205.00, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40, TSLA: 168.75 });
-  releaseInferenceAdapters('T3');
   await waitForAllCompleted('T3');
 
   console.log('\n--- T3 Status ---');
-  process.stdout.write(statusText());
+  process.stdout.write(formatStatusTable(statusText()));
 
   console.log('\n=== T4: Rapid successive portfolio updates (3x queue stress) ===');
   fs.writeFileSync(TMP_FILE, '', 'utf-8');
@@ -316,34 +388,32 @@ function printTaskExecutorLog() {
 
   // First update starts a source fetch request.
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV3, null, 2));
-  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
+  upsertCardFromFile(BOARD, portfolioFormPath, true);
 
   // Immediate second update should queue a newer checksum while the first request is in-flight.
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV4, null, 2));
-  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
+  upsertCardFromFile(BOARD, portfolioFormPath, true);
 
   // Immediate third update should overwrite queued checksum (latest-state wins).
   fs.writeFileSync(portfolioFormPath, JSON.stringify(portfolioFormV5, null, 2));
-  cli('upsert-card', '--rg', BOARD, '--card', portfolioFormPath, '--restart');
+  upsertCardFromFile(BOARD, portfolioFormPath, true);
 
   // 7) wait for first request, then 8) write response prices for update #1 tickers.
   // await readFetchRequest('T4 first fetch', ['AAPL', 'MSFT', 'GOOG', 'AMZN']);
   writePrices({ AAPL: 205.00, MSFT: 425.30, GOOG: 178.90, AMZN: 192.40 });
-  releaseInferenceAdapters('T4-first');
   await sleep(5000);
 
   // 9) wait for second request, then 10) write response prices for update #5 tickers.
   // await readFetchRequest('T4 second fetch', ['AAPL', 'MSFT', 'GOOG', 'TSLA']);
   writePrices({ AAPL: 206.00, MSFT: 426.00, GOOG: 179.50, TSLA: 169.20 });
-  releaseInferenceAdapters('T4-second');
 
   await waitForAllCompleted('T4');
 
   console.log('\n--- T4 Status ---');
-  process.stdout.write(statusText());
+  process.stdout.write(formatStatusTable(statusText()));
 
   console.log('\n=== T5: Final board status ===');
-  process.stdout.write(statusText());
+  process.stdout.write(formatStatusTable(statusText()));
 
   printTaskExecutorLog();
 

@@ -2,18 +2,30 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { cli, loadBoard } from '../../src/cli/board-live-cards-cli.js';
+import {
+  cli, loadBoard,
+  createBoardLiveCardsNonCorePublic, createFsBoardNonCorePlatformAdapter,
+} from '../../src/cli/board-live-cards-cli.js';
 import type { BoardLiveCard } from '../../src/cli/board-live-cards-cli.js';
 
 process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
 
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
 const ticks = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-async function pollBoard(dir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
+function writeCardToStore(boardDir: string, card: { id: string } & Record<string, unknown>): void {
+  const br = ref(boardDir);
+  const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, testDir, { onWarn: () => {} }));
+  nonCore.updateInCardStore({ params: { cardId: card.id }, body: card });
+}
+
+async function pollBoard(boardDir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const live = loadBoard(dir);
+    const live = loadBoard(ref(boardDir));
     if (pred(live.config.tasks as Record<string, unknown>)) return;
     await ticks(100);
   }
@@ -42,12 +54,10 @@ describe('board-live-cards CLI persistence', () => {
     tmpDir = '';
   });
 
-  it('writes provided token payloads to runtime-out/data-objects', async () => {
+  it('writes provided token payloads to .output/data-objects/', async () => {
     const dir = path.join(freshDir(), 'board');
-    const runtimeOutDir = path.join(tmpDir, 'runtime-out');
-    cli(['init', dir, '--runtime-out', runtimeOutDir]);
+    await cli(['init', '--base-ref', '::fs-path::' + dir]);
 
-    const cardFile = path.join(tmpDir, 'orders-source.json');
     const card: BoardLiveCard = {
       id: 'orders-source',
       provides: [
@@ -62,16 +72,17 @@ describe('board-live-cards CLI persistence', () => {
         metadata: { source: 'test-suite', version: 1 },
       },
     };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
+    writeCardToStore(dir, card);
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
+    await cli(['upsert-card', '--base-ref', '::fs-path::' + dir, '--card-id', 'orders-source']);
     logSpy.mockRestore();
 
     await pollBoard(dir, (tasks) => !!tasks['orders-source']);
 
-    const ordersFile = path.join(runtimeOutDir, 'data-objects', 'orders');
-    const metadataFile = path.join(runtimeOutDir, 'data-objects', 'metadata');
+    const dataObjectsDir = path.join(dir, '.output', 'data-objects');
+    const ordersFile = path.join(dataObjectsDir, 'orders.json');
+    const metadataFile = path.join(dataObjectsDir, 'metadata.json');
     await pollForFile(ordersFile);
     await pollForFile(metadataFile);
 
@@ -79,12 +90,10 @@ describe('board-live-cards CLI persistence', () => {
     expect(JSON.parse(fs.readFileSync(metadataFile, 'utf-8'))).toEqual(card.card_data?.metadata);
   });
 
-  it('writes computed_values snapshots even when the card has no provides', async () => {
+  it('writes computed_values snapshots to .output/cards/<cardId>/computed_values.json', async () => {
     const dir = path.join(freshDir(), 'board');
-    const runtimeOutDir = path.join(tmpDir, 'runtime-out');
-    cli(['init', dir, '--runtime-out', runtimeOutDir]);
+    await cli(['init', '--base-ref', '::fs-path::' + dir]);
 
-    const cardFile = path.join(tmpDir, 'totals.json');
     const card: BoardLiveCard = {
       id: 'totals-card',
       card_data: {
@@ -95,24 +104,20 @@ describe('board-live-cards CLI persistence', () => {
         { bindTo: 'count', expr: '$count(card_data.items)' },
       ],
     };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
+    writeCardToStore(dir, card);
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
+    await cli(['upsert-card', '--base-ref', '::fs-path::' + dir, '--card-id', 'totals-card']);
     logSpy.mockRestore();
 
     await pollBoard(dir, (tasks) => !!tasks['totals-card']);
 
-    const computedFile = path.join(runtimeOutDir, 'cards', 'totals-card.computed.json');
+    const computedFile = path.join(dir, '.output', 'cards', 'totals-card', 'computed_values.json');
     await pollForFile(computedFile);
 
     expect(JSON.parse(fs.readFileSync(computedFile, 'utf-8'))).toEqual({
-      schema_version: 'v1',
-      card_id: 'totals-card',
-      computed_values: {
-        total: 50,
-        count: 3,
-      },
+      total: 50,
+      count: 3,
     });
   });
 });

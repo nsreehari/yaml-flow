@@ -25,10 +25,6 @@ describe('portfolio tracker demo', () => {
     expect(combinedOutput).toContain('T2: all cards completed.');
     expect(combinedOutput).toContain('T3: all cards completed.');
     expect(combinedOutput).toContain('T4: all cards completed.');
-    // Inference cards must reach completed state with their provided outputs
-    expect(combinedOutput).toMatch(/completed\s+portfolio-risk-assessment.*\[riskAssessment\]/);
-    expect(combinedOutput).toMatch(/completed\s+rebalancing-strategy.*\[rebalancingPlan\]/);
-    expect(combinedOutput).toContain('Released inference adapters for T1');
     expect(combinedOutput).toContain('Portfolio tracker completed successfully');
   });
 
@@ -50,10 +46,6 @@ describe('portfolio tracker demo', () => {
     expect(combinedOutput).toContain('T2: all cards completed.');
     expect(combinedOutput).toContain('T3: all cards completed.');
     expect(combinedOutput).toContain('T4: all cards completed.');
-    // Inference cards must reach completed state with their provided outputs
-    expect(combinedOutput).toMatch(/completed\s+portfolio-risk-assessment.*\[riskAssessment\]/);
-    expect(combinedOutput).toMatch(/completed\s+rebalancing-strategy.*\[rebalancingPlan\]/);
-    expect(combinedOutput).toContain('Released inference adapters for T1');
     expect(combinedOutput).toContain('Portfolio tracker completed successfully');
   });
 });

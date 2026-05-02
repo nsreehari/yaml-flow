@@ -171,6 +171,21 @@ export interface BoardPlatformAdapter {
    */
   dispatchExecution(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
 
+  /**
+   * Absolute-path blob I/O — key IS the absolute file path.
+   * Used to read executor output files whose paths are carried in ::fs-path:: refs.
+   */
+  absoluteBlob: BlobStorage;
+
+  /**
+   * Request an additional drain pass asynchronously (e.g. spawn a background process).
+   * Called as the relay continuation after each drain cycle so that events written
+   * during the cycle (e.g. task-completed appended by the card handler) are eventually
+   * processed even when the current process exits immediately after returning.
+   * Optional — if absent, no continuation is scheduled.
+   */
+  requestProcessAccumulated?(): void;
+
   /** Optional warn sink — defaults to no-op. */
   onWarn?(msg: string): void;
 }
@@ -354,7 +369,7 @@ export function createBoardLiveCardsPublic(
       fetchedSourcesStore: createFetchedSourcesStore(
         adapter.blobStorage('sources'),
         (ref) => {
-          const content = adapter.blobStorage('').read(ref.value);
+          const content = adapter.absoluteBlob.read(ref.value);
           if (content === null) throw new Error(`resolveBlobRef: not found: ::${ref.kind}::${ref.value}`);
           return content;
         },
@@ -423,7 +438,10 @@ export function createBoardLiveCardsPublic(
   // Internal drain — called directly from within the factory (no CommandInput needed).
   async function drain(): Promise<CommandResult> {
     try {
-      const ran = await withRelayLock(adapter.lock, drainCycle);
+      const continuation = adapter.requestProcessAccumulated
+        ? () => { adapter.requestProcessAccumulated!(); }
+        : undefined;
+      const ran = await withRelayLock(adapter.lock, drainCycle, continuation);
       return ok({ ran: ran !== false });
     } catch (e) { return err(e); }
   }
@@ -561,7 +579,7 @@ export function createBoardLiveCardsPublic(
       const fetchedSourcesStore = createFetchedSourcesStore(
         adapter.blobStorage('sources'),
         (r) => {
-          const content = adapter.blobStorage('').read(r.value);
+          const content = adapter.absoluteBlob.read(r.value);
           if (content === null) throw new Error(`resolveBlobRef: not found: ::${r.kind}::${r.value}`);
           return content;
         },

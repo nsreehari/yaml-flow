@@ -55,6 +55,8 @@ export type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from './board-
 export { createBoardLiveCardsPublic, createBoardLiveCardsNonCorePublic } from './board-live-cards-public.js';
 export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib.js';
+export { liveCardToTaskConfig } from './board-live-cards-lib.js';
+export type { LiveCard as BoardLiveCard } from './board-live-cards-lib.js';
 
 const BOARD_LOCK_FILE = '.board.lock';
 
@@ -187,6 +189,14 @@ export function createFsBoardPlatformAdapter(
       } catch (e) {
         return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
       }
+    },
+
+    absoluteBlob: createFsAbsolutePathBlobStorage(),
+
+    requestProcessAccumulated() {
+      if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
+      const nodeAdapter = createNodeInvocationAdapter(cliDir);
+      void nodeAdapter.requestProcessAccumulated(baseRef);
     },
 
     onWarn: opts?.onWarn,

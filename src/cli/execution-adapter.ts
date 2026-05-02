@@ -42,6 +42,7 @@
  *  If argsMassaging is absent, the adapter uses its default mapping.
  */
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import jsonata from 'jsonata';
@@ -139,8 +140,18 @@ function resolveBuiltIn(whatToRun: string, cliDir: string): { command: string; a
 
   switch (name) {
     case 'source-cli-task-executor': {
-      const scriptPath = path.join(cliDir, 'source-cli-task-executor.js');
-      return { command: process.execPath, args: [scriptPath] };
+      const jsPath = path.join(cliDir, 'source-cli-task-executor.js');
+      if (fs.existsSync(jsPath)) {
+        return { command: process.execPath, args: [jsPath] };
+      }
+      const tsPath = path.join(cliDir, 'source-cli-task-executor.ts');
+      const tsxMjs = path.join(cliDir, '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+      const tsxBin = path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx');
+      const tsx = fs.existsSync(tsxMjs) ? tsxMjs : tsxBin;
+      if (fs.existsSync(tsPath) && fs.existsSync(tsx)) {
+        return { command: process.execPath, args: [tsx, tsPath] };
+      }
+      return { command: process.execPath, args: [jsPath] }; // fallback — will fail with clear error
     }
     case 'board-live-cards': {
       const { cmd, args } = buildBoardCliInvocation(cliDir, '_', []);

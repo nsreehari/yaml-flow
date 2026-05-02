@@ -12,7 +12,7 @@ try {
     process.exit(0);
   }
 
-  runBoardCli(['retrigger', '--rg', boardDir, '--task', task]);
+  runBoardCli(['retrigger', '--base-ref', `::fs-path::${boardDir}`, '--id', task]);
 
   writeResult({
     result: 'success',
