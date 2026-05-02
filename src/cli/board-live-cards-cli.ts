@@ -496,14 +496,15 @@ function resolveConfiguredRuntimeOutDir(baseRef: KindValueRef): string {
 /**
  * Decode a callback token → { taskName } or null if malformed.
  * Mirrors the private encodeCallbackToken format in reactive.ts.
+ * (Currently unused — token payload extraction happens inline in cli().)
  */
-function decodeCallbackToken(token: string): { taskName: string } | null {
-  try {
-    const payload = JSON.parse(Buffer.from(token, 'base64url').toString());
-    if (typeof payload?.t === 'string') return { taskName: payload.t };
-    return null;
-  } catch { return null; }
-}
+// function decodeCallbackToken(token: string): { taskName: string } | null {
+//   try {
+//     const payload = JSON.parse(Buffer.from(token, 'base64url').toString());
+//     if (typeof payload?.t === 'string') return { taskName: payload.t };
+//     return null;
+//   } catch { return null; }
+// }
 
 // ============================================================================
 // Source token — per-source opaque token carrying all delivery metadata
@@ -694,6 +695,16 @@ function printResult(result: unknown): void {
   console.log(JSON.stringify(result, null, 2));
 }
 
+/** Read all of stdin as JSON. Returns undefined if stdin is a TTY or empty. */
+async function readStdinBody(): Promise<unknown> {
+  if (process.stdin.isTTY) return undefined;
+  const parts: Buffer[] = [];
+  for await (const chunk of process.stdin) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+  const text = Buffer.concat(parts).toString('utf-8').trim();
+  if (!text) return undefined;
+  return JSON.parse(text) as unknown;
+}
+
 export async function cli(argv: string[]): Promise<void> {
   const cmd = argv[0];
   const rest = argv.slice(1);
@@ -703,36 +714,37 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── Commands that need a baseRef ────────────────────────────────────────────
+  // ── Parse baseRef (optional at this point — token-based cmds don't need it) ─
   const br = optFlag(rest, '--base-ref');
   const baseRef = br ? parseRef(br) : undefined;
 
-  // ── Token-based callbacks (token encodes baseRef — no --base-ref needed) ───
+  // ── Token-based callbacks (token encodes baseRef — no --base-ref needed) ────
   if (cmd === 'task-completed') {
     const token = requireFlag(rest, '--token', 'task-completed --token <token> [--data <json>]');
     const dataRaw = optFlag(rest, '--data');
-    const data = dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : undefined;
-    const payload = decodeCallbackToken(token);
-    if (!payload) throw new Error('Invalid callback token');
+    const data = dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : {};
     const br2 = parseRef(JSON.parse(Buffer.from(token, 'base64url').toString()).br as string);
     const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
-    printResult(board.taskCompleted(token, data));
+    printResult(board.taskCompleted({ params: { token }, body: data }));
     return;
   }
   if (cmd === 'task-failed') {
     const token = requireFlag(rest, '--token', 'task-failed --token <token> [--error <message>]');
     const br2 = parseRef(JSON.parse(Buffer.from(token, 'base64url').toString()).br as string);
     const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
-    printResult(board.taskFailed(token, optFlag(rest, '--error')));
+    const params: Record<string, string> = { token };
+    const error = optFlag(rest, '--error');
+    if (error) params['error'] = error;
+    printResult(board.taskFailed({ params }));
     return;
   }
   if (cmd === 'task-progress') {
     const token = requireFlag(rest, '--token', 'task-progress --token <token> [--update <json>]');
     const updateRaw = optFlag(rest, '--update');
-    const update = updateRaw ? JSON.parse(updateRaw) as Record<string, unknown> : undefined;
+    const update = updateRaw ? JSON.parse(updateRaw) as Record<string, unknown> : {};
     const br2 = parseRef(JSON.parse(Buffer.from(token, 'base64url').toString()).br as string);
     const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
-    printResult(board.taskProgress(token, update));
+    printResult(board.taskProgress({ params: { token }, body: update }));
     return;
   }
   if (cmd === 'source-data-fetched') {
@@ -741,7 +753,7 @@ export async function cli(argv: string[]): Promise<void> {
     const p = JSON.parse(Buffer.from(token, 'base64url').toString()) as Record<string, unknown>;
     const br2 = parseRef(p['br'] as string);
     const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
-    printResult(board.sourceDataFetched(token, ref));
+    printResult(board.sourceDataFetched({ params: { token, ref } }));
     return;
   }
   if (cmd === 'source-data-fetch-failure') {
@@ -749,70 +761,81 @@ export async function cli(argv: string[]): Promise<void> {
     const p = JSON.parse(Buffer.from(token, 'base64url').toString()) as Record<string, unknown>;
     const br2 = parseRef(p['br'] as string);
     const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
-    printResult(board.sourceDataFetchFailure(token, optFlag(rest, '--reason')));
+    const params: Record<string, string> = { token };
+    const reason = optFlag(rest, '--reason');
+    if (reason) params['reason'] = reason;
+    printResult(board.sourceDataFetchFailure({ params }));
     return;
   }
 
-  // ── validate-tmp-card (no baseRef, uses --card-ref) ─────────────────────────
+  // ── validate-tmp-card — card JSON arrives via stdin, optional --base-ref ─────
   if (cmd === 'validate-tmp-card') {
-    const cardRef = requireFlag(rest, '--card-ref', 'validate-tmp-card --card-ref <::kind::value>');
-    // For validate-tmp-card we still need a board context for the config store.
-    // If --base-ref is provided use it; otherwise create a minimal adapter scoped to cwd.
     const tmpRef = baseRef ?? { kind: 'fs-path', value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
-    printResult(nonCore.validateTmpCard(cardRef));
+    const body = await readStdinBody();
+    printResult(nonCore.validateTmpCard({ body }));
     return;
   }
 
-  // ── probe-tmp-source (no required baseRef) ──────────────────────────────────
+  // ── probe-tmp-source — flags supply source-def + mock-projections ───────────
   if (cmd === 'probe-tmp-source') {
     const sourceDefRaw = requireFlag(rest, '--source-def', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
     const mockRaw      = requireFlag(rest, '--mock-projections', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
     const outRef       = requireFlag(rest, '--out-ref', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
     const tmpRef = baseRef ?? { kind: 'fs-path', value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
-    printResult(nonCore.probeTmpSource(JSON.parse(sourceDefRaw) as Record<string, unknown>, JSON.parse(mockRaw) as Record<string, unknown>, outRef));
+    printResult(nonCore.probeTmpSource({
+      params: { outRef },
+      body: { sourceDef: JSON.parse(sourceDefRaw), mockProjections: JSON.parse(mockRaw) },
+    }));
     return;
   }
 
-  // ── All remaining commands require --base-ref ────────────────────────────────
+  // ── All remaining commands require --base-ref ─────────────────────────────
   if (!baseRef) throw new Error(`--base-ref is required for command "${cmd ?? '(none)'}"`);
 
-  const board    = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
-  const nonCore  = () => createBoardLiveCardsNonCorePublic(baseRef, createFsBoardNonCorePlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
+  const board   = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
+  const nonCore = () => createBoardLiveCardsNonCorePublic(baseRef, createFsBoardNonCorePlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
 
   switch (cmd) {
     case 'init': {
-      printResult(board().init(optFlag(rest, '--task-executor'), optFlag(rest, '--chat-handler')));
+      const params: Record<string, string | number | boolean> = {};
+      const te = optFlag(rest, '--task-executor');
+      const ch = optFlag(rest, '--chat-handler');
+      if (te) params['taskExecutor'] = te;
+      if (ch) params['chatHandler'] = ch;
+      printResult(board().init({ params }));
       return;
     }
     case 'status': {
-      printResult(board().status());
+      printResult(board().status({}));
       return;
     }
     case 'remove-card': {
       const id = requireFlag(rest, '--id', 'remove-card --base-ref <ref> --id <card-id>');
-      printResult(board().removeCard(id));
+      printResult(board().removeCard({ params: { id } }));
       return;
     }
     case 'retrigger': {
       const id = requireFlag(rest, '--id', 'retrigger --base-ref <ref> --id <card-id>');
-      printResult(board().retrigger(id));
+      printResult(board().retrigger({ params: { id } }));
       return;
     }
     case 'process-accumulated-events': {
-      printResult(await board().processAccumulatedEvents());
+      printResult(await board().processAccumulatedEvents({}));
       return;
     }
     case 'upsert-card': {
       const cardId  = requireFlag(rest, '--card-id', 'upsert-card --base-ref <ref> --card-id <id> [--restart]');
       const restart = rest.includes('--restart');
-      printResult(board().upsertCard(cardId, restart));
+      const params: Record<string, string | number | boolean> = { cardId };
+      if (restart) params['restart'] = true;
+      printResult(board().upsertCard({ params }));
       return;
     }
     case 'validate-card': {
       const cardId = requireFlag(rest, '--card-id', 'validate-card --base-ref <ref> --card-id <id>');
-      printResult(nonCore().validateCard(cardId));
+      printResult(nonCore().validateCard({ params: { cardId } }));
       return;
     }
     case 'probe-source': {
@@ -820,11 +843,25 @@ export async function cli(argv: string[]): Promise<void> {
       const idxRaw    = requireFlag(rest, '--source-idx', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
       const mockRaw   = requireFlag(rest, '--mock-projections', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
       const outRef    = requireFlag(rest, '--out-ref', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
-      printResult(nonCore().probeSource(cardId, parseInt(idxRaw, 10), JSON.parse(mockRaw) as Record<string, unknown>, outRef));
+      printResult(nonCore().probeSource({
+        params: { cardId, sourceIdx: parseInt(idxRaw, 10), outRef },
+        body: JSON.parse(mockRaw),
+      }));
       return;
     }
     case 'describe-task-executor-capabilities': {
-      printResult(nonCore().describeTaskExecutorCapabilities());
+      printResult(nonCore().describeTaskExecutorCapabilities({}));
+      return;
+    }
+    case 'update-in-card-store': {
+      const cardId = requireFlag(rest, '--card-id', 'update-in-card-store --base-ref <ref> --card-id <id>');
+      const body = await readStdinBody();
+      printResult(nonCore().updateInCardStore({ params: { cardId }, body }));
+      return;
+    }
+    case 'read-from-card-store': {
+      const cardId = requireFlag(rest, '--card-id', 'read-from-card-store --base-ref <ref> --card-id <id>');
+      printResult(nonCore().readFromCardStore({ params: { cardId } }));
       return;
     }
     default:

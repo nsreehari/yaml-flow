@@ -71,6 +71,23 @@ import type {
 } from './board-live-cards-lib.js';
 
 // ============================================================================
+// CommandInput — uniform request envelope
+//
+//   params — scalar routing/identity args (cardId, token, restart, etc.)
+//   body   — structured payload that arrives via stdin / HTTP body / in-process
+//            (card JSON, source-def object, task data, mock-projections, ...)
+//
+// Transport adapters (CLI, Azure Fn, in-process) are responsible for reading
+// the transport channel and building this shape before calling any method.
+// The public layer never knows how data arrived.
+// ============================================================================
+
+export type CommandInput = {
+  params?: Record<string, string | number | boolean>;
+  body?:   unknown;
+};
+
+// ============================================================================
 // CommandResult — uniform return envelope (success / fail / error)
 //
 //   success — operation completed normally
@@ -166,23 +183,30 @@ export interface BoardPlatformAdapter {
 
 export interface BoardLiveCardsPublic {
   // Board management
-  init(taskExecutor?: string, chatHandler?: string): CommandResult;
-  status(): CommandResult<BoardStatusObject>;
-  removeCard(id: string): CommandResult;
-  retrigger(id: string): CommandResult;
-  processAccumulatedEvents(): Promise<CommandResult>;
+  // params: taskExecutor?, chatHandler?
+  init(input: CommandInput): CommandResult;
+  // no params needed
+  status(input: CommandInput): CommandResult<BoardStatusObject>;
+  // params: id
+  removeCard(input: CommandInput): CommandResult;
+  // params: id
+  retrigger(input: CommandInput): CommandResult;
+  // no params needed
+  processAccumulatedEvents(input: CommandInput): Promise<CommandResult>;
 
-  // Card management
-  upsertCard(cardId: string, restart?: boolean): CommandResult;
+  // Card management — params: cardId, restart?
+  upsertCard(input: CommandInput): CommandResult;
 
-  // Task callbacks — token encodes the baseRef, no separate baseRef param
-  taskCompleted(token: string, data?: Record<string, unknown>): CommandResult;
-  taskFailed(token: string, error?: string): CommandResult;
-  taskProgress(token: string, update?: Record<string, unknown>): CommandResult;
+  // Task callbacks — params.token encodes baseRef; body = task data payload
+  taskCompleted(input: CommandInput): CommandResult;
+  // params: token, error?
+  taskFailed(input: CommandInput): CommandResult;
+  // params: token; body = update payload
+  taskProgress(input: CommandInput): CommandResult;
 
-  // Source callbacks — token encodes the baseRef, no separate baseRef param
-  sourceDataFetched(token: string, ref: string): CommandResult;
-  sourceDataFetchFailure(token: string, reason?: string): CommandResult;
+  // Source callbacks — params: token, ref | token, reason?
+  sourceDataFetched(input: CommandInput): CommandResult;
+  sourceDataFetchFailure(input: CommandInput): CommandResult;
 }
 
 // ============================================================================
@@ -396,8 +420,18 @@ export function createBoardLiveCardsPublic(
 
   // ── Public methods ──────────────────────────────────────────────────────────
 
-  function init(taskExecutor?: string, chatHandler?: string): CommandResult {
+  // Internal drain — called directly from within the factory (no CommandInput needed).
+  async function drain(): Promise<CommandResult> {
     try {
+      const ran = await withRelayLock(adapter.lock, drainCycle);
+      return ok({ ran: ran !== false });
+    } catch (e) { return err(e); }
+  }
+
+  function init(input: CommandInput): CommandResult {
+    try {
+      const taskExecutor = input.params?.['taskExecutor'] as string | undefined;
+      const chatHandler  = input.params?.['chatHandler']  as string | undefined;
       if (!boardExists()) {
         const live = createLiveGraph(EMPTY_CONFIG);
         commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(live) }, null);
@@ -410,7 +444,7 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
-  function status(): CommandResult<BoardStatusObject> {
+  function status(_input: CommandInput): CommandResult<BoardStatusObject> {
     try {
       let s = outputStore().readStatusSnapshot() as BoardStatusObject | null;
       if (!s) {
@@ -421,31 +455,36 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<BoardStatusObject>; }
   }
 
-  function removeCard(id: string): CommandResult {
+  function removeCard(input: CommandInput): CommandResult {
     try {
+      const id = input.params?.['id'] as string | undefined;
+      if (!id) return fail('removeCard requires params.id');
       appendJournalEvent({ type: 'task-removal', taskName: id, timestamp: nowIso() });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
 
-  function retrigger(id: string): CommandResult {
+  function retrigger(input: CommandInput): CommandResult {
     try {
+      const id = input.params?.['id'] as string | undefined;
+      if (!id) return fail('retrigger requires params.id');
       appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
 
-  async function processAccumulatedEvents(): Promise<CommandResult> {
-    try {
-      const ran = await withRelayLock(adapter.lock, drainCycle);
-      return ok({ ran: ran !== false });
-    } catch (e) { return err(e); }
+  async function processAccumulatedEvents(_input: CommandInput): Promise<CommandResult> {
+    return drain();
   }
 
-  function upsertCard(cardId: string, restart = false): CommandResult {
+  function upsertCard(input: CommandInput): CommandResult {
     try {
+      const cardId  = input.params?.['cardId']  as string | undefined;
+      const restart = !!input.params?.['restart'];
+      if (!cardId) return fail('upsertCard requires params.cardId');
+
       const card = cardStore().readCard(cardId);
       if (!card) return fail(`Card "${cardId}" not found in board at ${baseRef.value}`);
 
@@ -464,44 +503,57 @@ export function createBoardLiveCardsPublic(
       }
       if (restart) appendJournalEvent({ type: 'task-restart', taskName: cardId, timestamp: nowIso() });
 
-      void processAccumulatedEvents();
+      void drain();
       return ok({ message: `Card "${cardId}" ${existing ? 'updated' : 'inserted'}${restart ? ' (restarted)' : ''}.` });
     } catch (e) { return err(e); }
   }
 
-  function taskCompleted(token: string, data: Record<string, unknown> = {}): CommandResult {
+  function taskCompleted(input: CommandInput): CommandResult {
     try {
+      const token = input.params?.['token'] as string | undefined;
+      if (!token) return fail('taskCompleted requires params.token');
+      const data = (input.body ?? {}) as Record<string, unknown>;
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       try { outputStore().writeDataObjects(data); } catch { /* best-effort */ }
       appendJournalEvent({ type: 'task-completed', taskName: decoded.taskName, data, timestamp: nowIso() });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
 
-  function taskFailed(token: string, error = 'unknown error'): CommandResult {
+  function taskFailed(input: CommandInput): CommandResult {
     try {
+      const token = input.params?.['token'] as string | undefined;
+      if (!token) return fail('taskFailed requires params.token');
+      const error = (input.params?.['error'] as string | undefined) ?? 'unknown error';
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-failed', taskName: decoded.taskName, error, timestamp: nowIso() });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
 
-  function taskProgress(token: string, update: Record<string, unknown> = {}): CommandResult {
+  function taskProgress(input: CommandInput): CommandResult {
     try {
+      const token = input.params?.['token'] as string | undefined;
+      if (!token) return fail('taskProgress requires params.token');
+      const update = (input.body ?? {}) as Record<string, unknown>;
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-progress', taskName: decoded.taskName, update, timestamp: nowIso() });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
 
-  function sourceDataFetched(token: string, ref: string): CommandResult {
+  function sourceDataFetched(input: CommandInput): CommandResult {
     try {
+      const token = input.params?.['token'] as string | undefined;
+      const ref   = input.params?.['ref']   as string | undefined;
+      if (!token) return fail('sourceDataFetched requires params.token');
+      if (!ref)   return fail('sourceDataFetched requires params.ref');
       const payload = decodeSourceToken(token);
       if (!payload) return fail('Invalid source token');
       const { cbk, cid, b, d, cs } = payload;
@@ -528,13 +580,16 @@ export function createBoardLiveCardsPublic(
         update: { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs },
         timestamp: fetchedAt,
       });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
 
-  function sourceDataFetchFailure(token: string, reason = 'unknown'): CommandResult {
+  function sourceDataFetchFailure(input: CommandInput): CommandResult {
     try {
+      const token  = input.params?.['token']  as string | undefined;
+      const reason = (input.params?.['reason'] as string | undefined) ?? 'unknown';
+      if (!token) return fail('sourceDataFetchFailure requires params.token');
       const payload = decodeSourceToken(token);
       if (!payload) return fail('Invalid source token');
       const { cbk, b, d, cs } = payload;
@@ -548,7 +603,7 @@ export function createBoardLiveCardsPublic(
         update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs },
         timestamp: nowIso(),
       });
-      void processAccumulatedEvents();
+      void drain();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -597,29 +652,26 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
 // ============================================================================
 
 export interface BoardLiveCardsNonCorePublic {
-  /** Schema + executor validate-source-def for a card already in the board. */
-  validateCard(cardId: string): CommandResult<{ cardId: string; errors: string[] }>;
+  /** params.cardId — card already in the board */
+  validateCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }>;
 
-  /** Schema + executor validate-source-def for a card file by KindValueRef string. */
-  validateTmpCard(cardRef: string): CommandResult<{ cardId: string; errors: string[] }>;
+  /** body — card JSON object (arrives via stdin / HTTP body / in-process) */
+  validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }>;
 
-  /** Run run-source-fetch probe for a card already in the board. */
-  probeSource(
-    cardId: string,
-    sourceIdx: number,
-    mockProjections: Record<string, unknown>,
-    outRef?: string,
-  ): CommandResult;
+  /** params: cardId, sourceIdx, outRef?; body — mockProjections object */
+  probeSource(input: CommandInput): CommandResult;
 
-  /** Run run-source-fetch probe for an ad-hoc source def (no board card needed). */
-  probeTmpSource(
-    sourceDef: Record<string, unknown>,
-    mockProjections: Record<string, unknown>,
-    outRef?: string,
-  ): CommandResult;
+  /** body: { sourceDef, mockProjections }; params: outRef? */
+  probeTmpSource(input: CommandInput): CommandResult;
 
-  /** Invoke the registered task-executor's describe-capabilities subcommand. */
-  describeTaskExecutorCapabilities(): CommandResult;
+  /** no params needed */
+  describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
+
+  /** params.cardId; body — card JSON object */
+  updateInCardStore(input: CommandInput): CommandResult;
+
+  /** params.cardId */
+  readFromCardStore(input: CommandInput): CommandResult<{ card: unknown }>;
 }
 
 // ============================================================================
@@ -748,32 +800,36 @@ export function createBoardLiveCardsNonCorePublic(
 
   // ── Public methods ─────────────────────────────────────────────────────────
 
-  function validateCard(cardId: string): CommandResult<{ cardId: string; errors: string[] }> {
+  function validateCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }> {
     try {
+      const cardId = input.params?.['cardId'] as string | undefined;
+      if (!cardId) return fail('validateCard requires params.cardId') as CommandResult<{ cardId: string; errors: string[] }>;
       const card = cardStore().readCard(cardId);
       if (!card) return fail(`Card "${cardId}" not found`) as CommandResult<{ cardId: string; errors: string[] }>;
       return validateCardObject(cardId, card as Record<string, unknown>);
     } catch (e) { return err(e) as CommandResult<{ cardId: string; errors: string[] }>; }
   }
 
-  function validateTmpCard(cardRef: string): CommandResult<{ cardId: string; errors: string[] }> {
+  function validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; errors: string[] }> {
     try {
-      const ref = parseRef(cardRef);
-      const raw = adapter.absoluteBlob.read(ref.value);
-      if (!raw) return fail(`Card not found at ${cardRef}`) as CommandResult<{ cardId: string; errors: string[] }>;
-      const card = JSON.parse(raw) as Record<string, unknown>;
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('validateTmpCard requires card JSON object in body') as CommandResult<{ cardId: string; errors: string[] }>;
+      }
+      const card = input.body as Record<string, unknown>;
       const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
       return validateCardObject(cardId, card);
     } catch (e) { return err(e) as CommandResult<{ cardId: string; errors: string[] }>; }
   }
 
-  function probeSource(
-    cardId: string,
-    sourceIdx: number,
-    mockProjections: Record<string, unknown>,
-    outRef?: string,
-  ): CommandResult {
+  function probeSource(input: CommandInput): CommandResult {
     try {
+      const cardId    = input.params?.['cardId']    as string | undefined;
+      const sourceIdx = input.params?.['sourceIdx'] as number | undefined;
+      const outRef    = input.params?.['outRef']    as string | undefined;
+      if (!cardId) return fail('probeSource requires params.cardId');
+      if (sourceIdx === undefined) return fail('probeSource requires params.sourceIdx');
+      const mockProjections = (input.body ?? {}) as Record<string, unknown>;
+
       const card = cardStore().readCard(cardId) as Record<string, unknown> | null;
       if (!card) return fail(`Card "${cardId}" not found`);
       const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
@@ -784,17 +840,19 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
-  function probeTmpSource(
-    sourceDef: Record<string, unknown>,
-    mockProjections: Record<string, unknown>,
-    outRef?: string,
-  ): CommandResult {
+  function probeTmpSource(input: CommandInput): CommandResult {
     try {
+      const outRef = input.params?.['outRef'] as string | undefined;
+      const b = input.body as Record<string, unknown> | undefined;
+      if (!b) return fail('probeTmpSource requires body with sourceDef and mockProjections');
+      const sourceDef = b['sourceDef'] as Record<string, unknown> | undefined;
+      const mockProjections = (b['mockProjections'] ?? {}) as Record<string, unknown>;
+      if (!sourceDef) return fail('probeTmpSource body requires sourceDef');
       return runSourceProbe(sourceDef, mockProjections, baseRef.value, outRef);
     } catch (e) { return err(e); }
   }
 
-  function describeTaskExecutorCapabilities(): CommandResult {
+  function describeTaskExecutorCapabilities(_input: CommandInput): CommandResult {
     try {
       const teRef = configStore().readTaskExecutorRef();
       if (!teRef) return fail('No task-executor registered for this board');
@@ -803,9 +861,35 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
+  function updateInCardStore(input: CommandInput): CommandResult {
+    try {
+      const cardId = input.params?.['cardId'] as string | undefined;
+      if (!cardId) return fail('updateInCardStore requires params.cardId');
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('updateInCardStore requires card JSON object in body');
+      }
+      const card = input.body as LiveCard;
+      if (typeof card.id !== 'string') return fail('Card body must have a string id field');
+      if (card.id !== cardId) return fail(`Card body id "${card.id}" does not match params.cardId "${cardId}"`);
+      cardStore().writeCard(cardId, card);
+      return ok({ cardId, message: `Card "${cardId}" written to store.` });
+    } catch (e) { return err(e); }
+  }
+
+  function readFromCardStore(input: CommandInput): CommandResult<{ card: unknown }> {
+    try {
+      const cardId = input.params?.['cardId'] as string | undefined;
+      if (!cardId) return fail('readFromCardStore requires params.cardId') as CommandResult<{ card: unknown }>;
+      const card = cardStore().readCard(cardId);
+      if (!card) return fail(`Card "${cardId}" not found`) as CommandResult<{ card: unknown }>;
+      return ok({ card }) as CommandResult<{ card: unknown }>;
+    } catch (e) { return err(e) as CommandResult<{ card: unknown }>; }
+  }
+
   return {
     validateCard, validateTmpCard,
     probeSource, probeTmpSource,
     describeTaskExecutorCapabilities,
+    updateInCardStore, readFromCardStore,
   };
 }
