@@ -58,6 +58,7 @@ import {
 import { executionRefFromScriptPath } from './execution-interface.js';
 import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
 import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
+import type { BoardPlatformAdapter } from './board-live-cards-public.js';
 export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib.js';
 export { isSourceInFlight, decideSourceAction, nextEntryAfterFetchDelivery, nextEntryAfterFetchFailure, Resp } from './board-live-cards-lib.js';
 
@@ -133,8 +134,76 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
 const nodeStateSnapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
 
 // ============================================================================
-// Board Journal — append-only JSONL with GUID IDs
+// createFsBoardPlatformAdapter — wires FS adapters into BoardPlatformAdapter
+//
+// All platform-specific Node/FS concerns are encapsulated here.
+// board-live-cards-public.ts depends only on BoardPlatformAdapter, never on
+// Node built-ins or FS details.
+//
+// Usage:
+//   const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, cliDir));
 // ============================================================================
+
+export function createFsBoardPlatformAdapter(
+  baseRef: KindValueRef,
+  cliDir: string,
+  opts?: { onWarn?: (msg: string) => void },
+): BoardPlatformAdapter {
+  const dir = baseRef.value;
+
+  // Resolve selfRef once — the board CLI script path that executors call back to.
+  const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
+  const boardCliScriptPath =
+    (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
+      ? _cliArgs[0]
+      : (_cliArgs[1] ?? _cliArgs[0]);
+  const selfRef = {
+    meta: 'board-live-cards',
+    howToRun: 'local-node' as const,
+    whatToRun: serializeRef({ kind: 'fs-path', value: boardCliScriptPath }),
+  };
+
+  return {
+    kvStorage: (namespace: string) =>
+      createFsKvStorage(joinPath(dir, `.${namespace}`)),
+
+    blobStorage: (namespace: string) =>
+      namespace ? createFsBlobStorage(joinPath(dir, namespace)) : createFsBlobStorage(dir),
+
+    journalAdapter: () => createFsJournalStorageAdapter(dir),
+
+    cardAdapter: () => createFsCardStorageAdapter(dir),
+
+    snapshotAdapter: createFsStateSnapshotStorageAdapter(),
+
+    lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
+
+    selfRef,
+
+    async dispatchExecution(ref, args) {
+      if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return { dispatched: false };
+      try {
+        const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined
+          ?? genUUID().slice(0, 8);
+        const inFile  = makeBoardTempFilePath(dir, `exec-in-${label}`);
+        const outFile = makeBoardTempFilePath(dir, `exec-out-${label}`);
+        const errFile = makeBoardTempFilePath(dir, `exec-err-${label}`, '.txt');
+        const inRef   = serializeRef({ kind: 'fs-path', value: inFile });
+        const outRef  = serializeRef({ kind: 'fs-path', value: outFile });
+        const errRef  = serializeRef({ kind: 'fs-path', value: errFile });
+        blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(args, null, 2));
+        dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, cliDir);
+        return { dispatched: true };
+      } catch (e) {
+        return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+
+    onWarn: opts?.onWarn,
+  };
+}
+
+
 
 export interface JournalEntry {
   id: string;
