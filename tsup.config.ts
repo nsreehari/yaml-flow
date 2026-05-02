@@ -15,6 +15,7 @@ export default defineConfig({
     'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'cli/board-live-cards-cli': 'src/cli/board-live-cards-cli.ts',
+    'cli/card-store-cli': 'src/cli/card-store-cli.ts',
     'cli/source-cli-task-executor': 'src/cli/source-cli-task-executor.ts',
     'stores/file': 'src/stores/file.ts',
     'storage-refs': 'src/cli/public-storage-adapter.ts',
