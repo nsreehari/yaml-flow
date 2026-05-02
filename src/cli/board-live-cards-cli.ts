@@ -21,8 +21,7 @@ import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createReactiveGraph } from '../continuous-event-graph/reactive.js';
 import { createLiveGraph, snapshot } from '../continuous-event-graph/core.js';
-import type { GraphEvent, TaskConfig } from '../event-graph/types.js';
-import type { LiveCard } from '../continuous-event-graph/live-cards-bridge.js';
+import type { GraphEvent } from '../event-graph/types.js';
 import type { Journal } from '../continuous-event-graph/journal.js';
 import { validateLiveCardDefinition } from '../card-compute/schema-validator.js';
 import {
@@ -33,20 +32,13 @@ import {
   createPublishedOutputsStore,
   BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1,
   EMPTY_CONFIG,
-  Resp,
   boardEnvelopeToSnapshotEntries, snapshotEntriesToBoardEnvelope,
-  liveCardToTaskConfig,
   type BoardEnvelope,
-  type LiveCard as LibLiveCard,
   type CardUpsertIndexEntry,
   type CardInventoryEntry, type CardInventoryIndex,
-  type FetchedSourcesStore,
-  type PublishedOutputsStore,
-  type BoardConfigStore, type CardStore,
-  type CommandResponse,
+  type BoardConfigStore,
 } from './board-live-cards-lib.js';
 import {
-  computeStableJsonHash,
   createFsKvStorage,
   createFsBlobStorage,
   createFsAbsolutePathBlobStorage,
@@ -55,10 +47,10 @@ import {
   createFsCardStorageAdapter,
   createFsStateSnapshotStorageAdapter,
 } from './storage-fs-adapters.js';
-import { executionRefFromScriptPath } from './execution-interface.js';
 import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
-import type { InvocationAdapter, CommandExecutor } from './process-interface.js';
+import type { InvocationAdapter } from './process-interface.js';
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from './board-live-cards-public.js';
+import { createBoardLiveCardsPublic, createBoardLiveCardsNonCorePublic } from './board-live-cards-public.js';
 export type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from './board-live-cards-public.js';
 export { createBoardLiveCardsPublic, createBoardLiveCardsNonCorePublic } from './board-live-cards-public.js';
 export type { SourceRuntimeEntry, FetchRuntimeEntry, SourceTokenPayload, CommandResponse } from './board-live-cards-lib.js';
@@ -497,19 +489,6 @@ function resolveConfiguredRuntimeOutDir(baseRef: KindValueRef): string {
   return defaultDir;
 }
 
-function configureRuntimeOutDir(baseRef: KindValueRef, runtimeOut?: string): string {
-  const dir = baseRef.value;
-  const resolved = runtimeOut
-    ? (isAbsolutePath(runtimeOut) ? runtimeOut : resolvePath(dir, runtimeOut))
-    : joinPath(dir, DEFAULT_RUNTIME_OUT_DIR);
-  // ensure dir exists by writing a sentinel via blobStorage (mkdirSync is in storage layer)
-  const sentinelPath = joinPath(resolved, '.keep');
-  blobStorageForRef({ kind: 'fs-path', value: sentinelPath }).write(sentinelPath, '');
-  const cfgPath = joinPath(dir, RUNTIME_OUT_FILE);
-  blobStorageForRef({ kind: 'fs-path', value: cfgPath }).write(cfgPath, resolved);
-  return resolved;
-}
-
 // ============================================================================
 // Standalone journal append + opportunistic drain
 // ============================================================================
@@ -695,1091 +674,159 @@ function resolveSourceDataRef(ref: { kind: string; value: string }): string {
 }
 
 // ============================================================================
-// Non-core command handlers (inlined from board-live-cards-cli-noncore.ts)
+// cli() — thin arg-parse → public layer → print JSON
 // ============================================================================
 
-interface ValidateResultLike {
-  errors: string[];
+/** Parse a required flag value, throws with usage message if missing. */
+function requireFlag(args: string[], flag: string, usage: string): string {
+  const idx = args.indexOf(flag);
+  const val = idx !== -1 ? args[idx + 1] : undefined;
+  if (!val) throw new Error(`Missing ${flag}\nUsage: ${usage}`);
+  return val;
 }
 
-interface NonCoreCommandDeps {
-  getConfigStore: (baseRef: KindValueRef) => BoardConfigStore;
-  getCardStore: (baseRef: KindValueRef) => CardStore;
-  executor: CommandExecutor;
-  makeTempFilePath: (baseRef: KindValueRef, label: string, ext?: string) => string;
-  validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
-  readStdin: () => string;
-  cliDir: string;
+function optFlag(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx !== -1 ? args[idx + 1] : undefined;
 }
 
-interface NonCoreCommandHandlers {
-  cmdHelp: () => void;
-  cmdProbeSource: (args: string[]) => Promise<void>;
-  cmdDescribeTaskExecutorCapabilities: (args: string[]) => void;
-  cmdValidateCard: (args: string[]) => void;
-  /** Direct validate — used by compat layer to avoid stdin coupling. */
-  validateCards: (cards: Record<string, unknown>[], baseRef: KindValueRef | undefined) => CommandResponse<{ cardId: string; errors: string[] }>[];
-}
-
-function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandHandlers {
-  async function cmdProbeSource(args: string[]): Promise<void> {
-    const cardIdx = args.indexOf('--card');
-    const sourceIdxArg = args.indexOf('--source-idx');
-    const sourceBindArg = args.indexOf('--source-bind');
-    const mockProjectionsIdx = args.indexOf('--mock-projections');
-    const brIdx = args.indexOf('--base-ref');
-    const outIdx = args.indexOf('--out');
-
-    const cardFilePath = cardIdx !== -1 ? args[cardIdx + 1] : undefined;
-    const sourceIdxVal = sourceIdxArg !== -1 ? parseInt(args[sourceIdxArg + 1], 10) : 0;
-    const sourceBindVal = sourceBindArg !== -1 ? args[sourceBindArg + 1] : undefined;
-    const mockProjectionsRaw = mockProjectionsIdx !== -1 ? args[mockProjectionsIdx + 1] : undefined;
-    const boardDirArg = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const outFile = outIdx !== -1 ? args[outIdx + 1] : undefined;
-
-    if (!cardFilePath) {
-      console.error('Usage: board-live-cards probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>] [--mock-projections <json>] [--base-ref <::kind::value>] [--out <result.json>]');
-      process.exit(1);
-    }
-
-    // Read card
-    let card: any;
-    try {
-      const absCardPath = resolvePath(cardFilePath);
-      const raw = blobStorageForRef({ kind: 'fs-path', value: absCardPath }).read(absCardPath);
-      if (raw === null) throw new Error(`File not found: ${absCardPath}`);
-      card = JSON.parse(raw);
-    } catch (e) {
-      console.error(`[probe-source] Cannot read card: ${(e as Error).message}`);
-      process.exit(1);
-    }
-
-    const source_defs: any[] = card.source_defs ?? [];
-    if (source_defs.length === 0) {
-      console.error(`[probe-source] Card "${card.id}" has no source_defs`);
-      process.exit(1);
-    }
-
-    // Select source by index or bindTo name
-    let sourceIdx: number;
-    if (sourceBindVal) {
-      sourceIdx = source_defs.findIndex((s: any) => s.bindTo === sourceBindVal);
-      if (sourceIdx === -1) {
-        console.error(`[probe-source] No source with bindTo="${sourceBindVal}" in card "${card.id}"`);
-        process.exit(1);
-      }
-    } else {
-      sourceIdx = sourceIdxVal;
-      if (isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= source_defs.length) {
-        console.error(`[probe-source] --source-idx ${sourceIdxVal} out of range (card has ${source_defs.length} source(s))`);
-        process.exit(1);
-      }
-    }
-
-    const sourceDef = source_defs[sourceIdx];
-    const cardDir = resolvePath(dirnamePath(cardFilePath));
-    const baseRef: KindValueRef = boardDirArg ? parseRef(boardDirArg) : { kind: 'fs-path', value: cardDir };
-    const boardDir = baseRef.value; // used for inPayload.boardDir (executor string compat)
-
-    // Parse --mock-projections (JSON string or @file.json) — pre-resolved _projections values for testing
-    let mockProjections: Record<string, unknown> = {};
-    if (mockProjectionsRaw) {
-      let raw: string;
-      if (mockProjectionsRaw.startsWith('@')) {
-        const absPath = resolvePath(mockProjectionsRaw.slice(1));
-        const content = blobStorageForRef({ kind: 'fs-path', value: absPath }).read(absPath);
-        if (content === null) {
-          console.error(`[probe-source] --mock-projections file not found: ${absPath}`);
-          process.exit(1);
-        }
-        raw = content;
-      } else {
-        raw = mockProjectionsRaw;
-      }
-      try {
-        mockProjections = JSON.parse(raw);
-      } catch (e) {
-        console.error(`[probe-source] --mock-projections is not valid JSON: ${(e as Error).message}`);
-        process.exit(1);
-      }
-    }
-
-    // Detect registered task-executor
-    const teRef = deps.getConfigStore(baseRef).readTaskExecutorRef();
-    const teSpec = teRef ? buildLocalBaseSpec(teRef, deps.cliDir) : undefined;
-    const taskExecutorCmd = teSpec?.command;
-    const taskExecutorBaseArgs = teSpec?.baseArgs ?? [];
-    const taskExecutorExtraB64 = teRef?.extra
-      ? Buffer.from(JSON.stringify(teRef.extra)).toString('base64')
-      : undefined;
-
-    // Build --in payload — mirrors exactly what run-sourcedefs-internal passes to the executor
-    const inPayload: Record<string, unknown> = {
-      ...sourceDef,
-      cwd: typeof sourceDef.cwd === 'string' && sourceDef.cwd ? sourceDef.cwd : cardDir,
-      boardDir: typeof sourceDef.boardDir === 'string' && sourceDef.boardDir ? sourceDef.boardDir : boardDir,
-      _projections: mockProjections,
-    };
-
-    // Derive sourceKind from executor's describe-capabilities rather than hardcoding.
-    // Call describe-capabilities, get sourceKinds keys, find which one appears in sourceDef.
-    // Falls back to 'unknown' if executor is unavailable or call fails.
-    let sourceKind = 'unknown';
-    if (taskExecutorCmd) {
-      try {
-        const capRaw = deps.executor.executeSync(taskExecutorCmd, [...taskExecutorBaseArgs, 'describe-capabilities'], {
-          timeout: 8_000, encoding: 'utf-8',
-        });
-        const caps = JSON.parse(String(capRaw));
-        const knownKinds: string[] = caps?.sourceKinds ? Object.keys(caps.sourceKinds) : [];
-        const defKeys = new Set(Object.keys(sourceDef));
-        sourceKind = knownKinds.find(k => defKeys.has(k)) ?? 'unknown';
-      } catch {
-        // describe-capabilities failed — fall back to 'unknown'; probe execution still proceeds
-      }
-    }
-
-    console.log(`[probe-source] card:        ${card.id}`);
-    console.log(`[probe-source] source[${sourceIdx}]:  bindTo="${sourceDef.bindTo}" kind=${sourceKind}`);
-    console.log(`[probe-source] _projections:       ${JSON.stringify(mockProjections)}`);
-    console.log(`[probe-source] executor:    ${taskExecutorCmd ?? 'built-in (source.cli only)'}`);
-    console.log('[probe-source] running fetch...');
-
-    const inFile = deps.makeTempFilePath(baseRef, `probe-in-${sourceDef.bindTo}`);
-    const tmpOut = deps.makeTempFilePath(baseRef, `probe-out-${sourceDef.bindTo}`);
-    const errFile = deps.makeTempFilePath(baseRef, `probe-err-${sourceDef.bindTo}`, '.txt');
-
-    blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(inPayload, null, 2));
-
-    const inRef  = serializeRef({ kind: 'fs-path', value: inFile });
-    const outRef = serializeRef({ kind: 'fs-path', value: tmpOut });
-    const errRef = serializeRef({ kind: 'fs-path', value: errFile });
-
-    let passed = false;
-    let errorMsg: string | undefined;
-    let resultRaw: string | undefined;
-
-    try {
-      if (taskExecutorCmd) {
-        const executorArgs = [...taskExecutorBaseArgs, 'run-source-fetch',
-          '--in-ref', inRef, '--out-ref', outRef, '--err-ref', errRef,
-        ];
-        if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-        deps.executor.executeSync(taskExecutorCmd, executorArgs, {
-          timeout: (sourceDef.timeout as number) ?? 30_000,
-        });
-      } else {
-        // Built-in path: only source.cli is supported
-        if (!inPayload.cli) {
-          throw new Error('No task-executor registered and source has no cli field — cannot probe with built-in executor');
-        }
-        const cmdParts = deps.executor.splitCommand(inPayload.cli as string);
-        const rawCmd = cmdParts[0];
-        const { cmd, args: cliArgs } = deps.executor.resolveInvocation(rawCmd, cmdParts.slice(1));
-        const stdout = deps.executor.executeSync(cmd, cliArgs, {
-          shell: false,
-          encoding: 'utf-8',
-          timeout: (sourceDef.timeout as number) ?? 30_000,
-          cwd: inPayload.cwd as string,
-        });
-        blobStorageForRef({ kind: 'fs-path', value: tmpOut }).write(tmpOut, String(stdout).trim());
-      }
-
-      resultRaw = blobStorageForRef({ kind: 'fs-path', value: tmpOut }).read(tmpOut) ?? undefined;
-      passed = resultRaw !== undefined;
-      if (!passed) {
-        errorMsg = blobStorageForRef({ kind: 'fs-path', value: errFile }).read(errFile)?.trim()
-          ?? 'executor produced no output file';
-      }
-    } catch (e) {
-      errorMsg = (e as Error).message ?? String(e);
-      if (!errorMsg) {
-        errorMsg = blobStorageForRef({ kind: 'fs-path', value: errFile }).read(errFile)?.trim();
-      }
-    }
-
-    // Cleanup temp inputs
-    for (const f of [inFile, errFile]) {
-      try { createFsAbsolutePathBlobStorage().remove(f); } catch { /* best-effort */ }
-    }
-
-    // Report
-    if (passed && resultRaw !== undefined) {
-      const resultSize = resultRaw.length;
-      const sample = resultRaw.slice(0, 300);
-      console.log('[probe-source] STATUS:      PROBE_PASS');
-      console.log(`[probe-source] result size: ${resultSize} bytes`);
-      console.log(`[probe-source] sample:      ${sample}${resultSize > 300 ? '...' : ''}`);
-      if (outFile) {
-        const absOut = resolvePath(outFile);
-        blobStorageForRef({ kind: 'fs-path', value: absOut }).write(absOut, resultRaw);
-        console.log(`[probe-source] result written to: ${outFile}`);
-      } else {
-        try { createFsAbsolutePathBlobStorage().remove(tmpOut); } catch { /* best-effort */ }
-      }
-    } else {
-      console.log('[probe-source] STATUS:      PROBE_FAIL');
-      if (errorMsg) console.log(`[probe-source] error:       ${errorMsg}`);
-      try { createFsAbsolutePathBlobStorage().remove(tmpOut); } catch { /* best-effort */ }
-    }
-
-    // Machine-readable summary line — agents parse this
-    const summary = {
-      status: passed ? 'PROBE_PASS' : 'PROBE_FAIL',
-      cardId: card.id as string,
-      sourceIdx,
-      bindTo: sourceDef.bindTo as string,
-      sourceKind,
-      mockProjectionsKeys: Object.keys(mockProjections),
-      resultSizeBytes: resultRaw !== undefined ? resultRaw.length : 0,
-      error: errorMsg ?? undefined,
-    };
-    console.log(`[probe-source:result] ${JSON.stringify(summary)}`);
-
-    process.exit(passed ? 0 : 1);
-  }
-
-  function cmdDescribeTaskExecutorCapabilities(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const baseRef = brIdx !== -1 ? parseRef(args[brIdx + 1]) : undefined;
-    if (!baseRef) {
-      console.error('Usage: board-live-cards describe-task-executor-capabilities --base-ref <::kind::value>');
-      process.exit(1);
-    }
-
-    const teRef = deps.getConfigStore(baseRef).readTaskExecutorRef();
-    if (!teRef) {
-      console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${baseRef.value}`);
-      process.exit(1);
-    }
-
-    try {
-      const { command, baseArgs } = buildLocalBaseSpec(teRef, deps.cliDir);
-      const stdout = deps.executor.executeSync(command, [...baseArgs, 'describe-capabilities'], {
-        timeout: 10_000,
-        encoding: 'utf-8',
-      });
-      // Pass through the executor's JSON output directly
-      process.stdout.write(String(stdout));
-      if (!String(stdout).endsWith('\n')) process.stdout.write('\n');
-    } catch (e) {
-      console.error(`[describe-task-executor-capabilities] Executor failed: ${(e as Error).message ?? e}`);
-      process.exit(1);
-    }
-  }
-
-  function cmdHelp(): void {
-    console.log(`
-board-live-cards-cli — LiveCards board CLI
-
-USAGE
-  board-live-cards-cli <command> [options]
-
-BOARD MANAGEMENT
-  init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]
-    Create a new board at the location identified by <::kind::value>.
-    If --task-executor is given, registers the script as the board's task executor.
-    If --chat-handler is given, registers the script as the board's chat handler.
-    Writes runtime-out config (default: <board-dir>/runtime-out).
-    Published runtime files:
-      <runtime-out>/board-livegraph-status.json
-      <runtime-out>/cards/<card-id>.computed.json
-    Re-running init on an existing board is safe; handler registrations are updated.
-
-  status --base-ref <::kind::value> [--json]
-    Read and print the published status snapshot from <runtime-out>/board-livegraph-status.json.
-    --json emits the stable machine-readable status object.
-
-CARD MANAGEMENT
-  upsert-card --base-ref <::kind::value> (--card <card.json> | --card-glob <glob>) [--card-id <card-id>] [--restart]
-    Insert or update one or many cards.
-    Enforces strict one-to-one mapping between card id and file path:
-      - same id + same file path: update
-      - new id + new file path: insert
-      - id remap or file remap: rejected
-    If --card-id is provided, it must match the id inside the file.
-    --card-id is valid only with --card (single file), not with --card-glob.
-    --restart clears the task so it re-triggers from scratch.
-
-  validate-card (--card <card.json> | --card-glob <glob>) [--base-ref <::kind::value>]
-    Validate one or many card JSON files without adding them to a board.
-    Checks JSON Schema structure, runtime expression syntax, and provides.ref namespaces.
-    When --base-ref is provided, also invokes the board's task executor validate-source-def
-    subcommand to structurally validate each source definition against supported kinds.
-    Exits with code 1 if any card fails validation.
-
-  remove-card --base-ref <::kind::value> --id <card-id>
-    Remove a card and its task from the board.
-
-  retrigger --base-ref <::kind::value> --task <task-name>
-    Mark a task not-started and drain to re-trigger it.
-
-TASK CALLBACKS  (called by task executor scripts)
-  task-completed --token <callbackToken> [--data <json>]
-    Signal successful task completion with optional JSON result data.
-
-  task-failed --token <callbackToken> [--error <message>]
-    Signal task failure with an optional error message.
-
-  task-progress --base-ref <::kind::value> --token <callbackToken> [--update <json>]
-    Signal task progress with optional update payload (for waiting on more evidence, etc.).
-
-SOURCE CALLBACKS  (called by executor subprocesses)
-  source-data-fetched --tmp <file> --token <sourceToken>
-    Atomically rename <file> into the outputFile destination and record delivery
-    via journal events. Appends a task-progress event to re-invoke the card handler.
-
-  source-data-fetch-failure --token <sourceToken> [--reason <message>]
-    Record a source fetch failure via journal events and append a task-progress event.
-
-INTERNAL COMMANDS
-  process-accumulated-events --base-ref <::kind::value>
-    Executes forced drain for this board.
-    This command is also used as the background relay worker.
-    By default it schedules a detached worker and returns quickly.
-    Internal workers run with --inline-loop to perform the settle loop.
-
-    Eventual-progress guarantee is relay-based (not per-call blocking guarantee):
-    1) at least one runner continues processing,
-    2) no crash/forced exit in relay window,
-    3) lock stays healthy,
-    4) event production eventually quiesces.
-
-  run-sourcedefs-internal --card <card.json> --token <callbackToken> --base-ref <::kind::value>
-    Execute all source[] entries for a card, then report delivery or failure.
-    (Internal command — invoked by the card-handler. Not intended for direct use.)
-
-    If <dir>/.task-executor exists, invokes it with run-source-fetch subcommand:
-      <executor> run-source-fetch --in <source_json> --out <outfile> --err <errfile>
-
-    If no .task-executor is registered, uses board-live-cards built-in run-source-fetch.
-
-  run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
-    Execute a source definition. Board-live-cards reads source.cli and executes it.
-    Writes result to --out. Presence of --out after exit indicates success.
-
-  describe-task-executor-capabilities --base-ref <::kind::value>
-    Invoke the registered task-executor's describe-capabilities subcommand and
-    print its capabilities JSON to stdout.  Requires a .task-executor file in <::kind::value>.
-
-  probe-source --card <card.json> [--source-idx <n>] [--source-bind <name>]
-               [--mock-projections <json>] [--base-ref <::kind::value>] [--out <result.json>]
-    Validate that a card source can be fetched successfully.
-    Reads the card file, extracts the chosen source (default: index 0), builds the
-    run-source-fetch --in payload with the supplied _projections data, invokes the
-    registered task-executor (or built-in executor for source.cli), and reports pass/fail.
-    --mock-projections:     JSON string (or @file.json) providing pre-resolved _projections values
-                     the source needs.  Craft the minimal payload that exercises the
-                     source — e.g. '{"holdings":[{"ticker":"AAPL","quantity":10}]}'.
-                     If omitted, _projections is passed as empty ({}).
-    --source-idx:    0-based index into card.source_defs[]. Default: 0.
-    --source-bind:   Select source by its bindTo name instead of index.
-    --base-ref:      Board directory used to find .task-executor. Defaults to the
-                     directory containing the card file.
-    --out:           Optional path to write the raw fetch result JSON.
-    Prints a structured report ending with a [probe-source:result] JSON line.
-    Exits 0 on PROBE_PASS, 1 on PROBE_FAIL.
-
-RUN-SOURCE-FETCH PROTOCOL
-  External task-executors implement:
-    <executor> run-source-fetch --in <source.json> --out <result.json> [--err <error.txt>]
-
-  INPUT:   --in file contains the full source_defs[x] definition object
-  OUTPUT:  --out file is written with the result to signal success.
-           --err file may be written to explain failure.
-
-  Exit code and --out presence determine success:
-    Exit 0 + --out file present → source delivery recorded, card re-evaluated.
-    Exit non-zero OR --out absent → source-data-fetch-failure recorded.
-
-BOARD-LIVE-CARDS BUILT-IN EXECUTOR
-  Understands source.cli field only:
-    "source_defs": [{ "cli": "node ../fetch-prices.js", "bindTo": "prices", "outputFile": "prices.json" }]
-
-  The source.cli command is executed with:
-    - Direct command invocation (no shell; quote-aware argument parsing)
-    - Stdout is captured and delivered to the card as-is
-    - Timeout from source.timeout (default 120s)
-
-  The source.cli command must:
-    - Execute successfully (exit 0)
-    - Write output to stdout
-    - Complete within the timeout
-
-  The output format is the concern of the card's compute function to interpret.
-
-  External task-executors can interpret source definitions however they want.
-
-EXAMPLES
-  board-live-cards-cli init ./my-board
-  board-live-cards-cli init ./my-board --task-executor ./executors/my-runner.py
-  board-live-cards-cli upsert-card --base-ref ::fs-path::./my-board --card cards/prices.json
-  board-live-cards-cli status --base-ref ::fs-path::./my-board
-  board-live-cards-cli retrigger --base-ref ::fs-path::./my-board --task price-fetch
-  board-live-cards-cli probe-source --card cards/card-market-prices.json --source-idx 0 --base-ref ::fs-path::./my-board --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'
-`.trimStart());
-  }
-
-  function validateCardObjects(
-    cards: Record<string, unknown>[],
-    baseRef: KindValueRef | undefined,
-  ): CommandResponse<{ cardId: string; errors: string[] }>[] {
-    const teRef = baseRef ? deps.getConfigStore(baseRef).readTaskExecutorRef() : undefined;
-    const teSpec = teRef ? buildLocalBaseSpec(teRef, deps.cliDir) : undefined;
-
-    return cards.map((card) => {
-      const cardId = typeof card.id === 'string' ? card.id : '(unknown)';
-      const schemaErrors = deps.validateLiveCardDefinition(card).errors;
-      const sourceErrors: string[] = [];
-
-      if (teSpec && Array.isArray(card.source_defs)) {
-        for (const src of card.source_defs as Array<Record<string, unknown>>) {
-          const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
-          const tmpFile = deps.makeTempFilePath(baseRef!, `validate-src-${bindTo}`);
-          try {
-            blobStorageForRef({ kind: 'fs-path', value: tmpFile }).write(tmpFile, JSON.stringify(src));
-            let stdout: string;
-            try {
-              stdout = deps.executor.executeSync(
-                teSpec.command,
-                [...teSpec.baseArgs, 'validate-source-def', '--in', tmpFile],
-                { timeout: 10_000 },
-              );
-            } catch (execErr: any) {
-              stdout = typeof execErr?.stdout === 'string' ? execErr.stdout
-                : Buffer.isBuffer(execErr?.stdout) ? execErr.stdout.toString('utf-8')
-                : '';
-              if (!stdout.trim()) {
-                sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${execErr instanceof Error ? execErr.message : String(execErr)}`);
-                continue;
-              }
-            }
-            const parsed = JSON.parse(stdout.trim());
-            if (!parsed.ok && Array.isArray(parsed.errors)) {
-              for (const error of parsed.errors) {
-                sourceErrors.push(`source "${bindTo}": ${error}`);
-              }
-            }
-          } catch (err) {
-            sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${err instanceof Error ? err.message : String(err)}`);
-          } finally {
-            try { createFsAbsolutePathBlobStorage().remove(tmpFile); } catch { /* ignore */ }
-          }
-        }
-      }
-
-      const allErrors = [...schemaErrors, ...sourceErrors];
-      if (allErrors.length === 0) {
-        return Resp.success({ cardId, errors: [] as string[] });
-      }
-      return Resp.error(allErrors.join('; '), { cardId, errors: allErrors }) as CommandResponse<{ cardId: string; errors: string[] }>;
-    });
-  }
-
-  function cmdValidateCard(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const cardIdIdx = args.indexOf('--card-id');
-    const stdioMode = args.includes('--cards-stdio');
-    const baseRef = brIdx !== -1 ? parseRef(args[brIdx + 1]) : undefined;
-
-    if (stdioMode) {
-      // --cards-stdio: read JSON array of card objects from stdin, write results to stdout
-      let cards: Record<string, unknown>[];
-      try {
-        const raw = deps.readStdin();
-        cards = JSON.parse(raw) as Record<string, unknown>[];
-        if (!Array.isArray(cards)) throw new Error('stdin must be a JSON array');
-      } catch (err) {
-        const resp = Resp.error(`Failed to parse stdin: ${err instanceof Error ? err.message : String(err)}`);
-        console.log(JSON.stringify([resp]));
-        return;
-      }
-      const results = validateCardObjects(cards, baseRef);
-      console.log(JSON.stringify(results, null, 2));
-      return;
-    }
-
-    if (cardIdIdx !== -1) {
-      // --card-id: read from CardStore
-      const cardId = args[cardIdIdx + 1];
-      if (!cardId || !baseRef) {
-        throw new Error('Usage: board-live-cards validate-card --base-ref <::kind::value> --card-id <id>');
-      }
-      const card = deps.getCardStore(baseRef).readCard(cardId);
-      if (!card) {
-        throw new Error(`Card "${cardId}" not found in board at ${baseRef.value}`);
-      }
-      const [result] = validateCardObjects([card as Record<string, unknown>], baseRef);
-      if (result.status === 'error') {
-        for (const err of result.data.errors) console.error(`  ${err}`);
-        throw new Error(`Card "${cardId}" failed validation.`);
-      }
-      console.log(`OK    ${cardId}`);
-      return;
-    }
-
-    throw new Error('Usage: board-live-cards validate-card (--card-id <id> --base-ref <::kind::value>) | (--cards-stdio [--base-ref <::kind::value>])');
-  }
-
-  return {
-    cmdHelp,
-    cmdProbeSource,
-    cmdDescribeTaskExecutorCapabilities,
-    cmdValidateCard,
-    validateCards: validateCardObjects,
-  };
-}
-
-// ============================================================================
-// Board command handlers
-// ============================================================================
-
-interface BoardCommandDeps {
-  initBoard: (baseRef: KindValueRef) => 'created' | 'exists';
-  configureRuntimeOutDir: (baseRef: KindValueRef, runtimeOut?: string) => string;
-  loadBoard: (baseRef: KindValueRef) => LiveGraph;
-  getOutputStore: (baseRef: KindValueRef) => PublishedOutputsStore;
-  buildBoardStatusObject: (baseRef: KindValueRef, live: LiveGraph) => any;
-  getConfigStore: (baseRef: KindValueRef) => BoardConfigStore;
-  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
-  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
-}
-
-interface BoardCommandHandlers {
-  cmdInit: (args: string[]) => void;
-  cmdStatus: (args: string[]) => void;
-  cmdRemoveCard: (args: string[]) => void;
-  cmdRetrigger: (args: string[]) => void;
-}
-
-function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommandHandlers {
-  function cmdInit(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    if (!baseRef) {
-      console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
-      process.exit(1);
-    }
-
-    const teIdx = args.indexOf('--task-executor');
-    const taskExecutor = teIdx !== -1 ? args[teIdx + 1] : undefined;
-    const chIdx = args.indexOf('--chat-handler');
-    const chatHandler = chIdx !== -1 ? args[chIdx + 1] : undefined;
-    const roIdx = args.indexOf('--runtime-out');
-    const runtimeOut = roIdx !== -1 ? args[roIdx + 1] : undefined;
-    if (roIdx !== -1 && !runtimeOut) {
-      console.error('Usage: board-live-cards init --base-ref <::kind::value> [--task-executor <script>] [--chat-handler <script>] [--runtime-out <dir>]');
-      process.exit(1);
-    }
-
-    const result = deps.initBoard(baseRef);
-
-    const config = deps.getConfigStore(baseRef);
-    if (taskExecutor) {
-      const teExtraIdx = args.indexOf('--task-executor-extra');
-      let teExtra: Record<string, unknown> | undefined;
-      if (teExtraIdx !== -1 && args[teExtraIdx + 1]) {
-        try { teExtra = JSON.parse(args[teExtraIdx + 1]); } catch { /* ignore bad JSON */ }
-      }
-      config.writeTaskExecutorRef(executionRefFromScriptPath(taskExecutor, teExtra));
-    }
-    if (chatHandler) {
-      config.writeChatHandler(chatHandler);
-    }
-
-    const runtimeOutDir = deps.configureRuntimeOutDir(baseRef, runtimeOut);
-    const live = deps.loadBoard(baseRef);
-    deps.getOutputStore(baseRef).writeStatusSnapshot(deps.buildBoardStatusObject(baseRef, live));
-
-    if (result === 'exists') {
-      console.log(`Board already initialized at ${baseRef.value}${taskExecutor ? ` (task-executor updated: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
-    } else {
-      console.log(`Board initialized at ${baseRef.value}${taskExecutor ? ` (task-executor: ${taskExecutor})` : ''} (runtime-out: ${runtimeOutDir})`);
-    }
-  }
-
-  function cmdStatus(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const asJson = args.includes('--json');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    if (!baseRef) {
-      console.error('Usage: board-live-cards status --base-ref <::kind::value>');
-      process.exit(1);
-    }
-
-    let statusObject: any = deps.getOutputStore(baseRef).readStatusSnapshot();
-    if (!statusObject) {
-      statusObject = deps.buildBoardStatusObject(baseRef, deps.loadBoard(baseRef));
-      deps.getOutputStore(baseRef).writeStatusSnapshot(statusObject);
-    }
-
-    if (asJson) {
-      console.log(JSON.stringify(statusObject, null, 2));
-      return;
-    }
-
-    console.log(`Board: ${statusObject.meta.board.path}`);
-    console.log(`Tasks: ${statusObject.summary.card_count}`);
-    console.log('');
-
-    for (const card of statusObject.cards) {
-      const dataKeys = card.provides_runtime.join(', ');
-      console.log(`  ${card.status.padEnd(12)} ${card.name}${dataKeys ? ` — [${dataKeys}]` : ''}`);
-    }
-
-    console.log('');
-    console.log(`Schedule: ${statusObject.summary.eligible} eligible, ${statusObject.summary.pending} pending, ${statusObject.summary.blocked} blocked, ${statusObject.summary.unresolved} unresolved`);
-  }
-
-  function cmdRemoveCard(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const idIdx = args.indexOf('--id');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const cardId = idIdx !== -1 ? args[idIdx + 1] : undefined;
-    if (!baseRef || !cardId) {
-      console.error('Usage: board-live-cards remove-card --base-ref <::kind::value> --id <card-id>');
-      process.exit(1);
-    }
-
-    deps.appendEventToJournal(baseRef, {
-      type: 'task-removal',
-      taskName: cardId,
-      timestamp: new Date().toISOString(),
-    });
-
-    void deps.processAccumulatedEventsInfinitePass(baseRef);
-    console.log(`Card "${cardId}" removed.`);
-  }
-
-  function cmdRetrigger(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const taskIdx = args.indexOf('--task');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const taskName = taskIdx !== -1 ? args[taskIdx + 1] : undefined;
-    if (!baseRef || !taskName) {
-      console.error('Usage: board-live-cards retrigger --base-ref <::kind::value> --task <task-name>');
-      process.exit(1);
-    }
-
-    deps.appendEventToJournal(baseRef, {
-      type: 'task-restart',
-      taskName,
-      timestamp: new Date().toISOString(),
-    });
-
-    void deps.processAccumulatedEventsInfinitePass(baseRef);
-    console.log(`Task "${taskName}" retriggered.`);
-  }
-
-  return { cmdInit, cmdStatus, cmdRemoveCard, cmdRetrigger };
-}
-
-// ============================================================================
-// Card command handlers
-// ============================================================================
-
-export type BoardLiveCard = LiveCard;
-
-interface CardCommandDeps {
-  hashTaskConfig: (taskConfig: TaskConfig) => string;
-  getCardStore: (baseRef: KindValueRef) => CardStore;
-  readCardUpsertEntry: (baseRef: KindValueRef, cardId: string) => CardUpsertIndexEntry | null;
-  writeCardUpsertEntry: (baseRef: KindValueRef, cardId: string, entry: CardUpsertIndexEntry) => void;
-  liveCardToTaskConfig: (card: LibLiveCard) => TaskConfig;
-  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
-  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
-}
-
-interface CardCommandHandlers {
-  cmdUpsertCard: (args: string[]) => void;
-  upsertCardById: (baseRef: KindValueRef, cardId: string, restart: boolean) => string;
-}
-
-function createCardCommandHandlers(deps: CardCommandDeps): CardCommandHandlers {
-  function upsertCardById(baseRef: KindValueRef, cardId: string, restart: boolean): string {
-    const card = deps.getCardStore(baseRef).readCard(cardId);
-    if (!card) {
-      throw new Error(`Card "${cardId}" not found in CardStore at ${baseRef.value}`);
-    }
-
-    const taskConfig = deps.liveCardToTaskConfig(card);
-    const taskConfigHash = deps.hashTaskConfig(taskConfig);
-    const existing = deps.readCardUpsertEntry(baseRef, cardId);
-    const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
-
-    if (!taskConfigChanged && !restart) {
-      return `Card "${cardId}" unchanged — skipped.`;
-    }
-
-    if (taskConfigChanged) {
-      const blobRef = existing?.blobRef ?? deps.getCardStore(baseRef).readCardKey(cardId) ?? cardId;
-
-      deps.appendEventToJournal(baseRef, {
-        type: 'task-upsert',
-        taskName: cardId,
-        taskConfig,
-        timestamp: new Date().toISOString(),
-      });
-
-      deps.writeCardUpsertEntry(baseRef, cardId, { blobRef, taskConfigHash, updatedAt: new Date().toISOString() });
-    }
-
-    if (restart) {
-      deps.appendEventToJournal(baseRef, {
-        type: 'task-restart',
-        taskName: cardId,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    return `Card "${cardId}" ${existing ? 'upserted (updated)' : 'upserted (inserted)'}${restart ? ' (restarted)' : ''}.`;
-  }
-
-  function cmdUpsertCard(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const cardIdIdx = args.indexOf('--card-id');
-    const restart = args.includes('--restart');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const cardId = cardIdIdx !== -1 ? args[cardIdIdx + 1] : undefined;
-
-    if (!baseRef || !cardId) {
-      console.error('Usage: board-live-cards upsert-card --base-ref <::kind::value> --card-id <id> [--restart]');
-      process.exit(1);
-    }
-
-    const msg = upsertCardById(baseRef, cardId, restart);
-    void deps.processAccumulatedEventsInfinitePass(baseRef);
-    console.log(msg);
-  }
-
-  return { cmdUpsertCard, upsertCardById };
-}
-
-// ============================================================================
-// Callback command handlers
-// ============================================================================
-
-function injectTaskProgress(
-  baseRef: KindValueRef,
-  taskName: string,
-  update: Record<string, unknown>,
-  deps: {
-    appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
-    processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
-  },
-): void {
-  deps.appendEventToJournal(baseRef, {
-    type: 'task-progress',
-    taskName,
-    update,
-    timestamp: new Date().toISOString(),
-  });
-  void deps.processAccumulatedEventsInfinitePass(baseRef);
-}
-
-interface CallbackTokenPayload {
-  taskName: string;
-}
-
-interface SourceTokenPayloadLike {
-  cbk: string;
-  rg: string;
-  br: string;
-  cid: string;
-  b: string;
-  d: string;
-  cs?: string;
-}
-
-interface CallbackCommandDeps {
-  decodeCallbackToken: (token: string) => CallbackTokenPayload | null;
-  decodeSourceToken: (token: string) => SourceTokenPayloadLike | null;
-  getFetchedSourcesStore: (baseRef: KindValueRef) => FetchedSourcesStore;
-  generateId: () => string;
-  writeRuntimeDataObjects: (baseRef: KindValueRef, data: Record<string, unknown>) => void;
-  appendEventToJournal: (baseRef: KindValueRef, event: GraphEvent) => void;
-  processAccumulatedEventsForced: (baseRef: KindValueRef) => Promise<void>;
-  processAccumulatedEventsInfinitePass: (baseRef: KindValueRef) => Promise<boolean>;
-}
-
-interface CallbackCommandHandlers {
-  cmdTaskCompleted: (args: string[]) => void;
-  cmdTaskFailed: (args: string[]) => void;
-  cmdTaskProgress: (args: string[]) => void;
-  cmdSourceDataFetched: (args: string[]) => void;
-  cmdSourceDataFetchFailure: (args: string[]) => void;
-}
-
-function createCallbackCommandHandlers(deps: CallbackCommandDeps): CallbackCommandHandlers {
-  function cmdTaskCompleted(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const tokenIdx = args.indexOf('--token');
-    const dataIdx = args.indexOf('--data');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    if (!baseRef || !token) {
-      console.error('Usage: board-live-cards task-completed --base-ref <::kind::value> --token <token> [--data <json>]');
-      process.exit(1);
-    }
-
-    const decoded = deps.decodeCallbackToken(token);
-    if (!decoded) {
-      console.error('Invalid callback token');
-      process.exit(1);
-    }
-
-    const data: Record<string, unknown> = dataIdx !== -1
-      ? JSON.parse(args[dataIdx + 1])
-      : {};
-
-    deps.writeRuntimeDataObjects(baseRef, data);
-
-    deps.appendEventToJournal(baseRef, {
-      type: 'task-completed',
-      taskName: decoded.taskName,
-      data,
-      timestamp: new Date().toISOString(),
-    });
-
-    void deps.processAccumulatedEventsForced(baseRef);
-    console.log('Task completed.');
-  }
-
-  function cmdTaskFailed(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const tokenIdx = args.indexOf('--token');
-    const errorIdx = args.indexOf('--error');
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    const errorMsg = errorIdx !== -1 ? args[errorIdx + 1] : 'unknown error';
-    if (!baseRef || !token) {
-      console.error('Usage: board-live-cards task-failed --base-ref <::kind::value> --token <token> [--error <message>]');
-      process.exit(1);
-    }
-
-    const decoded = deps.decodeCallbackToken(token);
-    if (!decoded) {
-      console.error('Invalid callback token');
-      process.exit(1);
-    }
-
-    deps.appendEventToJournal(baseRef, {
-      type: 'task-failed',
-      taskName: decoded.taskName,
-      error: errorMsg,
-      timestamp: new Date().toISOString(),
-    });
-
-    void deps.processAccumulatedEventsForced(baseRef);
-    console.log('Task failed.');
-  }
-
-  function cmdSourceDataFetched(args: string[]): void {
-    const refIdx = args.indexOf('--ref');
-    const tokenIdx = args.indexOf('--token');
-    const refRaw = refIdx !== -1 ? args[refIdx + 1] : undefined;
-    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    if (!refRaw || !token) {
-      console.error('Usage: board-live-cards source-data-fetched --ref ::kind::value --token <sourceToken>');
-      process.exit(1);
-    }
-
-    const ref = parseRef(refRaw);
-
-    const payload = deps.decodeSourceToken(token);
-    if (!payload) {
-      console.error('Invalid source token');
-      process.exit(1);
-    }
-
-    const { cbk, cid, b, d, cs } = payload;
-    const boardRef = parseRef(payload.br);
-
-    const deliveryToken = deps.generateId();
-    deps.getFetchedSourcesStore(boardRef).ingestSourceDataStaged(cid, d, ref, deliveryToken);
-    console.log(`[source-data-fetched] ${cid}.${b} -> ${cid}/${d}`);
-
-    const fetchedAt = new Date().toISOString();
-    const cbkDecoded = deps.decodeCallbackToken(cbk);
-    if (!cbkDecoded) {
-      console.error('Invalid callback token embedded in source token');
-      process.exit(1);
-    }
-
-    injectTaskProgress(boardRef, cbkDecoded.taskName, { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs }, deps);
-  }
-
-  function cmdSourceDataFetchFailure(args: string[]): void {
-    const tokenIdx = args.indexOf('--token');
-    const reasonIdx = args.indexOf('--reason');
-    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    const reason = reasonIdx !== -1 ? args[reasonIdx + 1] : 'unknown';
-    if (!token) {
-      console.error('Usage: board-live-cards source-data-fetch-failure --token <sourceToken> [--reason <msg>]');
-      process.exit(1);
-    }
-
-    const payload = deps.decodeSourceToken(token);
-    if (!payload) {
-      console.error('Invalid source token');
-      process.exit(1);
-    }
-
-    const { cbk, cid, b, d, cs } = payload;
-    const boardRef = parseRef(payload.br);
-    console.log(`[source-data-fetch-failure] ${cid}.${b}: ${reason}`);
-
-    const cbkDecoded = deps.decodeCallbackToken(cbk);
-    if (!cbkDecoded) {
-      console.error('Invalid callback token embedded in source token');
-      process.exit(1);
-    }
-
-    injectTaskProgress(boardRef, cbkDecoded.taskName, { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs }, deps);
-  }
-
-  function cmdTaskProgress(args: string[]): void {
-    const brIdx = args.indexOf('--base-ref');
-    const tokenIdx = args.indexOf('--token');
-    const updateIdx = args.indexOf('--update');
-
-    const baseRefRaw = brIdx !== -1 ? args[brIdx + 1] : undefined;
-    const baseRef = baseRefRaw ? parseRef(baseRefRaw) : undefined;
-    const token = tokenIdx !== -1 ? args[tokenIdx + 1] : undefined;
-    const updateJson = updateIdx !== -1 ? args[updateIdx + 1] : '{}';
-
-    if (!baseRef || !token) {
-      console.error('Usage: board-live-cards task-progress --base-ref <::kind::value> --token <token> [--update <json>]');
-      process.exit(1);
-    }
-
-    const decoded = deps.decodeCallbackToken(token);
-    if (!decoded) {
-      console.error('Invalid callback token');
-      process.exit(1);
-    }
-
-    const update = updateJson ? JSON.parse(updateJson) : {};
-
-    injectTaskProgress(baseRef, decoded.taskName, update, deps);
-  }
-
-  return {
-    cmdTaskCompleted,
-    cmdTaskFailed,
-    cmdTaskProgress,
-    cmdSourceDataFetched,
-    cmdSourceDataFetchFailure,
-  };
-}
-
-// ============================================================================
-// Execution command handlers (inlined from board-live-cards-cli-execution-commands.ts)
-// ============================================================================
-
-interface ExecutionCommandDeps {
-  processAccumulatedEventsForced: (baseRef: KindValueRef) => Promise<void>;
-}
-
-interface ExecutionCommandHandlers {
-  cmdTryDrain: (args: string[]) => Promise<void>;
-}
-
-function createExecutionCommandHandlers(deps: ExecutionCommandDeps): ExecutionCommandHandlers {
-  async function cmdTryDrain(args: string[]): Promise<void> {
-    const brIdx = args.indexOf('--base-ref');
-    const baseRef = brIdx !== -1 ? parseRef(args[brIdx + 1]) : undefined;
-    if (!baseRef) {
-      console.error('Usage: board-live-cards process-accumulated-events --base-ref <::kind::value>');
-      process.exit(1);
-    }
-    await deps.processAccumulatedEventsForced(baseRef);
-  }
-
-  return { cmdTryDrain };
+function printResult(result: unknown): void {
+  console.log(JSON.stringify(result, null, 2));
 }
 
 export async function cli(argv: string[]): Promise<void> {
-  const processAccumulatedAdapter = createBoardInvocationAdapter(__dirname);
-  const executor = createNodeCommandExecutor();
-  const scheduleInfinitePass = (baseRef: KindValueRef) => processAccumulatedEventsInfinitePass(baseRef, processAccumulatedAdapter);
-  const scheduleForced = (baseRef: KindValueRef) => processAccumulatedEventsForced(baseRef, processAccumulatedAdapter);
-  const boardCommandHandlers = createBoardCommandHandlers({
-    initBoard,
-    configureRuntimeOutDir,
-    loadBoard,
-    getOutputStore: (baseRef: KindValueRef) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))),
-    buildBoardStatusObject: (baseRef: KindValueRef, live: LiveGraph) => buildBoardStatusObject(serializeRef(baseRef), live),
-    getConfigStore: createBoardConfig,
-    appendEventToJournal,
-    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
-  });
-  const callbackCommandHandlers = createCallbackCommandHandlers({
-    decodeCallbackToken,
-    decodeSourceToken,
-    getFetchedSourcesStore: (baseRef: KindValueRef) => createFetchedSourcesStore(createFsBlobStorage(baseRef.value), resolveSourceDataRef),
-    generateId: genUUID,
-    writeRuntimeDataObjects: (baseRef: KindValueRef, data: Record<string, unknown>) => createPublishedOutputsStore(createFsKvStorage(resolveConfiguredRuntimeOutDir(baseRef))).writeDataObjects(data),
-    appendEventToJournal,
-    processAccumulatedEventsForced: scheduleForced,
-    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
-  });
-  const nonCoreCommandHandlers = createNonCoreCommandHandlers({
-    getConfigStore: createBoardConfig,
-    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value), console.warn),
-    executor,
-    makeTempFilePath: (baseRef: KindValueRef, label: string, ext?: string) => makeBoardTempFilePath(baseRef.value, label, ext),
-    validateLiveCardDefinition,
-    readStdin: () => blobStorageForRef({ kind: 'fs-path', value: '/dev/stdin' }).read('/dev/stdin') ?? '',
-    cliDir: __dirname,
-  });
-  const cardCommandHandlers = createCardCommandHandlers({
-    getCardStore: (baseRef: KindValueRef) => createCardStore(createFsCardStorageAdapter(baseRef.value), console.warn),
-    readCardUpsertEntry: (baseRef: KindValueRef, cardId: string): CardUpsertIndexEntry | null => {
-      const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
-      return kv.read(cardId) as CardUpsertIndexEntry | null;
-    },
-    writeCardUpsertEntry: (baseRef: KindValueRef, cardId: string, entry: CardUpsertIndexEntry): void => {
-      const kv = createFsKvStorage(joinPath(baseRef.value, '.card-upsert-kv'));
-      kv.write(cardId, entry);
-    },
-    liveCardToTaskConfig,
-    hashTaskConfig: computeStableJsonHash,
-    appendEventToJournal,
-    processAccumulatedEventsInfinitePass: scheduleInfinitePass,
-  });
-  const executionCommandHandlers = createExecutionCommandHandlers({
-    processAccumulatedEventsForced: scheduleForced,
-  });
-
   const cmd = argv[0];
   const rest = argv.slice(1);
 
+  if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    console.log('board-live-cards-cli — see board-live-cards-cli-PARAMS.md for command reference');
+    return;
+  }
+
+  // ── Commands that need a baseRef ────────────────────────────────────────────
+  const br = optFlag(rest, '--base-ref');
+  const baseRef = br ? parseRef(br) : undefined;
+
+  // ── Token-based callbacks (token encodes baseRef — no --base-ref needed) ───
+  if (cmd === 'task-completed') {
+    const token = requireFlag(rest, '--token', 'task-completed --token <token> [--data <json>]');
+    const dataRaw = optFlag(rest, '--data');
+    const data = dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : undefined;
+    const payload = decodeCallbackToken(token);
+    if (!payload) throw new Error('Invalid callback token');
+    const br2 = parseRef(JSON.parse(Buffer.from(token, 'base64url').toString()).br as string);
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    printResult(board.taskCompleted(token, data));
+    return;
+  }
+  if (cmd === 'task-failed') {
+    const token = requireFlag(rest, '--token', 'task-failed --token <token> [--error <message>]');
+    const br2 = parseRef(JSON.parse(Buffer.from(token, 'base64url').toString()).br as string);
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    printResult(board.taskFailed(token, optFlag(rest, '--error')));
+    return;
+  }
+  if (cmd === 'task-progress') {
+    const token = requireFlag(rest, '--token', 'task-progress --token <token> [--update <json>]');
+    const updateRaw = optFlag(rest, '--update');
+    const update = updateRaw ? JSON.parse(updateRaw) as Record<string, unknown> : undefined;
+    const br2 = parseRef(JSON.parse(Buffer.from(token, 'base64url').toString()).br as string);
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    printResult(board.taskProgress(token, update));
+    return;
+  }
+  if (cmd === 'source-data-fetched') {
+    const token = requireFlag(rest, '--token', 'source-data-fetched --token <token> --ref <sourcefile>');
+    const ref   = requireFlag(rest, '--ref',   'source-data-fetched --token <token> --ref <sourcefile>');
+    const p = JSON.parse(Buffer.from(token, 'base64url').toString()) as Record<string, unknown>;
+    const br2 = parseRef(p['br'] as string);
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    printResult(board.sourceDataFetched(token, ref));
+    return;
+  }
+  if (cmd === 'source-data-fetch-failure') {
+    const token = requireFlag(rest, '--token', 'source-data-fetch-failure --token <token> [--reason <message>]');
+    const p = JSON.parse(Buffer.from(token, 'base64url').toString()) as Record<string, unknown>;
+    const br2 = parseRef(p['br'] as string);
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    printResult(board.sourceDataFetchFailure(token, optFlag(rest, '--reason')));
+    return;
+  }
+
+  // ── validate-tmp-card (no baseRef, uses --card-ref) ─────────────────────────
+  if (cmd === 'validate-tmp-card') {
+    const cardRef = requireFlag(rest, '--card-ref', 'validate-tmp-card --card-ref <::kind::value>');
+    // For validate-tmp-card we still need a board context for the config store.
+    // If --base-ref is provided use it; otherwise create a minimal adapter scoped to cwd.
+    const tmpRef = baseRef ?? { kind: 'fs-path', value: resolvePath('.') };
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    printResult(nonCore.validateTmpCard(cardRef));
+    return;
+  }
+
+  // ── probe-tmp-source (no required baseRef) ──────────────────────────────────
+  if (cmd === 'probe-tmp-source') {
+    const sourceDefRaw = requireFlag(rest, '--source-def', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
+    const mockRaw      = requireFlag(rest, '--mock-projections', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
+    const outRef       = requireFlag(rest, '--out-ref', 'probe-tmp-source --source-def <json> --mock-projections <json> --out-ref <ref>');
+    const tmpRef = baseRef ?? { kind: 'fs-path', value: resolvePath('.') };
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    printResult(nonCore.probeTmpSource(JSON.parse(sourceDefRaw) as Record<string, unknown>, JSON.parse(mockRaw) as Record<string, unknown>, outRef));
+    return;
+  }
+
+  // ── All remaining commands require --base-ref ────────────────────────────────
+  if (!baseRef) throw new Error(`--base-ref is required for command "${cmd ?? '(none)'}"`);
+
+  const board    = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
+  const nonCore  = () => createBoardLiveCardsNonCorePublic(baseRef, createFsBoardNonCorePlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
+
   switch (cmd) {
-    case 'help':
-    case '--help':
-    case '-h':            return nonCoreCommandHandlers.cmdHelp();
-    case 'init':           return boardCommandHandlers.cmdInit(rest);
-    case 'status':         return boardCommandHandlers.cmdStatus(rest);
-    case 'upsert-card':    return cardCommandHandlers.cmdUpsertCard(rest);
-    case 'validate-card':  return nonCoreCommandHandlers.cmdValidateCard(rest);
-    case 'remove-card':              return boardCommandHandlers.cmdRemoveCard(rest);
-    case 'retrigger':                 return boardCommandHandlers.cmdRetrigger(rest);
-    case 'task-completed':            return callbackCommandHandlers.cmdTaskCompleted(rest);
-    case 'task-failed':               return callbackCommandHandlers.cmdTaskFailed(rest);
-    case 'task-progress':             return callbackCommandHandlers.cmdTaskProgress(rest);
-    case 'source-data-fetched':       return callbackCommandHandlers.cmdSourceDataFetched(rest);
-    case 'source-data-fetch-failure': return callbackCommandHandlers.cmdSourceDataFetchFailure(rest);
-    case 'probe-source':               return await nonCoreCommandHandlers.cmdProbeSource(rest);
-    case 'describe-task-executor-capabilities': return nonCoreCommandHandlers.cmdDescribeTaskExecutorCapabilities(rest);
-    case 'process-accumulated-events': return await executionCommandHandlers.cmdTryDrain(rest);
+    case 'init': {
+      printResult(board().init(optFlag(rest, '--task-executor'), optFlag(rest, '--chat-handler')));
+      return;
+    }
+    case 'status': {
+      printResult(board().status());
+      return;
+    }
+    case 'remove-card': {
+      const id = requireFlag(rest, '--id', 'remove-card --base-ref <ref> --id <card-id>');
+      printResult(board().removeCard(id));
+      return;
+    }
+    case 'retrigger': {
+      const id = requireFlag(rest, '--id', 'retrigger --base-ref <ref> --id <card-id>');
+      printResult(board().retrigger(id));
+      return;
+    }
+    case 'process-accumulated-events': {
+      printResult(await board().processAccumulatedEvents());
+      return;
+    }
+    case 'upsert-card': {
+      const cardId  = requireFlag(rest, '--card-id', 'upsert-card --base-ref <ref> --card-id <id> [--restart]');
+      const restart = rest.includes('--restart');
+      printResult(board().upsertCard(cardId, restart));
+      return;
+    }
+    case 'validate-card': {
+      const cardId = requireFlag(rest, '--card-id', 'validate-card --base-ref <ref> --card-id <id>');
+      printResult(nonCore().validateCard(cardId));
+      return;
+    }
+    case 'probe-source': {
+      const cardId    = requireFlag(rest, '--card-id', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
+      const idxRaw    = requireFlag(rest, '--source-idx', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
+      const mockRaw   = requireFlag(rest, '--mock-projections', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
+      const outRef    = requireFlag(rest, '--out-ref', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --mock-projections <json> --out-ref <ref>');
+      printResult(nonCore().probeSource(cardId, parseInt(idxRaw, 10), JSON.parse(mockRaw) as Record<string, unknown>, outRef));
+      return;
+    }
+    case 'describe-task-executor-capabilities': {
+      printResult(nonCore().describeTaskExecutorCapabilities());
+      return;
+    }
     default:
       throw new Error(`Unknown command: ${cmd ?? '(none)'}`);
   }
