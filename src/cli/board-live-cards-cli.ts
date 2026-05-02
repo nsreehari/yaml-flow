@@ -6,14 +6,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
-  parseCommandSpec,
   makeBoardTempFilePath,
   buildBoardCliInvocation,
-  runDetached,
   genUUID,
   resolveModuleDir,
 } from './process-runner.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import { dispatchTaskExecutorDetached, buildLocalBaseSpec, builtInSourceCliExecutorRef } from './execution-adapter.js';
 import { restore } from '../continuous-event-graph/core.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
 import type { ReactiveGraph } from '../continuous-event-graph/reactive.js';
@@ -59,13 +58,11 @@ const INVENTORY_FILE = 'cards-inventory.jsonl';
 const RUNTIME_OUT_FILE = '.runtime-out';
 const DEFAULT_RUNTIME_OUT_DIR = 'runtime-out';
 function createBoardConfig(boardDir: string): BoardConfigStore {
-  return createBoardConfigStore(createFsKvStorage(path.join(boardDir, '.config')), parseCommandSpec);
+  return createBoardConfigStore(createFsKvStorage(path.join(boardDir, '.config')));
 }
 
 function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
   const base = createNodeInvocationAdapter(cliDir);
-  // Path to the built-in source-cli executor — compiled alongside this CLI in dist/cli/.
-  const sourceCliExecutorPath = path.join(cliDir, 'source-cli-task-executor.js');
   // Board CLI script path — used as the back-channel `via` for reportComplete() callbacks.
   const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
   const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
@@ -81,14 +78,7 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
     ) {
       if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return { dispatched: false, invocationId: undefined };
       try {
-        const teConfig = createBoardConfig(boardDir).readTaskExecutorConfig();
-        // Use configured task-executor if available; otherwise use the built-in source-cli-task-executor.
-        const parsedExec = teConfig
-          ? parseCommandSpec([teConfig.command, ...(teConfig.args ?? [])].join(' '))
-          : { command: process.execPath, args: [sourceCliExecutorPath] };
-        const taskExecutorExtraB64 = teConfig?.extra
-          ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
-          : undefined;
+        const executorRef = createBoardConfig(boardDir).readTaskExecutorRef() ?? builtInSourceCliExecutorRef();
 
         const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
         type SourceDef = { bindTo: string; outputFile?: string; [k: string]: unknown };
@@ -109,17 +99,17 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
           const inEnvelope = {
             source_def: src,
             base_ref: serializeRef({ kind: 'fs-path', value: boardDir }),
-            callback: { token: sourceToken, via: { type: 'node-cli' as const, path: boardCliScriptPath } },
+            callback: {
+              token: sourceToken,
+              via: { howToRun: 'local-node' as const, whatToRun: serializeRef({ kind: 'fs-path', value: boardCliScriptPath }) },
+            },
           };
           fs.writeFileSync(inFile, JSON.stringify(inEnvelope, null, 2), 'utf-8');
-          const executorArgs = [...(parsedExec.args ?? []), 'run-source-fetch',
-            '--in-ref', serializeRef({ kind: 'fs-path', value: inFile }),
-            '--out-ref', serializeRef({ kind: 'fs-path', value: outFile }),
-            '--err-ref', serializeRef({ kind: 'fs-path', value: errFile }),
-          ];
-          if (taskExecutorExtraB64) executorArgs.push('--extra', taskExecutorExtraB64);
-          console.log(`[request-source-fetch] ${teConfig ? 'task-executor' : 'built-in'}: ${parsedExec.command} ${executorArgs.join(' ')}`);
-          runDetached({ command: parsedExec.command, args: executorArgs });
+          const inRef  = serializeRef({ kind: 'fs-path', value: inFile });
+          const outRef = serializeRef({ kind: 'fs-path', value: outFile });
+          const errRef = serializeRef({ kind: 'fs-path', value: errFile });
+          console.log(`[request-source-fetch] ${executorRef.meta ?? executorRef.howToRun}: ${executorRef.whatToRun}`);
+          dispatchTaskExecutorDetached(executorRef, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, cliDir);
           dispatched = true;
         }
         return { dispatched, invocationId: dispatched ? genUUID() : undefined };
@@ -680,6 +670,7 @@ interface NonCoreCommandDeps {
   makeTempFilePath: (boardDir: string, label: string, ext?: string) => string;
   validateLiveCardDefinition: (card: Record<string, unknown>) => ValidateResultLike;
   readStdin: () => string;
+  cliDir: string;
 }
 
 interface NonCoreCommandHandlers {
@@ -762,11 +753,12 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
     }
 
     // Detect registered task-executor
-    const teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
-    const taskExecutorCmd = teConfig?.command;
-    const taskExecutorBaseArgs = teConfig?.args ?? [];
-    const taskExecutorExtraB64 = teConfig?.extra
-      ? Buffer.from(JSON.stringify(teConfig.extra)).toString('base64')
+    const teRef = deps.getConfigStore(boardDir).readTaskExecutorRef();
+    const teSpec = teRef ? buildLocalBaseSpec(teRef, deps.cliDir) : undefined;
+    const taskExecutorCmd = teSpec?.command;
+    const taskExecutorBaseArgs = teSpec?.baseArgs ?? [];
+    const taskExecutorExtraB64 = teRef?.extra
+      ? Buffer.from(JSON.stringify(teRef.extra)).toString('base64')
       : undefined;
 
     // Build --in payload — mirrors exactly what run-sourcedefs-internal passes to the executor
@@ -902,14 +894,15 @@ function createNonCoreCommandHandlers(deps: NonCoreCommandDeps): NonCoreCommandH
       process.exit(1);
     }
 
-    const teConfig = deps.getConfigStore(boardDir).readTaskExecutorConfig();
-    if (!teConfig) {
+    const teRef = deps.getConfigStore(boardDir).readTaskExecutorRef();
+    if (!teRef) {
       console.error(`[describe-task-executor-capabilities] No .task-executor registered in ${boardDir}`);
       process.exit(1);
     }
 
     try {
-      const stdout = deps.executor.executeSync(teConfig.command, [...(teConfig.args ?? []), 'describe-capabilities'], {
+      const { command, baseArgs } = buildLocalBaseSpec(teRef, deps.cliDir);
+      const stdout = deps.executor.executeSync(command, [...baseArgs, 'describe-capabilities'], {
         timeout: 10_000,
         encoding: 'utf-8',
       });
@@ -1078,14 +1071,15 @@ EXAMPLES
     cards: Record<string, unknown>[],
     boardDir: string | undefined,
   ): CommandResponse<{ cardId: string; errors: string[] }>[] {
-    const teConfig = boardDir ? deps.getConfigStore(boardDir).readTaskExecutorConfig() : undefined;
+    const teRef = boardDir ? deps.getConfigStore(boardDir).readTaskExecutorRef() : undefined;
+    const teSpec = teRef ? buildLocalBaseSpec(teRef, deps.cliDir) : undefined;
 
     return cards.map((card) => {
       const cardId = typeof card.id === 'string' ? card.id : '(unknown)';
       const schemaErrors = deps.validateLiveCardDefinition(card).errors;
       const sourceErrors: string[] = [];
 
-      if (teConfig && Array.isArray(card.source_defs)) {
+      if (teSpec && Array.isArray(card.source_defs)) {
         for (const src of card.source_defs as Array<Record<string, unknown>>) {
           const bindTo = typeof src.bindTo === 'string' ? src.bindTo : '(unknown)';
           const tmpFile = deps.makeTempFilePath(boardDir!, `validate-src-${bindTo}`);
@@ -1094,8 +1088,8 @@ EXAMPLES
             let stdout: string;
             try {
               stdout = deps.executor.executeSync(
-                teConfig.command,
-                [...(teConfig.args ?? []), 'validate-source-def', '--in', tmpFile],
+                teSpec.command,
+                [...teSpec.baseArgs, 'validate-source-def', '--in', tmpFile],
                 { timeout: 10_000 },
               );
             } catch (execErr: any) {
@@ -1241,6 +1235,7 @@ export async function cli(argv: string[]): Promise<void> {
     makeTempFilePath: makeBoardTempFilePath,
     validateLiveCardDefinition,
     readStdin: () => fs.readFileSync('/dev/stdin', 'utf-8'),
+    cliDir: __dirname,
   });
   const cardCommandHandlers = createCardCommandHandlers({
     getCardStore: (boardDir: string) => createCardStore(createFsCardStorageAdapter(boardDir)),

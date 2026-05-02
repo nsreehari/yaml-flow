@@ -2,6 +2,7 @@ import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { GraphEvent } from '../event-graph/types.js';
 import type { BoardConfigStore, PublishedOutputsStore } from './board-live-cards-all-stores.js';
 import { parseRef } from './storage-interface.js';
+import { executionRefFromScriptPath } from './execution-interface.js';
 
 interface BoardCommandDeps {
   initBoard: (dir: string) => 'created' | 'exists';
@@ -47,7 +48,7 @@ export function createBoardCommandHandlers(deps: BoardCommandDeps): BoardCommand
       if (teExtraIdx !== -1 && args[teExtraIdx + 1]) {
         try { teExtra = JSON.parse(args[teExtraIdx + 1]); } catch { /* ignore bad JSON */ }
       }
-      config.writeTaskExecutorConfig({ command: taskExecutor, ...(teExtra ? { extra: teExtra } : {}) });
+      config.writeTaskExecutorRef(executionRefFromScriptPath(taskExecutor, teExtra));
     }
     if (chatHandler) {
       config.writeChatHandler(chatHandler);

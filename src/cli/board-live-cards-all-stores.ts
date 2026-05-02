@@ -7,6 +7,8 @@
  */
 
 import type { KVStorage, BlobStorage, KindValueRef } from './storage-interface.js';
+import { parseExecutionRef, serializeExecutionRef } from './execution-interface.js';
+import type { ExecutionRef } from './execution-interface.js';
 import type { GraphEvent } from '../event-graph/types.js';
 // ============================================================================
 // Card store — types
@@ -494,26 +496,13 @@ export function createStateSnapshotStore(adapter: StateSnapshotStorageAdapter): 
 // Config store — types
 // ============================================================================
 
-/**
- * Parsed config for a registered task-executor.
- * Supports both the preferred structured form and the legacy plain-string form.
- *   Preferred:  { "command": "node", "args": ["executor.js"], "extra": {} }
- *   Legacy cmd: { "command": "node executor.js" }
- *   Legacy str: "node executor.js"
- */
-export interface TaskExecutorConfig {
-  command: string;
-  args?: string[];
-  extra?: Record<string, unknown>;
-}
-
 // ============================================================================
 // BoardConfigStore — pure logic interface
 // ============================================================================
 
 export interface BoardConfigStore {
-  readTaskExecutorConfig(): TaskExecutorConfig | undefined;
-  writeTaskExecutorConfig(config: TaskExecutorConfig): void;
+  readTaskExecutorRef(): ExecutionRef | undefined;
+  writeTaskExecutorRef(ref: ExecutionRef): void;
   readChatHandler(): string | undefined;
   writeChatHandler(value: string): void;
 }
@@ -523,14 +512,9 @@ export interface BoardConfigStore {
 // ============================================================================
 
 /**
- * @param kv          Key-value store. Keys used: 'task-executor', 'chat-handler'.
- * @param parseSpec   Normalises legacy string or structured { command, args } →
- *                    { command, args }. Injected to keep this module platform-free.
+ * @param kv  Key-value store.  Keys used: 'task-executor', 'chat-handler'.
  */
-export function createBoardConfigStore(
-  kv: KVStorage,
-  parseSpec: (raw: string | { command: string; args?: string[] }) => { command: string; args?: string[] },
-): BoardConfigStore {
+export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
   function readKey(key: string): string | null {
     const v = kv.read(key);
     if (v == null) return null;
@@ -538,23 +522,14 @@ export function createBoardConfigStore(
   }
 
   return {
-    readTaskExecutorConfig(): TaskExecutorConfig | undefined {
+    readTaskExecutorRef(): ExecutionRef | undefined {
       const raw = readKey('task-executor');
       if (!raw?.trim()) return undefined;
-      const trimmed = raw.trim();
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed && typeof parsed === 'object' && typeof parsed.command === 'string') {
-          const spec = parseSpec({ command: parsed.command, args: parsed.args });
-          return { command: spec.command, args: spec.args, extra: parsed.extra };
-        }
-      } catch { /* not JSON — treat as plain command string */ }
-      const spec = parseSpec(trimmed);
-      return { command: spec.command, args: spec.args };
+      return parseExecutionRef(raw.trim());
     },
 
-    writeTaskExecutorConfig(config: TaskExecutorConfig): void {
-      kv.write('task-executor', JSON.stringify(config, null, 2));
+    writeTaskExecutorRef(ref: ExecutionRef): void {
+      kv.write('task-executor', serializeExecutionRef(ref));
     },
 
     readChatHandler(): string | undefined {
