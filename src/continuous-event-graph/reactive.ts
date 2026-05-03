@@ -374,6 +374,8 @@ export function createReactiveGraph(
     // 6. Re-invoke handlers for in-progress tasks that received a task-progress event.
     //    task-progress events don't change task status (they're not applied by the engine),
     //    so we route them here directly to their taskHandlers.
+    //    If a syncResolver is registered, try it first — if it returns isCompleted,
+    //    journal task-completed inline and skip the async handler.
     for (const event of events) {
       if (event.type === 'task-progress') {
         const { taskName, update } = event;
@@ -382,6 +384,46 @@ export function createReactiveGraph(
         const taskState = live.state.tasks[taskName];
         if (!taskState || taskState.status !== 'running') continue;
         const callbackToken = encodeCallbackToken(taskName);
+
+        // ---- Synchronous fast-path for task-progress ----
+        if (syncResolver) {
+          const upstreamState = resolveUpstreamState(taskName);
+          const input: TaskHandlerInput = {
+            nodeId: taskName,
+            state: upstreamState,
+            taskState,
+            config: taskConfig,
+            callbackToken,
+            update,
+          };
+          try {
+            const syncResult = syncResolver(input);
+            if (syncResult.isCompleted) {
+              const data = syncResult.data ?? {};
+              const dataHash = Object.keys(data).length > 0 ? computeDataHash(data) : undefined;
+              internalJournal.append({
+                type: 'task-completed',
+                taskName,
+                data,
+                dataHash,
+                timestamp: new Date().toISOString(),
+              });
+              drain();
+              continue; // skip async handler for this event
+            }
+          } catch (error: unknown) {
+            internalJournal.append({
+              type: 'task-failed',
+              taskName,
+              error: error instanceof Error ? error.message : String(error),
+              timestamp: new Date().toISOString(),
+            });
+            drain();
+            continue;
+          }
+        }
+
+        // ---- Async handler fallback ----
         const p = runPipeline(taskName, callbackToken, update).catch((error: Error) => {
           if (disposed) return;
           internalJournal.append({

@@ -943,4 +943,134 @@ describe('reactive — syncResolver', () => {
     expect(state.state.tasks.a.status).toBe('completed');
     expect(state.state.tasks.a.data).toEqual({ v: 1 });
   });
+
+  it('completes task via syncResolver on task-progress when all data is ready', async () => {
+    // Simulates: initial dispatch → syncResolver returns isCompleted:false (sources pending)
+    // → task-progress arrives (source delivered) → syncResolver returns isCompleted:true
+    const config = makeConfig({
+      card: { provides: ['result'], taskHandlers: ['card-handler'] },
+    });
+
+    let callCount = 0;
+    const asyncHandlerCalls: string[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        'card-handler': async ({ nodeId }) => {
+          asyncHandlerCalls.push(nodeId);
+          return 'task-initiated';
+        },
+      },
+      syncResolver: (input) => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: initial dispatch — sources not ready
+          return { isCompleted: false };
+        }
+        // Second call: task-progress with update — sources now ready
+        expect(input.update).toBeDefined();
+        expect(input.update!.outputFile).toBe('prices.json');
+        return { isCompleted: true, data: { result: 42 } };
+      },
+    });
+
+    // Initial dispatch — syncResolver returns false, falls through to async handler
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    expect(callCount).toBe(1);
+    expect(asyncHandlerCalls).toEqual(['card']);
+    expect(rg.getState().state.tasks.card.status).toBe('running');
+
+    // Source delivery arrives as task-progress — syncResolver handles it
+    rg.push({
+      type: 'task-progress',
+      taskName: 'card',
+      update: { outputFile: 'prices.json', rqt: ts(), deliveryToken: 'dt-1' },
+      timestamp: ts(),
+    });
+    await ticks(50);
+
+    expect(callCount).toBe(2);
+    const state = rg.getState();
+    expect(state.state.tasks.card.status).toBe('completed');
+    expect(state.state.tasks.card.data).toEqual({ result: 42 });
+  });
+
+  it('falls through to async handler on task-progress when syncResolver returns false', async () => {
+    const config = makeConfig({
+      card: { provides: ['result'], taskHandlers: ['card-handler'] },
+    });
+
+    const asyncHandlerUpdates: Record<string, unknown>[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        'card-handler': async ({ callbackToken, update }) => {
+          if (update) asyncHandlerUpdates.push(update);
+          return 'task-initiated';
+        },
+      },
+      syncResolver: (_input) => {
+        // Always defer to async handler
+        return { isCompleted: false };
+      },
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+    expect(rg.getState().state.tasks.card.status).toBe('running');
+
+    // Send progress — syncResolver returns false, async handler gets it
+    rg.push({
+      type: 'task-progress',
+      taskName: 'card',
+      update: { outputFile: 'data.json' },
+      timestamp: ts(),
+    });
+    await ticks(50);
+
+    expect(asyncHandlerUpdates).toEqual([{ outputFile: 'data.json' }]);
+  });
+
+  it('task-progress syncResolver error marks task as failed', () => {
+    const config = makeConfig({
+      card: { provides: ['result'], taskHandlers: ['card-handler'] },
+    });
+
+    let dispatchCount = 0;
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        'card-handler': async () => 'task-initiated',
+      },
+      syncResolver: (_input) => {
+        dispatchCount++;
+        if (dispatchCount === 1) return { isCompleted: false };
+        // Throw on task-progress
+        throw new Error('source processing failed');
+      },
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    // Need a tick for the async handler to fire and mark task as running
+    // but syncResolver returned false so it will fall through
+
+    // Manually wait for handler to run
+    return new Promise<void>(resolve => setTimeout(() => {
+      expect(rg.getState().state.tasks.card.status).toBe('running');
+
+      rg.push({
+        type: 'task-progress',
+        taskName: 'card',
+        update: { outputFile: 'bad.json' },
+        timestamp: ts(),
+      });
+
+      // syncResolver throws on progress → task-failed
+      expect(rg.getState().state.tasks.card.status).toBe('failed');
+      expect(rg.getState().state.tasks.card.error).toBe('source processing failed');
+      resolve();
+    }, 50));
+  });
 });
