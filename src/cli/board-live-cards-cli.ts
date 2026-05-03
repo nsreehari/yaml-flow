@@ -6,6 +6,7 @@ import {
   makeBoardTempFilePath,
   buildBoardCliInvocation,
   genUUID,
+  getHash,
   resolveModuleDir,
   joinPath,
   resolvePath,
@@ -46,8 +47,9 @@ import {
   createFsJournalStorageAdapter,
   createFsCardStorageAdapter,
   createFsStateSnapshotStorageAdapter,
+  computeStableJsonHash,
 } from './storage-fs-adapters.js';
-import { createNodeInvocationAdapter, createNodeCommandExecutor } from './process-runner.js';
+import { requestProcessAccumulatedDetached, createNodeCommandExecutor } from './process-runner.js';
 import type { InvocationAdapter } from './process-interface.js';
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from './board-live-cards-public.js';
 import { createBoardLiveCardsPublic, createBoardLiveCardsNonCorePublic } from './board-live-cards-public.js';
@@ -68,7 +70,6 @@ function createBoardConfig(baseRef: KindValueRef): BoardConfigStore {
 }
 
 function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
-  const base = createNodeInvocationAdapter(cliDir);
   // Board CLI script path — used as the back-channel `via` for reportComplete() callbacks.
   const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
   const boardCliScriptPath = (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
@@ -76,7 +77,10 @@ function createBoardInvocationAdapter(cliDir: string): InvocationAdapter {
     : (_cliArgs[1] ?? _cliArgs[0]);
 
   return {
-    requestProcessAccumulated: base.requestProcessAccumulated.bind(base),
+    async requestProcessAccumulated(baseRef: KindValueRef) {
+      requestProcessAccumulatedDetached(cliDir, baseRef);
+      return { dispatched: true };
+    },
     async requestSourceFetch(
       baseRef: KindValueRef,
       enrichedCard: Record<string, unknown>,
@@ -191,14 +195,23 @@ export function createFsBoardPlatformAdapter(
       }
     },
 
-    absoluteBlob: createFsAbsolutePathBlobStorage(),
+    resolveBlob(ref: KindValueRef): string {
+      const content = isAbsolutePath(ref.value)
+        ? createFsAbsolutePathBlobStorage().read(ref.value)
+        : createFsBlobStorage(dir).read(ref.value);
+      if (content === null) throw new Error(`resolveBlob: blob not found: ::${ref.kind}::${ref.value}`);
+      return content;
+    },
+
+    hashFn: computeStableJsonHash,
+
+    genId: () => getHash(`${Date.now()}-${Math.random()}`).slice(0, 32),
 
     cardStorageForRef: (storeRef: string) => createFsCardStorageAdapter(parseRef(storeRef).value),
 
     requestProcessAccumulated() {
       if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
-      const nodeAdapter = createNodeInvocationAdapter(cliDir);
-      void nodeAdapter.requestProcessAccumulated(baseRef);
+      requestProcessAccumulatedDetached(cliDir, baseRef);
     },
 
     onWarn: opts?.onWarn,

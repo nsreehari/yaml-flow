@@ -10,9 +10,10 @@
  *        - requestProcessAccumulated — schedule the next drain pass
  *   3. Export a factory (e.g. `createAzureInvocationAdapter(...): InvocationAdapter`).
  *   4. Wire the factory at the top-level entrypoint (equivalent of `cli()` in
- *      board-live-cards-cli.ts) instead of `createNodeInvocationAdapter`.
+ *      board-live-cards-cli.ts) replacing `createBoardInvocationAdapter`.
  *
- * The Node implementation lives in process-runner.ts (`createNodeInvocationAdapter`).
+ * The Node implementation lives in process-runner.ts (`requestProcessAccumulatedDetached`)
+ * and board-live-cards-cli.ts (`createBoardInvocationAdapter`).
  */
 
 import type { KindValueRef } from './storage-interface.js';

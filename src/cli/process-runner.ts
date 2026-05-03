@@ -28,7 +28,6 @@ import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 
 import type { CommandSpec } from '../continuous-event-graph/handlers.js';
-import type { InvocationAdapter, DispatchResult } from './process-interface.js';
 import type { KindValueRef } from './storage-interface.js';
 import { serializeRef } from './storage-interface.js';
 export type { CommandSpec };
@@ -321,64 +320,17 @@ export function buildBoardCliInvocation(
 }
 
 // ============================================================================
-// createNodeInvocationAdapter — spawns board CLI sub-processes for source-fetch
-// and inference requests. Owns temp file creation for subprocess handoff.
-// BOARD_LIVE_CARDS_NO_SPAWN=1 suppresses actual spawning (used in tests).
+// requestProcessAccumulatedDetached — fire-and-forget dispatch of next drain pass
 // ============================================================================
 
-function shouldSuppressSpawn(): boolean {
-  return process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1';
-}
-
-class NodeInvocationAdapter implements InvocationAdapter {
-  constructor(
-    private readonly cliDir: string,
-  ) {}
-
-  async requestSourceFetch(
-    baseRef: KindValueRef,
-    enrichedCard: Record<string, unknown>,
-    callbackToken: string,
-  ): Promise<DispatchResult> {
-    if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
-    try {
-      const boardDir = baseRef.value;
-      const cardId = (enrichedCard.id as string | undefined) ?? 'unknown';
-      const enrichedCardPath = makeBoardTempFilePath(boardDir, `card-enriched-${cardId}`);
-      fs.writeFileSync(enrichedCardPath, JSON.stringify(enrichedCard, null, 2), 'utf-8');
-      const args = ['--card', enrichedCardPath, '--token', callbackToken, '--rg', boardDir];
-      const { cmd, args: cmdArgs } = buildBoardCliInvocation(this.cliDir, 'run-sourcedefs-internal', args);
-      runDetached({ command: cmd, args: cmdArgs });
-      return { dispatched: true, invocationId: randomUUID() };
-    } catch (err) {
-      return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  async requestProcessAccumulated(baseRef: KindValueRef): Promise<DispatchResult> {
-    if (shouldSuppressSpawn()) return { dispatched: false, invocationId: undefined };
-    try {
-      const { cmd, args } = buildBoardCliInvocation(this.cliDir, 'process-accumulated-events', ['--base-ref', serializeRef(baseRef)]);
-      runDetached({ command: cmd, args });
-      return { dispatched: true, invocationId: randomUUID() };
-    } catch (err) {
-      return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-}
-
-export function createNodeInvocationAdapter(
-  cliDir: string,
-): InvocationAdapter {
-  return new NodeInvocationAdapter(cliDir);
-}
-
 /**
- * Returns the command + args to invoke the built-in source-cli task executor.
- * Used as the default when no .task-executor is configured on the board.
+ * Spawn a detached board-live-cards process-accumulated-events pass for the given board.
+ * BOARD_LIVE_CARDS_NO_SPAWN=1 suppresses actual spawning (used in tests).
  */
-export function getBuiltInTaskExecutorSpec(cliDir: string): { command: string; args: string[] } {
-  return { command: process.execPath, args: [path.join(cliDir, 'source-cli-task-executor.js')] };
+export function requestProcessAccumulatedDetached(cliDir: string, baseRef: KindValueRef): void {
+  if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
+  const { cmd, args } = buildBoardCliInvocation(cliDir, 'process-accumulated-events', ['--base-ref', serializeRef(baseRef)]);
+  runDetached({ command: cmd, args });
 }
 
 // ============================================================================

@@ -31,8 +31,6 @@
  *   const status = board.status();
  */
 
-import { createHash } from 'node:crypto';
-import * as path from 'node:path';
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
@@ -177,10 +175,27 @@ export interface BoardPlatformAdapter {
   dispatchExecution(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
 
   /**
-   * Absolute-path blob I/O — key IS the absolute file path.
-   * Used to read executor output files whose paths are carried in ::fs-path:: refs.
+   * Resolve a blob ref to its string contents.
+   * The adapter handles the platform-specific lookup (e.g. absolute FS path vs board-relative key).
+   * Throws if the blob does not exist.
    */
-  absoluteBlob: BlobStorage;
+  resolveBlob(ref: KindValueRef): string;
+
+  /**
+   * Compute a stable, deterministic content hash for any JSON-serializable value.
+   * Used for dedup indexes and snapshot versioning.
+   *   Node/FS: computeStableJsonHash (storage-fs-adapters)
+   *   Browser: Web Crypto subtle.digest or equivalent
+   */
+  hashFn(value: unknown): string;
+
+  /**
+   * Generate a random short ID (32 hex chars).
+   * Used for commit IDs and delivery tokens.
+   *   Node/FS: getHash(`${Date.now()}-${Math.random()}`).slice(0, 32)
+   *   Browser: crypto.randomUUID().replace(/-/g, '')
+   */
+  genId(): string;
 
   /**
    * Request an additional drain pass asynchronously (e.g. spawn a background process).
@@ -236,39 +251,40 @@ export interface BoardLiveCardsPublic {
 // Internal pure helpers — no platform deps
 // ============================================================================
 
-function stableJson(value: unknown): string {
-  if (value === null || value === undefined || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${(value as unknown[]).map(stableJson).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  return `{${Object.keys(obj).sort().map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+// Pure JS base64url encode/decode — no Node/Buffer dependency.
+// TextEncoder/TextDecoder and btoa/atob are globally available in browsers and Node 16+.
+function toBase64Url(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  const binStr = Array.from(bytes, b => String.fromCharCode(b)).join('');
+  return btoa(binStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-function stableHash(value: unknown): string {
-  return createHash('sha256').update(stableJson(value)).digest('hex');
+function fromBase64Url(str: string): string {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+  const binStr = atob(padded);
+  const bytes = Uint8Array.from(binStr, c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 function decodeCallbackToken(token: string): { taskName: string } | null {
   try {
-    const p = JSON.parse(Buffer.from(token, 'base64url').toString());
+    const p = JSON.parse(fromBase64Url(token));
     return typeof p?.t === 'string' ? { taskName: p.t } : null;
   } catch { return null; }
 }
 
 function encodeSourceToken(payload: SourceTokenPayload): string {
-  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return toBase64Url(JSON.stringify(payload));
 }
 
 function decodeSourceToken(token: string): SourceTokenPayload | null {
   try {
-    const p = JSON.parse(Buffer.from(token, 'base64url').toString());
+    const p = JSON.parse(fromBase64Url(token));
     if (typeof p?.cbk === 'string' && typeof p?.cid === 'string' &&
         typeof p?.b === 'string' && typeof p?.d === 'string') return p as SourceTokenPayload;
     return null;
   } catch { return null; }
-}
-
-function genId(): string {
-  return createHash('sha256').update(`${Date.now()}-${Math.random()}`).digest('hex').slice(0, 32);
 }
 
 function nowIso(): string { return new Date().toISOString(); }
@@ -305,24 +321,14 @@ export function createBoardLiveCardsPublic(
       if (keys.length === 0) return { version: null, values: {} };
       const values: Record<string, unknown> = {};
       for (const key of keys) values[key] = kv.read(key);
-      return { version: stableHash(values), values };
+      return { version: adapter.hashFn(values), values };
     },
     writeValues(_scopeId: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
       const kv = adapter.kvStorage('state-snapshot');
       for (const key of deletedKeys) kv.delete(key);
       for (const [key, value] of Object.entries(nextValues)) kv.write(key, value);
-      return stableHash(nextValues);
+      return adapter.hashFn(nextValues);
     },
-  };
-
-  // Resolves a blob ref to its string contents.
-  // Absolute paths go directly through absoluteBlob; relative keys are joined to boardDir.
-  const resolveBlobRef = (ref: { kind: string; value: string }): string => {
-    const content = path.isAbsolute(ref.value)
-      ? adapter.absoluteBlob.read(ref.value)
-      : adapter.blobStorage('').read(ref.value);
-    if (content === null) throw new Error(`resolveBlobRef: not found: ::${ref.kind}::${ref.value}`);
-    return content;
   };
 
   // Store factory helpers — no long-lived singletons, created per call
@@ -346,7 +352,7 @@ export function createBoardLiveCardsPublic(
     const result = snapshotStore().commitSnapshot(baseRef.value, {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION_V1,
       expectedVersion,
-      commitId: genId(),
+      commitId: adapter.genId(),
       committedAt: nowIso(),
       deleteKeys: [],
       shallowMerge: boardEnvelopeToSnapshotEntries(envelope),
@@ -380,7 +386,7 @@ export function createBoardLiveCardsPublic(
       cardRuntimeStore: createCardRuntimeStore(adapter.kvStorage('card-runtime')),
       fetchedSourcesStore: createFetchedSourcesStore(
         adapter.blobStorage('sources'),
-        resolveBlobRef,
+        (ref) => adapter.resolveBlob(ref),
       ),
       outputStore: outputStore(),
       executionRequestStore,
@@ -526,7 +532,7 @@ export function createBoardLiveCardsPublic(
       for (const id of ids) {
         const card = cardStore().readCard(id)!;
         const taskConfig = liveCardToTaskConfig(card);
-        const taskConfigHash = stableHash(taskConfig);
+        const taskConfigHash = adapter.hashFn(taskConfig);
         const upsertKv = adapter.kvStorage('card-upsert');
         const existing = upsertKv.read(id) as CardUpsertIndexEntry | null;
         const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
@@ -600,10 +606,10 @@ export function createBoardLiveCardsPublic(
 
       const fetchedSourcesStore = createFetchedSourcesStore(
         adapter.blobStorage('sources'),
-        resolveBlobRef,
+        (ref) => adapter.resolveBlob(ref),
       );
 
-      const deliveryToken = genId();
+      const deliveryToken = adapter.genId();
       fetchedSourcesStore.ingestSourceDataStaged(cid, d, parseRef(ref), deliveryToken);
 
       const cbkDecoded = decodeCallbackToken(cbk);
@@ -757,10 +763,8 @@ export function createBoardLiveCardsNonCorePublic(
           try {
             stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', ['--in', tmpFile], { timeout: 10_000 });
           } catch (execErr: unknown) {
-            const se = execErr as { stdout?: string | Buffer };
-            stdout = typeof se?.stdout === 'string' ? se.stdout
-              : Buffer.isBuffer(se?.stdout) ? se.stdout.toString('utf-8')
-              : '';
+            const se = execErr as { stdout?: unknown };
+            stdout = typeof se?.stdout === 'string' ? se.stdout : '';
             if (!stdout.trim()) {
               sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${execErr instanceof Error ? execErr.message : String(execErr)}`);
               continue;
