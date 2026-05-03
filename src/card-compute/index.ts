@@ -26,6 +26,9 @@
  */
 
 import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const jsonataSync: typeof jsonata = _require('./jsonata-sync.cjs');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,6 +137,44 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
   }
 
   return node;
+}
+
+/**
+ * Synchronous version of run() — uses a vendored sync JSONata build
+ * (async/await stripped from jsonata.js since all built-in functions
+ * are CPU-only).
+ *
+ * Same semantics as `run()`: evaluates all compute steps, populates
+ * `node.computed_values`, returns the mutated node.
+ *
+ * @returns `{ ok: true, node }` when all steps evaluated successfully.
+ *          `{ ok: false, node }` is currently never returned but reserved
+ *          for future use if an expression requires true async evaluation.
+ */
+function runSync(node: ComputeNode, options?: RunOptions): { ok: boolean; node: ComputeNode } {
+  if (!node?.compute?.length) return { ok: true, node };
+  if (!node.card_data) node.card_data = {};
+  node.computed_values = {};
+  node._sourcesData = options?.sourcesData ?? {};
+
+  const ctx: Record<string, unknown> = {
+    card_data: node.card_data,
+    requires: node.requires ?? {},
+    fetched_sources: node._sourcesData,
+    computed_values: node.computed_values,
+  };
+
+  for (const step of node.compute) {
+    try {
+      const val = jsonataSync(step.expr).evaluate(ctx);
+      deepSet(node.computed_values, step.bindTo, val);
+      ctx.computed_values = node.computed_values;
+    } catch (err) {
+      console.error(`CardCompute.runSync error on "${node.id ?? '?'}.${step.bindTo}":`, err);
+    }
+  }
+
+  return { ok: true, node };
 }
 
 /**
@@ -353,6 +394,7 @@ async function enrichSources(
 
 export const CardCompute = {
   run,
+  runSync,
   eval: evalExpr,
   resolve,
   validate: validateNode,
