@@ -14,16 +14,16 @@ import { fileURLToPath } from 'node:url';
 import {
   createFsBoardPlatformAdapter,
   createFsBoardNonCorePlatformAdapter,
-} from '../../src/cli/board-live-cards-cli.js';
-import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
-} from '../../src/cli/board-live-cards-public.js';
+} from '../../src/cli/node/fs-board-adapter.js';
 
 process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
 
 const cliDir = path.dirname(fileURLToPath(import.meta.url));
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
+const mkCardStoreRef = (d: string) => '::fs-path::' + path.join(d, '.cards');
+const mkOutputsStoreRef = (d: string) => '::fs-path::' + path.join(d, '.output');
 
 /** Minimal card that satisfies the live-card schema. */
 const minCard = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -54,21 +54,21 @@ describe('BoardLiveCardsPublic — init and status', () => {
 
   it('init({}) creates the board state and returns success', () => {
     const { board, boardDir } = freshBoard();
-    const result = board.init({});
+    const result = board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     expect(result.status).toBe('success');
     // The public layer writes via KV abstraction (.state-snapshot namespace)
     expect(fs.existsSync(path.join(boardDir, '.state-snapshot'))).toBe(true);
   });
 
   it('init is idempotent — second call also returns success', () => {
-    const { board } = freshBoard();
-    board.init({});
-    expect(board.init({}).status).toBe('success');
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+    expect(board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } }).status).toBe('success');
   });
 
   it('status({}) returns a board status object with zero cards after init', () => {
-    const { board } = freshBoard();
-    board.init({});
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = board.status({});
     expect(result.status).toBe('success');
     if (result.status === 'success') {
@@ -78,40 +78,40 @@ describe('BoardLiveCardsPublic — init and status', () => {
   });
 
   it('removeCard({}) fails — params.id is missing', () => {
-    const { board } = freshBoard();
-    board.init({});
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = board.removeCard({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/params\.id/);
   });
 
   it('retrigger({}) fails — params.id is missing', () => {
-    const { board } = freshBoard();
-    board.init({});
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = board.retrigger({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/params\.id/);
   });
 
   it('upsertCard({}) fails — --card-id or --all is required', () => {
-    const { board } = freshBoard();
-    board.init({});
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = board.upsertCard({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/--card-id.*--all|--all.*--card-id/);
   });
 
   it('upsertCard fails when card is not yet in the store', () => {
-    const { board } = freshBoard();
-    board.init({});
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = board.upsertCard({ params: { cardId: 'ghost' } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/not found/);
   });
 
   it('processAccumulatedEvents({}) returns success after init', async () => {
-    const { board } = freshBoard();
-    board.init({});
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = await board.processAccumulatedEvents({});
     expect(result.status).toBe('success');
   });
@@ -128,7 +128,7 @@ describe('BoardLiveCardsNonCorePublic — updatesInCardStore', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-nc-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { nonCore };
   }
@@ -174,7 +174,7 @@ describe('BoardLiveCardsNonCorePublic — readFromCardStore', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-read-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { nonCore };
   }
@@ -222,7 +222,7 @@ describe('BoardLiveCardsNonCorePublic — validateTmpCard', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-vtmp-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { nonCore };
   }
@@ -282,7 +282,7 @@ describe('BoardLiveCardsNonCorePublic — validateCard', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-vc-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { nonCore };
   }
@@ -335,7 +335,7 @@ describe('BoardLiveCardsNonCorePublic — describeTaskExecutorCapabilities', () 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-caps-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
 
     const result = nonCore.describeTaskExecutorCapabilities({});
@@ -356,7 +356,7 @@ describe('integration: updatesInCardStore → board operations', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { board, nonCore };
   }
@@ -428,7 +428,7 @@ describe('BoardLiveCardsPublic — removeCard', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { board, nonCore };
   }
@@ -465,7 +465,7 @@ describe('BoardLiveCardsPublic — retrigger', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { board, nonCore };
   }
@@ -509,7 +509,7 @@ describe('BoardLiveCardsPublic — taskCompleted', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     return { board };
   }
 
@@ -562,7 +562,7 @@ describe('BoardLiveCardsPublic — taskFailed', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     return { board };
   }
 
@@ -605,7 +605,7 @@ describe('BoardLiveCardsPublic — taskProgress', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     return { board };
   }
 
@@ -669,7 +669,7 @@ describe('BoardLiveCardsPublic — sourceDataFetchFailure', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     return { board, boardDir };
   }
 
@@ -714,7 +714,7 @@ describe('BoardLiveCardsPublic — sourceDataFetched', () => {
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    board.init({});
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     return { board, boardDir };
   }
 
@@ -770,7 +770,7 @@ describe('BoardLiveCardsNonCorePublic — probeSource', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-ps-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { nonCore };
   }
@@ -825,7 +825,7 @@ describe('BoardLiveCardsNonCorePublic — probeTmpSource', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-pts-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({});
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} })).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
     return { nonCore };
   }

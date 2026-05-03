@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { readStdinJson, runBoardCli, runBoardCliWithInput, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, runCardStoreCliWithInput, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
@@ -23,9 +23,9 @@ try {
   fs.writeFileSync(cardPath, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
 
   const baseRef = `::fs-path::${boardDir}`;
-  runBoardCliWithInput(
-    ['updates-in-card-store', '--base-ref', baseRef],
-    JSON.stringify({ ops: [{ op: 'update', id: card.id, 'card-content': card }] }),
+  runCardStoreCliWithInput(
+    ['set', '--store-ref', baseRef],
+    JSON.stringify(card),
   );
   runBoardCli(['upsert-card', '--base-ref', baseRef, '--card-id', card.id, '--restart']);
 

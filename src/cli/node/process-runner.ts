@@ -27,9 +27,9 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 
-import type { CommandSpec } from '../continuous-event-graph/handlers.js';
-import type { KindValueRef } from './storage-interface.js';
-import { serializeRef } from './storage-interface.js';
+import type { CommandSpec } from '../../continuous-event-graph/handlers.js';
+import type { KindValueRef } from '../common/storage-interface.js';
+import { serializeRef } from '../common/storage-interface.js';
 export type { CommandSpec };
 
 // ============================================================================
@@ -342,7 +342,7 @@ export function requestProcessAccumulatedDetached(cliDir: string, baseRef: KindV
 // splitCommandLine / spawnDetachedCommand dep functions.
 // ============================================================================
 
-import type { CommandExecutor, ExecOptions } from './process-interface.js';
+import type { CommandExecutor, ExecOptions } from '../common/process-interface.js';
 
 export function createNodeCommandExecutor(): CommandExecutor {
   return {

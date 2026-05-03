@@ -1,26 +1,19 @@
 /**
- * card-store — JSON/YAML read/write for a board card store.
+ * card-store-cli.ts — thin arg-parsing CLI for the card store public API.
+ *
+ * All logic lives in card-store-lib-public.ts.
+ * This file only: parses argv, reads files/stdin, calls the public API, prints JSON.
  *
  * Commands:
  *   card-store get --store-ref <ref> [--id <card-id>] [--yaml]
- *     Read one card (--id) or all cards.
- *     Default output is JSON (array). Pass --yaml for YAML multi-doc.
- *
  *   card-store set --store-ref <ref> [--ref <jsonfile> | --ref-yaml <yamlfile>] [--yaml]
- *     Write cards into the store.
- *     --ref <file>      read a JSON file (array of card objects, or a single object)
- *     --ref-yaml <file> read a YAML multi-doc file; each document is one card
- *     --yaml            treat stdin as YAML multi-doc (default stdin format is JSON)
- *     When neither --ref nor --ref-yaml is given, input is read from stdin.
- *     Each card must contain a string `id` field.
- *
  *   card-store del --store-ref <ref> --id <card-id> [--id <card-id> ...]
- *     Delete one or more cards from the store by ID.
  */
 
 import * as fs from 'node:fs';
-import { parseRef } from './storage-interface.js';
-import { createCardStore } from './board-live-cards-lib.js';
+import { parseRef } from '../common/storage-interface.js';
+import { createCardStore } from '../common/board-live-cards-lib.js';
+import { createCardStorePublic } from '../common/card-store-lib-public.js';
 import { createFsCardStorageAdapter } from './storage-fs-adapters.js';
 
 function requireFlag(args: string[], flag: string, usage: string): string {
@@ -76,25 +69,21 @@ export async function cli(argv: string[]): Promise<void> {
 
   const br = requireFlag(rest, '--store-ref', `card-store ${cmd} --store-ref <::kind::value>`);
   const baseRef = parseRef(br);
-  const dir = baseRef.value;
-  const store = createCardStore(createFsCardStorageAdapter(dir), (msg) => console.error(`[card-store] ${msg}`));
+  const storePublic = createCardStorePublic(
+    createCardStore(createFsCardStorageAdapter(baseRef.value), (msg) => console.error(`[card-store] ${msg}`)),
+  );
 
   const asYaml = hasFlag(rest, '--yaml');
 
   // ── get ──────────────────────────────────────────────────────────────────
   if (cmd === 'get') {
     const id = optFlag(rest, '--id');
-    const cards = id
-      ? (() => {
-          const c = store.readCard(id);
-          if (!c) {
-            console.error(`card-store get: card "${id}" not found`);
-            process.exit(1);
-          }
-          return [c];
-        })()
-      : store.readAllCards();
-
+    const result = storePublic.get({ params: id ? { id } : {} });
+    if (result.status !== 'success') {
+      console.error(`card-store get: ${result.error}`);
+      process.exit(1);
+    }
+    const cards = result.data.cards;
     if (cards.length === 0) return;
 
     if (asYaml) {
@@ -114,15 +103,12 @@ export async function cli(argv: string[]): Promise<void> {
     let cards: Array<Record<string, unknown>>;
 
     if (refYaml) {
-      // YAML file
       const { parseAllDocuments } = await import('yaml');
       const text = fs.readFileSync(refYaml, 'utf-8');
       cards = parseYamlDocs(parseAllDocuments(text));
     } else if (refJson) {
-      // JSON file
       cards = parseJsonCards(fs.readFileSync(refJson, 'utf-8'), refJson);
     } else {
-      // stdin
       const text = await readStdin();
       if (!text.trim()) {
         console.error('card-store set: no input (provide --ref, --ref-yaml, or pipe to stdin)');
@@ -136,14 +122,12 @@ export async function cli(argv: string[]): Promise<void> {
       }
     }
 
-    for (const card of cards) {
-      if (typeof card['id'] !== 'string') {
-        console.error('card-store set: each card must have a string `id` field');
-        process.exit(1);
-      }
-      store.writeCard(card['id'], card as { id: string; [key: string]: unknown });
+    const result = storePublic.set({ body: cards });
+    if (result.status !== 'success') {
+      console.error(`card-store set: ${result.error}`);
+      process.exit(1);
     }
-    console.error(`card-store set: wrote ${cards.length} card(s)`);
+    console.error(`card-store set: wrote ${result.data.count} card(s)`);
     return;
   }
 
@@ -155,14 +139,12 @@ export async function cli(argv: string[]): Promise<void> {
         ids.push(rest[++i]);
       }
     }
-    if (ids.length === 0) {
-      console.error('card-store del: at least one --id <card-id> is required');
+    const result = storePublic.del({ body: { ids } });
+    if (result.status !== 'success') {
+      console.error(`card-store del: ${result.error}`);
       process.exit(1);
     }
-    for (const id of ids) {
-      store.removeCard(id);
-    }
-    console.error(`card-store del: removed ${ids.length} card(s)`);
+    console.error(`card-store del: removed ${result.data.count} card(s)`);
     return;
   }
 
@@ -206,3 +188,4 @@ if (isMain) {
     process.exit(1);
   });
 }
+

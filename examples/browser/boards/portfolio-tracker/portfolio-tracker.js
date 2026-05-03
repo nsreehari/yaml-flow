@@ -25,11 +25,13 @@ const CLI_WRAPPER = path.join(REPO_ROOT, 'board-live-cards-cli.js');
 const CLI_TS = path.join(REPO_ROOT, 'src', 'cli', 'board-live-cards-cli.ts');
 const CLI_JS = path.join(REPO_ROOT, 'dist', 'cli', 'board-live-cards-cli.js');
 const TSX_CLI = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const CARD_STORE_CLI_WRAPPER = path.join(REPO_ROOT, 'card-store.js');
 
 // Keep runtime artifacts out of the repository.
 const RUNTIME_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-tracker-'));
 const BOARD = path.join(RUNTIME_ROOT, 'board-runtime');
 const CARDS = path.join(RUNTIME_ROOT, 'cards');
+const OUTPUTS = path.join(RUNTIME_ROOT, 'outputs');
 const TMP_FILE = path.join(BOARD, 'tmp_file1');
 
 function parseArgs(argv) {
@@ -106,6 +108,26 @@ function cli(...args) {
   runCli(args, false);
 }
 
+/** Spawn card-store-cli with JSON piped to stdin. */
+function runCardStoreCliWithInput(args, inputJson) {
+  const result = spawnSync(process.execPath, [CARD_STORE_CLI_WRAPPER, ...args], {
+    input: inputJson,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    shell: false,
+    windowsHide: true,
+    encoding: 'utf-8',
+  });
+
+  if (result.error) {
+    console.error(`[ERROR] Failed to run card-store-cli ${args[0]}: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    console.error(`\n[ERROR] card-store-cli ${args[0]} exited with status ${result.status}`);
+    process.exit(1);
+  }
+}
+
 /** Spawn CLI with JSON piped to stdin. */
 function runCliWithInput(args, inputJson) {
   const { cmd, prefixArgs } = cliCommand();
@@ -136,9 +158,9 @@ function runCliWithInput(args, inputJson) {
 function upsertCardFromFile(boardDir, cardFilePath, restart = false) {
   const card = JSON.parse(fs.readFileSync(cardFilePath, 'utf-8'));
   const baseRef = `::fs-path::${boardDir}`;
-  runCliWithInput(
-    ['updates-in-card-store', '--base-ref', baseRef],
-    JSON.stringify({ ops: [{ op: 'update', id: card.id, 'card-content': card }] }),
+  runCardStoreCliWithInput(
+    ['set', '--store-ref', baseRef],
+    JSON.stringify(card),
   );
   const args = ['upsert-card', '--base-ref', baseRef, '--card-id', card.id];
   if (restart) args.push('--restart');
@@ -277,11 +299,11 @@ function printTaskExecutorLog() {
     if (scriptPath.startsWith('node ')) scriptPath = scriptPath.slice(5).trim();
     const taskExecutorRef = { meta: 'task-executor', howToRun: 'local-node', whatToRun: `::fs-path::${scriptPath}` };
     runCliWithInput(
-      ['init', '--base-ref', `::fs-path::${BOARD}`],
+      ['init', '--base-ref', `::fs-path::${BOARD}`, '--card-store-ref', `::fs-path::${BOARD}`, '--outputs-store-ref', `::fs-path::${OUTPUTS}`],
       JSON.stringify({ 'task-executor-ref': taskExecutorRef }),
     );
   } else {
-    cli('init', '--base-ref', `::fs-path::${BOARD}`);
+    cli('init', '--base-ref', `::fs-path::${BOARD}`, '--card-store-ref', `::fs-path::${BOARD}`, '--outputs-store-ref', `::fs-path::${OUTPUTS}`);
   }
   upsertCardsFromGlob(BOARD, path.join(CARDS, '*.json'));
 

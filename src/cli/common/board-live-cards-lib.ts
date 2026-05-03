@@ -18,12 +18,12 @@ import type { KVStorage, BlobStorage, KindValueRef } from './storage-interface.j
 import { serializeRef } from './storage-interface.js';
 import { parseExecutionRef, serializeExecutionRef } from './execution-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
-import type { GraphEvent, TaskConfig, GraphConfig } from '../event-graph/types.js';
-import type { LiveGraph, LiveGraphSnapshot } from '../continuous-event-graph/types.js';
-import { schedule } from '../continuous-event-graph/schedule.js';
-import type { TaskHandlerFn } from '../continuous-event-graph/reactive.js';
-import { CardCompute } from '../card-compute/index.js';
-import type { ComputeNode, ComputeStep, ComputeSource } from '../card-compute/index.js';
+import type { GraphEvent, TaskConfig, GraphConfig } from '../../event-graph/types.js';
+import type { LiveGraph, LiveGraphSnapshot } from '../../continuous-event-graph/types.js';
+import { schedule } from '../../continuous-event-graph/schedule.js';
+import type { TaskHandlerFn } from '../../continuous-event-graph/reactive.js';
+import { CardCompute } from '../../card-compute/index.js';
+import type { ComputeNode, ComputeStep, ComputeSource } from '../../card-compute/index.js';
 export type { DispatchResult, InvocationAdapter } from './process-interface.js';
 
 // ============================================================================

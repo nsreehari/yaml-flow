@@ -1,25 +1,52 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
-  cli, loadBoard,
-  createBoardLiveCardsNonCorePublic, createFsBoardNonCorePlatformAdapter,
-} from '../../src/cli/board-live-cards-cli.js';
-import type { BoardLiveCard } from '../../src/cli/board-live-cards-cli.js';
+  createBoardLiveCardsPublic,
+} from '../../src/cli/common/board-live-cards-public.js';
+import {
+  createFsBoardPlatformAdapter,
+} from '../../src/cli/node/fs-board-adapter.js';
+import {
+  createStateSnapshotStore,
+  snapshotEntriesToBoardEnvelope,
+  BOARD_GRAPH_KEY,
+  createCardStore,
+} from '../../src/cli/common/board-live-cards-lib.js';
+import type { BoardLiveCard } from '../../src/cli/common/board-live-cards-lib.js';
+import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
+import { createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
+import { restore } from '../../src/continuous-event-graph/index.js';
 
 process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
 
-const testDir = path.dirname(fileURLToPath(import.meta.url));
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
+const cardStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.cards');
+const outputsStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.output');
 const ticks = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+const cliDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
+
+function board(dir: string) {
+  const br = ref(dir);
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
+}
+
+const snapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
+
+function loadBoard(baseRef: { kind: string; value: string }) {
+  const snap = snapshotStore.readSnapshot(baseRef.value);
+  if (!snap.values[BOARD_GRAPH_KEY]) throw new Error(`Missing board state at: ${baseRef.value}`);
+  return restore(snapshotEntriesToBoardEnvelope(snap.values).graph);
+}
+
 function writeCardToStore(boardDir: string, card: { id: string } & Record<string, unknown>): void {
-  const br = ref(boardDir);
-  const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, testDir, { onWarn: () => {} }));
-  nonCore.updateInCardStore({ params: { cardId: card.id }, body: card });
+  const result = createCardStorePublic(
+    createCardStore(createFsCardStorageAdapter(path.join(boardDir, '.cards'))),
+  ).set({ body: card });
+  if (result.status !== 'success') throw new Error(`writeCardToStore failed: ${result.error}`);
 }
 
 async function pollBoard(boardDir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
@@ -56,7 +83,7 @@ describe('board-live-cards CLI persistence', () => {
 
   it('writes provided token payloads to .output/data-objects/', async () => {
     const dir = path.join(freshDir(), 'board');
-    await cli(['init', '--base-ref', '::fs-path::' + dir]);
+    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
 
     const card: BoardLiveCard = {
       id: 'orders-source',
@@ -74,9 +101,7 @@ describe('board-live-cards CLI persistence', () => {
     };
     writeCardToStore(dir, card);
 
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await cli(['upsert-card', '--base-ref', '::fs-path::' + dir, '--card-id', 'orders-source']);
-    logSpy.mockRestore();
+    board(dir).upsertCard({ params: { cardId: 'orders-source' } });
 
     await pollBoard(dir, (tasks) => !!tasks['orders-source']);
 
@@ -92,7 +117,7 @@ describe('board-live-cards CLI persistence', () => {
 
   it('writes computed_values snapshots to .output/cards/<cardId>/computed_values.json', async () => {
     const dir = path.join(freshDir(), 'board');
-    await cli(['init', '--base-ref', '::fs-path::' + dir]);
+    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
 
     const card: BoardLiveCard = {
       id: 'totals-card',
@@ -106,9 +131,7 @@ describe('board-live-cards CLI persistence', () => {
     };
     writeCardToStore(dir, card);
 
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await cli(['upsert-card', '--base-ref', '::fs-path::' + dir, '--card-id', 'totals-card']);
-    logSpy.mockRestore();
+    board(dir).upsertCard({ params: { cardId: 'totals-card' } });
 
     await pollBoard(dir, (tasks) => !!tasks['totals-card']);
 

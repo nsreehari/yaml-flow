@@ -46,8 +46,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import jsonata from 'jsonata';
-import type { ExecutionRef, ExecutionResult } from './execution-interface.js';
-import { parseRef } from './storage-interface.js';
+import type { ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
+import { parseRef } from '../common/storage-interface.js';
 import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.js';
 
 // ============================================================================

@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const distCli = path.join(__dirname, 'dist', 'cli', 'card-store-cli.js');
-const srcCli = path.join(__dirname, 'src', 'cli', 'card-store-cli.ts');
+const distCli = path.join(__dirname, 'dist', 'cli', 'node', 'card-store-cli.js');
+const srcCli = path.join(__dirname, 'src', 'cli', 'node', 'card-store-cli.ts');
 const tsxCli = path.join(__dirname, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 if (fs.existsSync(distCli)) {

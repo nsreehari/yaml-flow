@@ -430,7 +430,7 @@ export function createExampleBoardServerRuntime(options = {}) {
     const envOverride = process.env.BOARD_LIVE_CARDS_CLI_JS;
     if (envOverride && fs.existsSync(envOverride)) return envOverride;
 
-    const repoDevPath = path.join(path.resolve(__dirname, '../..'), 'dist', 'cli', 'board-live-cards-cli.js');
+    const repoDevPath = path.join(path.resolve(__dirname, '../..'), 'dist', 'cli', 'node', 'board-live-cards-cli.js');
     if (fs.existsSync(repoDevPath)) return repoDevPath;
 
     try {
@@ -439,7 +439,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       const pkgCli = path.join(pkgRoot, 'board-live-cards-cli.js');
       if (fs.existsSync(pkgCli)) return pkgCli;
 
-      const pkgDistCli = path.join(pkgRoot, 'dist', 'cli', 'board-live-cards-cli.js');
+      const pkgDistCli = path.join(pkgRoot, 'dist', 'cli', 'node', 'board-live-cards-cli.js');
       if (fs.existsSync(pkgDistCli)) return pkgDistCli;
     } catch {
       // fall through

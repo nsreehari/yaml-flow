@@ -37,7 +37,7 @@ function renameSync(src: string, dest: string): void {
   }
 }
 
-import type { GraphEvent } from '../event-graph/types.js';
+import type { GraphEvent } from '../../event-graph/types.js';
 import type {
   AtomicRelayLock,
   BlobStorage,
@@ -47,13 +47,13 @@ import type {
   JSONStorage,
   KVStorage,
   StorageProvider,
-} from './storage-interface.js';
+} from '../common/storage-interface.js';
 import type {
   CardIndex,
   LiveCard,
   StateSnapshotStorageAdapter,
   StateSnapshotReadView,
-} from './board-live-cards-lib.js';
+} from '../common/board-live-cards-lib.js';
 
 // ============================================================================
 // FsBlobStorage
@@ -361,10 +361,10 @@ export function createFsAtomicRelayLock(lockTargetPath: string): AtomicRelayLock
 
 // ============================================================================
 // createFsCardStorageAdapter — KV-backed card storage
-// Cards and index stored under <boardDir>/.cards/
+// kvDir is the KV storage directory (used directly, no hidden subdirectory added).
 // ============================================================================
 
-export function createFsCardStorageAdapter(boardDir: string): {
+export function createFsCardStorageAdapter(kvDir: string): {
   readIndex(): CardIndex | null;
   writeIndex(index: CardIndex): void;
   readCard(key: string): LiveCard | null;
@@ -372,7 +372,7 @@ export function createFsCardStorageAdapter(boardDir: string): {
   cardExists(key: string): boolean;
   defaultCardKey(cardId: string): string;
 } {
-  const kv = createFsKvStorage(path.join(boardDir, '.cards'));
+  const kv = createFsKvStorage(kvDir);
   return {
     readIndex() {
       return kv.read('_index') as CardIndex | null;

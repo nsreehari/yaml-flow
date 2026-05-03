@@ -207,7 +207,7 @@ export function createFsBoardPlatformAdapter(
 
     genId: () => getHash(`${Date.now()}-${Math.random()}`).slice(0, 32),
 
-    cardStorageForRef: (storeRef: string) => createFsCardStorageAdapter(parseRef(storeRef).value),
+    kvStorageForRef: (ref: string) => createFsKvStorage(parseRef(ref).value),
 
     requestProcessAccumulated() {
       if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
@@ -824,10 +824,10 @@ export async function cli(argv: string[]): Promise<void> {
 
   switch (cmd) {
     case 'init': {
-      const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value>');
-      const outputsStoreRef = optFlag(rest, '--outputs-store-ref');
+      const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value> --outputs-store-ref <::kind::value>');
+      const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value> --outputs-store-ref <::kind::value>');
       const body = await readStdinBody();
-      printResult(board().init({ params: { cardStoreRef, ...(outputsStoreRef ? { outputsStoreRef } : {}) }, body }));
+      printResult(board().init({ params: { cardStoreRef, outputsStoreRef }, body }));
       return;
     }
     case 'status': {

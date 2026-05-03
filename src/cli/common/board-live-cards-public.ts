@@ -34,9 +34,9 @@
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
-import { restore, createLiveGraph, snapshot } from '../continuous-event-graph/core.js';
-import { createReactiveGraph } from '../continuous-event-graph/reactive.js';
-import type { GraphEvent } from '../event-graph/types.js';
+import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
+import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
+import type { GraphEvent } from '../../event-graph/types.js';
 import {
   createCardStore,
   createJournalStore,
@@ -65,7 +65,12 @@ import type {
   BoardEnvelope,
   SourceTokenPayload,
   BoardStatusObject,
+  LiveCard,
+  CardIndex,
 } from './board-live-cards-lib.js';
+
+// Re-export constants so platform adapter files can import them without going through lib directly.
+export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from './board-live-cards-lib.js';
 
 // ============================================================================
 // CommandInput — uniform request envelope
@@ -126,11 +131,12 @@ export interface BoardPlatformAdapter {
   kvStorage(namespace: string): KVStorage;
 
   /**
-   * Build a CardStorageAdapter for the board-configured card store ref.
-   * Called by the public layer after reading storeRef from config.
-   *   FS: createFsCardStorageAdapter(parseRef(storeRef).value)
+   * Build a KVStorage rooted at the given ref.
+   * Used by the public layer for both card store and outputs store routing.
+   *   FS:          createFsKvStorage(parseRef(ref).value)
+   *   localStorage: createLocalStorageKvStorage(parseRef(ref).value)
    */
-  cardStorageForRef(storeRef: string): CardStorageAdapter;
+  kvStorageForRef(ref: string): KVStorage;
 
   /**
    * Blob storage factory — scoped by namespace.
@@ -309,7 +315,15 @@ export function createBoardLiveCardsPublic(
   function makeCardAdapter(): CardStorageAdapter {
     const storeRef = configStore().readCardStoreRef();
     if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <::kind::value>`);
-    return adapter.cardStorageForRef(storeRef);
+    const kv = adapter.kvStorageForRef(storeRef);
+    return {
+      readIndex(): CardIndex | null { return kv.read('_index') as CardIndex | null; },
+      writeIndex(index: CardIndex): void { kv.write('_index', index); },
+      readCard(id: string): LiveCard | null { return kv.read(id) as LiveCard | null; },
+      writeCard(id: string, card: LiveCard): string { kv.write(id, card); return adapter.hashFn(card); },
+      cardExists(id: string): boolean { return kv.read(id) !== null; },
+      defaultCardKey(cardId: string): string { return cardId; },
+    };
   }
 
   // scopeId is intentionally ignored — the adapter is already board-scoped via
@@ -336,7 +350,11 @@ export function createBoardLiveCardsPublic(
   const snapshotStore = () => createStateSnapshotStore(snapshotAdapterImpl);
   const journalStore = () => createJournalStore(adapter.journalAdapter());
   const cardStore = () => createCardStore(makeCardAdapter(), warn);
-  const outputStore = () => createPublishedOutputsStore(adapter.kvStorage('output'));
+  const outputStore = () => {
+    const ref = configStore().readOutputsStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no outputs store configured. Run: init --outputs-store-ref <::kind::value>`);
+    return createPublishedOutputsStore(adapter.kvStorageForRef(ref));
+  };
 
   function boardExists(): boolean {
     return !!snapshotStore().readSnapshot(baseRef.value).values[BOARD_GRAPH_KEY];
@@ -462,16 +480,18 @@ export function createBoardLiveCardsPublic(
 
   function init(input: CommandInput): CommandResult {
     try {
+      // cardStoreRef is required — create a card store with card-store-cli first
       const storeRef = input.params?.['cardStoreRef'] as string | undefined;
-      if (!storeRef) return fail('init requires params.cardStoreRef (pass --card-store-ref <::kind::value>)');
+      if (!storeRef) return fail('init requires params.cardStoreRef — create a card store with card-store-cli and pass its ref here');
       if (!boardExists()) {
         const live = createLiveGraph(EMPTY_CONFIG);
         commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(live) }, null);
       }
+      const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
+      if (!outputsStoreRef) return fail('init requires params.outputsStoreRef — pass the outputs store ref here');
       const cfg = configStore();
       cfg.writeCardStoreRef(storeRef);
-      const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
-      if (outputsStoreRef) cfg.writeOutputsStoreRef(outputsStoreRef);
+      cfg.writeOutputsStoreRef(outputsStoreRef);
       const body = (input.body ?? {}) as Record<string, unknown>;
       if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
       if (body['chat-handler-ref'])  cfg.writeChatHandlerRef(body['chat-handler-ref'] as ExecutionRef);
@@ -724,6 +744,18 @@ export interface BoardLiveCardsNonCorePublic {
 
   /** no params needed */
   describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
+
+  /**
+   * Write/update cards in the configured card store.
+   * body: { ops: Array<{ op: 'update', id: string, 'card-content': LiveCard }> }
+   */
+  updatesInCardStore(input: CommandInput): CommandResult;
+
+  /**
+   * Read cards from the configured card store by id.
+   * body: { ids: string[] }
+   */
+  readFromCardStore(input: CommandInput): CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }>;
 }
 
 // ============================================================================
@@ -739,7 +771,15 @@ export function createBoardLiveCardsNonCorePublic(
   function makeCardAdapterNC(): CardStorageAdapter {
     const storeRef = configStore().readCardStoreRef();
     if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <::kind::value>`);
-    return adapter.cardStorageForRef(storeRef);
+    const kv = adapter.kvStorageForRef(storeRef);
+    return {
+      readIndex(): CardIndex | null { return kv.read('_index') as CardIndex | null; },
+      writeIndex(index: CardIndex): void { kv.write('_index', index); },
+      readCard(id: string): LiveCard | null { return kv.read(id) as LiveCard | null; },
+      writeCard(id: string, card: LiveCard): string { kv.write(id, card); return adapter.hashFn(card); },
+      cardExists(id: string): boolean { return kv.read(id) !== null; },
+      defaultCardKey(cardId: string): string { return cardId; },
+    };
   }
   const cardStore = () => createCardStore(makeCardAdapterNC(), adapter.onWarn ?? (() => { /* no-op */ }));
 
@@ -913,9 +953,46 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
+  function updatesInCardStore(input: CommandInput): CommandResult {
+    try {
+      const b = input.body as Record<string, unknown> | undefined;
+      if (!b || !Array.isArray(b['ops'])) return fail('updatesInCardStore requires body.ops array');
+      const ops = b['ops'] as Array<Record<string, unknown>>;
+      const store = cardStore();
+      for (const op of ops) {
+        const opType = op['op'] as string | undefined;
+        const id = op['id'] as string | undefined;
+        if (!id) return fail('op is missing "id"');
+        if (opType === 'update') {
+          const cardContent = op['card-content'] as LiveCard | undefined;
+          if (!cardContent) return fail(`update op for "${id}" is missing "card-content"`);
+          store.writeCard(id, cardContent);
+        } else {
+          return fail(`Unknown op type: "${opType ?? '(none)'}"`);
+        }
+      }
+      return ok();
+    } catch (e) { return err(e); }
+  }
+
+  function readFromCardStore(input: CommandInput): CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }> {
+    try {
+      const b = input.body as Record<string, unknown> | undefined;
+      if (!b || !Array.isArray(b['ids'])) {
+        return fail('readFromCardStore requires body.ids array') as CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }>;
+      }
+      const ids = b['ids'] as string[];
+      const store = cardStore();
+      const cards = ids.map(id => ({ id, 'card-content': store.readCard(id) }));
+      return ok({ cards }) as CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }>;
+    } catch (e) { return err(e) as CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }>; }
+  }
+
   return {
     validateCard, validateTmpCard,
     probeSource, probeTmpSource,
     describeTaskExecutorCapabilities,
+    updatesInCardStore,
+    readFromCardStore,
   };
 }

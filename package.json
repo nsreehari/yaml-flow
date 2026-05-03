@@ -94,6 +94,14 @@
       "import": "./dist/execution-refs.js",
       "require": "./dist/execution-refs.cjs"
     },
+    "./board-live-cards-browser": {
+      "types": "./dist/cli/browser-api/board-live-cards-browser-adapter.d.ts",
+      "import": "./dist/cli/browser-api/board-live-cards-browser-adapter.js"
+    },
+    "./card-store-browser": {
+      "types": "./dist/cli/browser-api/card-store-browser-api.d.ts",
+      "import": "./dist/cli/browser-api/card-store-browser-api.js"
+    },
     "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
     "./package.json": "./package.json"
   },

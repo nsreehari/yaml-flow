@@ -153,11 +153,15 @@ function _resolveLocalNodeInvocation(scriptPath: string): { cmd: string; args: s
   if (!scriptPath.endsWith('.ts')) {
     return { cmd: process.execPath, args: [scriptPath] };
   }
-  // Dev path: look for tsx next to node_modules relative to the script
-  const candidates = [
-    path.join(path.dirname(scriptPath), '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-    path.join(path.dirname(scriptPath), '..', '..', 'node_modules', '.bin', 'tsx'),
-  ];
+  // Dev path: look for tsx in node_modules relative to the script's package root.
+  // The .ts file may be at src/cli/node/<file>.ts — walk up until we find node_modules/tsx.
+  const dir = path.dirname(scriptPath);
+  const candidates: string[] = [];
+  for (let up = 1; up <= 5; up++) {
+    const base = path.join(dir, ...Array(up).fill('..'), 'node_modules');
+    candidates.push(path.join(base, 'tsx', 'dist', 'cli.mjs'));
+    candidates.push(path.join(base, '.bin', 'tsx'));
+  }
   const tsx = candidates.find(p => fs.existsSync(p));
   if (tsx) return { cmd: process.execPath, args: [tsx, scriptPath] };
   return { cmd: 'npx', args: ['tsx', scriptPath] };
