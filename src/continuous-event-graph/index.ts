@@ -49,6 +49,7 @@ export { createReactiveGraph, computeDataHash } from './reactive.js';
 export type {
   ReactiveGraph, ReactiveGraphOptions,
   TaskHandlerFn, TaskHandlerInput, TaskHandlerReturn,
+  SyncTaskResolverFn, SyncResolverResult,
 } from './reactive.js';
 
 // Validate: runtime state-consistency checks

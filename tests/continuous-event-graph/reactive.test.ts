@@ -16,7 +16,7 @@ import {
   MemoryJournal,
   restore,
 } from '../../src/continuous-event-graph/index.js';
-import type { TaskHandlerFn, ReactiveGraph } from '../../src/continuous-event-graph/index.js';
+import type { TaskHandlerFn, ReactiveGraph, SyncTaskResolverFn } from '../../src/continuous-event-graph/index.js';
 
 // ============================================================================
 // Helpers
@@ -666,5 +666,281 @@ describe('reactive — snapshot / restore', () => {
 
     expect(restored.state.tasks.a.status).toBe('completed');
     expect(restored.state.tasks.a.data).toEqual({ x: [1, 2, 3] });
+  });
+});
+
+// ============================================================================
+// syncResolver — synchronous fast-path
+// ============================================================================
+
+describe('reactive — syncResolver', () => {
+  let rg: ReactiveGraph;
+
+  afterEach(() => {
+    rg?.dispose();
+  });
+
+  it('completes a task synchronously when syncResolver returns isCompleted:true', () => {
+    const config = makeConfig({
+      fast: { provides: ['data'], taskHandlers: ['fast'] },
+    });
+
+    const asyncHandlerCalls: string[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        fast: async ({ callbackToken }) => {
+          asyncHandlerCalls.push('fast');
+          return 'task-initiated';
+        },
+      },
+      syncResolver: (input) => {
+        if (input.nodeId === 'fast') {
+          return { isCompleted: true, data: { value: 42 } };
+        }
+        return { isCompleted: false };
+      },
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+
+    // Task completes synchronously — no await needed
+    const state = rg.getState();
+    expect(state.state.tasks.fast.status).toBe('completed');
+    expect(state.state.tasks.fast.data).toEqual({ value: 42 });
+    // Async handler should NOT have been called
+    expect(asyncHandlerCalls).toEqual([]);
+  });
+
+  it('falls through to async handler when syncResolver returns isCompleted:false', async () => {
+    const config = makeConfig({
+      slow: { provides: ['data'], taskHandlers: ['slow'] },
+    });
+
+    const g = makeGraphRef();
+    const asyncHandlerCalls: string[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        slow: async ({ callbackToken }) => {
+          asyncHandlerCalls.push('slow');
+          g.resolve(callbackToken, { fromAsync: true });
+          return 'task-initiated';
+        },
+      },
+      syncResolver: (_input) => {
+        return { isCompleted: false };
+      },
+    });
+    g.ref = rg;
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    expect(asyncHandlerCalls).toEqual(['slow']);
+    const state = rg.getState();
+    expect(state.state.tasks.slow.status).toBe('completed');
+    expect(state.state.tasks.slow.data).toEqual({ fromAsync: true });
+  });
+
+  it('cascades a full chain synchronously in a single drain pass', () => {
+    // A → B → C — all resolved by syncResolver, no async hops
+    const config = makeConfig({
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
+      c: { requires: ['y'], provides: ['z'], taskHandlers: ['c'] },
+    });
+
+    const asyncHandlerCalls: string[] = [];
+    const drainCounts: number[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        a: async () => { asyncHandlerCalls.push('a'); return 'task-initiated'; },
+        b: async () => { asyncHandlerCalls.push('b'); return 'task-initiated'; },
+        c: async () => { asyncHandlerCalls.push('c'); return 'task-initiated'; },
+      },
+      syncResolver: (input) => {
+        return { isCompleted: true, data: { from: input.nodeId } };
+      },
+      onDrain: (events) => {
+        drainCounts.push(events.length);
+      },
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+
+    // All three tasks complete synchronously — no await needed
+    const state = rg.getState();
+    expect(state.state.tasks.a.status).toBe('completed');
+    expect(state.state.tasks.a.data).toEqual({ from: 'a' });
+    expect(state.state.tasks.b.status).toBe('completed');
+    expect(state.state.tasks.b.data).toEqual({ from: 'b' });
+    expect(state.state.tasks.c.status).toBe('completed');
+    expect(state.state.tasks.c.data).toEqual({ from: 'c' });
+    expect(state.state.availableOutputs).toContain('x');
+    expect(state.state.availableOutputs).toContain('y');
+    expect(state.state.availableOutputs).toContain('z');
+    // No async handlers should have been invoked
+    expect(asyncHandlerCalls).toEqual([]);
+  });
+
+  it('stores dataHash when syncResolver provides data', () => {
+    const config = makeConfig({
+      producer: { provides: ['out'], taskHandlers: ['producer'] },
+    });
+
+    rg = createReactiveGraph(config, {
+      handlers: { producer: async () => 'task-initiated' },
+      syncResolver: () => ({ isCompleted: true, data: { key: 'val' } }),
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+
+    const state = rg.getState();
+    expect(state.state.tasks.producer.status).toBe('completed');
+    expect(state.state.tasks.producer.lastDataHash).toBeDefined();
+    expect(typeof state.state.tasks.producer.lastDataHash).toBe('string');
+  });
+
+  it('handles syncResolver returning empty data gracefully', () => {
+    const config = makeConfig({
+      empty: { provides: ['out'], taskHandlers: ['empty'] },
+    });
+
+    rg = createReactiveGraph(config, {
+      handlers: { empty: async () => 'task-initiated' },
+      syncResolver: () => ({ isCompleted: true }),
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+
+    const state = rg.getState();
+    expect(state.state.tasks.empty.status).toBe('completed');
+    // Empty data → data defaults to {}
+    expect(state.state.tasks.empty.data).toEqual({});
+  });
+
+  it('marks task as failed when syncResolver throws', () => {
+    const config = makeConfig({
+      broken: { provides: ['out'], taskHandlers: ['broken'] },
+    });
+
+    const asyncHandlerCalls: string[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        broken: async () => { asyncHandlerCalls.push('broken'); return 'task-initiated'; },
+      },
+      syncResolver: () => { throw new Error('resolver exploded'); },
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+
+    const state = rg.getState();
+    expect(state.state.tasks.broken.status).toBe('failed');
+    expect(state.state.tasks.broken.error).toContain('resolver exploded');
+    // Async handler should NOT have been called after syncResolver failure
+    expect(asyncHandlerCalls).toEqual([]);
+  });
+
+  it('resolves mixed sync/async tasks in same graph', async () => {
+    // 'fast' resolved by syncResolver, 'slow' falls through to async handler
+    const config = makeConfig({
+      fast: { provides: ['x'], taskHandlers: ['fast'] },
+      slow: { provides: ['y'], taskHandlers: ['slow'] },
+      combine: { requires: ['x', 'y'], provides: ['z'], taskHandlers: ['combine'] },
+    });
+
+    const g = makeGraphRef();
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        fast: async () => 'task-initiated',
+        slow: async ({ callbackToken }) => {
+          g.resolve(callbackToken, { slowData: true });
+          return 'task-initiated';
+        },
+        combine: async () => 'task-initiated',
+      },
+      syncResolver: (input) => {
+        if (input.nodeId === 'fast') return { isCompleted: true, data: { fastData: true } };
+        if (input.nodeId === 'combine') return { isCompleted: true, data: { merged: true } };
+        return { isCompleted: false };
+      },
+    });
+    g.ref = rg;
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    const state = rg.getState();
+    // 'fast' resolved synchronously
+    expect(state.state.tasks.fast.status).toBe('completed');
+    expect(state.state.tasks.fast.data).toEqual({ fastData: true });
+    // 'slow' resolved asynchronously
+    expect(state.state.tasks.slow.status).toBe('completed');
+    expect(state.state.tasks.slow.data).toEqual({ slowData: true });
+    // 'combine' resolved synchronously once both deps were ready
+    expect(state.state.tasks.combine.status).toBe('completed');
+    expect(state.state.tasks.combine.data).toEqual({ merged: true });
+  });
+
+  it('syncResolver receives upstream state from requires', () => {
+    const config = makeConfig({
+      producer: { provides: ['data'], taskHandlers: ['producer'] },
+      consumer: { requires: ['data'], provides: ['result'], taskHandlers: ['consumer'] },
+    });
+
+    let capturedState: Record<string, unknown> | undefined;
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        producer: async () => 'task-initiated',
+        consumer: async () => 'task-initiated',
+      },
+      syncResolver: (input) => {
+        if (input.nodeId === 'producer') {
+          return { isCompleted: true, data: { data: 'hello' } };
+        }
+        if (input.nodeId === 'consumer') {
+          capturedState = { ...input.state };
+          return { isCompleted: true, data: { echoed: (input.state['data'] as Record<string, unknown>)?.data } };
+        }
+        return { isCompleted: false };
+      },
+    });
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+
+    expect(capturedState).toBeDefined();
+    expect(capturedState!['data']).toEqual({ data: 'hello' });
+
+    const state = rg.getState();
+    expect(state.state.tasks.consumer.status).toBe('completed');
+    expect(state.state.tasks.consumer.data).toEqual({ echoed: 'hello' });
+  });
+
+  it('works without syncResolver (no regression)', async () => {
+    const config = makeConfig({
+      a: { provides: ['x'], taskHandlers: ['a'] },
+    });
+
+    const g = makeGraphRef();
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        a: async ({ callbackToken }) => { g.resolve(callbackToken, { v: 1 }); return 'task-initiated'; },
+      },
+      // no syncResolver
+    });
+    g.ref = rg;
+
+    rg.push({ type: 'inject-tokens', tokens: [], timestamp: ts() });
+    await ticks(50);
+
+    const state = rg.getState();
+    expect(state.state.tasks.a.status).toBe('completed');
+    expect(state.state.tasks.a.data).toEqual({ v: 1 });
   });
 });

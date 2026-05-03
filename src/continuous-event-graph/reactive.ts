@@ -196,9 +196,39 @@ export type TaskHandlerReturn = 'task-initiated' | 'task-initiate-failure';
  */
 export type TaskHandlerFn = (input: TaskHandlerInput) => Promise<TaskHandlerReturn>;
 
+/**
+ * Result returned by a synchronous task resolver.
+ * - `isCompleted: true`  → task is done; `data` is journaled as task-completed immediately.
+ * - `isCompleted: false` → task needs async work; falls through to the normal async handler pipeline.
+ */
+export interface SyncResolverResult {
+  isCompleted: boolean;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Optional synchronous callback that decides whether a task can be completed
+ * immediately without invoking the async handler pipeline.
+ *
+ * Called inside `dispatchTask()` **after** task-started is journaled but
+ * **before** the async handler fires.  If it returns `{ isCompleted: true, data }`,
+ * the reactive graph journals task-completed inline and re-drains — enabling
+ * full cascading chains to resolve in a single synchronous `drain()` pass.
+ *
+ * The callback receives the same `TaskHandlerInput` as the async handler.
+ * It must be **pure and synchronous** — no I/O, no side-effects.
+ */
+export type SyncTaskResolverFn = (input: TaskHandlerInput) => SyncResolverResult;
+
 export interface ReactiveGraphOptions {
   /** Named handler registry — handler name → handler function */
   handlers: Record<string, TaskHandlerFn>;
+  /**
+   * Optional synchronous resolver — if provided, called before async handlers.
+   * When it returns `{ isCompleted: true, data }`, the task completes inline
+   * and the async handler pipeline is skipped entirely.
+   */
+  syncResolver?: SyncTaskResolverFn;
   /** Called after each drain cycle — for observability */
   onDrain?: (events: GraphEvent[], live: LiveGraph, scheduleResult: ScheduleResult) => void;
 }
@@ -265,6 +295,7 @@ export function createReactiveGraph(
 ): ReactiveGraph {
   const {
     handlers: initialHandlers,
+    syncResolver,
     onDrain,
   } = options;
 
@@ -451,6 +482,49 @@ export function createReactiveGraph(
 
     const callbackToken = encodeCallbackToken(taskName);
 
+    // ---- Synchronous fast-path ------------------------------------------------
+    // If a syncResolver is registered, give it a chance to complete the task
+    // inline — no async hop, no handler pipeline.  This allows full cascading
+    // chains (A→B→C) to resolve in a single synchronous drain() pass.
+    if (syncResolver) {
+      const upstreamState = resolveUpstreamState(taskName);
+      const input: TaskHandlerInput = {
+        nodeId: taskName,
+        state: upstreamState,
+        taskState: live.state.tasks[taskName],
+        config: taskConfig,
+        callbackToken,
+      };
+
+      try {
+        const result = syncResolver(input);
+        if (result.isCompleted) {
+          const data = result.data ?? {};
+          const dataHash = Object.keys(data).length > 0 ? computeDataHash(data) : undefined;
+          internalJournal.append({
+            type: 'task-completed',
+            taskName,
+            data,
+            dataHash,
+            timestamp: new Date().toISOString(),
+          });
+          drain(); // cascades downstream in the same synchronous loop
+          return;  // skip async handler pipeline entirely
+        }
+      } catch (error: unknown) {
+        // syncResolver threw — treat as task failure, skip async handler
+        internalJournal.append({
+          type: 'task-failed',
+          taskName,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date().toISOString(),
+        });
+        drain();
+        return;
+      }
+    }
+
+    // ---- Async handler pipeline (existing path) ------------------------------
     // Fire-and-forget: run the handler pipeline
     const p = runPipeline(taskName, callbackToken).catch((error: Error) => {
       if (disposed) return;
