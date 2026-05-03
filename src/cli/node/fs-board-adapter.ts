@@ -51,6 +51,9 @@ export type {
 export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from '../common/board-live-cards-public.js';
 export { parseRef, serializeRef } from '../common/storage-interface.js';
 export type { KindValueRef } from '../common/storage-interface.js';
+export { createCardStorePublic } from '../common/card-store-lib-public.js';
+export { createCardStore } from '../common/board-live-cards-lib.js';
+export type { LiveCard } from '../common/board-live-cards-lib.js';
 
 // ============================================================================
 // Constants

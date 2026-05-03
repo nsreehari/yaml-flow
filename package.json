@@ -98,6 +98,10 @@
       "types": "./dist/cli/browser-api/board-live-cards-browser-adapter.d.ts",
       "import": "./dist/cli/browser-api/board-live-cards-browser-adapter.js"
     },
+    "./board-live-cards-node": {
+      "types": "./dist/cli/node/fs-board-adapter.d.ts",
+      "import": "./dist/cli/node/fs-board-adapter.js"
+    },
     "./card-store-browser": {
       "types": "./dist/cli/browser-api/card-store-browser-api.d.ts",
       "import": "./dist/cli/browser-api/card-store-browser-api.js"
