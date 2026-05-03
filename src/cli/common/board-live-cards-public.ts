@@ -447,7 +447,7 @@ export function createBoardLiveCardsPublic(
         warn(`[process-accumulated-events] unknown taskKind "${entry.taskKind}" — skipping`);
         return;
       }
-      const p = entry.payload as { boardRef: string; enrichedCard: Record<string, unknown>; callbackToken: string };
+      const p = entry.payload as { boardRef: string; enrichedCard: Record<string, unknown>; callbackToken: string; rqt: string };
       const cardId = (p.enrichedCard?.id as string | undefined) ?? 'unknown';
       const sourceDefs = (p.enrichedCard?.source_defs ?? []) as Array<{ bindTo: string; outputFile?: string; [k: string]: unknown }>;
 
@@ -455,7 +455,7 @@ export function createBoardLiveCardsPublic(
         if (!src.outputFile) { warn(`[dispatch] source "${src.bindTo}" has no outputFile — skipping`); continue; }
         const sourceToken = encodeSourceToken({
           cbk: p.callbackToken, rg: baseRef.value, br: serializeRef(baseRef),
-          cid: cardId, b: src.bindTo, d: src.outputFile, cs: undefined,
+          cid: cardId, b: src.bindTo, d: src.outputFile, cs: undefined, rqt: p.rqt,
         });
         adapter.dispatchExecution(executorRef, {
           source_def: src, base_ref: serializeRef(baseRef),
@@ -622,7 +622,7 @@ export function createBoardLiveCardsPublic(
       if (!ref)   return fail('sourceDataFetched requires params.ref');
       const payload = decodeSourceToken(token);
       if (!payload) return fail('Invalid source token');
-      const { cbk, cid, b, d, cs } = payload;
+      const { cbk, cid, b, d, cs, rqt } = payload;
 
       const fetchedSourcesStore = createFetchedSourcesStore(
         adapter.blobStorage('sources'),
@@ -639,7 +639,7 @@ export function createBoardLiveCardsPublic(
       appendJournalEvent({
         type: 'task-progress',
         taskName: cbkDecoded.taskName,
-        update: { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs },
+        update: { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs, rqt },
         timestamp: fetchedAt,
       });
       void drain();

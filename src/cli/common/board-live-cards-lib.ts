@@ -574,6 +574,7 @@ export interface SourceTokenPayload {
   b: string;
   d: string;
   cs?: string;
+  rqt: string;
 }
 
 export function isSourceInFlight(entry: FetchRuntimeEntry | undefined): boolean {
@@ -846,6 +847,10 @@ export function buildBoardStatusObject(boardPath: string, live: LiveGraph): Boar
 // ---- from board-live-cards-lib-card-handler.ts ----
 // ============================================================================
 
+function nowHighRes(): string {
+  return new Date().toISOString();
+}
+
 export function createCardHandlerFn(
   baseRef: KindValueRef,
   journalId: string,
@@ -895,14 +900,14 @@ export function createCardHandlerFn(
             if (u.failure) {
               setSourceEntry(outputFile, nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown'));
             } else {
-              const deliveryToken = typeof u.deliveryToken === 'string' ? u.deliveryToken : undefined;
-              if (deliveryToken) {
-                adapters.fetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
+              const incomingRqt = u.rqt as string;
+              if (!entry.lastFetchedAt || incomingRqt > entry.lastFetchedAt) {
+                const deliveryToken = typeof u.deliveryToken === 'string' ? u.deliveryToken : undefined;
+                if (deliveryToken) {
+                  adapters.fetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
+                }
+                setSourceEntry(outputFile, nextEntryAfterFetchDelivery(entry, incomingRqt));
               }
-              setSourceEntry(outputFile, nextEntryAfterFetchDelivery(
-                entry,
-                (u.fetchedAt as string | undefined) ?? new Date().toISOString(),
-              ));
             }
             flush();
           }
@@ -961,7 +966,7 @@ export function createCardHandlerFn(
             }))
           : enrichedSources;
 
-        const now = new Date().toISOString();
+        const now = nowHighRes();
         const runQueuedAt = input.update ? undefined : now;
 
         const undeliveredRequired = requiredSources.filter(s => {
@@ -982,17 +987,20 @@ export function createCardHandlerFn(
 
         if (undeliveredRequired.length > 0) {
           let stampedAny = false;
+          let dispatchRqt = now;
           for (const src of undeliveredRequired) {
             const outputFile = src.outputFile;
             if (typeof outputFile !== 'string' || !outputFile) continue;
             const entry = getSourceEntry(outputFile);
-            setSourceEntry(outputFile, { ...entry, lastRequestedAt: now });
+            const queuedAt = entry.queueRequestedAt ?? now;
+            setSourceEntry(outputFile, { ...entry, lastRequestedAt: queuedAt });
+            dispatchRqt = queuedAt;
             stampedAny = true;
           }
           if (stampedAny) flush();
           if (!stampedAny) return 'task-initiated';
 
-          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
+          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken, rqt: dispatchRqt } });
           adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
           return 'task-initiated';
         }
@@ -1013,7 +1021,7 @@ export function createCardHandlerFn(
           return entry.lastFetchedAt <= entry.lastRequestedAt;
         });
         if (undeliveredOptional.length > 0) {
-          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken } });
+          pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken, rqt: now } });
         }
 
         taskCompletedFn(input.nodeId, data);
