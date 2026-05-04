@@ -1,4 +1,23 @@
 import { defineConfig } from 'tsup';
+import { cpSync, readdirSync, statSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { execSync } from 'child_process';
+
+/** After build, copy jsonata-sync.cjs next to every dist bundle that references it. */
+function copyJsonataSyncToDistDirs() {
+  const src = 'src/card-compute/jsonata-sync.cjs';
+  if (!existsSync(src)) return;
+  // Find all .js/.cjs bundles that contain the require reference
+  const out = execSync('grep -rl "jsonata-sync.cjs" dist/ --include="*.js" --include="*.cjs"', { encoding: 'utf-8' }).trim();
+  const dirs = new Set(out.split('\n').filter(Boolean).map(f => dirname(f)));
+  for (const dir of dirs) {
+    const dest = join(dir, 'jsonata-sync.cjs');
+    if (!existsSync(dest)) {
+      cpSync(src, dest);
+    }
+  }
+  console.log(`Copied jsonata-sync.cjs to ${dirs.size} dist directories`);
+}
 
 export default defineConfig({
   entry: {
@@ -33,4 +52,5 @@ export default defineConfig({
   treeshake: true,
   target: 'es2022',
   outDir: 'dist',
+  onSuccess: async () => { copyJsonataSyncToDistDirs(); },
 });
