@@ -11,7 +11,12 @@ try {
     process.exit(0);
   }
 
-  runBoardCli(['init', '--base-ref', `::fs-path::${boardDir}`, '--card-store-ref', `::fs-path::${boardDir}`]);
+  runBoardCli([
+    'init',
+    '--base-ref', `::fs-path::${boardDir}`,
+    '--card-store-ref', `::fs-path::${boardDir}`,
+    '--outputs-store-ref', `::fs-path::${boardDir}`,
+  ]);
   writeResult({
     result: 'success',
     data: {
