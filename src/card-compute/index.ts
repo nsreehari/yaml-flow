@@ -392,6 +392,37 @@ async function enrichSources(
   );
 }
 
+function enrichSourcesSync(
+  source_defs: any[] | undefined,
+  context: {
+    card_data?: Record<string, any>;
+    requires?: Record<string, any>;
+  }
+): any[] {
+  if (!source_defs || source_defs.length === 0) return [];
+
+  const evalCtx = {
+    card_data: context.card_data ?? {},
+    requires: context.requires ?? {},
+  };
+
+  return source_defs.map((src: any) => {
+    const _projections: Record<string, unknown> = {};
+    if (src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
+      for (const [key, expr] of Object.entries(src.projections as Record<string, string>)) {
+        if (typeof expr === 'string' && expr.trim().length > 0) {
+          try {
+            _projections[key] = jsonataSync(expr).evaluate(evalCtx);
+          } catch {
+            _projections[key] = undefined;
+          }
+        }
+      }
+    }
+    return { ...src, _projections };
+  });
+}
+
 export const CardCompute = {
   run,
   runSync,
@@ -399,6 +430,7 @@ export const CardCompute = {
   resolve,
   validate: validateNode,
   enrichSources,
+  enrichSourcesSync,
 };
 
 export {

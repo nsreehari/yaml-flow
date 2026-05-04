@@ -948,13 +948,11 @@ export function createCardHandlerFn(
         adapters.outputStore.writeComputedValues(cardId, computeNode.computed_values ?? {});
 
         const enrichedCard = { ...card };
-        const enrichedSources = await CardCompute.enrichSources(
+        const enrichedSources = CardCompute.enrichSourcesSync(
           Array.isArray(card.source_defs) ? card.source_defs : undefined,
           {
             card_data: card.card_data as Record<string, unknown>,
             requires,
-            sourcesData,
-            computed_values: computeNode.computed_values,
           },
         );
 
