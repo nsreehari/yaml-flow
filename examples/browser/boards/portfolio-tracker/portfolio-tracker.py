@@ -154,7 +154,7 @@ def read_json(path: str):
         return json.load(f)
 
 
-def wait_for_completed(label: str, timeout_s: float = 90.0, poll_s: float = 0.5):
+def wait_for_completed(label: str, timeout_s: float = 10.0, poll_s: float = 0.5):
     required_names = {'portfolio-form', 'price-fetch', 'holdings-table', 'portfolio-value'}
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:

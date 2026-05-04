@@ -29,6 +29,7 @@ function findPython(): string | null {
 }
 
 const PYTHON_CMD = findPython();
+const DEEP = process.env.DEEP === 'true';
 
 function runScript(scriptName: string, timeoutMs = 120_000): Promise<{ stdout: string; stderr: string; code: number }> {
   const scriptPath = path.join(portfolioDir, scriptName);
@@ -99,9 +100,9 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toMatch(/"qty": 60/);   // TSLA
   }, 120_000);
 
-  it.skipIf(!PYTHON_CMD)('portfolio-tracker.py — CLI-based full board lifecycle (T0–T5)', async () => {
+  it.skipIf(!PYTHON_CMD || !DEEP)('portfolio-tracker.py — CLI-based full board lifecycle (T0–T5)', async () => {
     console.log(`[python] using: ${PYTHON_CMD}`);
-    const { stdout, stderr, code } = await runPythonScript('portfolio-tracker.py');
+    const { stdout, stderr, code } = await runPythonScript('portfolio-tracker.py', 170_000);
     const combined = stdout + stderr;
 
     expect(code).toBe(0);

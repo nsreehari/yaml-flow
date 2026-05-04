@@ -501,7 +501,7 @@ function makeCallbackToken(taskName: string): string {
   return Buffer.from(JSON.stringify({ t: taskName })).toString('base64url');
 }
 
-describe('BoardLiveCardsPublic — taskCompleted', () => {
+describe('BoardLiveCardsPublic — taskCompleted (via taskProgress)', () => {
   let tmpDir = '';
 
   function freshBoard() {
@@ -520,27 +520,27 @@ describe('BoardLiveCardsPublic — taskCompleted', () => {
   it('returns success with a valid token and no body', () => {
     const { board } = freshBoard();
     const token = makeCallbackToken('my-task');
-    const result = board.taskCompleted({ params: { token } });
+    const result = board.taskProgress({ params: { token } });
     expect(result.status).toBe('success');
   });
 
   it('returns success with a valid token and data body', () => {
     const { board } = freshBoard();
     const token = makeCallbackToken('my-task');
-    const result = board.taskCompleted({ params: { token }, body: { value: 42 } });
+    const result = board.taskProgress({ params: { token }, body: { update: { value: 42 } } });
     expect(result.status).toBe('success');
   });
 
   it('fails when params.token is missing', () => {
     const { board } = freshBoard();
-    const result = board.taskCompleted({});
+    const result = board.taskProgress({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/params\.token/);
   });
 
   it('fails when the token is invalid (not base64url JSON)', () => {
     const { board } = freshBoard();
-    const result = board.taskCompleted({ params: { token: 'not-a-valid-token' } });
+    const result = board.taskProgress({ params: { token: 'not-a-valid-token' } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/Invalid callback token/);
   });
@@ -548,7 +548,7 @@ describe('BoardLiveCardsPublic — taskCompleted', () => {
   it('fails when token payload is missing the task name field', () => {
     const { board } = freshBoard();
     const badToken = Buffer.from(JSON.stringify({ x: 'no-t-field' })).toString('base64url');
-    const result = board.taskCompleted({ params: { token: badToken } });
+    const result = board.taskProgress({ params: { token: badToken } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/Invalid callback token/);
   });

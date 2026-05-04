@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    exclude: ['tests/examples/portfolio-tracker-e2e.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

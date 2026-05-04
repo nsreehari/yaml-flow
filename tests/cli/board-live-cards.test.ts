@@ -52,7 +52,7 @@ function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
     if (entries.length > 0) throw new Error(`Directory "${dir}" is not empty and has no valid board`);
   }
   const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, testDir, { suppressSpawn: true }));
-  const result = board.init({ params: { cardStoreRef: '::fs-path::' + path.join(dir, '.cards') } });
+  const result = board.init({ params: { cardStoreRef: '::fs-path::' + path.join(dir, '.cards'), outputsStoreRef: '::fs-path::' + path.join(dir, '.output') } });
   if (result.status !== 'success') throw new Error(`initBoard failed: ${JSON.stringify(result)}`);
   return 'created';
 }
