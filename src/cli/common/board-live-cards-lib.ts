@@ -857,6 +857,8 @@ export function createCardHandlerFn(
   adapters: CardHandlerAdapters,
   taskCompletedFn: (taskName: string, data: Record<string, unknown>) => void,
   _taskFailedFn: (taskName: string, error: string) => void,
+  writeComputedValuesFn?: (cardId: string, values: Record<string, unknown>) => void,
+  writeDataObjectsFn?: (data: Record<string, unknown>) => void,
 ): TaskHandlerFn {
   return async (input) => {
         const pendingRequests: ExecutionRequestEntry[] = [];
@@ -945,7 +947,7 @@ export function createCardHandlerFn(
           CardCompute.runSync(computeNode, { sourcesData });
         }
 
-        adapters.outputStore.writeComputedValues(cardId, computeNode.computed_values ?? {});
+        (writeComputedValuesFn ?? adapters.outputStore.writeComputedValues.bind(adapters.outputStore))(cardId, computeNode.computed_values ?? {});
 
         const enrichedCard = { ...card };
         const enrichedSources = CardCompute.enrichSourcesSync(
@@ -1009,7 +1011,7 @@ export function createCardHandlerFn(
           data[bindTo] = CardCompute.resolve(computeNode, ref);
         }
 
-        adapters.outputStore.writeDataObjects(data);
+        (writeDataObjectsFn ?? adapters.outputStore.writeDataObjects.bind(adapters.outputStore))(data);
 
         const undeliveredOptional = allSources.filter(s => {
           if (s.optionalForCompletionGating !== true) return false;

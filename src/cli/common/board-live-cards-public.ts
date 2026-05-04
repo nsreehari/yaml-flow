@@ -67,6 +67,9 @@ import type {
   BoardStatusObject,
   LiveCard,
   CardIndex,
+  CardRuntimeStore,
+  CardRuntimeSnapshot,
+  FetchedSourcesStore,
 } from './board-live-cards-lib.js';
 
 // Re-export constants so platform adapter files can import them without going through lib directly.
@@ -399,13 +402,58 @@ export function createBoardLiveCardsPublic(
       onDispatchFailed,
     );
 
+    const realCardRuntimeStore = createCardRuntimeStore(adapter.kvStorage('card-runtime'));
+    const realFetchedSourcesStore = createFetchedSourcesStore(
+      adapter.blobStorage('sources'),
+      (ref) => adapter.resolveBlob(ref),
+    );
+
+    // RX: in-memory overlay for card runtime writes — reads check overlay first
+    const RX = new Map<string, CardRuntimeSnapshot>();
+    const overlayCardRuntimeStore: CardRuntimeStore = {
+      readRuntime(cardId) {
+        return RX.get(cardId) ?? realCardRuntimeStore.readRuntime(cardId);
+      },
+      writeRuntime(cardId, state) {
+        RX.set(cardId, state);
+      },
+    };
+
+    // SX: in-memory overlay for source commits — reads check overlay first
+    const SX: { cardId: string; outputFile: string; deliveryToken: string }[] = [];
+    const sxCache = new Map<string, unknown>();
+    const overlayFetchedSourcesStore: FetchedSourcesStore = {
+      readSourceData(cardId, outputFile) {
+        const key = `${cardId}/${outputFile}`;
+        if (sxCache.has(key)) return sxCache.get(key)!;
+        return realFetchedSourcesStore.readSourceData(cardId, outputFile);
+      },
+      ingestSourceDataStaged(cardId, outputFile, ref, deliveryToken) {
+        realFetchedSourcesStore.ingestSourceDataStaged(cardId, outputFile, ref, deliveryToken);
+      },
+      commitSourceData(cardId, outputFile, deliveryToken) {
+        // Read staged content into overlay so readSourceData sees it immediately
+        const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
+        const blob = adapter.blobStorage('sources');
+        const content = blob.read(stagedKey);
+        if (content == null) return false;
+        const key = `${cardId}/${outputFile}`;
+        const trimmed = content.trim();
+        try { sxCache.set(key, JSON.parse(trimmed)); } catch { sxCache.set(key, trimmed); }
+        SX.push({ cardId, outputFile, deliveryToken });
+        return true;
+      },
+      hasSource(cardId, outputFile) {
+        const key = `${cardId}/${outputFile}`;
+        if (sxCache.has(key)) return true;
+        return realFetchedSourcesStore.hasSource(cardId, outputFile);
+      },
+    };
+
     const cardHandlerAdapters = {
       cardStore: cardStore(),
-      cardRuntimeStore: createCardRuntimeStore(adapter.kvStorage('card-runtime')),
-      fetchedSourcesStore: createFetchedSourcesStore(
-        adapter.blobStorage('sources'),
-        (ref) => adapter.resolveBlob(ref),
-      ),
+      cardRuntimeStore: overlayCardRuntimeStore,
+      fetchedSourcesStore: overlayFetchedSourcesStore,
       outputStore: outputStore(),
       executionRequestStore,
     };
@@ -415,16 +463,24 @@ export function createBoardLiveCardsPublic(
     const { events: undrained, newCursor } = journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
 
     let TX: GraphEvent[] = [];
+    const CX: { cardId: string; values: Record<string, unknown> }[] = [];
+    const DX: Record<string, unknown>[] = [];
 
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
       TX.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
     };
     const taskFailedFn = (taskName: string, error: string): void =>
       appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
+    const writeComputedValuesFn = (cardId: string, values: Record<string, unknown>): void => {
+      CX.push({ cardId, values });
+    };
+    const writeDataObjectsFn = (data: Record<string, unknown>): void => {
+      DX.push(data);
+    };
 
     const rg = createReactiveGraph(live, {
       handlers: {
-        'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn),
+        'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn, writeComputedValuesFn, writeDataObjectsFn),
       },
     });
 
@@ -440,6 +496,16 @@ export function createBoardLiveCardsPublic(
 
     const currentVersion = snapshotStore().readSnapshot(baseRef.value).version;
     commitEnvelope({ lastDrainedJournalId: newCursor, graph: rg.snapshot() }, currentVersion);
+
+    // Flush deferred output writes after board state is saved
+    for (const { cardId, values } of CX) cardHandlerAdapters.outputStore.writeComputedValues(cardId, values);
+    for (const data of DX) cardHandlerAdapters.outputStore.writeDataObjects(data);
+
+    // Flush RX: card runtime overlay → real store
+    for (const [cardId, state] of RX) realCardRuntimeStore.writeRuntime(cardId, state);
+
+    // Flush SX: deferred source commits → real store
+    for (const { cardId, outputFile, deliveryToken } of SX) realFetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
 
     try {
       cardHandlerAdapters.outputStore.writeStatusSnapshot(
