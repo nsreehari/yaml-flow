@@ -109,7 +109,6 @@ export type {
   UpstreamResult, DownstreamResult,
   ReactiveGraph, ReactiveGraphOptions,
   TaskHandlerFn, TaskHandlerInput, TaskHandlerReturn,
-  SyncTaskResolverFn, SyncResolverResult,
   Journal,
   ReactiveGraphValidationInput, GraphMutation,
   ShellHandlerOptions, ProcessHandlerOptions, CommandSpec, ScriptHandlerOptions, WebhookHandlerOptions, ResolveCallbackFn,
