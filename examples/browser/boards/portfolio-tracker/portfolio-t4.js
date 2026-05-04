@@ -153,6 +153,8 @@ async function waitForCompleted(label, timeoutMs = 90_000, pollMs = 500) {
   process.exit(1);
 }
 
+const T = () => Date.now();
+
 // ── T0 — Init ─────────────────────────────────────────────────────────────────
 console.log('\n=== T0: Init ===');
 if (fs.existsSync(_TMP_BASE)) fs.rmSync(_TMP_BASE, { recursive: true, force: true });
@@ -166,6 +168,7 @@ checkResult(
   }),
   'init'
 );
+console.log(`  [${T()}] init done`);
 
 const cardStore = makeCardStore();
 for (const card of [
@@ -173,16 +176,19 @@ for (const card of [
   // only portfolio-form — isolate the rapid-fire bug
 ]) {
   const vr = makeNonCoreBoard().validateTmpCard({ body: card });
+  console.log(`  [${T()}] validateTmpCard ${card.id} done`);
   if (!vr.data?.isValid) { console.error(`[VALIDATE FAILED] ${card.id}:`, JSON.stringify(vr.data?.issues ?? vr.error)); process.exit(1); }
   checkResult(cardStore.set({ body: card }), `card-store set ${card.id}`);
+  console.log(`  [${T()}] cardStore.set ${card.id} done`);
 }
 
 for (const cardId of ['portfolio-form']) {
   checkResult(makeBoard().upsertCard({ params: { cardId } }), `upsertCard ${cardId}`);
+  console.log(`  [${T()}] upsertCard ${cardId} done`);
 }
 
 await waitForCompleted('T0-settle');
-console.log('[T0] board settled with initial holdings.');
+console.log(`[${T()}] [T0] board settled with initial holdings.`);
 
 // ── T4 — Rapid 5× portfolio-form updates (no delay) ───────────────────────────
 console.log('\n=== T4: Rapid 5x portfolio-form updates (no delay) ===');
@@ -202,11 +208,15 @@ for (let i = 0; i < T4_ITERS.length; i++) {
   const holdings = T4_ITERS[i];
   console.log(`  iter ${i + 1}: ${JSON.stringify(holdings)}`);
   checkResult(makeCardStore().set({ body: setHoldings(CARD_PORTFOLIO_FORM, holdings) }), `iter${i + 1} card-store set`);
+  console.log(`  [${T()}] iter ${i + 1} cardStore.set done`);
   checkResult(makeBoard().upsertCard({ params: { cardId: 'portfolio-form', restart: 'true' } }), `iter${i + 1} upsert`);
+  console.log(`  [${T()}] iter ${i + 1} upsertCard done`);
+  // await waitForCompleted(`T4-iter${i + 1}`);  // commented out: rapid-fire, no waits
 }
 
-console.log('\n[T4] all 5 upserts fired — waiting for board to converge...');
+console.log(`\n[${T()}] [T4] all 5 upserts fired — waiting for board to converge...`);
 const t4Final = await waitForCompleted('T4');
+console.log(`[${T()}] [T4] waitForCompleted done`);
 
 // ── Dump results ──────────────────────────────────────────────────────────────
 const holdingsPath = path.join(OUTPUTS_DIR, 'data-objects', 'holdings.json');

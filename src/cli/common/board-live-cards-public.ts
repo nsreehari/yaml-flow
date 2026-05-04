@@ -492,10 +492,11 @@ export function createBoardLiveCardsPublic(
       await rg.waitForHandlers();
     }
 
+    const finalLive = rg.getState();
     await rg.dispose({ wait: true });
 
     const currentVersion = snapshotStore().readSnapshot(baseRef.value).version;
-    commitEnvelope({ lastDrainedJournalId: newCursor, graph: rg.snapshot() }, currentVersion);
+    commitEnvelope({ lastDrainedJournalId: newCursor, graph: snapshot(finalLive) }, currentVersion);
 
     // Flush deferred output writes after board state is saved
     for (const { cardId, values } of CX) cardHandlerAdapters.outputStore.writeComputedValues(cardId, values);
@@ -509,7 +510,7 @@ export function createBoardLiveCardsPublic(
 
     try {
       cardHandlerAdapters.outputStore.writeStatusSnapshot(
-        buildBoardStatusObject(boardPath, restore(rg.snapshot())),
+        buildBoardStatusObject(boardPath, finalLive),
       );
     } catch (e) {
       warn(`[board-live-cards-public] status publish failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -546,9 +547,20 @@ export function createBoardLiveCardsPublic(
   // Internal drain — called directly from within the factory (no CommandInput needed).
   async function drain(): Promise<CommandResult> {
     try {
-      const continuation = adapter.requestProcessAccumulated
-        ? () => { adapter.requestProcessAccumulated!(); }
-        : undefined;
+      // After each drain cycle, check if new journal entries accumulated while we
+      // held the lock (e.g. concurrent upsertCard calls). If so, run another cycle.
+      // This is the in-process equivalent of requestProcessAccumulated (which spawns
+      // a child process for the CLI case). The self-continuation runs after the lock
+      // is released, so it re-acquires cleanly.
+      const continuation = () => {
+        const envelope = loadEnvelope();
+        const { events } = journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
+        if (events.length > 0) {
+          void drain();
+        }
+        // Also fire the platform continuation (e.g. detached process for source fetches)
+        adapter.requestProcessAccumulated?.();
+      };
       const ran = await withRelayLock(adapter.lock, drainCycle, continuation);
       return ok({ ran: ran !== false });
     } catch (e) { return err(e); }
