@@ -414,8 +414,11 @@ export function createBoardLiveCardsPublic(
     const live = restore(envelope.graph);
     const { events: undrained, newCursor } = journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
 
-    const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void =>
-      appendJournalEvent({ type: 'task-completed', taskName, data, timestamp: nowIso() });
+    let TX: GraphEvent[] = [];
+
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
+      TX.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
+    };
     const taskFailedFn = (taskName: string, error: string): void =>
       appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
 
@@ -425,7 +428,14 @@ export function createBoardLiveCardsPublic(
       },
     });
 
-    rg.pushAll(undrained);
+    TX = undrained;
+    while (TX.length > 0) {
+      const pending = TX;
+      TX = [];
+      rg.pushAll(pending);
+      await rg.waitForHandlers();
+    }
+
     await rg.dispose({ wait: true });
 
     const currentVersion = snapshotStore().readSnapshot(baseRef.value).version;

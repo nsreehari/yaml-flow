@@ -278,6 +278,13 @@ export interface ReactiveGraph {
   /** Current schedule projection. */
   getSchedule(): ScheduleResult;
   /**
+   * Await all in-flight handler promises without disposing the graph.
+   * Use this when you need to wait for async handlers to finish so you
+   * can inspect side-effects (e.g. a TX accumulator) and then push more
+   * events into the same graph instance.
+   */
+  waitForHandlers(): Promise<void>;
+  /**
    * Stop accepting events.
    * @param options.wait — if true, await all in-flight handler promises before marking disposed.
    */
@@ -714,6 +721,12 @@ export function createReactiveGraph(
 
     getSchedule(): ScheduleResult {
       return schedule(live);
+    },
+
+    async waitForHandlers(): Promise<void> {
+      if (pendingHandlers.size > 0) {
+        await Promise.allSettled([...pendingHandlers]);
+      }
     },
 
     async dispose(options?: { wait?: boolean }): Promise<void> {
