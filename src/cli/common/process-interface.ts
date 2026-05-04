@@ -67,7 +67,7 @@ export interface InvocationAdapter {
 export interface ExecOptions {
   shell?: boolean;
   timeout?: number;
-  encoding?: BufferEncoding;
+  encoding?: string;
   cwd?: string;
   env?: Record<string, string | undefined>;
 }

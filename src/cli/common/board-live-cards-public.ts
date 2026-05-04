@@ -70,6 +70,7 @@ import type {
   CardRuntimeStore,
   CardRuntimeSnapshot,
   FetchedSourcesStore,
+  OutputStoreEvent,
 } from './board-live-cards-lib.js';
 
 // Re-export constants so platform adapter files can import them without going through lib directly.
@@ -215,6 +216,12 @@ export interface BoardPlatformAdapter {
    */
   requestProcessAccumulated?(): void;
 
+  /**
+   * Optional cross-process board change notification publisher (named pipe, webhook, pubsub, etc.).
+   * Called once per drain cycle with the complete batch of notifications produced in that cycle.
+   */
+  publishBoardChangeNotifications?(notifications: BoardChangeNotification[]): void | Promise<void>;
+
   /** Optional warn sink — defaults to no-op. */
   onWarn?(msg: string): void;
 }
@@ -258,6 +265,10 @@ export interface BoardLiveCardsPublic {
   sourceDataFetched(input: CommandInput): CommandResult;
   sourceDataFetchFailure(input: CommandInput): CommandResult;
 }
+
+export type BoardChangeNotification =
+  | OutputStoreEvent
+  | { kind: 'card_refreshed'; cardId: string; card: LiveCard };
 
 // ============================================================================
 // Internal pure helpers — no platform deps
@@ -311,6 +322,20 @@ export function createBoardLiveCardsPublic(
 ): BoardLiveCardsPublic {
   const warn = adapter.onWarn ?? (() => { /* no-op */ });
   const boardPath = serializeRef(baseRef);
+
+  function flushBoardChangeNotifications(notifications: BoardChangeNotification[]): void {
+    if (notifications.length === 0) return;
+    try {
+      const p = adapter.publishBoardChangeNotifications?.(notifications);
+      if (p && typeof (p as Promise<void>).catch === 'function') {
+        void (p as Promise<void>).catch((e: unknown) =>
+          warn(`[board-live-cards-public] publishBoardChangeNotifications failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
+      }
+    } catch (e) {
+      warn(`[board-live-cards-public] publishBoardChangeNotifications failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   // ── Inline storage adapters built from the three primitives ─────────────────
   //
@@ -468,6 +493,8 @@ export function createBoardLiveCardsPublic(
     let TX: GraphEvent[] = [];
     const CX: { cardId: string; values: Record<string, unknown> }[] = [];
     const DX: Record<string, unknown>[] = [];
+    // NX: card refreshes — Map so last write per cardId wins, deduplicating rapid updates.
+    const NX = new Map<string, LiveCard>();
 
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
       TX.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
@@ -480,10 +507,16 @@ export function createBoardLiveCardsPublic(
     const writeDataObjectsFn = (data: Record<string, unknown>): void => {
       DX.push(data);
     };
+    const notifyCardFn = (cardId: string, card: LiveCard): void => {
+      NX.set(cardId, card);
+    };
+
+    // Wire output-store notifications for this drain cycle.
+    // (notifications are batched and flushed at the end of the drain cycle)
 
     const rg = createReactiveGraph(live, {
       handlers: {
-        'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn, writeComputedValuesFn, writeDataObjectsFn),
+        'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn, writeComputedValuesFn, writeDataObjectsFn, notifyCardFn),
       },
     });
 
@@ -511,13 +544,25 @@ export function createBoardLiveCardsPublic(
     // Flush SX: deferred source commits → real store
     for (const { cardId, outputFile, deliveryToken } of SX) realFetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
 
+    let statusObj: unknown;
     try {
-      cardHandlerAdapters.outputStore.writeStatusSnapshot(
-        buildBoardStatusObject(boardPath, finalLive),
-      );
+      statusObj = buildBoardStatusObject(boardPath, finalLive);
+      cardHandlerAdapters.outputStore.writeStatusSnapshot(statusObj);
     } catch (e) {
       warn(`[board-live-cards-public] status publish failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    // Batch all drain-cycle notifications and flush them atomically in one write
+    const batch: BoardChangeNotification[] = [];
+    for (const { cardId, values } of CX) batch.push({ kind: 'computed_values', cardId, values });
+    for (const data of DX) {
+      for (const [key, payload] of Object.entries(data)) {
+        if (key) batch.push({ kind: 'data_object', key, payload });
+      }
+    }
+    for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
+    if (statusObj !== undefined) batch.push({ kind: 'status', status: statusObj });
+    flushBoardChangeNotifications(batch);
 
     const executorRef = configStore().readTaskExecutorRef()
       ?? { howToRun: 'built-in' as const, whatToRun: '::built-in::source-cli-task-executor' };

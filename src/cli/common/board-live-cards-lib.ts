@@ -519,6 +519,11 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 // PublishedOutputsStore
 // ============================================================================
 
+export type OutputStoreEvent =
+  | { kind: 'computed_values'; cardId: string; values: Record<string, unknown> }
+  | { kind: 'data_object'; key: string; payload: unknown }
+  | { kind: 'status'; status: unknown };
+
 export interface PublishedOutputsStore {
   writeComputedValues(cardId: string, values: Record<string, unknown>): void;
   readComputedValues(cardId: string): unknown | null;
@@ -530,7 +535,9 @@ export interface PublishedOutputsStore {
 
 export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStore {
   return {
-    writeComputedValues(cardId, values) { kv.write(`cards/${cardId}/computed_values`, values); },
+    writeComputedValues(cardId, values) {
+      kv.write(`cards/${cardId}/computed_values`, values);
+    },
     readComputedValues(cardId) { return kv.read(`cards/${cardId}/computed_values`); },
     writeDataObjects(data) {
       for (const [token, payload] of Object.entries(data)) {
@@ -539,7 +546,9 @@ export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStor
       }
     },
     readDataObject(key) { return kv.read(`data-objects/${key}`); },
-    writeStatusSnapshot(status) { kv.write('status', status); },
+    writeStatusSnapshot(status) {
+      kv.write('status', status);
+    },
     readStatusSnapshot() { return kv.read('status'); },
   };
 }
@@ -863,6 +872,7 @@ export function createCardHandlerFn(
   _taskFailedFn: (taskName: string, error: string) => void,
   writeComputedValuesFn?: (cardId: string, values: Record<string, unknown>) => void,
   writeDataObjectsFn?: (data: Record<string, unknown>) => void,
+  notifyCardFn?: (cardId: string, card: LiveCard) => void,
 ): TaskHandlerFn {
   return async (input) => {
         const pendingRequests: ExecutionRequestEntry[] = [];
@@ -870,6 +880,8 @@ export function createCardHandlerFn(
         if (!card) return 'task-initiate-failure';
 
         const cardId = card.id as string;
+        // Notify on fresh evaluations only (not source-fetch callbacks).
+        if (!input.update) notifyCardFn?.(cardId, card);
         const cardState = (card.card_data ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
         const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);

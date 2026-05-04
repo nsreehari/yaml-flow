@@ -23,6 +23,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
@@ -326,9 +327,71 @@ export function buildBoardCliInvocation(
 /**
  * Spawn a detached board-live-cards process-accumulated-events pass for the given board.
  */
-export function requestProcessAccumulatedDetached(cliDir: string, baseRef: KindValueRef): void {
-  const { cmd, args } = buildBoardCliInvocation(cliDir, 'process-accumulated-events', ['--base-ref', serializeRef(baseRef)]);
+export function requestProcessAccumulatedDetached(cliDir: string, baseRef: KindValueRef, notifyChannel?: string): void {
+  const cliArgs = ['--base-ref', serializeRef(baseRef)];
+  if (notifyChannel) cliArgs.push('--notify-channel', notifyChannel);
+  const { cmd, args } = buildBoardCliInvocation(cliDir, 'process-accumulated-events', cliArgs);
   runDetached({ command: cmd, args });
+}
+
+// ============================================================================
+// Named-pipe event transport (cross-process board notifications)
+// ============================================================================
+
+/** Return canonical named-pipe/socket path for the given channel name. */
+export function getNamedPipePath(pipeName: string): string {
+  if (process.platform === 'win32') return `\\\\.\\pipe\\${pipeName}`;
+  return path.join(os.tmpdir(), `${pipeName}.sock`);
+}
+
+/**
+ * Publish a batch of JSON notifications as newline-delimited records to a named pipe.
+ * Best-effort: if the pipe is unavailable, logs via onWarn and drops the batch.
+ *
+ * All payloads are concatenated into a single `socket.write()` call so the consumer
+ * receives them atomically (no interleaving from other drain cycles).
+ * Uses a per-pipeName persistent connection so ordering is preserved across calls.
+ */
+const _pipeClients = new Map<string, { socket: net.Socket; ready: boolean; queue: string[] }>();
+
+export function publishJsonEventsToNamedPipe(
+  pipeName: string,
+  payloads: unknown[],
+  onWarn?: (msg: string) => void,
+): void {
+  if (payloads.length === 0) return;
+  const chunk = payloads.map(p => JSON.stringify(p)).join('\n') + '\n';
+  let entry = _pipeClients.get(pipeName);
+
+  if (entry && !entry.socket.destroyed) {
+    if (entry.ready) {
+      entry.socket.write(chunk);
+    } else {
+      entry.queue.push(chunk);
+    }
+    return;
+  }
+
+  // Create a new persistent connection
+  const pipePath = getNamedPipePath(pipeName);
+  const socket = net.createConnection(pipePath);
+  entry = { socket, ready: false, queue: [chunk] };
+  _pipeClients.set(pipeName, entry);
+
+  socket.on('connect', () => {
+    entry!.ready = true;
+    for (const queued of entry!.queue) socket.write(queued);
+    entry!.queue.length = 0;
+  });
+
+  socket.on('error', (e) => {
+    onWarn?.(`[named-pipe publish] ${pipePath}: ${e instanceof Error ? e.message : String(e)}`);
+    _pipeClients.delete(pipeName);
+  });
+
+  socket.on('close', () => {
+    _pipeClients.delete(pipeName);
+  });
 }
 
 // ============================================================================

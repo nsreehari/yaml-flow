@@ -18,6 +18,7 @@ import {
   joinPath,
   isAbsolutePath,
   requestProcessAccumulatedDetached,
+  publishJsonEventsToNamedPipe,
   createNodeCommandExecutor,
 } from './process-runner.js';
 import { buildLocalBaseSpec, dispatchTaskExecutorDetached } from './execution-adapter.js';
@@ -76,7 +77,7 @@ const BOARD_LOCK_FILE = '.board.lock';
 export function createFsBoardPlatformAdapter(
   baseRef: KindValueRef,
   cliDir: string,
-  opts?: { onWarn?: (msg: string) => void; suppressSpawn?: boolean },
+  opts?: { onWarn?: (msg: string) => void; suppressSpawn?: boolean; notifyChannel?: string },
 ): BoardPlatformAdapter {
   const dir = baseRef.value;
 
@@ -140,7 +141,22 @@ export function createFsBoardPlatformAdapter(
 
     requestProcessAccumulated() {
       if (opts?.suppressSpawn) return;
-      requestProcessAccumulatedDetached(cliDir, baseRef);
+      requestProcessAccumulatedDetached(cliDir, baseRef, opts?.notifyChannel);
+    },
+
+    publishBoardChangeNotifications(notifications) {
+      if (!opts?.notifyChannel || notifications.length === 0) return;
+      const envelopes = notifications.map(notification => ({
+        id: genUUID(),
+        ts: new Date().toISOString(),
+        boardRef: serializeRef(baseRef),
+        notification,
+      }));
+      publishJsonEventsToNamedPipe(
+        opts.notifyChannel,
+        envelopes,
+        opts.onWarn,
+      );
     },
 
     onWarn: opts?.onWarn,
