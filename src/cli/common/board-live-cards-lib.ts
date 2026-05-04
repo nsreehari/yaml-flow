@@ -942,7 +942,7 @@ export function createCardHandlerFn(
         };
         computeNode._sourcesData = sourcesData;
         if (card.compute) {
-          await CardCompute.run(computeNode, { sourcesData });
+          CardCompute.runSync(computeNode, { sourcesData });
         }
 
         adapters.outputStore.writeComputedValues(cardId, computeNode.computed_values ?? {});
