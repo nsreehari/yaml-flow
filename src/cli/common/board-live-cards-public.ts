@@ -245,7 +245,6 @@ export interface BoardLiveCardsPublic {
   upsertCard(input: CommandInput): CommandResult;
 
   // Task callbacks — params.token encodes baseRef; body = task data payload
-  taskCompleted(input: CommandInput): CommandResult;
   // params: token, error?
   taskFailed(input: CommandInput): CommandResult;
   // params: token; body = update payload
@@ -660,21 +659,6 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
-  function taskCompleted(input: CommandInput): CommandResult {
-    try {
-      const token = input.params?.['token'] as string | undefined;
-      if (!token) return fail('taskCompleted requires params.token');
-      const b = (input.body ?? {}) as Record<string, unknown>;
-      const data = (b['data'] ?? {}) as Record<string, unknown>;
-      const decoded = decodeCallbackToken(token);
-      if (!decoded) return fail('Invalid callback token');
-      try { outputStore().writeDataObjects(data); } catch { /* best-effort */ }
-      appendJournalEvent({ type: 'task-completed', taskName: decoded.taskName, data, timestamp: nowIso() });
-      void drain();
-      return ok();
-    } catch (e) { return err(e); }
-  }
-
   function taskFailed(input: CommandInput): CommandResult {
     try {
       const token = input.params?.['token'] as string | undefined;
@@ -777,7 +761,7 @@ export function createBoardLiveCardsPublic(
   return {
     init, status, getCardStoreRef, getOutputsStoreRef, removeCard, retrigger, processAccumulatedEvents,
     upsertCard,
-    taskCompleted, taskFailed, taskProgress,
+    taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,
   };
 }

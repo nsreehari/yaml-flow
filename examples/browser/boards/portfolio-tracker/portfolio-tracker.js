@@ -79,8 +79,6 @@ function cliCommand() {
 function runCli(args, capture = false) {
   const { cmd, prefixArgs } = cliCommand();
   const env = { ...process.env };
-  // This demo needs real worker dispatch; suppressing spawn keeps source/inference tasks in running state.
-  delete env.BOARD_LIVE_CARDS_NO_SPAWN;
   const result = spawnSync(cmd, [...prefixArgs, ...args], {
     stdio: capture ? 'pipe' : 'inherit',
     shell: false,
@@ -132,7 +130,6 @@ function runCardStoreCliWithInput(args, inputJson) {
 function runCliWithInput(args, inputJson) {
   const { cmd, prefixArgs } = cliCommand();
   const env = { ...process.env };
-  delete env.BOARD_LIVE_CARDS_NO_SPAWN;
   const result = spawnSync(cmd, [...prefixArgs, ...args], {
     input: inputJson,
     stdio: ['pipe', 'inherit', 'inherit'],

@@ -325,10 +325,8 @@ export function buildBoardCliInvocation(
 
 /**
  * Spawn a detached board-live-cards process-accumulated-events pass for the given board.
- * BOARD_LIVE_CARDS_NO_SPAWN=1 suppresses actual spawning (used in tests).
  */
 export function requestProcessAccumulatedDetached(cliDir: string, baseRef: KindValueRef): void {
-  if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
   const { cmd, args } = buildBoardCliInvocation(cliDir, 'process-accumulated-events', ['--base-ref', serializeRef(baseRef)]);
   runDetached({ command: cmd, args });
 }

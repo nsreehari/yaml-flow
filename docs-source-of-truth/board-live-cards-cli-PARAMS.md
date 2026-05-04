@@ -30,7 +30,7 @@ type CommandInput = {
 | `validate-tmp-card` | `{ "card-content": <card object> }` |
 | `probe-source` | `{ "mock-projections": <object> }` |
 | `probe-tmp-source` | `{ "source-def": <object>, "mock-projections": <object> }` |
-| `task-completed` | `{ "data": <data-object> }` |
+
 | `task-progress` | `{ "update": <update-object> }` |
 | `init` | `{ "task-executor-ref"?: <ExecutionRef>, "chat-handler-ref"?: <ExecutionRef> }` |
 
@@ -106,10 +106,6 @@ describe-task-executor-capabilities --base-ref <ref>   (no additional params)
 > `--token` encodes the base-ref — no `--base-ref` flag needed.
 
 ```
-task-completed --token <token>
-  params: { token }
-  body: { "data": <data-object> }                     # stdin
-
 task-failed --token <token> [--error <message>]
   params: { token, error? }
 

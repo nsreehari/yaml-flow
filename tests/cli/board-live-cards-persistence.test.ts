@@ -20,7 +20,7 @@ import { createCardStorePublic } from '../../src/cli/common/card-store-lib-publi
 import { createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
 import { restore } from '../../src/continuous-event-graph/index.js';
 
-process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
+
 
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
 const cardStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.cards');
@@ -31,7 +31,7 @@ const cliDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]
 
 function board(dir: string) {
   const br = ref(dir);
-  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {} }));
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {}, suppressSpawn: true }));
 }
 
 const snapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());

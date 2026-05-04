@@ -31,7 +31,7 @@ import { createReactiveGraph, restore, createLiveGraph, snapshot } from '../../s
 import type { ReactiveGraph } from '../../src/continuous-event-graph/index.js';
 import type { GraphConfig, GraphEvent } from '../../src/event-graph/types.js';
 
-process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
+// Spawning is suppressed via { suppressSpawn: true } in adapter creation.
 
 // ============================================================================
 // Test-local helpers (adapters previously in fs-board-adapter.ts)
@@ -51,7 +51,7 @@ function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
     const entries = fs.readdirSync(dir);
     if (entries.length > 0) throw new Error(`Directory "${dir}" is not empty and has no valid board`);
   }
-  const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, testDir));
+  const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, testDir, { suppressSpawn: true }));
   const result = board.init({ params: { cardStoreRef: '::fs-path::' + path.join(dir, '.cards') } });
   if (result.status !== 'success') throw new Error(`initBoard failed: ${JSON.stringify(result)}`);
   return 'created';

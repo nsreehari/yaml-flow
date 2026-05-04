@@ -76,7 +76,7 @@ const BOARD_LOCK_FILE = '.board.lock';
 export function createFsBoardPlatformAdapter(
   baseRef: KindValueRef,
   cliDir: string,
-  opts?: { onWarn?: (msg: string) => void },
+  opts?: { onWarn?: (msg: string) => void; suppressSpawn?: boolean },
 ): BoardPlatformAdapter {
   const dir = baseRef.value;
 
@@ -106,7 +106,7 @@ export function createFsBoardPlatformAdapter(
     selfRef,
 
     async dispatchExecution(ref, args) {
-      if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return { dispatched: false };
+      if (opts?.suppressSpawn) return { dispatched: false };
       try {
         const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined
           ?? genUUID().slice(0, 8);
@@ -139,7 +139,7 @@ export function createFsBoardPlatformAdapter(
     kvStorageForRef: (ref: string) => createFsKvStorage(parseRef(ref).value),
 
     requestProcessAccumulated() {
-      if (process.env.BOARD_LIVE_CARDS_NO_SPAWN === '1') return;
+      if (opts?.suppressSpawn) return;
       requestProcessAccumulatedDetached(cliDir, baseRef);
     },
 

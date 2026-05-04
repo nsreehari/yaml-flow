@@ -170,13 +170,6 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().upsertCard({ params }));
       return;
     }
-    case 'task-completed': {
-      const token  = requireFlag(rest, '--token', 'task-completed --base-ref <ref> --token <token> [--data <json>]');
-      const dataRaw = optFlag(rest, '--data');
-      const data = dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : {};
-      printResult(board().taskCompleted({ params: { token }, body: { data } }));
-      return;
-    }
     case 'task-failed': {
       const token = requireFlag(rest, '--token', 'task-failed --base-ref <ref> --token <token> [--error <message>]');
       const params: Record<string, string> = { token };

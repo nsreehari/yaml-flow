@@ -173,7 +173,9 @@ console.log(`  [${T()}] init done`);
 const cardStore = makeCardStore();
 for (const card of [
   setHoldings(CARD_PORTFOLIO_FORM, { AAPL: 10 }),
-  // only portfolio-form — isolate the rapid-fire bug
+  CARD_PRICE_FETCH,
+  CARD_HOLDINGS_TABLE,
+  CARD_PORTFOLIO_VALUE,
 ]) {
   const vr = makeNonCoreBoard().validateTmpCard({ body: card });
   console.log(`  [${T()}] validateTmpCard ${card.id} done`);
@@ -182,7 +184,7 @@ for (const card of [
   console.log(`  [${T()}] cardStore.set ${card.id} done`);
 }
 
-for (const cardId of ['portfolio-form']) {
+for (const cardId of ['portfolio-form', 'price-fetch', 'holdings-table', 'portfolio-value']) {
   checkResult(makeBoard().upsertCard({ params: { cardId } }), `upsertCard ${cardId}`);
   console.log(`  [${T()}] upsertCard ${cardId} done`);
 }
@@ -218,13 +220,69 @@ console.log(`\n[${T()}] [T4] all 5 upserts fired — waiting for board to conver
 const t4Final = await waitForCompleted('T4');
 console.log(`[${T()}] [T4] waitForCompleted done`);
 
-// ── Dump results ──────────────────────────────────────────────────────────────
+// ── Assertions ────────────────────────────────────────────────────────────────
 const holdingsPath = path.join(OUTPUTS_DIR, 'data-objects', 'holdings.json');
 const holdings = readJson(holdingsPath);
 console.log('\n[T4] holdings.json (data-object output):', JSON.stringify(holdings, null, 2));
 
 const finalCard = readJson(path.join(CARDSTORE_DIR, 'portfolio-form.json'));
 console.log('[T4] cardstore portfolio-form holdings:', JSON.stringify(finalCard.card_data?.holdings, null, 2));
+
+// Assert final holdings match iter-5
+const holdingsBySymbol = Object.fromEntries(holdings.map(h => [h.symbol, h.qty]));
+const expectedSymbols = Object.keys(T4_EXPECTED_FINAL).sort();
+const actualSymbols = Object.keys(holdingsBySymbol).sort();
+assert(JSON.stringify(actualSymbols) === JSON.stringify(expectedSymbols),
+  `T4: expected symbols ${JSON.stringify(expectedSymbols)}, got ${JSON.stringify(actualSymbols)}`);
+for (const [sym, qty] of Object.entries(T4_EXPECTED_FINAL)) {
+  assert(holdingsBySymbol[sym] === qty,
+    `T4: expected ${sym} qty=${qty}, got ${holdingsBySymbol[sym]}`);
+}
+console.log('[T4] holdings assertions passed: iter-5 symbols and quantities match.');
+
+// Assert prices contain exactly the iter-5 tickers
+const pricesPath = path.join(OUTPUTS_DIR, 'data-objects', 'prices.json');
+const prices = readJson(pricesPath);
+const priceKeys = Object.keys(prices).sort();
+assert(JSON.stringify(priceKeys) === JSON.stringify(expectedSymbols),
+  `T4: expected price keys ${JSON.stringify(expectedSymbols)}, got ${JSON.stringify(priceKeys)}`);
+assert(Object.values(prices).every(v => typeof v === 'number'),
+  'T4: all price values must be numbers');
+console.log('[T4] prices assertions passed:', JSON.stringify(prices));
+
+// Assert holdings-table rows match
+const htCvPath = path.join(OUTPUTS_DIR, 'cards', 'holdings-table', 'computed_values.json');
+const htCv = readJson(htCvPath);
+const rowsBySymbol = Object.fromEntries([].concat(htCv.table.rows).map(r => [r.symbol, r]));
+for (const [sym, qty] of Object.entries(T4_EXPECTED_FINAL)) {
+  assert(rowsBySymbol[sym]?.qty === qty,
+    `T4: holdings-table expected ${sym} qty=${qty}, got ${rowsBySymbol[sym]?.qty}`);
+  const expectedValue = Math.round(qty * prices[sym] * 100) / 100;
+  assert(Math.round(rowsBySymbol[sym]?.value * 100) === Math.round(expectedValue * 100),
+    `T4: holdings-table expected ${sym} value=${expectedValue}, got ${rowsBySymbol[sym]?.value}`);
+}
+console.log('[T4] holdings-table assertions passed: rows match holdings × prices.');
+
+// Assert portfolio-value totalValue = sum(holdings × prices)
+const pvCv = readJson(path.join(OUTPUTS_DIR, 'cards', 'portfolio-value', 'computed_values.json'));
+const expectedTotal = Object.entries(T4_EXPECTED_FINAL).reduce(
+  (sum, [sym, qty]) => sum + qty * prices[sym], 0
+);
+assert(Math.round(pvCv.totalValue * 100) === Math.round(expectedTotal * 100),
+  `T4: expected totalValue=${Math.round(expectedTotal * 100) / 100}, got ${pvCv.totalValue}`);
+console.log(`[T4] portfolio-value assertion passed: totalValue=${pvCv.totalValue} matches sum(holdings × prices).`);
+
+// Assert cardstore portfolio-form holdings match iter-5
+const cardstoreHoldings = Object.fromEntries(
+  (finalCard.card_data?.holdings ?? []).map(h => [h.symbol, h.qty])
+);
+for (const [sym, qty] of Object.entries(T4_EXPECTED_FINAL)) {
+  assert(cardstoreHoldings[sym] === qty,
+    `T4: cardstore expected ${sym} qty=${qty}, got ${cardstoreHoldings[sym]}`);
+}
+assert(Object.keys(cardstoreHoldings).length === Object.keys(T4_EXPECTED_FINAL).length,
+  `T4: cardstore has ${Object.keys(cardstoreHoldings).length} symbols, expected ${Object.keys(T4_EXPECTED_FINAL).length}`);
+console.log('[T4] cardstore holdings assertion passed: portfolio-form matches iter-5.');
 
 console.log('\nFinal board status summary:');
 const { summary } = t4Final;

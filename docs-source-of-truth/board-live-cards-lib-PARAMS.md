@@ -52,10 +52,6 @@ upsertCard(input: CommandInput): CommandResult
 > `params.token` encodes the base-ref — no separate `baseRef` needed.
 
 ```ts
-taskCompleted(input: CommandInput): CommandResult
-  params: { token }
-  body:   { data: <data-object> }
-
 taskFailed(input: CommandInput): CommandResult
   params: { token, error? }
 
@@ -124,3 +120,55 @@ updatesInCardStore(input: CommandInput): CommandResult
 readFromCardStore(input: CommandInput): CommandResult<{ cards: Array<{ id: string; 'card-content': unknown }> }>
   body:   { "ids": string[] }   // from stdin
 ```
+
+---
+
+## `createCardHandlerFn` — internal signature
+> Used internally by `drainCycle` to wire the card-handler into the ReactiveGraph.
+
+```ts
+createCardHandlerFn(
+  baseRef: KindValueRef,
+  journalId: string,
+  adapters: CardHandlerAdapters,
+  taskCompletedFn: (taskName: string, data: Record<string, unknown>) => void,
+  _taskFailedFn: (taskName: string, error: string) => void,
+  writeComputedValuesFn?: (cardId: string, values: Record<string, unknown>) => void,
+  writeDataObjectsFn?: (data: Record<string, unknown>) => void,
+): TaskHandlerFn
+```
+
+- `taskCompletedFn` — called synchronously when a card computes successfully. In `drainCycle`,
+  this accumulates `task-completed` events into a local `TX` array (not the file journal).
+- `writeComputedValuesFn` — optional override for `outputStore.writeComputedValues`.
+  When provided by `drainCycle`, appends to a local `CX` array for deferred flush.
+- `writeDataObjectsFn` — optional override for `outputStore.writeDataObjects`.
+  When provided by `drainCycle`, appends to a local `DX` array for deferred flush.
+- Both optional overrides default to calling the adapter directly if not supplied.
+
+---
+
+## drainCycle — TX accumulator loop
+> Internal to `board-live-cards-public.ts`. Documented here as source of truth for the
+> rapid-fire task-completion pattern.
+
+```
+1. Load envelope; read undrained journal events into TX.
+2. Build overlays: RX (cardRuntime), sxCache+SX (sources), CX (computedValues), DX (dataObjects).
+3. Create ReactiveGraph (rg) with card-handler wired to TX/CX/DX accumulation callbacks.
+4. TX accumulator loop:
+     while TX.length > 0:
+       pending = TX; TX = [];
+       rg.pushAll(pending);
+       await rg.waitForHandlers();
+5. finalLive = rg.getState(); await rg.dispose().
+6. commitEnvelope(finalLive) — snapshot includes all completions.
+7. Flush deferred writes: CX → writeComputedValues, DX → writeDataObjects,
+   RX → realCardRuntimeStore, SX → realFetchedSourcesStore.
+8. Dispatch source-fetch execution requests.
+```
+
+**Key invariant**: `task-completed` from in-process card-handlers never goes to the file journal
+during a drain cycle. The file journal only receives `task-failed` (error path) and source-callback
+events (`task-progress`). This ensures the snapshot committed at step 6 is always fully up-to-date
+and rapid-fire restarts are resolved within a single `drainCycle` invocation.

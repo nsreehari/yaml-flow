@@ -62,18 +62,18 @@ const CARD_PRICE_FETCH = {
   id: 'price-fetch',
   meta: { title: 'Fetch Market Prices' },
   requires: ['holdings'],
-  provides: [{ bindTo: 'prices', ref: 'computed_values.prices' }],
-  card_data: {
-    mock_prices: { NVDA: 135.5, GOOG: 178.25, AAPL: 210.0, MSFT: 420.5, TSLA: 250.0, AMZN: 190.0 }
-  },
-  compute: [{
+  provides: [{ bindTo: 'prices', ref: 'fetched_sources.prices' }],
+  card_data: {},
+  source_defs: [{
+    kind: 'mock-quotes',
     bindTo: 'prices',
-    expr: '$reduce($append([], requires.holdings.symbol), function($acc, $sym) { $merge([$acc, { $sym: $lookup(card_data.mock_prices, $sym) }]) }, {})'
+    outputFile: 'prices.json',
+    projections: { tickers: '$append([], requires.holdings.symbol)' }
   }],
   view: {
     elements: [
       { kind: 'table', label: 'Market Prices',
-        data: { bind: 'computed_values.prices' } }
+        data: { bind: 'fetched_sources.prices' } }
     ]
   }
 };
@@ -258,8 +258,6 @@ assert(JSON.stringify(Object.keys(pricesT1).sort()) === JSON.stringify(['NVDA'])
   `T1: expected keys {NVDA}, got ${JSON.stringify(Object.keys(pricesT1))}`);
 assert(Object.values(pricesT1).every(v => typeof v === 'number'),
   'T1: all price values must be numbers');
-assert(pricesT1['NVDA'] === 135.5,
-  `T1: expected NVDA price=135.5, got ${pricesT1['NVDA']}`);
 const htCvT1 = readJson(htCvPath);
 const rowsBySymbolT1 = Object.fromEntries([].concat(htCvT1.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT1['NVDA'] === 100,
@@ -309,7 +307,7 @@ await waitForCompleted('T3', 4);
 const pricesT3 = readJson(pricesPath);
 assert(JSON.stringify(Object.keys(pricesT3).sort()) === JSON.stringify(['GOOG', 'NVDA']),
   `T3: expected keys {GOOG, NVDA}, got ${JSON.stringify(Object.keys(pricesT3))}`);
-// With no source_defs, prices are deterministic from card_data.mock_prices
+// With source_defs, prices are fetched from mock-quotes executor (random values)
 const htCvT3 = readJson(htCvPath);
 const rowsBySymbolT3 = Object.fromEntries([].concat(htCvT3.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT3['NVDA'] === 50,
