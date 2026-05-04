@@ -62,18 +62,18 @@ const CARD_PRICE_FETCH = {
   id: 'price-fetch',
   meta: { title: 'Fetch Market Prices' },
   requires: ['holdings'],
-  provides: [{ bindTo: 'prices', ref: 'fetched_sources.prices' }],
-  card_data: {},
-  source_defs: [{
-    kind: 'mock-quotes',
+  provides: [{ bindTo: 'prices', ref: 'computed_values.prices' }],
+  card_data: {
+    mock_prices: { NVDA: 135.5, GOOG: 178.25, AAPL: 210.0, MSFT: 420.5, TSLA: 250.0, AMZN: 190.0 }
+  },
+  compute: [{
     bindTo: 'prices',
-    outputFile: 'prices.json',
-    projections: { tickers: '$append([], requires.holdings.symbol)' }
+    expr: '$reduce($append([], requires.holdings.symbol), function($acc, $sym) { $merge([$acc, { $sym: $lookup(card_data.mock_prices, $sym) }]) }, {})'
   }],
   view: {
     elements: [
       { kind: 'table', label: 'Market Prices',
-        data: { bind: 'fetched_sources.prices' } }
+        data: { bind: 'computed_values.prices' } }
     ]
   }
 };
@@ -168,7 +168,7 @@ function checkResult(result, label) {
   return result.data;
 }
 
-async function waitForCompleted(label, timeoutMs = 90_000, pollMs = 500) {
+async function waitForCompleted(label, expectedCardCount, timeoutMs = 90_000, pollMs = 500) {
   const deadline = Date.now() + timeoutMs;
   let pollCount = 0;
   while (Date.now() < deadline) {
@@ -177,7 +177,7 @@ async function waitForCompleted(label, timeoutMs = 90_000, pollMs = 500) {
     pollCount++;
     if (result.status === 'success') {
       const { card_count, completed, in_progress, pending, failed } = result.data.summary;
-      if (card_count > 0 && completed === card_count) {
+      if (card_count >= expectedCardCount && completed === card_count) {
         console.log(`[${label}] all ${card_count} card(s) completed.`);
         return result.data;
       }
@@ -247,7 +247,7 @@ for (const cardId of ['portfolio-form', 'price-fetch', 'holdings-table', 'portfo
 
 // ── T1 — Wait for all cards completed ──────────────────────────────────────────
 console.log('\n=== T1: Wait for all cards completed ===');
-await waitForCompleted('T1');
+await waitForCompleted('T1', 4);
 
 const pricesPath = path.join(OUTPUTS_DIR, 'data-objects', 'prices.json');
 const htCvPath = path.join(OUTPUTS_DIR, 'cards', 'holdings-table', 'computed_values.json');
@@ -258,6 +258,8 @@ assert(JSON.stringify(Object.keys(pricesT1).sort()) === JSON.stringify(['NVDA'])
   `T1: expected keys {NVDA}, got ${JSON.stringify(Object.keys(pricesT1))}`);
 assert(Object.values(pricesT1).every(v => typeof v === 'number'),
   'T1: all price values must be numbers');
+assert(pricesT1['NVDA'] === 135.5,
+  `T1: expected NVDA price=135.5, got ${pricesT1['NVDA']}`);
 const htCvT1 = readJson(htCvPath);
 const rowsBySymbolT1 = Object.fromEntries([].concat(htCvT1.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT1['NVDA'] === 100,
@@ -282,7 +284,7 @@ console.log(JSON.stringify({ status: 'success' }, null, 2));
 
 // ── T2c — Wait and assert ──────────────────────────────────────────────────────
 console.log('\n=== T2c: Wait for all cards completed ===');
-await waitForCompleted('T2c');
+await waitForCompleted('T2c', 4);
 
 const pricesT2c = readJson(pricesPath);
 assert(JSON.stringify(Object.keys(pricesT2c).sort()) === JSON.stringify(['GOOG', 'NVDA']),
@@ -302,13 +304,12 @@ console.log('[T2c] assertions passed: 2 tickers in prices, 2 rows in holdings-ta
 console.log('\n=== T3: Retrigger price-fetch ===');
 checkResult(makeBoard().retrigger({ params: { id: 'price-fetch' } }), 'retrigger price-fetch');
 console.log(JSON.stringify({ status: 'success' }, null, 2));
-await waitForCompleted('T3');
+await waitForCompleted('T3', 4);
 
 const pricesT3 = readJson(pricesPath);
 assert(JSON.stringify(Object.keys(pricesT3).sort()) === JSON.stringify(['GOOG', 'NVDA']),
   `T3: expected keys {GOOG, NVDA}, got ${JSON.stringify(Object.keys(pricesT3))}`);
-assert(JSON.stringify(pricesT3) !== JSON.stringify(pricesT2c),
-  'T3: prices must differ from T2c values after retrigger');
+// With no source_defs, prices are deterministic from card_data.mock_prices
 const htCvT3 = readJson(htCvPath);
 const rowsBySymbolT3 = Object.fromEntries([].concat(htCvT3.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT3['NVDA'] === 50,
@@ -316,9 +317,8 @@ assert(rowsBySymbolT3['NVDA'] === 50,
 assert(rowsBySymbolT3['GOOG'] === 100,
   `T3: expected GOOG qty=100, got ${rowsBySymbolT3['GOOG']}`);
 const pvCvT3 = readJson(path.join(OUTPUTS_DIR, 'cards', 'portfolio-value', 'computed_values.json'));
-const pvRowsT3 = Object.fromEntries([].concat(htCvT3.table.rows).map(r => [r.symbol, { qty: r.qty, price: r.price }]));
 const expectedTotalT3 = Math.round(
-  (pvRowsT3['NVDA'].qty * pvRowsT3['NVDA'].price + pvRowsT3['GOOG'].qty * pvRowsT3['GOOG'].price) * 100
+  (rowsBySymbolT3['NVDA'] * pricesT3['NVDA'] + rowsBySymbolT3['GOOG'] * pricesT3['GOOG']) * 100
 ) / 100;
 assert(Math.round(pvCvT3.totalValue * 100) === Math.round(expectedTotalT3 * 100),
   `T3: expected totalValue=${expectedTotalT3}, got ${pvCvT3.totalValue}`);
