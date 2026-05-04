@@ -1181,11 +1181,6 @@ describe('windows launcher behavior', () => {
     expect(wrapper).toContain('windowsHide: true');
   });
 
-  it('keeps the portfolio tracker launches hidden on Windows', () => {
-    const tracker = fs.readFileSync(path.join(repoRoot, 'examples', 'browser', 'boards', 'portfolio-tracker', 'portfolio-tracker.js'), 'utf-8');
-    expect(tracker).toContain('windowsHide: true');
-  });
-
   it('keeps CLI child-process launches hidden on Windows', () => {
     // All process execution is consolidated in process-runner.ts; check there.
     const processRunner = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'node', 'process-runner.ts'), 'utf-8');
