@@ -1,0 +1,553 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from typing import Any, Dict
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PYCLI_ROOT = os.path.normpath(os.path.join(_HERE, ".."))
+if _PYCLI_ROOT not in sys.path:
+    sys.path.insert(0, _PYCLI_ROOT)
+
+from sub.board_live_cards_adapters import (
+    ExecutionRef,
+    FileAtomicRelayLock,
+    FsBlobStorage,
+    FsJournalStorageAdapter,
+    FsKvStorage,
+    dispatch_execution,
+    parse_execution_ref,
+)
+from sub.board_live_cards_quickjs_bridge import (
+    QuickJsUnavailableError,
+    invoke_js_bundle_function,
+)
+from sub.board_live_cards_state_snapshot import commit_snapshot, read_snapshot
+
+
+DEFAULT_QUICKJS_BUNDLE = "dist/pycli/quickjs-board-runtime.global.js"
+
+
+def _parse_json_file(file_path: str) -> Dict[str, Any]:
+    with open(file_path, "r", encoding="utf-8") as f:
+        value = json.load(f)
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON root must be an object: {file_path}")
+    return value
+
+
+def _parse_any_json_file(file_path: str) -> Any:
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _print_json(value: Any) -> None:
+    print(json.dumps(value, indent=2, ensure_ascii=True))
+
+
+def _read_stdin_json() -> Any:
+    if sys.stdin.isatty():
+        return None
+    raw = sys.stdin.read().strip()
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
+def _resolve_bundle_path(bundle_arg: str | None) -> str:
+    bundle = bundle_arg or DEFAULT_QUICKJS_BUNDLE
+    if os.path.exists(bundle):
+        return bundle
+    # If called from outside yaml-flow dir, also try relative to this file.
+    here = os.path.dirname(os.path.abspath(__file__))
+    alt = os.path.normpath(os.path.join(here, "..", "..", bundle))
+    return alt
+
+
+def _kv_root(scope: str, namespace: str) -> str:
+    return f"{scope}/.{namespace}"
+
+
+def _blob_root(scope: str, namespace: str) -> str:
+    return f"{scope}/{namespace}" if namespace else scope
+
+
+def cmd_read_snapshot(args: argparse.Namespace) -> int:
+    view = read_snapshot(args.scope)
+    _print_json({"version": view.version, "values": view.values})
+    return 0
+
+
+def cmd_commit_snapshot(args: argparse.Namespace) -> int:
+    envelope = _parse_json_file(args.input)
+    result = commit_snapshot(args.scope, envelope)
+    if result.ok:
+        _print_json({"ok": True, "newVersion": result.new_version})
+        return 0
+
+    _print_json({"ok": False, "reason": result.reason, "currentVersion": result.current_version})
+    return 2
+
+
+def cmd_kv_read(args: argparse.Namespace) -> int:
+    kv = FsKvStorage(_kv_root(args.scope, args.namespace))
+    _print_json({"value": kv.read(args.key)})
+    return 0
+
+
+def cmd_kv_write(args: argparse.Namespace) -> int:
+    kv = FsKvStorage(_kv_root(args.scope, args.namespace))
+    kv.write(args.key, _parse_any_json_file(args.input))
+    _print_json({"ok": True})
+    return 0
+
+
+def cmd_kv_delete(args: argparse.Namespace) -> int:
+    kv = FsKvStorage(_kv_root(args.scope, args.namespace))
+    kv.delete(args.key)
+    _print_json({"ok": True})
+    return 0
+
+
+def cmd_kv_list(args: argparse.Namespace) -> int:
+    kv = FsKvStorage(_kv_root(args.scope, args.namespace))
+    _print_json({"keys": kv.list_keys(args.prefix)})
+    return 0
+
+
+def cmd_blob_read(args: argparse.Namespace) -> int:
+    blob = FsBlobStorage(_blob_root(args.scope, args.namespace))
+    _print_json({"content": blob.read(args.key)})
+    return 0
+
+
+def cmd_blob_write(args: argparse.Namespace) -> int:
+    blob = FsBlobStorage(_blob_root(args.scope, args.namespace))
+    content = args.text if args.text is not None else str(_parse_any_json_file(args.input))
+    blob.write(args.key, content)
+    _print_json({"ok": True})
+    return 0
+
+
+def cmd_blob_exists(args: argparse.Namespace) -> int:
+    blob = FsBlobStorage(_blob_root(args.scope, args.namespace))
+    _print_json({"exists": blob.exists(args.key)})
+    return 0
+
+
+def cmd_blob_remove(args: argparse.Namespace) -> int:
+    blob = FsBlobStorage(_blob_root(args.scope, args.namespace))
+    blob.remove(args.key)
+    _print_json({"ok": True})
+    return 0
+
+
+def cmd_journal_append(args: argparse.Namespace) -> int:
+    journal = FsJournalStorageAdapter(args.scope)
+    entry = {"id": journal.generate_id(), "event": _parse_any_json_file(args.input)}
+    journal.append_entry(entry)
+    _print_json({"ok": True, "id": entry["id"]})
+    return 0
+
+
+def cmd_journal_read_after(args: argparse.Namespace) -> int:
+    journal = FsJournalStorageAdapter(args.scope)
+    entries = journal.read_all_entries()
+    if not args.cursor:
+        sliced = entries
+    else:
+        idx = next((i for i, e in enumerate(entries) if e.get("id") == args.cursor), -1)
+        sliced = entries if idx < 0 else entries[idx + 1 :]
+    events = [e.get("event") for e in sliced]
+    new_cursor = args.cursor if not sliced else sliced[-1].get("id")
+    _print_json({"events": events, "newCursor": new_cursor})
+    return 0
+
+
+def cmd_lock_try(args: argparse.Namespace) -> int:
+    lock = FileAtomicRelayLock(f"{args.scope}/.board.lock")
+    release = lock.try_acquire()
+    acquired = release is not None
+    if release:
+        release()
+    _print_json({"acquired": acquired})
+    return 0
+
+
+def cmd_dispatch(args: argparse.Namespace) -> int:
+    if args.ref_json:
+        ref = parse_execution_ref(args.ref_json)
+    else:
+        ref = parse_execution_ref(_parse_any_json_file(args.ref_file))
+    if not isinstance(ref, ExecutionRef):
+        raise ValueError("Invalid execution ref")
+    payload = _parse_any_json_file(args.input)
+    if not isinstance(payload, dict):
+        raise ValueError("Dispatch args payload must be a JSON object")
+    result = dispatch_execution(ref, payload, cwd=args.cwd)
+    _print_json(result)
+    return 0 if result.get("dispatched") else 2
+
+
+def cmd_quickjs_invoke(args: argparse.Namespace) -> int:
+    payload = _parse_any_json_file(args.input) if args.input else {}
+    if not isinstance(payload, dict):
+        raise ValueError("QuickJS payload must be a JSON object")
+    try:
+        result_raw = invoke_js_bundle_function(
+            bundle_path=args.bundle,
+            function_name=args.function,
+            function_arg=payload,
+            bootstrap_js=args.bootstrap,
+        )
+    except QuickJsUnavailableError as e:
+        _print_json({"status": "error", "error": str(e)})
+        return 2
+
+    parsed: Any = result_raw
+    if isinstance(result_raw, str):
+        try:
+            parsed = json.loads(result_raw)
+        except Exception:
+            parsed = result_raw
+    _print_json({"status": "success", "data": parsed})
+    return 0
+
+
+def cmd_card_store_set(args: argparse.Namespace) -> int:
+    node = shutil.which("node")
+    if not node:
+        _print_json({"status": "error", "error": "node not found on PATH"})
+        return 2
+
+    card = _parse_json_file(args.input)
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.normpath(os.path.join(here, "..", ".."))
+    card_store_cli = os.path.join(repo_root, "card-store.js")
+    if not os.path.exists(card_store_cli):
+        _print_json({"status": "error", "error": f"card-store CLI not found: {card_store_cli}"})
+        return 2
+
+    proc = subprocess.run(
+        [node, card_store_cli, "set", "--store-ref", args.store_ref],
+        input=json.dumps(card, ensure_ascii=True),
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+    if proc.returncode != 0:
+        _print_json({
+            "status": "error",
+            "error": (proc.stderr or proc.stdout or "card-store set failed").strip(),
+        })
+        return 2
+
+    _print_json({"status": "success"})
+    return 0
+
+
+def _invoke_board_command(
+    *,
+    base_ref: str,
+    command: str,
+    input_obj: Dict[str, Any] | None,
+    bundle: str | None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "baseRef": base_ref,
+        "command": command,
+        "input": input_obj or {},
+    }
+    result_raw = invoke_js_bundle_function(
+        bundle_path=_resolve_bundle_path(bundle),
+        function_name="pycliBoardInvoke",
+        function_arg=payload,
+    )
+    if isinstance(result_raw, str):
+        try:
+            parsed = json.loads(result_raw)
+        except Exception:
+            return {"status": "error", "error": result_raw}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"status": "error", "error": "Unexpected non-object result from QuickJS runtime"}
+    if isinstance(result_raw, dict):
+        return result_raw
+    return {"status": "error", "error": "Unexpected result type from QuickJS runtime"}
+
+
+def _board_handler(command: str):
+    def _handler(args: argparse.Namespace) -> int:
+        try:
+            input_obj: Dict[str, Any] = {"params": {}, "body": None}
+
+            if getattr(args, "body_input", None):
+                input_obj["body"] = _parse_any_json_file(args.body_input)
+            elif getattr(args, "stdin_body", False):
+                input_obj["body"] = _read_stdin_json()
+
+            params = input_obj["params"]
+            for field in (
+                "id",
+                "card_id",
+                "key",
+                "token",
+                "ref",
+                "reason",
+                "error",
+                "card_store_ref",
+                "outputs_store_ref",
+            ):
+                if hasattr(args, field):
+                    val = getattr(args, field)
+                    if val is not None:
+                        params_name = {
+                            "card_id": "cardId",
+                            "card_store_ref": "cardStoreRef",
+                            "outputs_store_ref": "outputsStoreRef",
+                        }.get(field, field)
+                        params[params_name] = val
+
+            if hasattr(args, "restart") and args.restart:
+                params["restart"] = True
+            if hasattr(args, "all") and args.all:
+                params["all"] = True
+
+            if hasattr(args, "update") and args.update is not None:
+                input_obj["body"] = {"update": _parse_any_json_file(args.update)}
+
+            if not input_obj["params"]:
+                input_obj.pop("params", None)
+            if input_obj.get("body") is None:
+                input_obj.pop("body", None)
+
+            result = _invoke_board_command(
+                base_ref=args.base_ref,
+                command=command,
+                input_obj=input_obj,
+                bundle=getattr(args, "bundle", None),
+            )
+            _print_json(result)
+
+            status = result.get("status")
+            return 0 if status == "success" else 2
+        except QuickJsUnavailableError as e:
+            _print_json({"status": "error", "error": str(e)})
+            return 2
+
+    return _handler
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="board-live-cards-pycli",
+        description="Python host implementation for board-live-cards snapshot-store operations.",
+    )
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    read_cmd = sub.add_parser("read-snapshot", help="Read authoritative snapshot values")
+    read_cmd.add_argument("--scope", required=True, help="Board directory")
+    read_cmd.set_defaults(handler=cmd_read_snapshot)
+
+    commit_cmd = sub.add_parser("commit-snapshot", help="Commit snapshot envelope")
+    commit_cmd.add_argument("--scope", required=True, help="Board directory")
+    commit_cmd.add_argument("--in", dest="input", required=True, help="Path to commit envelope JSON")
+    commit_cmd.set_defaults(handler=cmd_commit_snapshot)
+
+    kv_read_cmd = sub.add_parser("kv-read", help="Read one key from a KV namespace")
+    kv_read_cmd.add_argument("--scope", required=True, help="Board directory")
+    kv_read_cmd.add_argument("--namespace", required=True, help="KV namespace")
+    kv_read_cmd.add_argument("--key", required=True, help="KV key")
+    kv_read_cmd.set_defaults(handler=cmd_kv_read)
+
+    kv_write_cmd = sub.add_parser("kv-write", help="Write one key in a KV namespace")
+    kv_write_cmd.add_argument("--scope", required=True, help="Board directory")
+    kv_write_cmd.add_argument("--namespace", required=True, help="KV namespace")
+    kv_write_cmd.add_argument("--key", required=True, help="KV key")
+    kv_write_cmd.add_argument("--in", dest="input", required=True, help="JSON file to write")
+    kv_write_cmd.set_defaults(handler=cmd_kv_write)
+
+    kv_delete_cmd = sub.add_parser("kv-delete", help="Delete one key in a KV namespace")
+    kv_delete_cmd.add_argument("--scope", required=True, help="Board directory")
+    kv_delete_cmd.add_argument("--namespace", required=True, help="KV namespace")
+    kv_delete_cmd.add_argument("--key", required=True, help="KV key")
+    kv_delete_cmd.set_defaults(handler=cmd_kv_delete)
+
+    kv_list_cmd = sub.add_parser("kv-list", help="List keys in a KV namespace")
+    kv_list_cmd.add_argument("--scope", required=True, help="Board directory")
+    kv_list_cmd.add_argument("--namespace", required=True, help="KV namespace")
+    kv_list_cmd.add_argument("--prefix", required=False, help="Optional key prefix")
+    kv_list_cmd.set_defaults(handler=cmd_kv_list)
+
+    blob_read_cmd = sub.add_parser("blob-read", help="Read one blob key")
+    blob_read_cmd.add_argument("--scope", required=True, help="Board directory")
+    blob_read_cmd.add_argument("--namespace", default="", help="Blob namespace")
+    blob_read_cmd.add_argument("--key", required=True, help="Blob key")
+    blob_read_cmd.set_defaults(handler=cmd_blob_read)
+
+    blob_write_cmd = sub.add_parser("blob-write", help="Write one blob key")
+    blob_write_cmd.add_argument("--scope", required=True, help="Board directory")
+    blob_write_cmd.add_argument("--namespace", default="", help="Blob namespace")
+    blob_write_cmd.add_argument("--key", required=True, help="Blob key")
+    blob_write_group = blob_write_cmd.add_mutually_exclusive_group(required=True)
+    blob_write_group.add_argument("--text", help="Text content")
+    blob_write_group.add_argument("--in", dest="input", help="JSON file to stringify")
+    blob_write_cmd.set_defaults(handler=cmd_blob_write)
+
+    blob_exists_cmd = sub.add_parser("blob-exists", help="Check blob key existence")
+    blob_exists_cmd.add_argument("--scope", required=True, help="Board directory")
+    blob_exists_cmd.add_argument("--namespace", default="", help="Blob namespace")
+    blob_exists_cmd.add_argument("--key", required=True, help="Blob key")
+    blob_exists_cmd.set_defaults(handler=cmd_blob_exists)
+
+    blob_remove_cmd = sub.add_parser("blob-remove", help="Remove one blob key")
+    blob_remove_cmd.add_argument("--scope", required=True, help="Board directory")
+    blob_remove_cmd.add_argument("--namespace", default="", help="Blob namespace")
+    blob_remove_cmd.add_argument("--key", required=True, help="Blob key")
+    blob_remove_cmd.set_defaults(handler=cmd_blob_remove)
+
+    journal_append_cmd = sub.add_parser("journal-append", help="Append one event to board journal")
+    journal_append_cmd.add_argument("--scope", required=True, help="Board directory")
+    journal_append_cmd.add_argument("--in", dest="input", required=True, help="Event JSON file")
+    journal_append_cmd.set_defaults(handler=cmd_journal_append)
+
+    journal_read_cmd = sub.add_parser("journal-read-after", help="Read events after a cursor")
+    journal_read_cmd.add_argument("--scope", required=True, help="Board directory")
+    journal_read_cmd.add_argument("--cursor", required=False, help="Last processed journal id")
+    journal_read_cmd.set_defaults(handler=cmd_journal_read_after)
+
+    lock_try_cmd = sub.add_parser("lock-try", help="Try lock acquire and release immediately")
+    lock_try_cmd.add_argument("--scope", required=True, help="Board directory")
+    lock_try_cmd.set_defaults(handler=cmd_lock_try)
+
+    dispatch_cmd = sub.add_parser("dispatch", help="Dispatch an execution ref")
+    dispatch_ref_group = dispatch_cmd.add_mutually_exclusive_group(required=True)
+    dispatch_ref_group.add_argument("--ref-json", help="ExecutionRef JSON string")
+    dispatch_ref_group.add_argument("--ref-file", help="ExecutionRef JSON file")
+    dispatch_cmd.add_argument("--in", dest="input", required=True, help="Dispatch args JSON file")
+    dispatch_cmd.add_argument("--cwd", help="Optional working directory")
+    dispatch_cmd.set_defaults(handler=cmd_dispatch)
+
+    quickjs_cmd = sub.add_parser("quickjs-invoke", help="Invoke a function from a JS bundle using QuickJS host adapters")
+    quickjs_cmd.add_argument("--bundle", required=True, help="Path to JS bundle file")
+    quickjs_cmd.add_argument("--function", required=True, help="Global function name to invoke")
+    quickjs_cmd.add_argument("--in", dest="input", help="Optional JSON payload file")
+    quickjs_cmd.add_argument("--bootstrap", help="Optional JS code evaluated before loading bundle")
+    quickjs_cmd.set_defaults(handler=cmd_quickjs_invoke)
+
+    card_store_set_cmd = sub.add_parser("card-store-set", help="Set one card into a card store ref")
+    card_store_set_cmd.add_argument("--store-ref", required=True, help="Card store ref (::kind::value)")
+    card_store_set_cmd.add_argument("--in", dest="input", required=True, help="Card JSON file")
+    card_store_set_cmd.set_defaults(handler=cmd_card_store_set)
+
+    board_init_cmd = sub.add_parser("board-init", help="Initialize board stores")
+    board_init_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_init_cmd.add_argument("--card-store-ref", required=True, help="Card store ref (::kind::value)")
+    board_init_cmd.add_argument("--outputs-store-ref", required=True, help="Outputs store ref (::kind::value)")
+    board_init_cmd.add_argument("--in", dest="body_input", help="Optional JSON body file")
+    board_init_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_init_cmd.set_defaults(handler=_board_handler("init"))
+
+    board_status_cmd = sub.add_parser("board-status", help="Read board status")
+    board_status_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_status_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_status_cmd.set_defaults(handler=_board_handler("status"))
+
+    board_card_ref_cmd = sub.add_parser("board-get-card-store-ref", help="Get card store ref")
+    board_card_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_card_ref_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_card_ref_cmd.set_defaults(handler=_board_handler("getCardStoreRef"))
+
+    board_out_ref_cmd = sub.add_parser("board-get-outputs-store-ref", help="Get outputs store ref")
+    board_out_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_out_ref_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_out_ref_cmd.set_defaults(handler=_board_handler("getOutputsStoreRef"))
+
+    board_get_outputs_cmd = sub.add_parser("board-get-outputs", help="Get outputs data or computed-values")
+    board_get_outputs_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_get_outputs_cmd.add_argument("--type", choices=["data-object", "computed-values"], required=True)
+    board_get_outputs_cmd.add_argument("--key", required=True, help="Data key (data-object) or card id (computed-values)")
+    board_get_outputs_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+
+    def _board_get_outputs_handler(args: argparse.Namespace) -> int:
+        cmd = "getOutputsDataObject" if args.type == "data-object" else "getOutputsComputedValues"
+        invoke = _board_handler(cmd)
+        return invoke(args)
+
+    board_get_outputs_cmd.set_defaults(handler=_board_get_outputs_handler)
+
+    board_remove_cmd = sub.add_parser("board-remove-card", help="Remove a card")
+    board_remove_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_remove_cmd.add_argument("--id", required=True, help="Card id")
+    board_remove_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_remove_cmd.set_defaults(handler=_board_handler("removeCard"))
+
+    board_retrigger_cmd = sub.add_parser("board-retrigger", help="Retrigger a card")
+    board_retrigger_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_retrigger_cmd.add_argument("--id", required=True, help="Card id")
+    board_retrigger_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_retrigger_cmd.set_defaults(handler=_board_handler("retrigger"))
+
+    board_process_cmd = sub.add_parser("board-process-accumulated-events", help="Process pending board events")
+    board_process_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_process_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_process_cmd.set_defaults(handler=_board_handler("processAccumulatedEvents"))
+
+    board_upsert_cmd = sub.add_parser("board-upsert-card", help="Upsert one card or all cards")
+    board_upsert_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_upsert_cmd.add_argument("--card-id", help="Card id")
+    board_upsert_cmd.add_argument("--all", action="store_true", help="Upsert all cards")
+    board_upsert_cmd.add_argument("--restart", action="store_true", help="Mark upsert as restart")
+    board_upsert_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_upsert_cmd.set_defaults(handler=_board_handler("upsertCard"))
+
+    board_task_failed_cmd = sub.add_parser("board-task-failed", help="Send task-failed callback")
+    board_task_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_task_failed_cmd.add_argument("--token", required=True, help="Callback token")
+    board_task_failed_cmd.add_argument("--error", help="Error message")
+    board_task_failed_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_task_failed_cmd.set_defaults(handler=_board_handler("taskFailed"))
+
+    board_task_progress_cmd = sub.add_parser("board-task-progress", help="Send task-progress callback")
+    board_task_progress_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_task_progress_cmd.add_argument("--token", required=True, help="Callback token")
+    board_task_progress_cmd.add_argument("--update", required=True, help="JSON file for progress update payload")
+    board_task_progress_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_task_progress_cmd.set_defaults(handler=_board_handler("taskProgress"))
+
+    board_source_fetched_cmd = sub.add_parser("board-source-data-fetched", help="Send source-data-fetched callback")
+    board_source_fetched_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_source_fetched_cmd.add_argument("--token", required=True, help="Callback token")
+    board_source_fetched_cmd.add_argument("--ref", required=True, help="Fetched source ref")
+    board_source_fetched_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_source_fetched_cmd.set_defaults(handler=_board_handler("sourceDataFetched"))
+
+    board_source_failed_cmd = sub.add_parser("board-source-data-fetch-failure", help="Send source-data-fetch-failure callback")
+    board_source_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_source_failed_cmd.add_argument("--token", required=True, help="Callback token")
+    board_source_failed_cmd.add_argument("--reason", help="Failure reason")
+    board_source_failed_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    board_source_failed_cmd.set_defaults(handler=_board_handler("sourceDataFetchFailure"))
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as err:  # pragma: no cover - CLI error path
+        print(str(err), file=sys.stderr)
+        raise SystemExit(1)

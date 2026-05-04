@@ -14,6 +14,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import argparse
+
+
+_CLI_PARSER = argparse.ArgumentParser()
+_CLI_PARSER.add_argument('--run-pycli', action='store_true', help='Use pycli for board/card operations')
+_CLI_ARGS = _CLI_PARSER.parse_args()
+RUN_PYCLI = _CLI_ARGS.run_pycli
 
 # ── Path resolution ────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +34,23 @@ if not NODE:
 BOARD_CLI       = os.path.join(_REPO_ROOT, 'board-live-cards-cli.js')
 CARD_STORE_CLI  = os.path.join(_REPO_ROOT, 'card-store.js')
 FETCH_PRICES_JS = os.path.join(_HERE, 'portfolio-tracker-fetch-prices.js')
+
+PYTHON312 = os.path.join(_REPO_ROOT, '.venv312', 'Scripts', 'python.exe')
+PYCLI = os.path.join(_REPO_ROOT, 'pycli', 'main', 'board_live_cards_pycli.py')
+QUICKJS_BUNDLE = os.path.join(_REPO_ROOT, 'dist', 'pycli', 'quickjs-board-runtime.global.js')
+
+if RUN_PYCLI:
+    if not os.path.exists(PYTHON312):
+        print(f'[ERROR] Python 3.12 venv not found: {PYTHON312}', file=sys.stderr)
+        print('Run from yaml-flow root: npm run pycli:install:venv312', file=sys.stderr)
+        sys.exit(1)
+    if not os.path.exists(PYCLI):
+        print(f'[ERROR] pycli entry not found: {PYCLI}', file=sys.stderr)
+        sys.exit(1)
+    if not os.path.exists(QUICKJS_BUNDLE):
+        print(f'[ERROR] quickjs bundle not found: {QUICKJS_BUNDLE}', file=sys.stderr)
+        print('Run from yaml-flow root: npm run build:quickjs', file=sys.stderr)
+        sys.exit(1)
 
 # ── Runtime directories (under os.tmpdir()/experiment/) ───────────────────────
 _TMP_BASE       = os.path.join(tempfile.gettempdir(), 'experiment')
@@ -124,29 +148,86 @@ def set_holdings(card_json: dict, holdings: dict) -> dict:
 
 
 def run_board(*args):
-    subprocess.run([NODE, BOARD_CLI, *args], check=True, shell=False)
+    if not RUN_PYCLI:
+        subprocess.run([NODE, BOARD_CLI, *args], check=True, shell=False)
+        return
+    _run_pycli([*_map_board_args(list(args)), '--bundle', QUICKJS_BUNDLE])
 
 
 def run_board_with_input(*args, input_json: str):
-    subprocess.run(
-        [NODE, BOARD_CLI, *args],
-        input=input_json, check=True, shell=False, text=True,
-    )
+    if not RUN_PYCLI:
+        subprocess.run(
+            [NODE, BOARD_CLI, *args],
+            input=input_json, check=True, shell=False, text=True,
+        )
+        return
+
+    with tempfile.NamedTemporaryFile('w', delete=False, suffix='.json', encoding='utf-8') as f:
+        f.write(input_json)
+        body_file = f.name
+    try:
+        _run_pycli([*_map_board_args(list(args)), '--in', body_file, '--bundle', QUICKJS_BUNDLE])
+    finally:
+        try:
+            os.unlink(body_file)
+        except OSError:
+            pass
 
 
 def run_board_capture(*args) -> str:
-    result = subprocess.run(
-        [NODE, BOARD_CLI, *args],
-        check=True, shell=False, capture_output=True, text=True,
-    )
-    return result.stdout
+    if not RUN_PYCLI:
+        result = subprocess.run(
+            [NODE, BOARD_CLI, *args],
+            check=True, shell=False, capture_output=True, text=True,
+        )
+        return result.stdout
+    return _run_pycli([*_map_board_args(list(args)), '--bundle', QUICKJS_BUNDLE], capture=True)
 
 
 def run_card_store_set(card: dict):
-    subprocess.run(
-        [NODE, CARD_STORE_CLI, 'set', '--store-ref', CARDSTORE_REF],
-        input=json.dumps(card), check=True, shell=False, text=True,
+    if not RUN_PYCLI:
+        subprocess.run(
+            [NODE, CARD_STORE_CLI, 'set', '--store-ref', CARDSTORE_REF],
+            input=json.dumps(card), check=True, shell=False, text=True,
+        )
+        return
+
+    with tempfile.NamedTemporaryFile('w', delete=False, suffix='.json', encoding='utf-8') as f:
+        json.dump(card, f)
+        card_file = f.name
+    try:
+        _run_pycli(['card-store-set', '--store-ref', CARDSTORE_REF, '--in', card_file])
+    finally:
+        try:
+            os.unlink(card_file)
+        except OSError:
+            pass
+
+
+def _map_board_args(args: list[str]) -> list[str]:
+    if not args:
+        raise ValueError('Missing board command')
+    command = args[0]
+    mapped = {
+        'init': 'board-init',
+        'status': 'board-status',
+        'upsert-card': 'board-upsert-card',
+        'retrigger': 'board-retrigger',
+    }.get(command)
+    if not mapped:
+        raise ValueError(f'Unsupported board command for pycli mode: {command}')
+    return [mapped, *args[1:]]
+
+
+def _run_pycli(args: list[str], *, capture: bool = False) -> str:
+    result = subprocess.run(
+        [PYTHON312, PYCLI, *args],
+        check=True,
+        shell=False,
+        capture_output=capture,
+        text=True,
     )
+    return result.stdout if capture else ''
 
 
 def read_json(path: str):
