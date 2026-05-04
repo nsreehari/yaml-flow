@@ -134,7 +134,7 @@
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:e2e": ".\\.venv312\\Scripts\\python.exe examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
+    "test:e2e": "npm run -s build:quickjs && .\\.venv312\\Scripts\\python.exe examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
     "test:example-board": "vitest run tests/examples/example-board.test.ts",
     "check:example-board": "npm run test:example-board && npm run validate:cards -- \"examples/example-board/cards/*.json\"",
     "validate:cards": "tsx scripts/validate-live-cards.ts",
