@@ -144,6 +144,19 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().getOutputsStoreRef({}));
       return;
     }
+    case 'get-outputs': {
+      const type = requireFlag(rest, '--type', 'get-outputs --base-ref <ref> --type <data-object|computed-values> [--key <key>|--card-id <id>]');
+      if (type === 'data-object') {
+        const key = requireFlag(rest, '--key', 'get-outputs --type data-object --base-ref <ref> --key <datakey>');
+        printResult(board().getOutputsDataObject({ params: { key } }));
+      } else if (type === 'computed-values') {
+        const key = requireFlag(rest, '--key', 'get-outputs --type computed-values --base-ref <ref> --key <card-id>');
+        printResult(board().getOutputsComputedValues({ params: { key } }));
+      } else {
+        throw new Error(`get-outputs: unknown --type "${type}", expected data-object | computed-values`);
+      }
+      return;
+    }
     case 'remove-card': {
       const id = requireFlag(rest, '--id', 'remove-card --base-ref <ref> --id <card-id>');
       printResult(board().removeCard({ params: { id } }));

@@ -234,6 +234,10 @@ export interface BoardLiveCardsPublic {
   // no params needed
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
+  // params: key
+  getOutputsDataObject(input: CommandInput): CommandResult;
+  // params: key
+  getOutputsComputedValues(input: CommandInput): CommandResult;
   // params: id
   removeCard(input: CommandInput): CommandResult;
   // params: id
@@ -758,8 +762,26 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
   }
 
+  function getOutputsDataObject(input: CommandInput): CommandResult {
+    try {
+      const key = input.params?.['key'] as string | undefined;
+      if (!key) return fail('getOutputsDataObject requires params.key');
+      const value = outputStore().readDataObject(key);
+      return ok(value);
+    } catch (e) { return err(e); }
+  }
+
+  function getOutputsComputedValues(input: CommandInput): CommandResult {
+    try {
+      const key = input.params?.['key'] as string | undefined;
+      if (!key) return fail('getOutputsComputedValues requires params.key');
+      const value = outputStore().readComputedValues(key);
+      return ok(value);
+    } catch (e) { return err(e); }
+  }
+
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef, removeCard, retrigger, processAccumulatedEvents,
+    init, status, getCardStoreRef, getOutputsStoreRef, getOutputsDataObject, getOutputsComputedValues, removeCard, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,

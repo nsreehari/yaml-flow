@@ -59,6 +59,11 @@ get-card-store-ref --base-ref <ref>
 get-outputs-store-ref --base-ref <ref>
   → data: { "storeRef": "<::kind::value>" }
 
+get-outputs --base-ref <ref> --type <data-object|computed-values> --key <key>
+  params: { type, key }
+  --type data-object     → data: the stored payload at data-objects/<key>, or null
+  --type computed-values → data: the computed_values map for card <key>, or null
+
 remove-card --base-ref <ref> --id <card-id>
   params: { id }
 

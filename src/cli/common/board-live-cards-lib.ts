@@ -521,7 +521,9 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 
 export interface PublishedOutputsStore {
   writeComputedValues(cardId: string, values: Record<string, unknown>): void;
+  readComputedValues(cardId: string): unknown | null;
   writeDataObjects(data: Record<string, unknown>): void;
+  readDataObject(key: string): unknown | null;
   writeStatusSnapshot(status: unknown): void;
   readStatusSnapshot(): unknown | null;
 }
@@ -529,12 +531,14 @@ export interface PublishedOutputsStore {
 export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStore {
   return {
     writeComputedValues(cardId, values) { kv.write(`cards/${cardId}/computed_values`, values); },
+    readComputedValues(cardId) { return kv.read(`cards/${cardId}/computed_values`); },
     writeDataObjects(data) {
       for (const [token, payload] of Object.entries(data)) {
         if (!token) continue;
         kv.write(`data-objects/${token}`, payload);
       }
     },
+    readDataObject(key) { return kv.read(`data-objects/${key}`); },
     writeStatusSnapshot(status) { kv.write('status', status); },
     readStatusSnapshot() { return kv.read('status'); },
   };

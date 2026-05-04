@@ -31,6 +31,20 @@ init(input: CommandInput): CommandResult
 status(input: CommandInput): CommandResult<BoardStatusObject>
   (no params / no body)
 
+getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>
+  (no params / no body)
+
+getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>
+  (no params / no body)
+
+getOutputsDataObject(input: CommandInput): CommandResult
+  params: { key }   // key = the data-object token (e.g. "holdings")
+  → data: stored payload at data-objects/<key>, or null
+
+getOutputsComputedValues(input: CommandInput): CommandResult
+  params: { key }   // key = card id
+  → data: computed_values map for that card, or null
+
 removeCard(input: CommandInput): CommandResult
   params: { id }
 
