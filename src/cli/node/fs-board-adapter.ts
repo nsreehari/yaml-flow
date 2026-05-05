@@ -93,6 +93,7 @@ export function createFsBoardPlatformAdapter(
     meta: 'board-live-cards',
     howToRun: 'local-node' as const,
     whatToRun: serializeRef({ kind: 'fs-path', value: boardCliScriptPath }),
+    ...(opts?.notifyChannel ? { extra: { notifyChannel: opts.notifyChannel } } : {}),
   };
 
   return {

@@ -144,6 +144,11 @@ function _parseWhatToRun(whatToRun: string): string {
   try { return parseRef(whatToRun).value; } catch { return whatToRun; }
 }
 
+function _notifyChannelFromVia(via: ExecutionRef): string | undefined {
+  const candidate = via.extra?.['notifyChannel'];
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+}
+
 /**
  * Resolve the Node invocation for a local board CLI script.
  * If the path ends in .ts (dev mode), attempts to locate tsx alongside it;
@@ -176,9 +181,15 @@ export function reportComplete(callback: TaskCallback, outRef: KindValueRef): vo
   if (via.howToRun === 'local-node' || via.howToRun === 'local-process') {
     const scriptPath = _parseWhatToRun(via.whatToRun);
     const { cmd, args } = _resolveLocalNodeInvocation(scriptPath);
-    const result = spawnSync(cmd, [...args, 'source-data-fetched',
-      '--ref', serializeRef(outRef), '--token', token,
-    ], { encoding: 'utf-8', windowsHide: true });
+    const notifyChannel = _notifyChannelFromVia(via);
+    const callbackArgs = [
+      ...args,
+      'source-data-fetched',
+      '--ref', serializeRef(outRef),
+      '--token', token,
+      ...(notifyChannel ? ['--notify-channel', notifyChannel] : []),
+    ];
+    const result = spawnSync(cmd, callbackArgs, { encoding: 'utf-8', windowsHide: true });
     if (result.status !== 0) {
       throw new Error(`reportComplete: board CLI exited ${result.status}: ${result.stderr?.trim()}`);
     }
@@ -202,9 +213,15 @@ export function reportFailed(callback: TaskCallback, reason: string): void {
   if (via.howToRun === 'local-node' || via.howToRun === 'local-process') {
     const scriptPath = _parseWhatToRun(via.whatToRun);
     const { cmd, args } = _resolveLocalNodeInvocation(scriptPath);
-    const result = spawnSync(cmd, [...args, 'source-data-fetch-failure',
-      '--token', token, '--reason', reason,
-    ], { encoding: 'utf-8', windowsHide: true });
+    const notifyChannel = _notifyChannelFromVia(via);
+    const callbackArgs = [
+      ...args,
+      'source-data-fetch-failure',
+      '--token', token,
+      '--reason', reason,
+      ...(notifyChannel ? ['--notify-channel', notifyChannel] : []),
+    ];
+    const result = spawnSync(cmd, callbackArgs, { encoding: 'utf-8', windowsHide: true });
     if (result.status !== 0) {
       throw new Error(`reportFailed: board CLI exited ${result.status}: ${result.stderr?.trim()}`);
     }
