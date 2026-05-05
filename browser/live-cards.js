@@ -98,13 +98,15 @@ var LiveCard = (function () {
       .lc-gandalf-caret:hover { opacity:1; }
       .lc-gandalf-card.lc-collapsed .lc-gandalf-caret { transform:rotate(-90deg); }
       .lc-gandalf-card.lc-collapsed .card-body { display:none !important; }
-      .lc-token-footer { display:flex; flex-wrap:wrap; gap:0.25rem; padding:0.375rem 0.5rem; border-top:1px solid var(--bs-border-color-translucent,#dee2e6); background:var(--bs-light,#f8f9fa); border-radius:0 0 var(--bs-card-border-radius,.375rem) var(--bs-card-border-radius,.375rem); }
-      .lc-token-badge { display:inline-flex; align-items:center; gap:0.25rem; font-size:0.7rem; padding:0.15rem 0.45rem; border-radius:0.75rem; font-weight:500; line-height:1.2; }
-      .lc-token-badge-provides { border:1px solid var(--bs-success,#198754); color:var(--bs-success,#198754); }
-      .lc-token-badge-provides.lc-token-available { background:var(--bs-success,#198754); color:#fff; }
-      .lc-token-badge-requires { border:1px solid var(--bs-secondary,#6c757d); color:var(--bs-secondary,#6c757d); }
-      .lc-token-badge-requires.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); color:#fff; }
-      .lc-token-arrow { font-size:0.6rem; opacity:0.5; }
+      .lc-token-row { display:flex; flex-wrap:wrap; gap:0.35rem; padding:0.2rem 0.5rem; background:transparent; align-items:center; justify-content:center; min-height:0; }
+      .lc-token-row-requires { border-bottom:none; padding-bottom:0.1rem; }
+      .lc-token-row-provides { border-top:none; padding-top:0.1rem; }
+      .lc-token-gem { display:inline-block; width:10px; height:10px; border-radius:50%; cursor:default; transition:transform .15s, box-shadow .15s; position:relative; }
+      .lc-token-gem:hover { transform:scale(1.5); box-shadow:0 0 4px rgba(0,0,0,0.3); z-index:5; }
+      .lc-token-gem-requires { background:var(--bs-secondary,#6c757d); border:1.5px solid var(--bs-secondary,#6c757d); }
+      .lc-token-gem-requires.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); }
+      .lc-token-gem-provides { background:var(--bs-secondary,#6c757d); border:1.5px solid var(--bs-secondary,#6c757d); }
+      .lc-token-gem-provides.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -2424,9 +2426,13 @@ var LiveCard = (function () {
       const s = document.createElement('style');
       s.id = 'lc-board-css';
       s.textContent = `
-        .lc-canvas-card { position:absolute; min-width:${cvs.minWidth}px; max-width:${cvs.maxWidth}px; cursor:grab; user-select:none; z-index:1; }
+        .lc-canvas-card { position:absolute; min-width:${cvs.minWidth}px; cursor:grab; user-select:none; z-index:1; }
         .lc-canvas-card.lc-dragging { cursor:grabbing; z-index:10; box-shadow:0 8px 24px rgba(0,0,0,0.18)!important; }
-        .lc-canvas-card .card-body { max-height:${cvs.cardMaxH}px; overflow:auto; }
+        .lc-canvas-card .card-body { overflow:auto; }
+        .lc-canvas-card.lc-resizing { cursor:nwse-resize; z-index:10; }
+        .lc-resize-handle { position:absolute; bottom:0; right:0; width:14px; height:14px; cursor:nwse-resize; z-index:2; opacity:0.4; transition:opacity .15s; }
+        .lc-resize-handle:hover { opacity:1; }
+        .lc-resize-handle::after { content:''; position:absolute; bottom:3px; right:3px; width:8px; height:8px; border-right:2px solid var(--bs-secondary,#6c757d); border-bottom:2px solid var(--bs-secondary,#6c757d); }
         .lc-canvas-edges path.lc-edge-path { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; stroke-dasharray:6 4; animation:lc-edge-flow 0.6s linear infinite; }
         .lc-canvas-edges line { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; }
         @keyframes lc-edge-flow { to { stroke-dashoffset:-10; } }
@@ -2726,41 +2732,42 @@ var LiveCard = (function () {
       
       const body = document.createElement('div');
       body.className = 'card-body p-2';
-      wrap.appendChild(header);
-      wrap.appendChild(body);
 
-      // Token footer — shows requires (incoming) and provides (outgoing) data keys
+      // Token gem rows — requires gems above header, provides gems below body
       const requiresTokens = (card.requires && Array.isArray(card.requires)) ? card.requires : [];
       const providesTokens = (Array.isArray(card.provides) && card.provides.length)
         ? card.provides.map(function(p) { return typeof p === 'string' ? p : (p.bindTo || p); })
         : [node.id];
 
-      if (requiresTokens.length || providesTokens.length) {
-        const footer = document.createElement('div');
-        footer.className = 'lc-token-footer';
-        footer.dataset.nodeId = node.id;
-
-        // Requires tokens (incoming arrows)
+      // Requires gems — top of card (above header)
+      if (requiresTokens.length) {
+        const reqRow = document.createElement('div');
+        reqRow.className = 'lc-token-row lc-token-row-requires';
         requiresTokens.forEach(function(token) {
-          const badge = document.createElement('span');
-          badge.className = 'lc-token-badge lc-token-badge-requires';
-          badge.dataset.token = token;
-          badge.title = 'Requires: ' + token;
-          badge.innerHTML = '<span class="lc-token-arrow">&#x2B05;</span>' + _esc(token);
-          footer.appendChild(badge);
+          const gem = document.createElement('span');
+          gem.className = 'lc-token-gem lc-token-gem-requires';
+          gem.dataset.token = token;
+          gem.title = token;
+          reqRow.appendChild(gem);
         });
+        wrap.appendChild(reqRow);
+      }
 
-        // Provides tokens (outgoing arrows)
+      wrap.appendChild(header);
+      wrap.appendChild(body);
+
+      // Provides gems — bottom of card (below body)
+      if (providesTokens.length) {
+        const provRow = document.createElement('div');
+        provRow.className = 'lc-token-row lc-token-row-provides';
         providesTokens.forEach(function(token) {
-          const badge = document.createElement('span');
-          badge.className = 'lc-token-badge lc-token-badge-provides';
-          badge.dataset.token = token;
-          badge.title = 'Provides: ' + token;
-          badge.innerHTML = _esc(token) + '<span class="lc-token-arrow">&#x27A1;</span>';
-          footer.appendChild(badge);
+          const gem = document.createElement('span');
+          gem.className = 'lc-token-gem lc-token-gem-provides';
+          gem.dataset.token = token;
+          gem.title = token;
+          provRow.appendChild(gem);
         });
-
-        wrap.appendChild(footer);
+        wrap.appendChild(provRow);
       }
 
       return { wrap, header, body };
@@ -2833,20 +2840,20 @@ var LiveCard = (function () {
         nodeHasData[node.id] = hasOutput || status === 'fresh' || status === 'completed';
       });
 
-      // Update all badges in root container
-      var allBadges = root.querySelectorAll('.lc-token-badge');
-      allBadges.forEach(function(badge) {
-        var token = badge.dataset.token;
+      // Update all gem elements in root container
+      var allGems = root.querySelectorAll('.lc-token-gem');
+      allGems.forEach(function(gem) {
+        var token = gem.dataset.token;
         if (!token) return;
-        if (badge.classList.contains('lc-token-badge-provides')) {
-          // The provides badge: green if this node has data
-          var nodeEl = badge.closest('[data-node-id]');
+        if (gem.classList.contains('lc-token-gem-provides')) {
+          // The provides gem: green if this node has data
+          var nodeEl = gem.closest('[data-node-id]');
           var nId = nodeEl && nodeEl.dataset.nodeId;
-          badge.classList.toggle('lc-token-available', !!(nId && nodeHasData[nId]));
-        } else if (badge.classList.contains('lc-token-badge-requires')) {
-          // The requires badge: green if the upstream provider for this token has data
+          gem.classList.toggle('lc-token-available', !!(nId && nodeHasData[nId]));
+        } else if (gem.classList.contains('lc-token-gem-requires')) {
+          // The requires gem: green if the upstream provider for this token has data
           var srcId = tokenMap[token];
-          badge.classList.toggle('lc-token-available', !!(srcId && nodeHasData[srcId]));
+          gem.classList.toggle('lc-token-available', !!(srcId && nodeHasData[srcId]));
         }
       });
     }
@@ -2879,18 +2886,18 @@ var LiveCard = (function () {
             if (!srcId) return;
             var srcInfo = nodeMap[srcId];
             if (!srcInfo || !srcInfo.colEl) return;
-            // Find the specific badge elements for this token
-            var srcBadge = srcInfo.colEl.querySelector('.lc-token-badge-provides[data-token="' + token + '"]');
-            var tgtBadge = tgtInfo.colEl.querySelector('.lc-token-badge-requires[data-token="' + token + '"]');
-            var startEl = srcBadge || srcInfo.colEl;
-            var endEl = tgtBadge || tgtInfo.colEl;
+            // Find the specific gem elements for this token
+            var srcGem = srcInfo.colEl.querySelector('.lc-token-gem-provides[data-token="' + token + '"]');
+            var tgtGem = tgtInfo.colEl.querySelector('.lc-token-gem-requires[data-token="' + token + '"]');
+            var startEl = srcGem || srcInfo.colEl;
+            var endEl = tgtGem || tgtInfo.colEl;
             try {
               var lineOpts = {
                 color: edgeCfg.color,
                 size: edgeCfg.size,
                 endPlug: edgeCfg.endPlug,
-                startSocket: 'right',
-                endSocket: 'left',
+                startSocket: srcGem ? 'bottom' : 'right',
+                endSocket: tgtGem ? 'top' : 'left',
               };
               if (edgeCfg.dash) {
                 lineOpts.dash = edgeCfg.animation ? { animation: true } : true;
@@ -2911,31 +2918,31 @@ var LiveCard = (function () {
           if (!srcId) return;
           var srcInfo = nodeMap[srcId];
           if (!srcInfo || !srcInfo.colEl) return;
-          // Locate badges; fall back to card element if badge not found
-          var srcBadge = srcInfo.colEl.querySelector('.lc-token-badge-provides[data-token="' + token + '"]');
-          var tgtBadge = tgtInfo.colEl.querySelector('.lc-token-badge-requires[data-token="' + token + '"]');
-          var sEl = srcBadge || srcInfo.colEl;
-          var tEl = tgtBadge || tgtInfo.colEl;
-          // Compute positions relative to canvasInner
-          var sx = sEl.offsetLeft + sEl.offsetWidth;
-          var sy = sEl.offsetTop + sEl.offsetHeight / 2;
-          var tx = tEl.offsetLeft;
-          var ty = tEl.offsetTop + tEl.offsetHeight / 2;
-          // If using badges, compute position relative to canvas coordinate space
-          if (srcBadge) {
-            var srcRect = srcBadge.getBoundingClientRect();
-            var innerRect = canvasInner.getBoundingClientRect();
-            sx = (srcRect.right - innerRect.left) / cvs.zoom;
-            sy = (srcRect.top + srcRect.height / 2 - innerRect.top) / cvs.zoom;
+          // Locate gems; fall back to card element if gem not found
+          var srcGem = srcInfo.colEl.querySelector('.lc-token-gem-provides[data-token="' + token + '"]');
+          var tgtGem = tgtInfo.colEl.querySelector('.lc-token-gem-requires[data-token="' + token + '"]');
+          var sx, sy, tx, ty;
+          var innerRect = canvasInner.getBoundingClientRect();
+          if (srcGem) {
+            var srcRect = srcGem.getBoundingClientRect();
+            sx = (srcRect.left + srcRect.width / 2 - innerRect.left) / cvs.zoom;
+            sy = (srcRect.bottom - innerRect.top) / cvs.zoom;
+          } else {
+            var sEl = srcInfo.colEl;
+            sx = sEl.offsetLeft + sEl.offsetWidth / 2;
+            sy = sEl.offsetTop + sEl.offsetHeight;
           }
-          if (tgtBadge) {
-            var tgtRect = tgtBadge.getBoundingClientRect();
-            var innerRect2 = canvasInner.getBoundingClientRect();
-            tx = (tgtRect.left - innerRect2.left) / cvs.zoom;
-            ty = (tgtRect.top + tgtRect.height / 2 - innerRect2.top) / cvs.zoom;
+          if (tgtGem) {
+            var tgtRect = tgtGem.getBoundingClientRect();
+            tx = (tgtRect.left + tgtRect.width / 2 - innerRect.left) / cvs.zoom;
+            ty = (tgtRect.top - innerRect.top) / cvs.zoom;
+          } else {
+            var tEl = tgtInfo.colEl;
+            tx = tEl.offsetLeft + tEl.offsetWidth / 2;
+            ty = tEl.offsetTop;
           }
-          var cpOffset = Math.min(Math.abs(tx - sx) * 0.5, 80);
-          var d = 'M ' + sx + ' ' + sy + ' C ' + (sx + cpOffset) + ' ' + sy + ', ' + (tx - cpOffset) + ' ' + ty + ', ' + tx + ' ' + ty;
+          var cpOffset = Math.min(Math.abs(ty - sy) * 0.5, 80);
+          var d = 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + (sy + cpOffset) + ', ' + tx + ' ' + (ty - cpOffset) + ', ' + tx + ' ' + ty;
           var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           path.setAttribute('d', d);
           path.setAttribute('fill', 'none');
@@ -2991,6 +2998,64 @@ var LiveCard = (function () {
       }, { signal });
     }
 
+    function _makeResizable(el, node) {
+      const handle = document.createElement('div');
+      handle.className = 'lc-resize-handle';
+      el.appendChild(handle);
+      el.style.overflow = 'visible';
+
+      let resizing = false, startX, startY, origW, origH;
+
+      handle.addEventListener('pointerdown', function(e) {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        e.preventDefault();
+        resizing = true;
+        el.classList.add('lc-resizing');
+        handle.setPointerCapture(e.pointerId);
+        startX = e.clientX;
+        startY = e.clientY;
+        origW = el.offsetWidth;
+        origH = el.offsetHeight;
+      }, { signal });
+
+      handle.addEventListener('pointermove', function(e) {
+        if (!resizing) return;
+        const dw = (e.clientX - startX) / cvs.zoom;
+        const dh = (e.clientY - startY) / cvs.zoom;
+        const newW = Math.max(cvs.minWidth, origW + dw);
+        const newH = Math.max(80, origH + dh);
+        el.style.width = newW + 'px';
+        el.style.height = newH + 'px';
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
+      }, { signal });
+
+      handle.addEventListener('pointerup', function() {
+        if (!resizing) return;
+        resizing = false;
+        el.classList.remove('lc-resizing');
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        // Snap to grid
+        const sw = cvs.snap > 1 ? Math.round(w / cvs.snap) * cvs.snap : w;
+        const sh = cvs.snap > 1 ? Math.round(h / cvs.snap) * cvs.snap : h;
+        el.style.width = sw + 'px';
+        el.style.height = sh + 'px';
+        // Persist dimensions
+        _positions[node.id] = Object.assign(_positions[node.id] || {}, { w: sw, h: sh });
+        if (node.card && node.card.view) {
+          if (!node.card.view.layout) node.card.view.layout = {};
+          if (!node.card.view.layout.canvas) node.card.view.layout.canvas = {};
+          node.card.view.layout.canvas.w = sw;
+          node.card.view.layout.canvas.h = sh;
+        }
+        engine.notify(node.id);
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
+      }, { signal });
+    }
+
     function _renderCanvas() {
       _destroyEdges();
       root.innerHTML = '';
@@ -3021,6 +3086,7 @@ var LiveCard = (function () {
           el.style.left = pos.x + 'px';
           el.style.top  = pos.y + 'px';
           if (pos.w) el.style.width = pos.w + 'px';
+          if (pos.h) el.style.height = pos.h + 'px';
 
           const { wrap, body } = _buildCardWrapper(node);
           while (wrap.firstChild) el.appendChild(wrap.firstChild);
@@ -3031,6 +3097,7 @@ var LiveCard = (function () {
           nodeMap[node.id] = { node, colEl: el, bodyEl: body };
           engine.render(node, body, { showChat: false });
           _makeDraggable(el, node);
+          _makeResizable(el, node);
         }
       });
 
