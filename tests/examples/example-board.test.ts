@@ -7,7 +7,18 @@ import { CardCompute, validateLiveCardDefinition } from '../../src/card-compute/
 import type { ComputeNode } from '../../src/card-compute/index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const exampleBoardDir = path.join(repoRoot, 'examples', 'example-board');
+function resolveExampleBoardDir(): string {
+  const candidates = [
+    path.join(repoRoot, 'examples', 'example-board'),
+    path.join(repoRoot, 'demo-src', 'example-board'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'cards'))) return candidate;
+  }
+  throw new Error(`Could not resolve example-board cards directory from: ${candidates.join(', ')}`);
+}
+
+const exampleBoardDir = resolveExampleBoardDir();
 const cardsDir = path.join(exampleBoardDir, 'cards');
 // Orders-domain card fixtures for the stable-outputs test.
 const cardsDir1 = path.join(repoRoot, 'tests', 'fixtures', 'orders-domain-cards');

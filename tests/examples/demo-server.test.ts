@@ -6,8 +6,22 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const demoServerPath = path.join(repoRoot, 'examples', 'example-board', 'demo-server.js');
-const SOURCE_CARDS_DIR = path.join(repoRoot, 'examples', 'example-board', 'cards');
+function resolveExampleBoardDir(): string {
+  const candidates = [
+    path.join(repoRoot, 'examples', 'example-board'),
+    path.join(repoRoot, 'demo-src', 'example-board'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'demo-server.js')) && fs.existsSync(path.join(candidate, 'cards'))) {
+      return candidate;
+    }
+  }
+  throw new Error(`Could not resolve example-board directory from: ${candidates.join(', ')}`);
+}
+
+const exampleBoardDir = resolveExampleBoardDir();
+const demoServerPath = path.join(exampleBoardDir, 'demo-server.js');
+const SOURCE_CARDS_DIR = path.join(exampleBoardDir, 'cards');
 
 const TEST_PORT = 7800 + Math.floor(Math.random() * 100); // Use random port to avoid conflicts
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-demo-server-fileapi-'));
@@ -63,7 +77,7 @@ beforeAll(async () => {
       DEMO_SERVER_PORT: String(TEST_PORT),
       DEMO_SETUP_DIR: SETUP_DIR,
       DEMO_CARDS_DIR: TMP_CARDS_DIR,
-      DEMO_TASK_EXECUTOR_PATH: path.join(repoRoot, 'examples', 'example-board', 'demo-task-executor.js'),
+      DEMO_TASK_EXECUTOR_PATH: path.join(exampleBoardDir, 'demo-task-executor.js'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
