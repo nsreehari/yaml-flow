@@ -54,6 +54,7 @@ const quickjsStubPlugin: Plugin = {
 export default defineConfig({
   entry: {
     'pycli/quickjs-board-runtime': 'src/cli/pycli/quickjs-board-runtime.ts',
+    'pycli/quickjs-step-machine-runtime': 'src/cli/pycli/quickjs-step-machine-runtime.ts',
   },
   outDir: 'dist',
   format: ['iife'],

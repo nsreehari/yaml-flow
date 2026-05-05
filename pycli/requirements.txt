@@ -2,3 +2,4 @@
 # quickjs does not currently build against Python 3.13 on Windows.
 # Use Python 3.12 for pycli runtime setup.
 quickjs>=1.19.4,<2 ; python_version < "3.13"
+pyyaml>=6.0.1,<7
