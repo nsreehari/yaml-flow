@@ -17,7 +17,6 @@ const runtimeRootEntries = [
 ];
 
 const runtimeDirs = [
-  'dist/cli/node',
   'dist/pycli',
   'pycli/main',
   'pycli/sub',
@@ -39,12 +38,6 @@ const runtimeExampleDirs = [
   'examples/cli/step-machine-cli/portfolio-tracker/handlers',
 ];
 
-const copiedPkgs = new Set();
-
-function pkgPath(baseDir, pkgName) {
-  return path.join(baseDir, 'node_modules', ...pkgName.split('/'));
-}
-
 async function exists(p) {
   try {
     await fs.access(p);
@@ -61,36 +54,6 @@ async function copyIntoDist(relPath) {
   await fs.cp(src, dst, { recursive: true });
 }
 
-async function copyPackageWithDeps(pkgName, optional = false) {
-  if (copiedPkgs.has(pkgName)) return;
-
-  const srcPkgDir = pkgPath(root, pkgName);
-  if (!(await exists(srcPkgDir))) {
-    if (optional) return;
-    throw new Error(`Missing runtime dependency in node_modules: ${pkgName}`);
-  }
-
-  copiedPkgs.add(pkgName);
-
-  const dstPkgDir = pkgPath(outDir, pkgName);
-  await fs.mkdir(path.dirname(dstPkgDir), { recursive: true });
-  await fs.cp(srcPkgDir, dstPkgDir, { recursive: true });
-
-  const pkgJsonPath = path.join(srcPkgDir, 'package.json');
-  if (!(await exists(pkgJsonPath))) return;
-
-  const pkgJson = JSON.parse(await fs.readFile(pkgJsonPath, 'utf-8'));
-  const deps = Object.keys(pkgJson.dependencies ?? {});
-  const optionalDeps = Object.keys(pkgJson.optionalDependencies ?? {});
-
-  for (const dep of deps) {
-    await copyPackageWithDeps(dep, false);
-  }
-  for (const dep of optionalDeps) {
-    await copyPackageWithDeps(dep, true);
-  }
-}
-
 async function writeReadme() {
   const readme = [
     '# yaml-flow standalone',
@@ -99,7 +62,6 @@ async function writeReadme() {
     '',
     '## Requirements',
     '- Python 3.12',
-    '- Node.js 18+ (required for detached process callbacks from pycli host bridge)',
     '',
     '## Setup',
     '1. `python -m pip install -r pycli/requirements.txt`',
@@ -173,7 +135,6 @@ async function minifyStandaloneJs() {
 async function copyJsonataSidecars() {
   const sidecarRelPaths = [
     'dist/jsonata-sync.cjs',
-    'dist/cli/node/jsonata-sync.cjs',
     'dist/cli/browser-api/jsonata-sync.cjs',
     'dist/card-compute/jsonata-sync.cjs',
     'dist/continuous-event-graph/jsonata-sync.cjs',
@@ -181,29 +142,6 @@ async function copyJsonataSidecars() {
   ];
 
   for (const rel of sidecarRelPaths) {
-    const src = path.join(root, rel);
-    if (!(await exists(src))) continue;
-    const dst = path.join(outDir, rel);
-    await fs.mkdir(path.dirname(dst), { recursive: true });
-    await fs.cp(src, dst, { force: true });
-  }
-}
-
-async function copyNodeCliRuntimeFiles() {
-  const relFiles = [
-    'dist/cli/node/board-live-cards-cli.js',
-    'dist/cli/node/board-live-cards-cli.cjs',
-    'dist/cli/node/card-store-cli.js',
-    'dist/cli/node/card-store-cli.cjs',
-    'dist/cli/node/fs-board-adapter.js',
-    'dist/cli/node/fs-board-adapter.cjs',
-    'dist/cli/node/source-cli-task-executor.js',
-    'dist/cli/node/source-cli-task-executor.cjs',
-    'dist/cli/node/artifacts-store-cli.js',
-    'dist/cli/node/artifacts-store-cli.cjs',
-  ];
-
-  for (const rel of relFiles) {
     const src = path.join(root, rel);
     if (!(await exists(src))) continue;
     const dst = path.join(outDir, rel);
@@ -229,23 +167,12 @@ async function main() {
     await copyIntoDist(rel);
   }
 
-  const projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf-8'));
-  const topLevelRuntimeDeps = [
-    ...Object.keys(projectPkg.dependencies ?? {}),
-    ...Object.keys(projectPkg.optionalDependencies ?? {}),
-  ];
-
-  for (const dep of topLevelRuntimeDeps) {
-    await copyPackageWithDeps(dep, true);
-  }
-
   if (shouldMinifyJs) {
     await minifyStandaloneJs();
   }
 
   // Keep required CommonJS sidecars available for runtime require() paths.
   await copyJsonataSidecars();
-  await copyNodeCliRuntimeFiles();
 
   await writeReadme();
 
