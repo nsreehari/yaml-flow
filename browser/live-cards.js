@@ -2351,6 +2351,17 @@ var LiveCard = (function () {
     };
     const ac = new AbortController();
     const signal = ac.signal;
+    const _edges = [];        // LeaderLine instances for canvas edges
+
+    // Edge style config (from canvas opts)
+    const edgeOpts = co.edgeStyle || {};
+    const edgeCfg = {
+      color:     edgeOpts.color || 'rgba(108, 117, 125, 0.6)',
+      size:      edgeOpts.size || 2,
+      dash:      edgeOpts.dash !== false,
+      animation: edgeOpts.animation !== false,
+      endPlug:   edgeOpts.endPlug || 'arrow1',
+    };
 
     // DOM containers
     const root = document.createElement('div');
@@ -2387,7 +2398,9 @@ var LiveCard = (function () {
         .lc-canvas-card { position:absolute; min-width:${cvs.minWidth}px; max-width:${cvs.maxWidth}px; cursor:grab; user-select:none; z-index:1; }
         .lc-canvas-card.lc-dragging { cursor:grabbing; z-index:10; box-shadow:0 8px 24px rgba(0,0,0,0.18)!important; }
         .lc-canvas-card .card-body { max-height:${cvs.cardMaxH}px; overflow:auto; }
+        .lc-canvas-edges path.lc-edge-path { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; stroke-dasharray:6 4; animation:lc-edge-flow 0.6s linear infinite; }
         .lc-canvas-edges line { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; }
+        @keyframes lc-edge-flow { to { stroke-dashoffset:-10; } }
         .lc-source-node { position:absolute; cursor:grab; user-select:none; z-index:1; }
         .lc-source-node.lc-dragging { cursor:grabbing; z-index:10; }
       `;
@@ -2662,6 +2675,7 @@ var LiveCard = (function () {
     // ---- Board mode ----
 
     function _renderBoard() {
+      _destroyEdges();
       root.innerHTML = '';
       root.appendChild(gridEl);
       gridEl.innerHTML = '';
@@ -2692,26 +2706,65 @@ var LiveCard = (function () {
       canvasInner.style.transform = `translate(${cvs.panX}px,${cvs.panY}px) scale(${cvs.zoom})`;
     }
 
+    function _destroyEdges() {
+      _edges.forEach(function(line) { try { line.remove(); } catch(e) { /* noop */ } });
+      _edges.length = 0;
+    }
+
+    function _repositionEdges() {
+      _edges.forEach(function(line) { try { line.position(); } catch(e) { /* noop */ } });
+    }
+
     function _drawEdges() {
-      svgEl.querySelectorAll('line').forEach(l => l.remove());
+      _destroyEdges();
+      svgEl.querySelectorAll('line,path').forEach(function(el) { el.remove(); });
       if (!cvs.edges) return;
 
-      nodeList.forEach(node => {
-        _getRequires(node).forEach(srcId => {
-          const srcInfo = nodeMap[srcId];
-          const tgtInfo = nodeMap[node.id];
+      // Prefer LeaderLine if available (CDN / global)
+      if (typeof LeaderLine !== 'undefined') {
+        nodeList.forEach(function(node) {
+          _getRequires(node).forEach(function(srcId) {
+            var srcInfo = nodeMap[srcId];
+            var tgtInfo = nodeMap[node.id];
+            if (!srcInfo || !tgtInfo || !srcInfo.colEl || !tgtInfo.colEl) return;
+            try {
+              var lineOpts = {
+                color: edgeCfg.color,
+                size: edgeCfg.size,
+                endPlug: edgeCfg.endPlug,
+                startSocket: 'right',
+                endSocket: 'left',
+              };
+              if (edgeCfg.dash) {
+                lineOpts.dash = edgeCfg.animation ? { animation: true } : true;
+              }
+              _edges.push(new LeaderLine(srcInfo.colEl, tgtInfo.colEl, lineOpts));
+            } catch(e) { /* skip edge on error */ }
+          });
+        });
+        return;
+      }
+
+      // SVG fallback — curved paths with animated dash
+      nodeList.forEach(function(node) {
+        _getRequires(node).forEach(function(srcId) {
+          var srcInfo = nodeMap[srcId];
+          var tgtInfo = nodeMap[node.id];
           if (!srcInfo || !tgtInfo) return;
-          const sEl = srcInfo.colEl;
-          const tEl = tgtInfo.colEl;
-          const sx = sEl.offsetLeft + sEl.offsetWidth;
-          const sy = sEl.offsetTop + sEl.offsetHeight / 2;
-          const tx = tEl.offsetLeft;
-          const ty = tEl.offsetTop + tEl.offsetHeight / 2;
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          line.setAttribute('x1', sx); line.setAttribute('y1', sy);
-          line.setAttribute('x2', tx); line.setAttribute('y2', ty);
-          line.setAttribute('marker-end', 'url(#lc-arrow)');
-          svgEl.appendChild(line);
+          var sEl = srcInfo.colEl;
+          var tEl = tgtInfo.colEl;
+          var sx = sEl.offsetLeft + sEl.offsetWidth;
+          var sy = sEl.offsetTop + sEl.offsetHeight / 2;
+          var tx = tEl.offsetLeft;
+          var ty = tEl.offsetTop + tEl.offsetHeight / 2;
+          var cpOffset = Math.min(Math.abs(tx - sx) * 0.5, 80);
+          var d = 'M ' + sx + ' ' + sy + ' C ' + (sx + cpOffset) + ' ' + sy + ', ' + (tx - cpOffset) + ' ' + ty + ', ' + tx + ' ' + ty;
+          var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', d);
+          path.setAttribute('fill', 'none');
+          path.setAttribute('marker-end', 'url(#lc-arrow)');
+          path.classList.add('lc-edge-path');
+          svgEl.appendChild(path);
         });
       });
     }
@@ -2736,7 +2789,8 @@ var LiveCard = (function () {
         const dy = (e.clientY - startY) / cvs.zoom;
         el.style.left = (origX + dx) + 'px';
         el.style.top  = (origY + dy) + 'px';
-        _drawEdges();
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
       }, { signal });
 
       el.addEventListener('pointerup', () => {
@@ -2755,15 +2809,17 @@ var LiveCard = (function () {
           node.card.view.layout.canvas.y = y;
         }
         engine.notify(node.id);
-        _drawEdges();
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
       }, { signal });
     }
 
     function _renderCanvas() {
+      _destroyEdges();
       root.innerHTML = '';
       root.appendChild(canvasEl);
       canvasInner.querySelectorAll('.lc-canvas-card,.lc-source-node').forEach(el => el.remove());
-      svgEl.querySelectorAll('line').forEach(l => l.remove());
+      svgEl.querySelectorAll('line,path').forEach(function(el) { el.remove(); });
       _initPositions();
       _applyTransform();
 
@@ -2801,7 +2857,15 @@ var LiveCard = (function () {
         }
       });
 
-      _drawEdges();
+      // Draw edges — use rAF for LeaderLine so elements are laid out first
+      if (typeof LeaderLine !== 'undefined') {
+        requestAnimationFrame(function() { _drawEdges(); });
+      } else {
+        _drawEdges();
+      }
+
+      // Reposition LeaderLine edges on scroll
+      canvasEl.addEventListener('scroll', function() { _repositionEdges(); }, { signal, passive: true });
 
       // Pan: middle-click or Ctrl+drag on background
       let panning = false, panStartX, panStartY, panOrigX, panOrigY;
@@ -2819,6 +2883,7 @@ var LiveCard = (function () {
         cvs.panX = panOrigX + (e.clientX - panStartX);
         cvs.panY = panOrigY + (e.clientY - panStartY);
         _applyTransform();
+        _repositionEdges();
       }, { signal });
       canvasEl.addEventListener('pointerup', () => { panning = false; }, { signal });
 
@@ -2829,6 +2894,7 @@ var LiveCard = (function () {
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
         cvs.zoom = Math.min(cvs.zoomMax, Math.max(cvs.zoomMin, cvs.zoom * delta));
         _applyTransform();
+        _repositionEdges();
       }, { signal, passive: false });
     }
 
@@ -2910,6 +2976,7 @@ var LiveCard = (function () {
     function refresh() { _render(); }
 
     function clear() {
+      _destroyEdges();
       engine.destroyAll();
       nodeList.length = 0;
       Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
@@ -2929,6 +2996,7 @@ var LiveCard = (function () {
     }
 
     function destroy() {
+      _destroyEdges();
       ac.abort();
       engine.destroyAll();
       nodeList.length = 0;
