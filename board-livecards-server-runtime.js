@@ -272,12 +272,6 @@ export function createMultiBoardServerRuntime(options = {}) {
       config.boards.push(entry);
       writeBoardsConfig(config);
 
-      // Pre-create board directory tree so the board is immediately usable.
-      const boardRoot = path.join(setupDir, `board-${id}`);
-      fs.mkdirSync(path.join(boardRoot, 'runtime'), { recursive: true });
-      fs.mkdirSync(path.join(boardRoot, 'surface'), { recursive: true });
-      fs.mkdirSync(path.join(boardRoot, 'runtime-out'), { recursive: true });
-
       json(res, 200, { ok: true, board: entry });
       return true;
     }
