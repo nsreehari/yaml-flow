@@ -98,6 +98,13 @@ var LiveCard = (function () {
       .lc-gandalf-caret:hover { opacity:1; }
       .lc-gandalf-card.lc-collapsed .lc-gandalf-caret { transform:rotate(-90deg); }
       .lc-gandalf-card.lc-collapsed .card-body { display:none !important; }
+      .lc-token-footer { display:flex; flex-wrap:wrap; gap:0.25rem; padding:0.375rem 0.5rem; border-top:1px solid var(--bs-border-color-translucent,#dee2e6); background:var(--bs-light,#f8f9fa); border-radius:0 0 var(--bs-card-border-radius,.375rem) var(--bs-card-border-radius,.375rem); }
+      .lc-token-badge { display:inline-flex; align-items:center; gap:0.25rem; font-size:0.7rem; padding:0.15rem 0.45rem; border-radius:0.75rem; font-weight:500; line-height:1.2; }
+      .lc-token-badge-provides { border:1px solid var(--bs-success,#198754); color:var(--bs-success,#198754); }
+      .lc-token-badge-provides.lc-token-available { background:var(--bs-success,#198754); color:#fff; }
+      .lc-token-badge-requires { border:1px solid var(--bs-secondary,#6c757d); color:var(--bs-secondary,#6c757d); }
+      .lc-token-badge-requires.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); color:#fff; }
+      .lc-token-arrow { font-size:0.6rem; opacity:0.5; }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -781,7 +788,29 @@ var LiveCard = (function () {
       const requires = (node && node.card && Array.isArray(node.card.requires)) ? node.card.requires : [];
       if (!requires.length) return;
       const cleanup = _getCleanup(node.id);
-      cleanup.unsubs = requires.map(upId => subscribe(upId, () => {
+
+      // Resolve required tokens to upstream node IDs via provides declarations.
+      // Build a token→nodeId map from all nodes the engine knows about.
+      const tokenMap = {};
+      const allNodeIds = Object.keys(_subs).concat(Object.keys(_nodeEls));
+      allNodeIds.forEach(function(nid) {
+        const n = cfg.resolve(nid);
+        if (!n || !n.card) return;
+        var provides = (Array.isArray(n.card.provides) && n.card.provides.length)
+          ? n.card.provides.map(function(p) { return typeof p === 'string' ? p : (p.bindTo || p); })
+          : [n.id];
+        provides.forEach(function(tok) { tokenMap[tok] = n.id; });
+      });
+
+      // Subscribe to each upstream provider node (deduplicated)
+      const seen = {};
+      const upIds = [];
+      requires.forEach(function(token) {
+        var srcId = tokenMap[token] || token; // fallback: treat token as nodeId
+        if (!seen[srcId]) { seen[srcId] = true; upIds.push(srcId); }
+      });
+
+      cleanup.unsubs = upIds.map(upId => subscribe(upId, () => {
         const info = _nodeEls[node.id];
         if (!info || !info.resultEl) return;
         const updated = cfg.resolve(node.id);
@@ -2435,6 +2464,51 @@ var LiveCard = (function () {
       return (node && node.card && Array.isArray(node.card.requires)) ? node.card.requires : [];
     }
 
+    /**
+     * Returns tokens this node provides.
+     * Explicit: card.provides[].bindTo
+     * Implicit default: the node's own id (if no provides declared)
+     */
+    function _getProvides(node) {
+      if (!node || !node.card) return [node ? node.id : ''];
+      if (Array.isArray(node.card.provides) && node.card.provides.length > 0) {
+        return node.card.provides.map(function(p) { return (typeof p === 'string') ? p : (p.bindTo || p); });
+      }
+      // Default: node provides a token equal to its own id
+      return [node.id];
+    }
+
+    /**
+     * Build token → provider nodeId map from all nodes in the board.
+     * Called before drawing edges so we can resolve requires tokens → source nodes.
+     */
+    function _buildTokenMap() {
+      var map = {};
+      nodeList.forEach(function(node) {
+        _getProvides(node).forEach(function(token) {
+          map[token] = node.id;
+        });
+      });
+      return map;
+    }
+
+    /**
+     * Resolve required tokens to provider node IDs.
+     * Returns deduplicated array of source node IDs for a given consumer node.
+     */
+    function _resolveEdgeSources(node, tokenMap) {
+      var sources = [];
+      var seen = {};
+      _getRequires(node).forEach(function(token) {
+        var srcId = tokenMap[token];
+        if (srcId && !seen[srcId]) {
+          seen[srcId] = true;
+          sources.push(srcId);
+        }
+      });
+      return sources;
+    }
+
     function _showCardInspector(node) {
       const modal = document.createElement('div');
       modal.className = 'modal d-block';
@@ -2654,6 +2728,41 @@ var LiveCard = (function () {
       body.className = 'card-body p-2';
       wrap.appendChild(header);
       wrap.appendChild(body);
+
+      // Token footer — shows requires (incoming) and provides (outgoing) data keys
+      const requiresTokens = (card.requires && Array.isArray(card.requires)) ? card.requires : [];
+      const providesTokens = (Array.isArray(card.provides) && card.provides.length)
+        ? card.provides.map(function(p) { return typeof p === 'string' ? p : (p.bindTo || p); })
+        : [node.id];
+
+      if (requiresTokens.length || providesTokens.length) {
+        const footer = document.createElement('div');
+        footer.className = 'lc-token-footer';
+        footer.dataset.nodeId = node.id;
+
+        // Requires tokens (incoming arrows)
+        requiresTokens.forEach(function(token) {
+          const badge = document.createElement('span');
+          badge.className = 'lc-token-badge lc-token-badge-requires';
+          badge.dataset.token = token;
+          badge.title = 'Requires: ' + token;
+          badge.innerHTML = '<span class="lc-token-arrow">&#x2B05;</span>' + _esc(token);
+          footer.appendChild(badge);
+        });
+
+        // Provides tokens (outgoing arrows)
+        providesTokens.forEach(function(token) {
+          const badge = document.createElement('span');
+          badge.className = 'lc-token-badge lc-token-badge-provides';
+          badge.dataset.token = token;
+          badge.title = 'Provides: ' + token;
+          badge.innerHTML = _esc(token) + '<span class="lc-token-arrow">&#x27A1;</span>';
+          footer.appendChild(badge);
+        });
+
+        wrap.appendChild(footer);
+      }
+
       return { wrap, header, body };
     }
 
@@ -2698,12 +2807,48 @@ var LiveCard = (function () {
         nodeMap[node.id] = { node, colEl: col, bodyEl: body };
         engine.render(node, body, { showChat });
       });
+      _updateTokenAvailability();
     }
 
     // ---- Canvas mode ----
 
     function _applyTransform() {
       canvasInner.style.transform = `translate(${cvs.panX}px,${cvs.panY}px) scale(${cvs.zoom})`;
+    }
+
+    /**
+     * Update token badge availability: a provides badge turns green when the
+     * node has data; a requires badge turns green when the upstream provider
+     * has data for that token.
+     */
+    function _updateTokenAvailability() {
+      var tokenMap = _buildTokenMap();
+      // Determine which nodes "have data" (non-empty card_data or fetched_sources, or status=fresh/completed)
+      var nodeHasData = {};
+      nodeList.forEach(function(node) {
+        var cd = node.card_data || (node.card && node.card.card_data);
+        var fs = node.fetched_sources;
+        var status = cd && cd.status;
+        var hasOutput = (cd && Object.keys(cd).length > 0) || (fs && Object.keys(fs).length > 0);
+        nodeHasData[node.id] = hasOutput || status === 'fresh' || status === 'completed';
+      });
+
+      // Update all badges in root container
+      var allBadges = root.querySelectorAll('.lc-token-badge');
+      allBadges.forEach(function(badge) {
+        var token = badge.dataset.token;
+        if (!token) return;
+        if (badge.classList.contains('lc-token-badge-provides')) {
+          // The provides badge: green if this node has data
+          var nodeEl = badge.closest('[data-node-id]');
+          var nId = nodeEl && nodeEl.dataset.nodeId;
+          badge.classList.toggle('lc-token-available', !!(nId && nodeHasData[nId]));
+        } else if (badge.classList.contains('lc-token-badge-requires')) {
+          // The requires badge: green if the upstream provider for this token has data
+          var srcId = tokenMap[token];
+          badge.classList.toggle('lc-token-available', !!(srcId && nodeHasData[srcId]));
+        }
+      });
     }
 
     function _destroyEdges() {
@@ -2720,13 +2865,25 @@ var LiveCard = (function () {
       svgEl.querySelectorAll('line,path').forEach(function(el) { el.remove(); });
       if (!cvs.edges) return;
 
-      // Prefer LeaderLine if available (CDN / global)
+      // Build token → provider nodeId map
+      var tokenMap = _buildTokenMap();
+
+      // For each consumer node, for each required token, draw edge from
+      // the provider's "provides" badge → the consumer's "requires" badge.
       if (typeof LeaderLine !== 'undefined') {
         nodeList.forEach(function(node) {
-          _getRequires(node).forEach(function(srcId) {
+          var tgtInfo = nodeMap[node.id];
+          if (!tgtInfo || !tgtInfo.colEl) return;
+          _getRequires(node).forEach(function(token) {
+            var srcId = tokenMap[token];
+            if (!srcId) return;
             var srcInfo = nodeMap[srcId];
-            var tgtInfo = nodeMap[node.id];
-            if (!srcInfo || !tgtInfo || !srcInfo.colEl || !tgtInfo.colEl) return;
+            if (!srcInfo || !srcInfo.colEl) return;
+            // Find the specific badge elements for this token
+            var srcBadge = srcInfo.colEl.querySelector('.lc-token-badge-provides[data-token="' + token + '"]');
+            var tgtBadge = tgtInfo.colEl.querySelector('.lc-token-badge-requires[data-token="' + token + '"]');
+            var startEl = srcBadge || srcInfo.colEl;
+            var endEl = tgtBadge || tgtInfo.colEl;
             try {
               var lineOpts = {
                 color: edgeCfg.color,
@@ -2738,25 +2895,45 @@ var LiveCard = (function () {
               if (edgeCfg.dash) {
                 lineOpts.dash = edgeCfg.animation ? { animation: true } : true;
               }
-              _edges.push(new LeaderLine(srcInfo.colEl, tgtInfo.colEl, lineOpts));
+              _edges.push(new LeaderLine(startEl, endEl, lineOpts));
             } catch(e) { /* skip edge on error */ }
           });
         });
         return;
       }
 
-      // SVG fallback — curved paths with animated dash
+      // SVG fallback — connect badge-to-badge with curved paths
       nodeList.forEach(function(node) {
-        _getRequires(node).forEach(function(srcId) {
+        var tgtInfo = nodeMap[node.id];
+        if (!tgtInfo || !tgtInfo.colEl) return;
+        _getRequires(node).forEach(function(token) {
+          var srcId = tokenMap[token];
+          if (!srcId) return;
           var srcInfo = nodeMap[srcId];
-          var tgtInfo = nodeMap[node.id];
-          if (!srcInfo || !tgtInfo) return;
-          var sEl = srcInfo.colEl;
-          var tEl = tgtInfo.colEl;
+          if (!srcInfo || !srcInfo.colEl) return;
+          // Locate badges; fall back to card element if badge not found
+          var srcBadge = srcInfo.colEl.querySelector('.lc-token-badge-provides[data-token="' + token + '"]');
+          var tgtBadge = tgtInfo.colEl.querySelector('.lc-token-badge-requires[data-token="' + token + '"]');
+          var sEl = srcBadge || srcInfo.colEl;
+          var tEl = tgtBadge || tgtInfo.colEl;
+          // Compute positions relative to canvasInner
           var sx = sEl.offsetLeft + sEl.offsetWidth;
           var sy = sEl.offsetTop + sEl.offsetHeight / 2;
           var tx = tEl.offsetLeft;
           var ty = tEl.offsetTop + tEl.offsetHeight / 2;
+          // If using badges, compute position relative to canvas coordinate space
+          if (srcBadge) {
+            var srcRect = srcBadge.getBoundingClientRect();
+            var innerRect = canvasInner.getBoundingClientRect();
+            sx = (srcRect.right - innerRect.left) / cvs.zoom;
+            sy = (srcRect.top + srcRect.height / 2 - innerRect.top) / cvs.zoom;
+          }
+          if (tgtBadge) {
+            var tgtRect = tgtBadge.getBoundingClientRect();
+            var innerRect2 = canvasInner.getBoundingClientRect();
+            tx = (tgtRect.left - innerRect2.left) / cvs.zoom;
+            ty = (tgtRect.top + tgtRect.height / 2 - innerRect2.top) / cvs.zoom;
+          }
           var cpOffset = Math.min(Math.abs(tx - sx) * 0.5, 80);
           var d = 'M ' + sx + ' ' + sy + ' C ' + (sx + cpOffset) + ' ' + sy + ', ' + (tx - cpOffset) + ' ' + ty + ', ' + tx + ' ' + ty;
           var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -2857,6 +3034,8 @@ var LiveCard = (function () {
         }
       });
 
+      _updateTokenAvailability();
+
       // Draw edges — use rAF for LeaderLine so elements are laid out first
       if (typeof LeaderLine !== 'undefined') {
         requestAnimationFrame(function() { _drawEdges(); });
@@ -2906,11 +3085,12 @@ var LiveCard = (function () {
     // ---- Auto-layout (topological L → R) ----
 
     function autoLayout() {
+      const tokenMap = _buildTokenMap();
       const incoming = {};
       const levels = {};
       nodeList.forEach(n => { incoming[n.id] = []; levels[n.id] = 0; });
       nodeList.forEach(n => {
-        _getRequires(n).forEach(srcId => {
+        _resolveEdgeSources(n, tokenMap).forEach(srcId => {
           if (incoming[n.id]) incoming[n.id].push(srcId);
         });
       });
