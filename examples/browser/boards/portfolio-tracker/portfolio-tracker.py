@@ -33,7 +33,12 @@ if not NODE:
 
 BOARD_CLI       = os.path.join(_REPO_ROOT, 'board-live-cards-cli.js')
 CARD_STORE_CLI  = os.path.join(_REPO_ROOT, 'card-store.js')
-FETCH_PRICES_JS = os.path.join(_HERE, 'portfolio-tracker-fetch-prices.js')
+FETCH_PRICES_PY = os.path.join(_HERE, 'portfolio-tracker-fetch-prices.py')
+
+PYTHON = shutil.which('python')
+if not PYTHON:
+    print('[ERROR] python not found on PATH (required for portfolio-tracker-fetch-prices.py)', file=sys.stderr)
+    sys.exit(1)
 
 PYTHON312 = os.path.join(_REPO_ROOT, '.venv312', 'Scripts', 'python.exe')
 PYCLI = os.path.join(_REPO_ROOT, 'pycli', 'main', 'board_live_cards_pycli.py')
@@ -266,8 +271,8 @@ print('\n=== T0b: Init board ===')
 _task_executor_body = json.dumps({
     'task-executor-ref': {
         'meta': 'task-executor',
-        'howToRun': 'local-node',
-        'whatToRun': f'::fs-path::{FETCH_PRICES_JS}',
+        'howToRun': 'local-python',
+        'whatToRun': f'::fs-path::{FETCH_PRICES_PY}',
     }
 })
 run_board_with_input(
