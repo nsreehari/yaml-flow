@@ -443,8 +443,14 @@ if (typeof globalThis.TextDecoder !== 'function') {
     # QuickJS bundle shims require('./jsonata-sync.cjs') from globalThis.__jsonataSync.
     # Seed it before loading the main bundle to ensure projections/compute evaluate synchronously.
     repo_root = Path(__file__).resolve().parent.parent.parent
-    jsonata_sync_path = repo_root / "src" / "card-compute" / "jsonata-sync.cjs"
-    if jsonata_sync_path.exists():
+    _candidate_paths = [
+        repo_root / "dist" / "card-compute" / "jsonata-sync.cjs",
+        repo_root / "dist" / "jsonata-sync.cjs",
+        Path(bundle_path).resolve().parent / "jsonata-sync.cjs",
+        repo_root / "src" / "card-compute" / "jsonata-sync.cjs",
+    ]
+    jsonata_sync_path = next((p for p in _candidate_paths if p.exists()), None)
+    if jsonata_sync_path is not None:
         ctx.eval(jsonata_sync_path.read_text(encoding="utf-8"))
         ctx.eval(
             """
