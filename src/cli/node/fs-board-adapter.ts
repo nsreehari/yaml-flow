@@ -53,7 +53,9 @@ export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from '../co
 export { parseRef, serializeRef } from '../common/storage-interface.js';
 export type { KindValueRef } from '../common/storage-interface.js';
 export { createCardStorePublic } from '../common/card-store-lib-public.js';
+export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
 export { createCardStore } from '../common/board-live-cards-lib.js';
+export { createArtifactsStore } from '../common/artifacts-store-lib.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 
 // ============================================================================

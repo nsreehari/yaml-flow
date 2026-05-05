@@ -32,8 +32,16 @@
 // Blob — raw content at an opaque key
 //
 // The key is backend-specific (file path, blob name, storage key).
-// Content is always a string — callers own JSON serialisation.
+// Text helpers are always available. Binary helpers are optional so existing
+// backends can adopt incrementally.
 // ============================================================================
+
+export interface BlobStat {
+  key: string;
+  size: number;
+  updatedAt?: string;
+  contentType?: string;
+}
 
 export interface BlobStorage {
   /** Returns raw content string, or null if the blob does not exist. */
@@ -47,6 +55,18 @@ export interface BlobStorage {
 
   /** Delete the blob at key. No-op if it does not exist. */
   remove(key: string): void;
+
+  /** Optional binary read for file-like artifacts. */
+  readBytes?(key: string): Uint8Array | null;
+
+  /** Optional binary write for file-like artifacts. */
+  writeBytes?(key: string, content: Uint8Array): void;
+
+  /** Optional key listing by prefix. */
+  listKeys?(prefix?: string): string[];
+
+  /** Optional metadata lookup. */
+  stat?(key: string): BlobStat | null;
 }
 
 // ============================================================================

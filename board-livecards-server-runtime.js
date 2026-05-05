@@ -10,6 +10,7 @@ import {
   createFsBoardPlatformAdapter,
   createCardStorePublic,
   createCardStore,
+  createArtifactsStore,
   parseRef,
 } from './dist/cli/node/fs-board-adapter.js';
 
@@ -440,7 +441,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   function makeBoardContext(label, runtimeDir, outputsDir, cardsRootDir, taskExecutorPath, chatHandlerPath, inferenceAdapterPath) {
     const notifyChannel = `yaml-flow-server-${label}-${boardId || 'default'}-${process.pid}`;
     const baseRefStr = `::fs-path::${runtimeDir}`;
-    const cardStoreRef = `::fs-path::${path.join(runtimeDir, '.cards')}`;
+    const cardStoreRef = `::fs-path::${path.join(cardsRootDir, 'cards')}`;
     const outputsStoreRef = `::fs-path::${path.join(outputsDir, '.outputs')}`;
     const baseRef = parseRef(baseRefStr);
     const adapter = createFsBoardPlatformAdapter(baseRef, __dirname, {
@@ -459,6 +460,10 @@ export function createExampleBoardServerRuntime(options = {}) {
       defaultCardKey: (id) => id,
     };
     const cardStore = createCardStorePublic(createCardStore(cardAdapterObj, console.warn));
+    const artifactsRef = parseRef(`::fs-path::${cardsRootDir}`);
+    const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, __dirname, { suppressSpawn: true });
+    const filesArtifacts = createArtifactsStore(artifactsAdapter.blobStorage('files'));
+    const chatsArtifacts = createArtifactsStore(artifactsAdapter.blobStorage('chats'));
     return {
       label,
       runtimeDir,
@@ -467,6 +472,8 @@ export function createExampleBoardServerRuntime(options = {}) {
       notifyChannel,
       board,
       cardStore,
+      filesArtifacts,
+      chatsArtifacts,
       cardStoreRef,
       outputsStoreRef,
       taskExecutorPath,
@@ -567,12 +574,19 @@ export function createExampleBoardServerRuntime(options = {}) {
   function ensureCardStorageDirs(cardId) {
     const safeCardId = String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
     const baseDir = isGandalfCard(cardId) ? tmpGandalfCardsDir : tmpCardsDir;
-    const cardDir = path.join(baseDir, safeCardId);
-    const filesDir = path.join(cardDir, 'files');
-    const chatsDir = path.join(cardDir, 'chats');
+    const filesDir = path.join(baseDir, 'files', safeCardId);
+    const chatsDir = path.join(baseDir, 'chats', safeCardId);
     fs.mkdirSync(filesDir, { recursive: true });
     fs.mkdirSync(chatsDir, { recursive: true });
-    return { filesDir, chatsDir };
+    return { filesDir, chatsDir, safeCardId };
+  }
+
+  function artifactsStores(cardId) {
+    const ctx = isGandalfCard(cardId) ? gandalfCtx : baseCtx;
+    return {
+      files: ctx ? ctx.filesArtifacts : null,
+      chats: ctx ? ctx.chatsArtifacts : null,
+    };
   }
 
   function normalizeDisplayFileName(name) {
@@ -752,26 +766,20 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readChatSignal(cardId) {
-    const baseDir = isGandalfCard(cardId) ? tmpGandalfCardsDir : tmpCardsDir;
-    const chatsDir = path.join(baseDir, cardId, 'chats');
-    if (!fs.existsSync(chatsDir)) {
-      return { count: 0, latest_mtime_ms: 0, processing: false };
-    }
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    if (!stores.chats) return { count: 0, latest_mtime_ms: 0, processing: false };
 
+    const entries = stores.chats.list(`${safeCardId}/`);
     let count = 0;
     let latestMtimeMs = 0;
     let processing = false;
-    for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (entry.name === '.processing') { processing = true; continue; }
+    for (const entry of entries) {
+      const name = path.basename(entry.key);
+      if (name === '.processing') { processing = true; continue; }
       count += 1;
-      try {
-        const st = fs.statSync(path.join(chatsDir, entry.name));
-        const mtimeMs = Number(st.mtimeMs || 0);
-        if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
-      } catch {
-        // Ignore transient file stat/read errors.
-      }
+      const mtimeMs = entry.updatedAt ? Number(new Date(entry.updatedAt).getTime() || 0) : 0;
+      if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
     }
 
     return { count, latest_mtime_ms: latestMtimeMs, processing };
@@ -1026,8 +1034,11 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function clearChatRecords(cardId) {
-    const { chatsDir } = ensureCardStorageDirs(cardId);
-    clearDirContents(chatsDir);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    const prefix = `${safeCardId}/`;
+    const entries = stores.chats ? stores.chats.list(prefix) : [];
+    for (const entry of entries) stores.chats.remove(entry.key);
   }
 
   function nextFileSerial(cardId) {
@@ -1046,11 +1057,11 @@ export function createExampleBoardServerRuntime(options = {}) {
       // ignore malformed card file and fall back to dir scan
     }
 
-    const { filesDir } = ensureCardStorageDirs(cardId);
-    if (fs.existsSync(filesDir)) {
-      for (const entry of fs.readdirSync(filesDir, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        names.push(entry.name);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    if (stores.files) {
+      for (const entry of stores.files.list(`${safeCardId}/`)) {
+        names.push(path.basename(entry.key));
       }
     }
 
@@ -1058,9 +1069,10 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function nextChatStoredName(cardId, role) {
-    const { chatsDir } = ensureCardStorageDirs(cardId);
-    const names = fs.existsSync(chatsDir)
-      ? fs.readdirSync(chatsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    const names = stores.chats
+      ? stores.chats.list(`${safeCardId}/`).map((e) => path.basename(e.key))
       : [];
     const serial = nextSerialFromNames(names);
     const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
@@ -1069,9 +1081,10 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function writeChatRecord(cardId, role, text, files) {
     const now = new Date().toISOString();
-    const { chatsDir } = ensureCardStorageDirs(cardId);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
     const outName = nextChatStoredName(cardId, role || 'system');
-    const outPath = path.join(chatsDir, outName);
+    const artifactKey = `${safeCardId}/${outName}`;
 
     const lines = [];
     const msg = typeof text === 'string' ? text.trim() : '';
@@ -1089,7 +1102,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
     }
 
-    fs.writeFileSync(outPath, `${lines.join('\n')}\n`, 'utf-8');
+    if (stores.chats) stores.chats.putText(artifactKey, `${lines.join('\n')}\n`);
     return {
       at: now,
       role: role || 'system',
@@ -1100,27 +1113,25 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readChatRecords(cardId) {
-    const { chatsDir } = ensureCardStorageDirs(cardId);
-    if (!fs.existsSync(chatsDir)) return [];
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    if (!stores.chats) return [];
 
     const out = [];
-    for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const name = entry.name;
+    for (const entry of stores.chats.list(`${safeCardId}/`)) {
+      const name = path.basename(entry.key);
       const parsed = String(name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
       if (!parsed) continue; // skip .processing and other non-chat files
       const serial = parseInt(parsed[1], 10);
       const role = parsed[2].toLowerCase();
-      const filePath = path.join(chatsDir, name);
-      const text = fs.readFileSync(filePath, 'utf-8');
-      const stat = fs.statSync(filePath);
+      const text = stores.chats.getText(entry.key) ?? '';
       out.push({
         serial,
         role,
         text,
         path: `${cardId}/chats/${name}`,
         stored_name: name,
-        updated_at: new Date(stat.mtimeMs).toISOString(),
+        updated_at: entry.updatedAt || null,
       });
     }
 
@@ -1129,18 +1140,20 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function persistUploadedFile(cardId, requestedName, contentType, buffer) {
-    const { filesDir } = ensureCardStorageDirs(cardId);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
     const displayName = normalizeDisplayFileName(requestedName);
 
     let serial = nextFileSerial(cardId);
     let storedName = buildStoredFileName(displayName, serial);
-    while (fs.existsSync(path.join(filesDir, storedName))) {
+    while (stores.files && stores.files.exists(`${safeCardId}/${storedName}`)) {
       serial += 1;
       storedName = buildStoredFileName(displayName, serial);
     }
 
-    const targetPath = path.join(filesDir, storedName);
-    fs.writeFileSync(targetPath, buffer);
+    if (stores.files) {
+      stores.files.putBytes(`${safeCardId}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
+    }
 
     return {
       name: displayName,
@@ -1502,23 +1515,17 @@ export function createExampleBoardServerRuntime(options = {}) {
           return true;
         }
 
-        const { filesDir } = ensureCardStorageDirs(cardId);
-        const filePath = path.join(filesDir, fileRecord.stored_name);
-
-        const realPath = path.resolve(filePath);
-        const realFilesDir = path.resolve(filesDir);
-        if (!realPath.startsWith(realFilesDir)) {
-          json(res, 403, { error: 'Forbidden' });
-          return true;
-        }
-
-        if (!fs.existsSync(filePath)) {
+        const { safeCardId } = ensureCardStorageDirs(cardId);
+        const stores = artifactsStores(cardId);
+        const fileKey = `${safeCardId}/${fileRecord.stored_name}`;
+        const bytes = stores.files ? stores.files.getBytes(fileKey) : null;
+        if (!bytes) {
           json(res, 404, { error: 'File not found' });
           return true;
         }
 
-        const buffer = fs.readFileSync(filePath);
-        const filename = fileRecord.name || path.basename(filePath);
+        const buffer = Buffer.from(bytes);
+        const filename = fileRecord.name || fileRecord.stored_name;
         const mimeType = fileRecord.mime_type || 'application/octet-stream';
         res.writeHead(200, {
           'Content-Type': mimeType,

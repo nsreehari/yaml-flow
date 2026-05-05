@@ -55,6 +55,26 @@ export function computeStableJsonHashBrowser(value: unknown): string {
 
 export function createLocalStorageBlobStorage(prefix: string): BlobStorage {
   function key(k: string): string { return `${prefix}:blob:${k}`; }
+  const textEncoder = new TextEncoder();
+
+  function encodeBytes(bytes: Uint8Array): string {
+    if (typeof btoa === 'function') {
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+    return '';
+  }
+
+  function decodeBytes(encoded: string): Uint8Array {
+    if (typeof atob === 'function') {
+      const bin = atob(encoded);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    return new Uint8Array();
+  }
 
   return {
     read(k: string): string | null {
@@ -68,6 +88,51 @@ export function createLocalStorageBlobStorage(prefix: string): BlobStorage {
     },
     remove(k: string): void {
       globalThis.localStorage.removeItem(key(k));
+    },
+
+    readBytes(k: string): Uint8Array | null {
+      const raw = globalThis.localStorage.getItem(key(k));
+      if (raw === null) return null;
+      try {
+        const parsed = JSON.parse(raw) as { __kind?: string; data?: string };
+        if (parsed && parsed.__kind === 'bytes-b64' && typeof parsed.data === 'string') {
+          return decodeBytes(parsed.data);
+        }
+      } catch {
+        // fall through to plain text path
+      }
+      return textEncoder.encode(raw);
+    },
+
+    writeBytes(k: string, content: Uint8Array): void {
+      // Store binary payloads as base64 envelope to avoid lossy UTF-8 coercion.
+      const envelope = JSON.stringify({ __kind: 'bytes-b64', data: encodeBytes(content) });
+      globalThis.localStorage.setItem(key(k), envelope);
+    },
+
+    listKeys(prefix2?: string): string[] {
+      const marker = key(prefix2 ?? '');
+      const out: string[] = [];
+      for (let i = 0; i < globalThis.localStorage.length; i++) {
+        const k = globalThis.localStorage.key(i);
+        if (k && k.startsWith(marker)) out.push(k.slice(key('').length));
+      }
+      return out.sort();
+    },
+
+    stat(k: string) {
+      const raw = globalThis.localStorage.getItem(key(k));
+      if (raw === null) return null;
+      let size = textEncoder.encode(raw).byteLength;
+      try {
+        const parsed = JSON.parse(raw) as { __kind?: string; data?: string };
+        if (parsed && parsed.__kind === 'bytes-b64' && typeof parsed.data === 'string') {
+          size = decodeBytes(parsed.data).byteLength;
+        }
+      } catch {
+        // plain text path
+      }
+      return { key: k, size };
     },
   };
 }

@@ -36,6 +36,7 @@ export default defineConfig({
     'cli/node/board-live-cards-cli': 'src/cli/node/board-live-cards-cli.ts',
     'cli/node/fs-board-adapter': 'src/cli/node/fs-board-adapter.ts',
     'cli/node/card-store-cli': 'src/cli/node/card-store-cli.ts',
+    'cli/node/artifacts-store-cli': 'src/cli/node/artifacts-store-cli.ts',
     'cli/node/source-cli-task-executor': 'src/cli/node/source-cli-task-executor.ts',
     'cli/browser-api/board-live-cards-browser-adapter': 'src/cli/browser-api/board-live-cards-browser-adapter.ts',
     'cli/browser-api/card-store-browser-api': 'src/cli/browser-api/card-store-browser-api.ts',

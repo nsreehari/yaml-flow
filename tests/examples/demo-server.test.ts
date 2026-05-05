@@ -17,6 +17,7 @@ const SURFACE_DIR = path.join(BOARD_ROOT, 'surface');
 const BOARD_DIR = path.join(BOARD_ROOT, 'runtime');
 const RUNTIME_OUT_DIR = path.join(BOARD_ROOT, 'runtime-out');
 const TMP_CARDS_DIR = path.join(SURFACE_DIR, 'tmp-cards');
+const TMP_CHATS_DIR = path.join(TMP_CARDS_DIR, 'chats');
 const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/boards/default`;
 
 let serverProc: ChildProcess | null = null;
@@ -175,6 +176,47 @@ async function getBootstrapPayload(): Promise<Record<string, unknown>> {
   return await boot.json() as Record<string, unknown>;
 }
 
+async function readSseDataEvents(url: string, expectedCount: number, timeoutMs: number): Promise<string[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const events: string[] = [];
+  try {
+    const res = await fetch(url, {
+      headers: { accept: 'text/event-stream' },
+      signal: controller.signal,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.headers.get('content-type') || '').toContain('text/event-stream');
+
+    const reader = res.body?.getReader();
+    expect(reader).toBeTruthy();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+
+    while (events.length < expectedCount) {
+      const next = await reader!.read();
+      if (next.done) break;
+      buf += decoder.decode(next.value, { stream: true });
+      while (true) {
+        const idx = buf.indexOf('\n');
+        if (idx < 0) break;
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice('data:'.length).trim();
+        if (payload) events.push(payload);
+        if (events.length >= expectedCount) break;
+      }
+    }
+  } catch {
+    // Timeout/abort is expected if we did not collect enough events in time.
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+  return events;
+ }
+
 function getCardFiles(card: Record<string, unknown>) {
   const cardData = card.card_data as Record<string, unknown> | undefined;
   return Array.isArray(cardData?.files) ? cardData.files as Array<Record<string, unknown>> : [];
@@ -195,7 +237,7 @@ async function sendChatMessage(cardId: string, userMessage: string): Promise<voi
 }
 
 function getCardChatsDir(cardId: string): string {
-  return path.join(TMP_CARDS_DIR, cardId, 'chats');
+  return path.join(TMP_CHATS_DIR, cardId);
 }
 
 function readChatFileNames(cardId: string): string[] {
@@ -327,6 +369,25 @@ describe('demo-server file upload + card list + download', () => {
     const dependentCard = cardRuntimeById?.['card-portfolio-value'];
     expect(dependentCard).toBeTruthy();
     expect(typeof dependentCard?.requires).toBe('object');
+  }, 30000);
+
+  it('streams SSE payload updates after runtime mutation', async () => {
+    const sseUrl = `${API_BASE}/sse`;
+    const sseRead = readSseDataEvents(sseUrl, 2, 12000);
+
+    // Allow the SSE stream to connect and emit the initial hydration payload.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await sendChatMessage(cardId, 'sse-update-check');
+
+    const dataEvents = await sseRead;
+    expect(dataEvents.length).toBeGreaterThanOrEqual(2);
+
+    const first = JSON.parse(dataEvents[0]) as Record<string, unknown>;
+    const second = JSON.parse(dataEvents[1]) as Record<string, unknown>;
+    expect(typeof first).toBe('object');
+    expect(typeof second).toBe('object');
+    expect(first.cardDefinitions).toBeTruthy();
+    expect(second.cardDefinitions).toBeTruthy();
   }, 30000);
 
   it('invokes .chat-handler after chat-send and demo handler writes an echo assistant reply', async () => {

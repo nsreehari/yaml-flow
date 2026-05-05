@@ -67,6 +67,24 @@ export function createFsBlobStorage(rootDir: string): BlobStorage {
     return path.join(rootDir, ...key.split('/'));
   }
 
+  function toKey(fullPath: string): string {
+    const rel = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+    return rel;
+  }
+
+  function walk(dir: string, out: string[]): void {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(p, out);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      out.push(toKey(p));
+    }
+  }
+
   return {
     read(key: string): string | null {
       const p = resolve(key);
@@ -89,6 +107,43 @@ export function createFsBlobStorage(rootDir: string): BlobStorage {
     remove(key: string): void {
       const p = resolve(key);
       try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch { /* best-effort */ }
+    },
+
+    readBytes(key: string): Uint8Array | null {
+      const p = resolve(key);
+      if (!fs.existsSync(p)) return null;
+      try { return new Uint8Array(fs.readFileSync(p)); } catch { return null; }
+    },
+
+    writeBytes(key: string, content: Uint8Array): void {
+      const p = resolve(key);
+      const tmp = `${p}.${process.pid}.${randomUUID()}.tmp`;
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(tmp, Buffer.from(content));
+      renameSync(tmp, p);
+    },
+
+    listKeys(prefix?: string): string[] {
+      const all: string[] = [];
+      walk(rootDir, all);
+      const sorted = all.sort();
+      if (!prefix) return sorted;
+      return sorted.filter((k) => k.startsWith(prefix));
+    },
+
+    stat(key: string) {
+      const p = resolve(key);
+      if (!fs.existsSync(p)) return null;
+      try {
+        const st = fs.statSync(p);
+        return {
+          key,
+          size: Number(st.size || 0),
+          updatedAt: new Date(st.mtimeMs).toISOString(),
+        };
+      } catch {
+        return null;
+      }
     },
   };
 }
@@ -115,6 +170,32 @@ export function createFsAbsolutePathBlobStorage(): BlobStorage {
     },
     remove(key: string): void {
       try { if (fs.existsSync(key)) fs.unlinkSync(key); } catch { /* best-effort */ }
+    },
+
+    readBytes(key: string): Uint8Array | null {
+      if (!fs.existsSync(key)) return null;
+      try { return new Uint8Array(fs.readFileSync(key)); } catch { return null; }
+    },
+
+    writeBytes(key: string, content: Uint8Array): void {
+      const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
+      fs.mkdirSync(path.dirname(key), { recursive: true });
+      fs.writeFileSync(tmp, Buffer.from(content));
+      renameSync(tmp, key);
+    },
+
+    stat(key: string) {
+      if (!fs.existsSync(key)) return null;
+      try {
+        const st = fs.statSync(key);
+        return {
+          key,
+          size: Number(st.size || 0),
+          updatedAt: new Date(st.mtimeMs).toISOString(),
+        };
+      } catch {
+        return null;
+      }
     },
   };
 }
