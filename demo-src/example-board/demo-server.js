@@ -27,7 +27,6 @@ function resolveYamlFlowDir() {
 }
 
 const _yamlFlowDir = resolveYamlFlowDir();
-const _pkgCliJs = _yamlFlowDir ? path.join(_yamlFlowDir, 'board-live-cards-cli.js') : null;
 const _pkgStepMachineCli = _yamlFlowDir ? path.join(_yamlFlowDir, 'step-machine-cli.js') : null;
 
 function loadServerConfig() {
@@ -48,7 +47,6 @@ function resolveFromConfig(configValue) {
 }
 
 const serverConfig = loadServerConfig();
-const configuredCliJs = resolveFromConfig(serverConfig.boardLiveCardsCliJs) || _pkgCliJs;
 const configuredCardsDir = resolveFromConfig(serverConfig.cardsDir);
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
 const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath) || _pkgStepMachineCli;
@@ -59,9 +57,6 @@ const configuredGandalfTaskExecutorPath = resolveFromConfig(serverConfig.gandalf
 const configuredGandalfChatHandlerPath = resolveFromConfig(serverConfig.gandalfChatHandlerPath);
 const configuredGandalfInferenceAdapterPath = resolveFromConfig(serverConfig.gandalfInferenceAdapterPath);
 
-if (!process.env.BOARD_LIVE_CARDS_CLI_JS && configuredCliJs) {
-  process.env.BOARD_LIVE_CARDS_CLI_JS = configuredCliJs;
-}
 if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath) {
   process.env.DEMO_STEP_MACHINE_CLI_PATH = configuredStepMachineCliPath;
 }
@@ -93,7 +88,6 @@ const runtime = createMultiBoardServerRuntime({
   defaultGandalfTaskExecutorPath: process.env.DEMO_GANDALF_TASK_EXECUTOR_PATH || configuredGandalfTaskExecutorPath || null,
   defaultGandalfChatHandlerPath: process.env.DEMO_GANDALF_CHAT_HANDLER_PATH || configuredGandalfChatHandlerPath || null,
   defaultGandalfInferenceAdapterPath: process.env.DEMO_GANDALF_INFERENCE_ADAPTER_PATH || configuredGandalfInferenceAdapterPath || null,
-  boardLiveCardsCliJs: process.env.BOARD_LIVE_CARDS_CLI_JS || configuredCliJs,
 });
 
 function resetRuntime() {
