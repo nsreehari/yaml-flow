@@ -232,16 +232,22 @@ class PythonCommandExecutor:
         env: Optional[Dict[str, str]] = None,
         shell: bool = False,
     ) -> str:
-        proc = subprocess.run(
-            [cmd, *args],
-            cwd=cwd,
-            env=env,
-            shell=shell,
-            capture_output=True,
-            text=True,
-            timeout=timeout / 1000 if timeout else None,
-            check=False,
-        )
+        run_kwargs: Dict[str, Any] = {
+            "cwd": cwd,
+            "env": env,
+            "shell": shell,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout / 1000 if timeout else None,
+            "check": False,
+        }
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            run_kwargs["startupinfo"] = startupinfo
+            run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        proc = subprocess.run([cmd, *args], **run_kwargs)
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr.strip() or f"Command failed with exit code {proc.returncode}")
         return proc.stdout

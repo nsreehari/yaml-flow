@@ -259,23 +259,11 @@ export function runDetached(spec: CommandSpec): void {
   const { command, args = [] } = spec;
 
   if (process.platform === 'win32') {
-    const bash = findGitBash();
-    if (bash) {
-      const shellCmd = [command, ...args]
-        .map(a => _shellQuote(a.replace(/\\/g, '/')))
-        .join(' ');
-      const child = spawn(bash, ['-c', shellCmd], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      child.unref();
-      return;
-    }
     const child = spawn(command, args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
+      shell: _needsWindowsShell(command),
     });
     child.unref();
     return;

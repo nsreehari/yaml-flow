@@ -58,14 +58,23 @@ class QuickJsStepMachineHost:
                     return self._err("step.runCli payloadJson must be a string")
 
                 try:
+                    run_kwargs: Dict[str, Any] = {
+                        "cwd": cwd,
+                        "shell": True,
+                        "input": payload_json,
+                        "capture_output": True,
+                        "text": True,
+                        "check": False,
+                    }
+                    if os.name == "nt":
+                        startupinfo = subprocess.STARTUPINFO()
+                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                        run_kwargs["startupinfo"] = startupinfo
+                        run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
                     proc = subprocess.run(
                         command,
-                        cwd=cwd,
-                        shell=True,
-                        input=payload_json,
-                        capture_output=True,
-                        text=True,
-                        check=False,
+                        **run_kwargs,
                     )
                     return self._ok(
                         {
