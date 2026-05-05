@@ -3,11 +3,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { transform } from 'esbuild';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, 'standalone');
+const shouldMinifyJs = !process.argv.includes('--no-minify-js');
 
 const runtimeRootEntries = [
   'board-live-cards-cli.js',
@@ -105,6 +107,57 @@ async function writeReadme() {
   await fs.writeFile(path.join(outDir, 'README-STANDALONE.md'), readme, 'utf-8');
 }
 
+async function walkFiles(dir) {
+  const out = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const nested = await walkFiles(p);
+      out.push(...nested);
+    } else {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+async function minifyStandaloneJs() {
+  const staticTargets = [
+    path.join(outDir, 'board-live-cards-cli.js'),
+    path.join(outDir, 'card-store.js'),
+  ];
+
+  const distRoot = path.join(outDir, 'dist');
+  const distFiles = (await exists(distRoot)) ? await walkFiles(distRoot) : [];
+  const distTargets = distFiles.filter(p => p.endsWith('.js') || p.endsWith('.cjs'));
+  const mapFiles = distFiles.filter(p => p.endsWith('.map'));
+
+  const allTargets = [...staticTargets, ...distTargets];
+
+  for (const filePath of allTargets) {
+    if (!(await exists(filePath))) continue;
+    const source = await fs.readFile(filePath, 'utf-8');
+    const lines = source.split('\n');
+    const shebang = lines[0].startsWith('#!') ? lines[0] : '';
+    const body = shebang ? lines.slice(1).join('\n') : source;
+
+    const result = await transform(body, {
+      loader: 'js',
+      minify: true,
+      legalComments: 'none',
+      target: 'es2022',
+    });
+
+    const output = shebang ? `${shebang}\n${result.code}` : result.code;
+    await fs.writeFile(filePath, output, 'utf-8');
+  }
+
+  for (const mapFile of mapFiles) {
+    await fs.rm(mapFile, { force: true });
+  }
+}
+
 async function main() {
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(outDir, { recursive: true });
@@ -129,9 +182,13 @@ async function main() {
     await copyPackageWithDeps(dep, true);
   }
 
+  if (shouldMinifyJs) {
+    await minifyStandaloneJs();
+  }
+
   await writeReadme();
 
-  console.log(`standalone generated at: ${outDir}`);
+  console.log(`standalone generated at: ${outDir}${shouldMinifyJs ? ' (js minified)' : ''}`);
 }
 
 main().catch((err) => {
