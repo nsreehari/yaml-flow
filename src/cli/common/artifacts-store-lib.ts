@@ -25,6 +25,35 @@ export interface ArtifactsStore {
   remove(key: string): void;
 }
 
+export interface ChatIndexRecord {
+  serial: number;
+  role: string;
+  stored_name: string;
+  path: string;
+  updated_at?: string | null;
+}
+
+export interface ChatRecord extends ChatIndexRecord {
+  text: string;
+}
+
+export interface ChatSignal {
+  count: number;
+  latest_mtime_ms: number;
+  processing: boolean;
+}
+
+export interface ChatArtifactsStore {
+  indexKey(cardPrefix: string): string;
+  loadIndex(cardPrefix: string): ChatIndexRecord[];
+  saveIndex(cardPrefix: string, records: ChatIndexRecord[]): void;
+  nextSerial(cardPrefix: string): number;
+  appendIndexRecord(cardPrefix: string, record: ChatIndexRecord): void;
+  readRecords(cardPrefix: string): ChatRecord[];
+  clear(cardPrefix: string): void;
+  readSignal(cardPrefix: string): ChatSignal;
+}
+
 const INDEX_KEY = '.artifacts-index.json';
 
 interface ArtifactIndexEntry {
@@ -79,6 +108,11 @@ function updateIndex(index: ArtifactIndex, key: string, info: ArtifactInfo): voi
     updatedAt: info.updatedAt,
     contentType: info.contentType,
   };
+}
+
+function parseLeadingSerial(fileName: string): number {
+  const m = String(fileName || '').match(/^(\d+)[-_]/);
+  return m ? parseInt(m[1], 10) : 0;
 }
 
 export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
@@ -199,5 +233,112 @@ export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
       delete index.entries[key];
       saveIndex(blob, index);
     },
+  };
+}
+
+export function createChatArtifactsStore(
+  store: ArtifactsStore,
+  opts?: { indexFileName?: string },
+): ChatArtifactsStore {
+  const indexFileName = opts?.indexFileName || '.index.json';
+
+  function indexKey(cardPrefix: string): string {
+    return `${cardPrefix}/${indexFileName}`;
+  }
+
+  function loadIndex(cardPrefix: string): ChatIndexRecord[] {
+    const raw = store.getText(indexKey(cardPrefix));
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((row) => row && typeof row.stored_name === 'string')
+        .map((row) => ({
+          serial: Number(row.serial || parseLeadingSerial(String(row.stored_name)) || 0),
+          role: String(row.role || 'system').toLowerCase(),
+          stored_name: String(row.stored_name),
+          path: typeof row.path === 'string' ? row.path : `${cardPrefix}/chats/${String(row.stored_name)}`,
+          updated_at: typeof row.updated_at === 'string' ? row.updated_at : null,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  function saveIndex(cardPrefix: string, records: ChatIndexRecord[]): void {
+    store.putText(indexKey(cardPrefix), JSON.stringify(records, null, 2), 'application/json; charset=utf-8');
+  }
+
+  function nextSerial(cardPrefix: string): number {
+    const index = loadIndex(cardPrefix);
+    let maxSeen = 0;
+    for (const row of index) {
+      const serial = Number(row.serial || 0);
+      if (Number.isFinite(serial) && serial > maxSeen) maxSeen = serial;
+    }
+    return maxSeen + 1;
+  }
+
+  function appendIndexRecord(cardPrefix: string, record: ChatIndexRecord): void {
+    const index = loadIndex(cardPrefix);
+    index.push(record);
+    saveIndex(cardPrefix, index);
+  }
+
+  function readRecords(cardPrefix: string): ChatRecord[] {
+    const index = loadIndex(cardPrefix);
+    const out: ChatRecord[] = [];
+    for (const row of index) {
+      const key = `${cardPrefix}/${row.stored_name}`;
+      const text = store.getText(key);
+      if (text === null) continue;
+      out.push({
+        serial: Number(row.serial || parseLeadingSerial(row.stored_name) || 0),
+        role: String(row.role || 'system').toLowerCase(),
+        text,
+        path: typeof row.path === 'string' ? row.path : `${cardPrefix}/chats/${row.stored_name}`,
+        stored_name: row.stored_name,
+        updated_at: row.updated_at || null,
+      });
+    }
+    out.sort((a, b) => a.serial - b.serial || a.stored_name.localeCompare(b.stored_name));
+    return out;
+  }
+
+  function clear(cardPrefix: string): void {
+    const prefix = `${cardPrefix}/`;
+    for (const entry of store.list(prefix)) store.remove(entry.key);
+  }
+
+  function readSignal(cardPrefix: string): ChatSignal {
+    const prefix = `${cardPrefix}/`;
+    const entries = store.list(prefix);
+    let count = 0;
+    let latestMtimeMs = 0;
+    let processing = false;
+    for (const entry of entries) {
+      const name = entry.key.slice(prefix.length);
+      if (name === '.processing') {
+        processing = true;
+        continue;
+      }
+      if (!/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i.test(name)) continue;
+      count += 1;
+      const mtimeMs = entry.updatedAt ? Number(new Date(entry.updatedAt).getTime() || 0) : 0;
+      if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
+    }
+    return { count, latest_mtime_ms: latestMtimeMs, processing };
+  }
+
+  return {
+    indexKey,
+    loadIndex,
+    saveIndex,
+    nextSerial,
+    appendIndexRecord,
+    readRecords,
+    clear,
+    readSignal,
   };
 }

@@ -11,6 +11,7 @@ import {
   createCardStorePublic,
   createCardStore,
   createArtifactsStore,
+  createChatArtifactsStore,
   parseRef,
 } from './dist/cli/node/fs-board-adapter.js';
 
@@ -589,6 +590,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     };
   }
 
+  function chatArtifactsForCard(cardId) {
+    const stores = artifactsStores(cardId);
+    if (!stores.chats) return null;
+    return createChatArtifactsStore(stores.chats, { indexFileName: '.index.json' });
+  }
+
   function normalizeDisplayFileName(name) {
     const input = String(name || '').trim();
     if (!input) return 'upload.bin';
@@ -767,23 +774,9 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function readChatSignal(cardId) {
     const { safeCardId } = ensureCardStorageDirs(cardId);
-    const stores = artifactsStores(cardId);
-    if (!stores.chats) return { count: 0, latest_mtime_ms: 0, processing: false };
-
-    const entries = stores.chats.list(`${safeCardId}/`);
-    let count = 0;
-    let latestMtimeMs = 0;
-    let processing = false;
-    for (const entry of entries) {
-      const name = path.basename(entry.key);
-      if (name === '.processing') { processing = true; continue; }
-      if (!/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i.test(name)) continue;
-      count += 1;
-      const mtimeMs = entry.updatedAt ? Number(new Date(entry.updatedAt).getTime() || 0) : 0;
-      if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
-    }
-
-    return { count, latest_mtime_ms: latestMtimeMs, processing };
+    const chatStore = chatArtifactsForCard(cardId);
+    if (!chatStore) return { count: 0, latest_mtime_ms: 0, processing: false };
+    return chatStore.readSignal(safeCardId);
   }
 
   function buildPublishedRuntimePayload() {
@@ -1036,35 +1029,9 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function clearChatRecords(cardId) {
     const { safeCardId } = ensureCardStorageDirs(cardId);
-    const stores = artifactsStores(cardId);
-    const prefix = `${safeCardId}/`;
-    const entries = stores.chats ? stores.chats.list(prefix) : [];
-    for (const entry of entries) stores.chats.remove(entry.key);
-  }
-
-  function chatIndexKey(cardId) {
-    const { safeCardId } = ensureCardStorageDirs(cardId);
-    return `${safeCardId}/.index.json`;
-  }
-
-  function loadChatIndex(cardId) {
-    const stores = artifactsStores(cardId);
-    if (!stores.chats) return [];
-    const raw = stores.chats.getText(chatIndexKey(cardId));
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // ignore malformed index
-    }
-    return [];
-  }
-
-  function saveChatIndex(cardId, records) {
-    const stores = artifactsStores(cardId);
-    if (!stores.chats) return;
-    stores.chats.putText(chatIndexKey(cardId), JSON.stringify(records, null, 2), 'application/json; charset=utf-8');
+    const chatStore = chatArtifactsForCard(cardId);
+    if (!chatStore) return;
+    chatStore.clear(safeCardId);
   }
 
   function nextFileSerial(cardId) {
@@ -1095,8 +1062,9 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function nextChatStoredName(cardId, role) {
-    const index = loadChatIndex(cardId);
-    const serial = (index.length > 0 ? Number(index[index.length - 1].serial || 0) : 0) + 1;
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const chatStore = chatArtifactsForCard(cardId);
+    const serial = chatStore ? chatStore.nextSerial(safeCardId) : 1;
     const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
     return `${String(serial).padStart(3, '0')}_${safeRole}.txt`;
   }
@@ -1126,15 +1094,16 @@ export function createExampleBoardServerRuntime(options = {}) {
 
     if (stores.chats) stores.chats.putText(artifactKey, `${lines.join('\n')}\n`);
     const serial = parseLeadingSerial(outName);
-    const index = loadChatIndex(cardId);
-    index.push({
-      serial,
-      role: role || 'system',
-      stored_name: outName,
-      path: `${cardId}/chats/${outName}`,
-      updated_at: now,
-    });
-    saveChatIndex(cardId, index);
+    const chatStore = chatArtifactsForCard(cardId);
+    if (chatStore) {
+      chatStore.appendIndexRecord(safeCardId, {
+        serial,
+        role: role || 'system',
+        stored_name: outName,
+        path: `${cardId}/chats/${outName}`,
+        updated_at: now,
+      });
+    }
     return {
       at: now,
       role: role || 'system',
@@ -1146,28 +1115,12 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   function readChatRecords(cardId) {
     const { safeCardId } = ensureCardStorageDirs(cardId);
-    const stores = artifactsStores(cardId);
-    if (!stores.chats) return [];
-
-    const index = loadChatIndex(cardId);
-    const out = [];
-    for (const row of index) {
-      if (!row || typeof row.stored_name !== 'string') continue;
-      const key = `${safeCardId}/${row.stored_name}`;
-      const text = stores.chats.getText(key);
-      if (text === null) continue;
-      out.push({
-        serial: Number(row.serial || parseLeadingSerial(row.stored_name) || 0),
-        role: String(row.role || 'system').toLowerCase(),
-        text,
-        path: typeof row.path === 'string' ? row.path : `${cardId}/chats/${row.stored_name}`,
-        stored_name: row.stored_name,
-        updated_at: row.updated_at || null,
-      });
-    }
-
-    out.sort((a, b) => a.serial - b.serial || a.stored_name.localeCompare(b.stored_name));
-    return out;
+    const chatStore = chatArtifactsForCard(cardId);
+    if (!chatStore) return [];
+    return chatStore.readRecords(safeCardId).map((row) => ({
+      ...row,
+      path: `${cardId}/chats/${row.stored_name}`,
+    }));
   }
 
   function persistUploadedFile(cardId, requestedName, contentType, buffer) {
