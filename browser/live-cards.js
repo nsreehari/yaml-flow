@@ -98,6 +98,20 @@ var LiveCard = (function () {
       .lc-gandalf-caret:hover { opacity:1; }
       .lc-gandalf-card.lc-collapsed .lc-gandalf-caret { transform:rotate(-90deg); }
       .lc-gandalf-card.lc-collapsed .card-body { display:none !important; }
+      .lc-token-row { display:flex; flex-wrap:wrap; gap:0.35rem; padding:0.2rem 0.5rem; background:transparent; align-items:center; justify-content:center; min-height:0; }
+      .lc-token-row-requires { border-bottom:none; padding-bottom:0.1rem; }
+      .lc-token-row-provides { border-top:none; padding-top:0.1rem; }
+      .lc-token-gem { display:inline-block; width:10px; height:10px; border-radius:50%; cursor:default; transition:transform .15s, box-shadow .15s; position:relative; }
+      .lc-token-gem:hover { transform:scale(1.5); box-shadow:0 0 4px rgba(0,0,0,0.3); z-index:5; }
+      .lc-token-gem-requires { background:var(--bs-secondary,#6c757d); border:1.5px solid var(--bs-secondary,#6c757d); }
+      .lc-token-gem-requires.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); }
+      .lc-token-gem-provides { background:var(--bs-secondary,#6c757d); border:1.5px solid var(--bs-secondary,#6c757d); }
+      .lc-token-gem-provides.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); }
+      .lc-running { animation:lc-running-pulse 2s ease-in-out infinite; position:relative; }
+      .lc-running::before { content:''; position:absolute; inset:-2px; border-radius:inherit; background:linear-gradient(90deg,transparent,rgba(13,110,253,.45),rgba(102,16,242,.4),rgba(13,110,253,.45),transparent); background-size:300% 100%; animation:lc-running-shimmer 2s linear infinite; z-index:-1; pointer-events:none; }
+      @keyframes lc-running-pulse { 0%,100%{ box-shadow:0 0 4px rgba(13,110,253,.15); } 50%{ box-shadow:0 0 14px 3px rgba(13,110,253,.35); } }
+      @keyframes lc-running-shimmer { 0%{ background-position:100% 0; } 100%{ background-position:-100% 0; } }
+      .lc-running .card-header { border-bottom-color:rgba(13,110,253,.35); }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -781,7 +795,29 @@ var LiveCard = (function () {
       const requires = (node && node.card && Array.isArray(node.card.requires)) ? node.card.requires : [];
       if (!requires.length) return;
       const cleanup = _getCleanup(node.id);
-      cleanup.unsubs = requires.map(upId => subscribe(upId, () => {
+
+      // Resolve required tokens to upstream node IDs via provides declarations.
+      // Build a token→nodeId map from all nodes the engine knows about.
+      const tokenMap = {};
+      const allNodeIds = Object.keys(_subs).concat(Object.keys(_nodeEls));
+      allNodeIds.forEach(function(nid) {
+        const n = cfg.resolve(nid);
+        if (!n || !n.card) return;
+        var provides = (Array.isArray(n.card.provides) && n.card.provides.length)
+          ? n.card.provides.map(function(p) { return typeof p === 'string' ? p : (p.bindTo || p); })
+          : [n.id];
+        provides.forEach(function(tok) { tokenMap[tok] = n.id; });
+      });
+
+      // Subscribe to each upstream provider node (deduplicated)
+      const seen = {};
+      const upIds = [];
+      requires.forEach(function(token) {
+        var srcId = tokenMap[token] || token; // fallback: treat token as nodeId
+        if (!seen[srcId]) { seen[srcId] = true; upIds.push(srcId); }
+      });
+
+      cleanup.unsubs = upIds.map(upId => subscribe(upId, () => {
         const info = _nodeEls[node.id];
         if (!info || !info.resultEl) return;
         const updated = cfg.resolve(node.id);
@@ -2351,6 +2387,17 @@ var LiveCard = (function () {
     };
     const ac = new AbortController();
     const signal = ac.signal;
+    const _edges = [];        // LeaderLine instances for canvas edges
+
+    // Edge style config (from canvas opts)
+    const edgeOpts = co.edgeStyle || {};
+    const edgeCfg = {
+      color:     edgeOpts.color || 'rgba(108, 117, 125, 0.6)',
+      size:      edgeOpts.size || 2,
+      dash:      edgeOpts.dash !== false,
+      animation: edgeOpts.animation !== false,
+      endPlug:   edgeOpts.endPlug || 'arrow1',
+    };
 
     // DOM containers
     const root = document.createElement('div');
@@ -2384,10 +2431,16 @@ var LiveCard = (function () {
       const s = document.createElement('style');
       s.id = 'lc-board-css';
       s.textContent = `
-        .lc-canvas-card { position:absolute; min-width:${cvs.minWidth}px; max-width:${cvs.maxWidth}px; cursor:grab; user-select:none; z-index:1; }
+        .lc-canvas-card { position:absolute; min-width:${cvs.minWidth}px; cursor:grab; user-select:none; z-index:1; }
         .lc-canvas-card.lc-dragging { cursor:grabbing; z-index:10; box-shadow:0 8px 24px rgba(0,0,0,0.18)!important; }
-        .lc-canvas-card .card-body { max-height:${cvs.cardMaxH}px; overflow:auto; }
+        .lc-canvas-card .card-body { overflow:auto; }
+        .lc-canvas-card.lc-resizing { cursor:nwse-resize; z-index:10; }
+        .lc-resize-handle { position:absolute; bottom:0; right:0; width:14px; height:14px; cursor:nwse-resize; z-index:2; opacity:0.4; transition:opacity .15s; }
+        .lc-resize-handle:hover { opacity:1; }
+        .lc-resize-handle::after { content:''; position:absolute; bottom:3px; right:3px; width:8px; height:8px; border-right:2px solid var(--bs-secondary,#6c757d); border-bottom:2px solid var(--bs-secondary,#6c757d); }
+        .lc-canvas-edges path.lc-edge-path { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; stroke-dasharray:6 4; animation:lc-edge-flow 0.6s linear infinite; }
         .lc-canvas-edges line { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; }
+        @keyframes lc-edge-flow { to { stroke-dashoffset:-10; } }
         .lc-source-node { position:absolute; cursor:grab; user-select:none; z-index:1; }
         .lc-source-node.lc-dragging { cursor:grabbing; z-index:10; }
       `;
@@ -2420,6 +2473,51 @@ var LiveCard = (function () {
 
     function _getRequires(node) {
       return (node && node.card && Array.isArray(node.card.requires)) ? node.card.requires : [];
+    }
+
+    /**
+     * Returns tokens this node provides.
+     * Explicit: card.provides[].bindTo
+     * Implicit default: the node's own id (if no provides declared)
+     */
+    function _getProvides(node) {
+      if (!node || !node.card) return [node ? node.id : ''];
+      if (Array.isArray(node.card.provides) && node.card.provides.length > 0) {
+        return node.card.provides.map(function(p) { return (typeof p === 'string') ? p : (p.bindTo || p); });
+      }
+      // Default: node provides a token equal to its own id
+      return [node.id];
+    }
+
+    /**
+     * Build token → provider nodeId map from all nodes in the board.
+     * Called before drawing edges so we can resolve requires tokens → source nodes.
+     */
+    function _buildTokenMap() {
+      var map = {};
+      nodeList.forEach(function(node) {
+        _getProvides(node).forEach(function(token) {
+          map[token] = node.id;
+        });
+      });
+      return map;
+    }
+
+    /**
+     * Resolve required tokens to provider node IDs.
+     * Returns deduplicated array of source node IDs for a given consumer node.
+     */
+    function _resolveEdgeSources(node, tokenMap) {
+      var sources = [];
+      var seen = {};
+      _getRequires(node).forEach(function(token) {
+        var srcId = tokenMap[token];
+        if (srcId && !seen[srcId]) {
+          seen[srcId] = true;
+          sources.push(srcId);
+        }
+      });
+      return sources;
     }
 
     function _showCardInspector(node) {
@@ -2562,8 +2660,9 @@ var LiveCard = (function () {
       const card = node && node.card ? node.card : {};
       const isSimulation = card.meta && card.meta.simulation === true;
       const isGandalfCard  = card.meta && card.meta._gandalfCard === true;
+      const isRunning     = node && node.runtime_state && node.runtime_state.task_status === 'running';
       const extraClass   = isSimulation ? ' lc-simulation-card' : (isGandalfCard ? ' lc-gandalf-card' : '');
-      wrap.className = 'card shadow-sm h-100' + extraClass;
+      wrap.className = 'card shadow-sm h-100' + extraClass + (isRunning ? ' lc-running' : '');
       const header = document.createElement('div');
       header.className = 'card-header d-flex align-items-center gap-2 py-2';
       const title = (card.meta && card.meta.title) || node.id;
@@ -2639,8 +2738,44 @@ var LiveCard = (function () {
       
       const body = document.createElement('div');
       body.className = 'card-body p-2';
+
+      // Token gem rows — requires gems above header, provides gems below body
+      const requiresTokens = (card.requires && Array.isArray(card.requires)) ? card.requires : [];
+      const providesTokens = (Array.isArray(card.provides) && card.provides.length)
+        ? card.provides.map(function(p) { return typeof p === 'string' ? p : (p.bindTo || p); })
+        : [node.id];
+
+      // Requires gems — top of card (above header)
+      if (requiresTokens.length) {
+        const reqRow = document.createElement('div');
+        reqRow.className = 'lc-token-row lc-token-row-requires';
+        requiresTokens.forEach(function(token) {
+          const gem = document.createElement('span');
+          gem.className = 'lc-token-gem lc-token-gem-requires';
+          gem.dataset.token = token;
+          gem.title = token;
+          reqRow.appendChild(gem);
+        });
+        wrap.appendChild(reqRow);
+      }
+
       wrap.appendChild(header);
       wrap.appendChild(body);
+
+      // Provides gems — bottom of card (below body)
+      if (providesTokens.length) {
+        const provRow = document.createElement('div');
+        provRow.className = 'lc-token-row lc-token-row-provides';
+        providesTokens.forEach(function(token) {
+          const gem = document.createElement('span');
+          gem.className = 'lc-token-gem lc-token-gem-provides';
+          gem.dataset.token = token;
+          gem.title = token;
+          provRow.appendChild(gem);
+        });
+        wrap.appendChild(provRow);
+      }
+
       return { wrap, header, body };
     }
 
@@ -2662,6 +2797,7 @@ var LiveCard = (function () {
     // ---- Board mode ----
 
     function _renderBoard() {
+      _destroyEdges();
       root.innerHTML = '';
       root.appendChild(gridEl);
       gridEl.innerHTML = '';
@@ -2684,6 +2820,7 @@ var LiveCard = (function () {
         nodeMap[node.id] = { node, colEl: col, bodyEl: body };
         engine.render(node, body, { showChat });
       });
+      _updateTokenAvailability();
     }
 
     // ---- Canvas mode ----
@@ -2692,26 +2829,132 @@ var LiveCard = (function () {
       canvasInner.style.transform = `translate(${cvs.panX}px,${cvs.panY}px) scale(${cvs.zoom})`;
     }
 
+    /**
+     * Update token badge availability: a provides badge turns green when the
+     * node has data; a requires badge turns green when the upstream provider
+     * has data for that token.
+     */
+    function _updateTokenAvailability() {
+      var tokenMap = _buildTokenMap();
+      // Determine which nodes "have data" (non-empty card_data or fetched_sources, or status=fresh/completed)
+      var nodeHasData = {};
+      nodeList.forEach(function(node) {
+        var cd = node.card_data || (node.card && node.card.card_data);
+        var fs = node.fetched_sources;
+        var status = cd && cd.status;
+        var hasOutput = (cd && Object.keys(cd).length > 0) || (fs && Object.keys(fs).length > 0);
+        nodeHasData[node.id] = hasOutput || status === 'fresh' || status === 'completed';
+      });
+
+      // Update all gem elements in root container
+      var allGems = root.querySelectorAll('.lc-token-gem');
+      allGems.forEach(function(gem) {
+        var token = gem.dataset.token;
+        if (!token) return;
+        if (gem.classList.contains('lc-token-gem-provides')) {
+          // The provides gem: green if this node has data
+          var nodeEl = gem.closest('[data-node-id]');
+          var nId = nodeEl && nodeEl.dataset.nodeId;
+          gem.classList.toggle('lc-token-available', !!(nId && nodeHasData[nId]));
+        } else if (gem.classList.contains('lc-token-gem-requires')) {
+          // The requires gem: green if the upstream provider for this token has data
+          var srcId = tokenMap[token];
+          gem.classList.toggle('lc-token-available', !!(srcId && nodeHasData[srcId]));
+        }
+      });
+    }
+
+    function _destroyEdges() {
+      _edges.forEach(function(line) { try { line.remove(); } catch(e) { /* noop */ } });
+      _edges.length = 0;
+    }
+
+    function _repositionEdges() {
+      _edges.forEach(function(line) { try { line.position(); } catch(e) { /* noop */ } });
+    }
+
     function _drawEdges() {
-      svgEl.querySelectorAll('line').forEach(l => l.remove());
+      _destroyEdges();
+      svgEl.querySelectorAll('line,path').forEach(function(el) { el.remove(); });
       if (!cvs.edges) return;
 
-      nodeList.forEach(node => {
-        _getRequires(node).forEach(srcId => {
-          const srcInfo = nodeMap[srcId];
-          const tgtInfo = nodeMap[node.id];
-          if (!srcInfo || !tgtInfo) return;
-          const sEl = srcInfo.colEl;
-          const tEl = tgtInfo.colEl;
-          const sx = sEl.offsetLeft + sEl.offsetWidth;
-          const sy = sEl.offsetTop + sEl.offsetHeight / 2;
-          const tx = tEl.offsetLeft;
-          const ty = tEl.offsetTop + tEl.offsetHeight / 2;
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          line.setAttribute('x1', sx); line.setAttribute('y1', sy);
-          line.setAttribute('x2', tx); line.setAttribute('y2', ty);
-          line.setAttribute('marker-end', 'url(#lc-arrow)');
-          svgEl.appendChild(line);
+      // Build token → provider nodeId map
+      var tokenMap = _buildTokenMap();
+
+      // For each consumer node, for each required token, draw edge from
+      // the provider's "provides" badge → the consumer's "requires" badge.
+      if (typeof LeaderLine !== 'undefined') {
+        nodeList.forEach(function(node) {
+          var tgtInfo = nodeMap[node.id];
+          if (!tgtInfo || !tgtInfo.colEl) return;
+          _getRequires(node).forEach(function(token) {
+            var srcId = tokenMap[token];
+            if (!srcId) return;
+            var srcInfo = nodeMap[srcId];
+            if (!srcInfo || !srcInfo.colEl) return;
+            // Find the specific gem elements for this token
+            var srcGem = srcInfo.colEl.querySelector('.lc-token-gem-provides[data-token="' + token + '"]');
+            var tgtGem = tgtInfo.colEl.querySelector('.lc-token-gem-requires[data-token="' + token + '"]');
+            var startEl = srcGem || srcInfo.colEl;
+            var endEl = tgtGem || tgtInfo.colEl;
+            try {
+              var lineOpts = {
+                color: edgeCfg.color,
+                size: edgeCfg.size,
+                endPlug: edgeCfg.endPlug,
+                startSocket: srcGem ? 'bottom' : 'right',
+                endSocket: tgtGem ? 'top' : 'left',
+              };
+              if (edgeCfg.dash) {
+                lineOpts.dash = edgeCfg.animation ? { animation: true } : true;
+              }
+              _edges.push(new LeaderLine(startEl, endEl, lineOpts));
+            } catch(e) { /* skip edge on error */ }
+          });
+        });
+        return;
+      }
+
+      // SVG fallback — connect badge-to-badge with curved paths
+      nodeList.forEach(function(node) {
+        var tgtInfo = nodeMap[node.id];
+        if (!tgtInfo || !tgtInfo.colEl) return;
+        _getRequires(node).forEach(function(token) {
+          var srcId = tokenMap[token];
+          if (!srcId) return;
+          var srcInfo = nodeMap[srcId];
+          if (!srcInfo || !srcInfo.colEl) return;
+          // Locate gems; fall back to card element if gem not found
+          var srcGem = srcInfo.colEl.querySelector('.lc-token-gem-provides[data-token="' + token + '"]');
+          var tgtGem = tgtInfo.colEl.querySelector('.lc-token-gem-requires[data-token="' + token + '"]');
+          var sx, sy, tx, ty;
+          var innerRect = canvasInner.getBoundingClientRect();
+          if (srcGem) {
+            var srcRect = srcGem.getBoundingClientRect();
+            sx = (srcRect.left + srcRect.width / 2 - innerRect.left) / cvs.zoom;
+            sy = (srcRect.bottom - innerRect.top) / cvs.zoom;
+          } else {
+            var sEl = srcInfo.colEl;
+            sx = sEl.offsetLeft + sEl.offsetWidth / 2;
+            sy = sEl.offsetTop + sEl.offsetHeight;
+          }
+          if (tgtGem) {
+            var tgtRect = tgtGem.getBoundingClientRect();
+            tx = (tgtRect.left + tgtRect.width / 2 - innerRect.left) / cvs.zoom;
+            ty = (tgtRect.top - innerRect.top) / cvs.zoom;
+          } else {
+            var tEl = tgtInfo.colEl;
+            tx = tEl.offsetLeft + tEl.offsetWidth / 2;
+            ty = tEl.offsetTop;
+          }
+          var cpOffset = Math.min(Math.abs(ty - sy) * 0.5, 80);
+          var d = 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + (sy + cpOffset) + ', ' + tx + ' ' + (ty - cpOffset) + ', ' + tx + ' ' + ty;
+          var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', d);
+          path.setAttribute('fill', 'none');
+          path.setAttribute('marker-end', 'url(#lc-arrow)');
+          path.classList.add('lc-edge-path');
+          svgEl.appendChild(path);
         });
       });
     }
@@ -2736,7 +2979,8 @@ var LiveCard = (function () {
         const dy = (e.clientY - startY) / cvs.zoom;
         el.style.left = (origX + dx) + 'px';
         el.style.top  = (origY + dy) + 'px';
-        _drawEdges();
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
       }, { signal });
 
       el.addEventListener('pointerup', () => {
@@ -2755,15 +2999,75 @@ var LiveCard = (function () {
           node.card.view.layout.canvas.y = y;
         }
         engine.notify(node.id);
-        _drawEdges();
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
+      }, { signal });
+    }
+
+    function _makeResizable(el, node) {
+      const handle = document.createElement('div');
+      handle.className = 'lc-resize-handle';
+      el.appendChild(handle);
+      el.style.overflow = 'visible';
+
+      let resizing = false, startX, startY, origW, origH;
+
+      handle.addEventListener('pointerdown', function(e) {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        e.preventDefault();
+        resizing = true;
+        el.classList.add('lc-resizing');
+        handle.setPointerCapture(e.pointerId);
+        startX = e.clientX;
+        startY = e.clientY;
+        origW = el.offsetWidth;
+        origH = el.offsetHeight;
+      }, { signal });
+
+      handle.addEventListener('pointermove', function(e) {
+        if (!resizing) return;
+        const dw = (e.clientX - startX) / cvs.zoom;
+        const dh = (e.clientY - startY) / cvs.zoom;
+        const newW = Math.max(cvs.minWidth, origW + dw);
+        const newH = Math.max(80, origH + dh);
+        el.style.width = newW + 'px';
+        el.style.height = newH + 'px';
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
+      }, { signal });
+
+      handle.addEventListener('pointerup', function() {
+        if (!resizing) return;
+        resizing = false;
+        el.classList.remove('lc-resizing');
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        // Snap to grid
+        const sw = cvs.snap > 1 ? Math.round(w / cvs.snap) * cvs.snap : w;
+        const sh = cvs.snap > 1 ? Math.round(h / cvs.snap) * cvs.snap : h;
+        el.style.width = sw + 'px';
+        el.style.height = sh + 'px';
+        // Persist dimensions
+        _positions[node.id] = Object.assign(_positions[node.id] || {}, { w: sw, h: sh });
+        if (node.card && node.card.view) {
+          if (!node.card.view.layout) node.card.view.layout = {};
+          if (!node.card.view.layout.canvas) node.card.view.layout.canvas = {};
+          node.card.view.layout.canvas.w = sw;
+          node.card.view.layout.canvas.h = sh;
+        }
+        engine.notify(node.id);
+        if (_edges.length) _repositionEdges();
+        else _drawEdges();
       }, { signal });
     }
 
     function _renderCanvas() {
+      _destroyEdges();
       root.innerHTML = '';
       root.appendChild(canvasEl);
       canvasInner.querySelectorAll('.lc-canvas-card,.lc-source-node').forEach(el => el.remove());
-      svgEl.querySelectorAll('line').forEach(l => l.remove());
+      svgEl.querySelectorAll('line,path').forEach(function(el) { el.remove(); });
       _initPositions();
       _applyTransform();
 
@@ -2788,6 +3092,7 @@ var LiveCard = (function () {
           el.style.left = pos.x + 'px';
           el.style.top  = pos.y + 'px';
           if (pos.w) el.style.width = pos.w + 'px';
+          if (pos.h) el.style.height = pos.h + 'px';
 
           const { wrap, body } = _buildCardWrapper(node);
           while (wrap.firstChild) el.appendChild(wrap.firstChild);
@@ -2798,10 +3103,21 @@ var LiveCard = (function () {
           nodeMap[node.id] = { node, colEl: el, bodyEl: body };
           engine.render(node, body, { showChat: false });
           _makeDraggable(el, node);
+          _makeResizable(el, node);
         }
       });
 
-      _drawEdges();
+      _updateTokenAvailability();
+
+      // Draw edges — use rAF for LeaderLine so elements are laid out first
+      if (typeof LeaderLine !== 'undefined') {
+        requestAnimationFrame(function() { _drawEdges(); });
+      } else {
+        _drawEdges();
+      }
+
+      // Reposition LeaderLine edges on scroll
+      canvasEl.addEventListener('scroll', function() { _repositionEdges(); }, { signal, passive: true });
 
       // Pan: middle-click or Ctrl+drag on background
       let panning = false, panStartX, panStartY, panOrigX, panOrigY;
@@ -2819,6 +3135,7 @@ var LiveCard = (function () {
         cvs.panX = panOrigX + (e.clientX - panStartX);
         cvs.panY = panOrigY + (e.clientY - panStartY);
         _applyTransform();
+        _repositionEdges();
       }, { signal });
       canvasEl.addEventListener('pointerup', () => { panning = false; }, { signal });
 
@@ -2829,6 +3146,7 @@ var LiveCard = (function () {
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
         cvs.zoom = Math.min(cvs.zoomMax, Math.max(cvs.zoomMin, cvs.zoom * delta));
         _applyTransform();
+        _repositionEdges();
       }, { signal, passive: false });
     }
 
@@ -2840,11 +3158,12 @@ var LiveCard = (function () {
     // ---- Auto-layout (topological L → R) ----
 
     function autoLayout() {
+      const tokenMap = _buildTokenMap();
       const incoming = {};
       const levels = {};
       nodeList.forEach(n => { incoming[n.id] = []; levels[n.id] = 0; });
       nodeList.forEach(n => {
-        _getRequires(n).forEach(srcId => {
+        _resolveEdgeSources(n, tokenMap).forEach(srcId => {
           if (incoming[n.id]) incoming[n.id].push(srcId);
         });
       });
@@ -2910,6 +3229,7 @@ var LiveCard = (function () {
     function refresh() { _render(); }
 
     function clear() {
+      _destroyEdges();
       engine.destroyAll();
       nodeList.length = 0;
       Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
@@ -2929,6 +3249,7 @@ var LiveCard = (function () {
     }
 
     function destroy() {
+      _destroyEdges();
       ac.abort();
       engine.destroyAll();
       nodeList.length = 0;
