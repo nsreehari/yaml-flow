@@ -255,6 +255,33 @@ function findNewestSystemChatFile(cardId: string): string | null {
   return names[names.length - 1];
 }
 
+function getChatIndexPath(cardId: string): string {
+  return path.join(getCardChatsDir(cardId), '.index.json');
+}
+
+function readChatIndex(cardId: string): Array<Record<string, unknown>> {
+  const indexPath = getChatIndexPath(cardId);
+  if (!fs.existsSync(indexPath)) return [];
+  const raw = fs.readFileSync(indexPath, 'utf8');
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeChatIndex(cardId: string, records: Array<Record<string, unknown>>): void {
+  fs.writeFileSync(getChatIndexPath(cardId), JSON.stringify(records, null, 2), 'utf8');
+}
+
+async function readChatsApi(cardId: string): Promise<Array<Record<string, unknown>>> {
+  const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/chats`);
+  expect(res.ok).toBe(true);
+  const payload = await res.json() as { messages?: Array<Record<string, unknown>> };
+  return Array.isArray(payload.messages) ? payload.messages : [];
+}
+
 describe('demo-server file upload + card list + download', () => {
   const cardId = 'card-portfolio';
 
@@ -329,6 +356,59 @@ describe('demo-server file upload + card list + download', () => {
 
     const secondPath = path.join(getCardChatsDir(chatCardId), secondNew as string);
     expect(fs.readFileSync(secondPath, 'utf8')).toContain(secondMessage);
+
+    const indexRows = readChatIndex(chatCardId);
+    expect(indexRows.length).toBeGreaterThanOrEqual(afterSecond.length);
+    const indexedNames = new Set(indexRows.map((row) => String(row.stored_name || '')));
+    expect(indexedNames.has(firstNew as string)).toBe(true);
+    expect(indexedNames.has(secondNew as string)).toBe(true);
+  }, 30000);
+
+  it('uses .index.json for chats and ignores stale index entries', async () => {
+    const chatCardId = 'card-portfolio';
+    await sendChatMessage(chatCardId, 'index-contract-message');
+
+    const beforeRows = readChatIndex(chatCardId);
+    expect(beforeRows.length).toBeGreaterThan(0);
+
+    const staleName = '999_system.txt';
+    writeChatIndex(chatCardId, [
+      ...beforeRows,
+      {
+        serial: 999,
+        role: 'system',
+        stored_name: staleName,
+        path: `${chatCardId}/chats/${staleName}`,
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+
+    const messages = await readChatsApi(chatCardId);
+    expect(messages.length).toBeGreaterThan(0);
+    const stale = messages.find((m) => m && m.stored_name === staleName);
+    expect(stale).toBeUndefined();
+
+    // Restore a clean index so subsequent tests are not affected by the injected stale row.
+    writeChatIndex(chatCardId, beforeRows);
+  }, 30000);
+
+  it('chat signal count ignores index and metadata artifacts', async () => {
+    const chatCardId = 'card-portfolio';
+    await sendChatMessage(chatCardId, 'signal-filter-message');
+
+    const chatsDir = getCardChatsDir(chatCardId);
+    fs.writeFileSync(path.join(chatsDir, '.processing'), '', 'utf8');
+    fs.writeFileSync(path.join(chatsDir, '__metadata.json'), '{"ok":true}', 'utf8');
+
+    const payload = await getBootstrapPayload();
+    const cardRuntimeById = payload.cardRuntimeById as Record<string, Record<string, unknown>> | undefined;
+    const runtime = cardRuntimeById?.[chatCardId] as Record<string, unknown> | undefined;
+    const cardData = runtime?.card_data as Record<string, unknown> | undefined;
+    const signal = cardData?.__chat_signal as Record<string, unknown> | undefined;
+
+    expect(signal).toBeTruthy();
+    expect(Number(signal?.count || 0)).toBe(readChatFileNames(chatCardId).length);
+    expect(Boolean(signal?.processing)).toBe(true);
   }, 30000);
 
   it('uploads with inChat=true, stores file metadata on card, and appends system chat record', async () => {
