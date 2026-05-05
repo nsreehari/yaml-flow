@@ -4,9 +4,12 @@ import base64
 import json
 import os
 import random
+import socket
 import shutil
 import sys
+import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -41,6 +44,7 @@ class QuickJsBoardHost:
 
     def __init__(self, bundle_path: str) -> None:
         self._locks: Dict[str, Any] = {}
+        self._pipe_clients: Dict[str, Any] = {}
         self._bundle_path = bundle_path
         self._repo_root = Path(__file__).resolve().parent.parent.parent
 
@@ -52,6 +56,33 @@ class QuickJsBoardHost:
         tmp_dir.mkdir(parents=True, exist_ok=True)
         suffix = f"{int(uuid.uuid1().time_low)}-{random.randint(0, 0xFFFFFF):06x}"
         return str(tmp_dir / f"{label}-{suffix}{ext}")
+
+    def _named_pipe_path(self, pipe_name: str) -> str:
+        if os.name == "nt":
+            return f"\\\\.\\pipe\\{pipe_name}"
+        return str(Path(tempfile.gettempdir()) / f"{pipe_name}.sock")
+
+    def _publish_json_events_to_named_pipe(self, pipe_name: str, payloads: list[Any]) -> None:
+        if not payloads:
+            return
+
+        chunk = "\n".join(json.dumps(payload, ensure_ascii=True) for payload in payloads) + "\n"
+        pipe_path = self._named_pipe_path(pipe_name)
+
+        if os.name == "nt":
+            stream = self._pipe_clients.get(pipe_name)
+            if stream is None or stream.closed:
+                stream = open(pipe_path, "wb", buffering=0)
+                self._pipe_clients[pipe_name] = stream
+            stream.write(chunk.encode("utf-8"))
+            return
+
+        client = self._pipe_clients.get(pipe_name)
+        if client is None:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(pipe_path)
+            self._pipe_clients[pipe_name] = client
+        client.sendall(chunk.encode("utf-8"))
 
     def _ok(self, data: Any = None) -> str:
         return json.dumps({"ok": True, "data": data}, ensure_ascii=True)
@@ -226,6 +257,9 @@ class QuickJsBoardHost:
                 scope = req.get("scope")
                 if not isinstance(scope, str) or not scope:
                     return self._err("board.requestProcessAccumulated requires scope")
+                notify_channel = req.get("notifyChannel")
+                if notify_channel is not None and not isinstance(notify_channel, str):
+                    return self._err("board.requestProcessAccumulated notifyChannel must be a string when provided")
                 node = shutil.which("node")
                 if not node:
                     return self._err("node not found on PATH")
@@ -241,9 +275,35 @@ class QuickJsBoardHost:
                         "process-accumulated-events",
                         "--base-ref",
                         base_ref,
+                        *( ["--notify-channel", notify_channel] if notify_channel else [] ),
                     ],
                     cwd=str(self._repo_root),
                 )
+                return self._ok(True)
+
+            if op == "board.publishNotifications":
+                scope = req.get("scope")
+                if not isinstance(scope, str) or not scope:
+                    return self._err("board.publishNotifications requires scope")
+                notify_channel = req.get("notifyChannel")
+                if not isinstance(notify_channel, str) or not notify_channel:
+                    return self._err("board.publishNotifications requires notifyChannel")
+                notifications = req.get("notifications")
+                if not isinstance(notifications, list):
+                    return self._err("board.publishNotifications requires notifications array")
+
+                board_ref = f"::fs-path::{scope}"
+                envelopes = [
+                    {
+                        "id": uuid.uuid4().hex,
+                        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "boardRef": board_ref,
+                        "notification": notification,
+                    }
+                    for notification in notifications
+                ]
+                if envelopes:
+                    self._publish_json_events_to_named_pipe(notify_channel, envelopes)
                 return self._ok(True)
 
             if op == "self.ref":

@@ -22,6 +22,7 @@ declare global {
 
 type BoardInvokePayload = {
   baseRef: string;
+  notifyChannel?: string;
   command:
     | 'init'
     | 'status'
@@ -56,7 +57,7 @@ function makeLock(scope: string): AtomicRelayLock {
   };
 }
 
-function createHostAdapter(baseRef: KindValueRef): BoardPlatformAdapter {
+function createHostAdapter(baseRef: KindValueRef, notifyChannel?: string): BoardPlatformAdapter {
   const scope = baseRef.value;
 
   function makeKv(scopeRoot: string, namespace: string) {
@@ -87,7 +88,12 @@ function createHostAdapter(baseRef: KindValueRef): BoardPlatformAdapter {
     },
 
     requestProcessAccumulated() {
-      hostCall<boolean>({ op: 'board.requestProcessAccumulated', scope });
+      hostCall<boolean>({ op: 'board.requestProcessAccumulated', scope, notifyChannel });
+    },
+
+    publishBoardChangeNotifications(notifications) {
+      if (!notifyChannel || notifications.length === 0) return;
+      hostCall<boolean>({ op: 'board.publishNotifications', scope, notifyChannel, notifications });
     },
 
     blobStorage(namespace: string) {
@@ -162,7 +168,7 @@ function createHostAdapter(baseRef: KindValueRef): BoardPlatformAdapter {
 
 async function invoke(payload: BoardInvokePayload): Promise<CommandResult | string> {
   const baseRef = parseRef(payload.baseRef);
-  const board = createBoardLiveCardsPublic(baseRef, createHostAdapter(baseRef));
+  const board = createBoardLiveCardsPublic(baseRef, createHostAdapter(baseRef, payload.notifyChannel));
   const input = payload.input ?? {};
 
   switch (payload.command) {

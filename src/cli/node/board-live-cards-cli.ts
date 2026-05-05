@@ -72,6 +72,7 @@ export async function cli(argv: string[]): Promise<void> {
 
   // ── Parse baseRef (optional at this point — source-token-based cmds don't need it) ─
   const br = optFlag(rest, '--base-ref');
+  const notifyChannel = optFlag(rest, '--notify-channel');
   const baseRef = br ? parseRef(br) : undefined;
 
   // ── Source callbacks — token has `br` field; no --base-ref needed ────────
@@ -81,7 +82,7 @@ export async function cli(argv: string[]): Promise<void> {
     const brStr = decodeBoardRefFromToken(token);
     if (!brStr) throw new Error('source-data-fetched: could not decode board ref from token — is this a valid source token?');
     const br2 = parseRef(brStr);
-    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn, notifyChannel }));
     printResult(board.sourceDataFetched({ params: { token, ref } }));
     return;
   }
@@ -91,7 +92,7 @@ export async function cli(argv: string[]): Promise<void> {
     const brStr = decodeBoardRefFromToken(token);
     if (!brStr) throw new Error('source-data-fetch-failure: could not decode board ref from token — is this a valid source token?');
     const br2 = parseRef(brStr);
-    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn }));
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn, notifyChannel }));
     const params: Record<string, string> = { token };
     const reason = optFlag(rest, '--reason');
     if (reason) params['reason'] = reason;
@@ -121,7 +122,7 @@ export async function cli(argv: string[]): Promise<void> {
   // ── All remaining commands require --base-ref ─────────────────────────────
   if (!baseRef) throw new Error(`--base-ref is required for command "${cmd ?? '(none)'}"`);
 
-  const board   = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
+  const board   = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn, notifyChannel }));
   const nonCore = () => createBoardLiveCardsNonCorePublic(baseRef, createFsBoardNonCorePlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
 
   switch (cmd) {

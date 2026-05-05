@@ -257,6 +257,7 @@ def _invoke_board_command(
     base_ref: str,
     command: str,
     input_obj: Dict[str, Any] | None,
+    notify_channel: str | None,
     bundle: str | None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
@@ -264,6 +265,8 @@ def _invoke_board_command(
         "command": command,
         "input": input_obj or {},
     }
+    if notify_channel:
+        payload["notifyChannel"] = notify_channel
     result_raw = invoke_js_bundle_function(
         bundle_path=_resolve_bundle_path(bundle),
         function_name="pycliBoardInvoke",
@@ -331,6 +334,7 @@ def _board_handler(command: str):
                 base_ref=args.base_ref,
                 command=command,
                 input_obj=input_obj,
+                notify_channel=getattr(args, "notify_channel", None),
                 bundle=getattr(args, "bundle", None),
             )
             _print_json(result)
@@ -351,6 +355,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
+
+    def _add_notify_channel_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--notify-channel",
+            required=False,
+            help="Optional named pipe/socket channel for board change notifications",
+        )
 
     read_cmd = sub.add_parser("read-snapshot", help="Read authoritative snapshot values")
     read_cmd.add_argument("--scope", required=True, help="Board directory")
@@ -453,21 +464,25 @@ def build_parser() -> argparse.ArgumentParser:
     board_init_cmd.add_argument("--outputs-store-ref", required=True, help="Outputs store ref (::kind::value)")
     board_init_cmd.add_argument("--in", dest="body_input", help="Optional JSON body file")
     board_init_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_init_cmd)
     board_init_cmd.set_defaults(handler=_board_handler("init"))
 
     board_status_cmd = sub.add_parser("board-status", help="Read board status")
     board_status_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
     board_status_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_status_cmd)
     board_status_cmd.set_defaults(handler=_board_handler("status"))
 
     board_card_ref_cmd = sub.add_parser("board-get-card-store-ref", help="Get card store ref")
     board_card_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
     board_card_ref_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_card_ref_cmd)
     board_card_ref_cmd.set_defaults(handler=_board_handler("getCardStoreRef"))
 
     board_out_ref_cmd = sub.add_parser("board-get-outputs-store-ref", help="Get outputs store ref")
     board_out_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
     board_out_ref_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_out_ref_cmd)
     board_out_ref_cmd.set_defaults(handler=_board_handler("getOutputsStoreRef"))
 
     board_get_outputs_cmd = sub.add_parser("board-get-outputs", help="Get outputs data or computed-values")
@@ -475,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_get_outputs_cmd.add_argument("--type", choices=["data-object", "computed-values"], required=True)
     board_get_outputs_cmd.add_argument("--key", required=True, help="Data key (data-object) or card id (computed-values)")
     board_get_outputs_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_get_outputs_cmd)
 
     def _board_get_outputs_handler(args: argparse.Namespace) -> int:
         cmd = "getOutputsDataObject" if args.type == "data-object" else "getOutputsComputedValues"
@@ -487,17 +503,20 @@ def build_parser() -> argparse.ArgumentParser:
     board_remove_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
     board_remove_cmd.add_argument("--id", required=True, help="Card id")
     board_remove_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_remove_cmd)
     board_remove_cmd.set_defaults(handler=_board_handler("removeCard"))
 
     board_retrigger_cmd = sub.add_parser("board-retrigger", help="Retrigger a card")
     board_retrigger_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
     board_retrigger_cmd.add_argument("--id", required=True, help="Card id")
     board_retrigger_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_retrigger_cmd)
     board_retrigger_cmd.set_defaults(handler=_board_handler("retrigger"))
 
     board_process_cmd = sub.add_parser("board-process-accumulated-events", help="Process pending board events")
     board_process_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
     board_process_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_process_cmd)
     board_process_cmd.set_defaults(handler=_board_handler("processAccumulatedEvents"))
 
     board_upsert_cmd = sub.add_parser("board-upsert-card", help="Upsert one card or all cards")
@@ -506,6 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_upsert_cmd.add_argument("--all", action="store_true", help="Upsert all cards")
     board_upsert_cmd.add_argument("--restart", action="store_true", help="Mark upsert as restart")
     board_upsert_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_upsert_cmd)
     board_upsert_cmd.set_defaults(handler=_board_handler("upsertCard"))
 
     board_task_failed_cmd = sub.add_parser("board-task-failed", help="Send task-failed callback")
@@ -513,6 +533,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_task_failed_cmd.add_argument("--token", required=True, help="Callback token")
     board_task_failed_cmd.add_argument("--error", help="Error message")
     board_task_failed_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_task_failed_cmd)
     board_task_failed_cmd.set_defaults(handler=_board_handler("taskFailed"))
 
     board_task_progress_cmd = sub.add_parser("board-task-progress", help="Send task-progress callback")
@@ -520,6 +541,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_task_progress_cmd.add_argument("--token", required=True, help="Callback token")
     board_task_progress_cmd.add_argument("--update", required=True, help="JSON file for progress update payload")
     board_task_progress_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_task_progress_cmd)
     board_task_progress_cmd.set_defaults(handler=_board_handler("taskProgress"))
 
     board_source_fetched_cmd = sub.add_parser("board-source-data-fetched", help="Send source-data-fetched callback")
@@ -527,6 +549,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_source_fetched_cmd.add_argument("--token", required=True, help="Callback token")
     board_source_fetched_cmd.add_argument("--ref", required=True, help="Fetched source ref")
     board_source_fetched_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_source_fetched_cmd)
     board_source_fetched_cmd.set_defaults(handler=_board_handler("sourceDataFetched"))
 
     board_source_failed_cmd = sub.add_parser("board-source-data-fetch-failure", help="Send source-data-fetch-failure callback")
@@ -534,6 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_source_failed_cmd.add_argument("--token", required=True, help="Callback token")
     board_source_failed_cmd.add_argument("--reason", help="Failure reason")
     board_source_failed_cmd.add_argument("--bundle", help=f"Optional QuickJS bundle path (default: {DEFAULT_QUICKJS_BUNDLE})")
+    _add_notify_channel_arg(board_source_failed_cmd)
     board_source_failed_cmd.set_defaults(handler=_board_handler("sourceDataFetchFailure"))
 
     return parser
