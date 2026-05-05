@@ -1185,6 +1185,9 @@ describe('windows launcher behavior', () => {
     // All process execution is consolidated in process-runner.ts; check there.
     const processRunner = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'node', 'process-runner.ts'), 'utf-8');
     expect(processRunner).toContain('windowsHide: true');
-    expect((processRunner.match(/windowsHide: true/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    // Keep this semantic: each launch path must explicitly set windowsHide.
+    expect(processRunner).toMatch(/export function runSync[\s\S]*?windowsHide:\s*true/);
+    expect(processRunner).toMatch(/export function runAsync[\s\S]*?windowsHide:\s*true/);
+    expect(processRunner).toMatch(/export function runDetached[\s\S]*?windowsHide:\s*true/);
   });
 });
