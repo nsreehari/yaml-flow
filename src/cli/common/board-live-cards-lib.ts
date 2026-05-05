@@ -824,7 +824,8 @@ export function buildBoardStatusObject(boardPath: string, live: LiveGraph): Boar
         last_transition_at: state.lastUpdated ?? null,
         last_completed_at: state.completedAt ?? null,
         last_restarted_at: state.startedAt ?? null,
-        status_age_ms: state.lastUpdated ? Math.max(0, Date.now() - Date.parse(state.lastUpdated)) : null,
+        // Keep status snapshots immutable across reads: this field must not depend on wall-clock pull time.
+        status_age_ms: state.lastUpdated ? 0 : null,
       },
     };
   });
