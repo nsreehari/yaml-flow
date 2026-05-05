@@ -780,10 +780,15 @@ node <handler.js> --boardId <id> --cardId <id> --extraEncJson <base64json>
 
 - **`--boardId`** — board identifier
 - **`--cardId`** — the specific card where the user clicked the chat button
-- **`--extraEncJson`** — base64-encoded JSON: `{ chatDir, boardDir, lastChatFile }`
+- **`--extraEncJson`** — base64-encoded JSON: `{ boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, chatProcessingMarkerKey, lastChatFile, serverUrl? }`
+  - `boardSetupRoot` — absolute board setup root (parent of runtime/surface/runtime-out)
+  - `boardRuntimeDir` — relative runtime path (for example `runtime`)
+  - `runtimeStatusDir` — relative runtime-out path
+  - `cardsDir` — relative cards root path (for example `surface/tmp-cards`)
   - `chatDir` — absolute path to the directory holding all chat message files for this card
-  - `boardDir` — absolute path to the board runtime directory
+  - `chatProcessingMarkerKey` — relative key for `.processing` marker under cardsDir (for example `card-portfolio/.processing`)
   - `lastChatFile` — filename of the user message just written (e.g. `007_user.txt`)
+  - `serverUrl` — optional base URL of the hosting server
 
 ### Chat message files
 
@@ -795,8 +800,9 @@ Messages are stored as serial-numbered `.txt` files in `chatDir`:
 
 1. Read all `*_user.txt` / `*-assistant.txt` files from `chatDir` (sorted) → conversation history
 2. Build a system prompt scoped to `cardId` / `boardId` as grounding context
-3. Call the LLM directly (e.g. Copilot CLI) with `cwd: boardDir` — running from `boardDir` gives the LLM natural file context
+3. Call the LLM directly (e.g. Copilot CLI) with `cwd: boardSetupRoot` — running from board setup root gives natural file context for runtime, cards, and outputs
 4. Write the response to `<nextSerial>-assistant.txt` in `chatDir`
+5. Remove `.processing` marker using `chatProcessingMarkerKey` (fallback: `chatDir/.processing`)
 
 ### System prompt guidance
 
@@ -815,12 +821,12 @@ Be concise. Ground answers in the card's data context.`
 
 ### LLM invocation
 
-Call Copilot CLI directly from `boardDir` — same pattern as `demo-task-executor.js`:
+Call Copilot CLI directly from `boardSetupRoot` — same pattern as `demo-task-executor.js`:
 ```javascript
 execFileSync(copilotBin, ['--allow-all'], {
   input: fullPrompt,
   encoding: 'utf-8',
-  cwd: boardDir,         // ← run from boardDir for natural file context
+  cwd: boardSetupRoot,   // ← run from setup root for natural file context
   stdio: ['pipe', 'pipe', 'pipe'],
 });
 ```
