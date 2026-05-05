@@ -254,7 +254,12 @@ class PythonCommandExecutor:
             "stderr": subprocess.DEVNULL,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # Ensure detached callbacks do not create visible cmd windows on Windows.
+            kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen([cmd, *args], **kwargs)
