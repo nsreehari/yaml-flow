@@ -9,6 +9,9 @@ Subcommands:
   run-source-fetch      --in-ref <::kind::value> --out-ref <::kind::value> --err-ref <::kind::value>
   validate-source-def   --in <source.json>
   describe-capabilities
+
+Uses the public storage adapter for all storage and callback operations.
+The executor does NOT contain transport-specific callback logic.
 """
 
 from __future__ import annotations
@@ -17,151 +20,28 @@ import argparse
 import json
 import os
 import random
-import subprocess
 import sys
 import time
 from typing import Any
-from urllib import request
+
+# Add pycli to path so we can import the public storage adapter.
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..'))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from pycli.sub.public_storage_adapter import (  # noqa: E402
+    parse_ref,
+    serialize_ref,
+    blob_storage_for_ref,
+    report_complete,
+    report_failed,
+    KindValueRef,
+)
 
 
-def parse_ref(ref: str) -> tuple[str, str]:
-    if not ref.startswith("::"):
-        raise ValueError(f"Invalid ref format (expected ::kind::value): {ref}")
-    inner = ref[2:]
-    idx = inner.find("::")
-    if idx < 0:
-        raise ValueError(f"Invalid ref format (expected ::kind::value): {ref}")
-    return inner[:idx], inner[idx + 2 :]
-
-
-def serialize_ref(kind: str, value: str) -> str:
-    return f"::{kind}::{value}"
-
-
-def read_blob_ref(ref: str) -> str | None:
-    kind, value = parse_ref(ref)
-    if kind != "fs-path":
-        raise ValueError(f"Unsupported storage kind: {kind}")
-    if not os.path.exists(value):
-        return None
-    with open(value, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-def write_blob_ref(ref: str, content: str) -> None:
-    kind, value = parse_ref(ref)
-    if kind != "fs-path":
-        raise ValueError(f"Unsupported storage kind: {kind}")
-    os.makedirs(os.path.dirname(value), exist_ok=True)
-    with open(value, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def _what_to_run_value(what_to_run: str) -> str:
-    try:
-        return parse_ref(what_to_run)[1]
-    except Exception:
-        return what_to_run
-
-
-def report_complete(callback: dict[str, Any], out_ref: str) -> None:
-    token = callback.get("token")
-    via = callback.get("via") or {}
-    how = via.get("howToRun")
-    what_to_run = str(via.get("whatToRun") or "")
-
-    if not token or not how or not what_to_run:
-        raise ValueError("Invalid callback object")
-
-    if how in ("local-node", "local-process"):
-        script_path = _what_to_run_value(what_to_run)
-        cmd = ["node", script_path, "source-data-fetched", "--ref", out_ref, "--token", token]
-        result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
-        if result.returncode != 0:
-            msg = (result.stderr or result.stdout or "callback failed").strip()
-            raise RuntimeError(f"report_complete failed: {msg}")
-        return
-
-    if how == "local-python":
-        script_path = _what_to_run_value(what_to_run)
-        cmd = [
-            sys.executable,
-            script_path,
-            "board-source-data-fetched",
-            "--base-ref",
-            _what_to_run_value(via.get("extra", {}).get("baseRef", "")) if isinstance(via.get("extra"), dict) else "",
-            "--ref",
-            out_ref,
-            "--token",
-            token,
-        ]
-        # baseRef is required by board pycli command and is carried in callback extra.
-        if not cmd[4]:
-            raise RuntimeError("report_complete failed: missing callback baseRef for local-python transport")
-        result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
-        if result.returncode != 0:
-            msg = (result.stderr or result.stdout or "callback failed").strip()
-            raise RuntimeError(f"report_complete failed: {msg}")
-        return
-
-    if how == "http:post":
-        url = _what_to_run_value(what_to_run)
-        payload = json.dumps({"status": "complete", "ref": out_ref, "token": token}).encode("utf-8")
-        req = request.Request(url, method="POST", data=payload, headers={"Content-Type": "application/json"})
-        with request.urlopen(req, timeout=30):
-            return
-
-    raise ValueError(f"Unsupported callback transport: {how}")
-
-
-def report_failed(callback: dict[str, Any], reason: str) -> None:
-    token = callback.get("token")
-    via = callback.get("via") or {}
-    how = via.get("howToRun")
-    what_to_run = str(via.get("whatToRun") or "")
-
-    if not token or not how or not what_to_run:
-        raise ValueError("Invalid callback object")
-
-    if how in ("local-node", "local-process"):
-        script_path = _what_to_run_value(what_to_run)
-        cmd = ["node", script_path, "source-data-fetch-failure", "--token", token, "--reason", reason]
-        result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
-        if result.returncode != 0:
-            msg = (result.stderr or result.stdout or "callback failed").strip()
-            raise RuntimeError(f"report_failed failed: {msg}")
-        return
-
-    if how == "local-python":
-        script_path = _what_to_run_value(what_to_run)
-        cmd = [
-            sys.executable,
-            script_path,
-            "board-source-data-fetch-failure",
-            "--base-ref",
-            _what_to_run_value(via.get("extra", {}).get("baseRef", "")) if isinstance(via.get("extra"), dict) else "",
-            "--token",
-            token,
-            "--reason",
-            reason,
-        ]
-        # baseRef is required by board pycli command and is carried in callback extra.
-        if not cmd[4]:
-            raise RuntimeError("report_failed failed: missing callback baseRef for local-python transport")
-        result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
-        if result.returncode != 0:
-            msg = (result.stderr or result.stdout or "callback failed").strip()
-            raise RuntimeError(f"report_failed failed: {msg}")
-        return
-
-    if how == "http:post":
-        url = _what_to_run_value(what_to_run)
-        payload = json.dumps({"status": "failed", "reason": reason, "token": token}).encode("utf-8")
-        req = request.Request(url, method="POST", data=payload, headers={"Content-Type": "application/json"})
-        with request.urlopen(req, timeout=30):
-            return
-
-    raise ValueError(f"Unsupported callback transport: {how}")
+def _parse_ref_str(ref: str) -> KindValueRef:
+    """Convenience: parse a CLI ref string."""
+    return parse_ref(ref)
 
 
 def validate_source_def(source_def: dict[str, Any]) -> dict[str, Any]:
@@ -230,7 +110,15 @@ def cmd_describe_capabilities(_: argparse.Namespace) -> int:
 
 
 def cmd_run_source_fetch(args: argparse.Namespace) -> int:
-    raw_in = read_blob_ref(args.in_ref)
+    in_ref = _parse_ref_str(args.in_ref)
+    out_ref = _parse_ref_str(args.out_ref)
+    err_ref = _parse_ref_str(args.err_ref)
+
+    in_storage = blob_storage_for_ref(in_ref)
+    out_storage = blob_storage_for_ref(out_ref)
+    err_storage = blob_storage_for_ref(err_ref)
+
+    raw_in = in_storage.read(in_ref.value)
     if not raw_in:
         print(f"[portfolio-tracker-fetch-prices] input envelope not found at: {args.in_ref}", file=sys.stderr)
         return 1
@@ -240,7 +128,7 @@ def cmd_run_source_fetch(args: argparse.Namespace) -> int:
 
     def safe_fail(msg: str) -> int:
         try:
-            write_blob_ref(args.err_ref, msg)
+            err_storage.write(err_ref.value, msg)
         except Exception:
             pass
         if isinstance(callback, dict):
@@ -271,11 +159,11 @@ def cmd_run_source_fetch(args: argparse.Namespace) -> int:
         for ticker in tickers:
             prices[str(ticker)] = round(10 + random.random() * 989.99, 2)
 
-        write_blob_ref(args.out_ref, json.dumps(prices, ensure_ascii=True))
+        out_storage.write(out_ref.value, json.dumps(prices, ensure_ascii=True))
         print(f"[portfolio-tracker-fetch-prices] wrote prices for: {', '.join([str(t) for t in tickers])}")
 
         if isinstance(callback, dict):
-            report_complete(callback, args.out_ref)
+            report_complete(callback, out_ref)
         return 0
     except Exception as e:
         msg = str(e)

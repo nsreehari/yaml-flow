@@ -5,7 +5,6 @@ import json
 import os
 import random
 import socket
-import shutil
 import sys
 import tempfile
 import uuid
@@ -42,14 +41,14 @@ class QuickJsBoardHost:
       {"ok": true, "data": ...} | {"ok": false, "error": "..."}
     """
 
-    def __init__(self, bundle_path: str) -> None:
+    def __init__(self) -> None:
         self._locks: Dict[str, Any] = {}
         self._pipe_clients: Dict[str, Any] = {}
-        self._bundle_path = bundle_path
         self._repo_root = Path(__file__).resolve().parent.parent.parent
+        self._board_pycli = self._repo_root / "pycli" / "main" / "board_live_cards_pycli.py"
 
-    def _node_board_cli_path(self) -> Path:
-        return self._repo_root / "board-live-cards-cli.js"
+    def _python_board_pycli_path(self) -> Path:
+        return self._board_pycli
 
     def _make_board_temp_file_path(self, board_dir: str, label: str, ext: str = ".json") -> str:
         tmp_dir = Path(board_dir) / ".tmp"
@@ -152,10 +151,13 @@ class QuickJsBoardHost:
                 if kind == "fs-path":
                     path = Path(value)
                     if not path.exists():
-                        return self._ok(None)
+                        return self._err(f"resolveBlob: blob not found: ::{kind}::{value}")
                     return self._ok(path.read_text(encoding="utf-8"))
                 blob = self._blob(str(req["scope"]), "")
-                return self._ok(blob.read(value))
+                content = blob.read(value)
+                if content is None:
+                    return self._err(f"resolveBlob: blob not found: ::{kind}::{value}")
+                return self._ok(content)
 
             if op == "journal.readAllEntries":
                 journal = FsJournalStorageAdapter(str(req["scope"]))
@@ -217,7 +219,10 @@ class QuickJsBoardHost:
                 in_file = self._make_board_temp_file_path(scope, f"exec-in-{label}")
                 out_file = self._make_board_temp_file_path(scope, f"exec-out-{label}")
                 err_file = self._make_board_temp_file_path(scope, f"exec-err-{label}", ".txt")
-                Path(in_file).write_text(json.dumps(args, indent=2, ensure_ascii=True), encoding="utf-8")
+                Path(in_file).write_text(
+                    json.dumps(args, ensure_ascii=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
                 dispatch_args = {
                     "subcommand": "run-source-fetch",
                     "inRef": f"::fs-path::{in_file}",
@@ -236,6 +241,21 @@ class QuickJsBoardHost:
                 msg = req.get("msg")
                 if isinstance(msg, str):
                     print(f"[pycli-warn] {msg}")
+                return self._ok(True)
+
+            if op == "console.log":
+                parts = req.get("args", [])
+                print(f"[js] {' '.join(str(a) for a in parts)}")
+                return self._ok(True)
+
+            if op == "console.warn":
+                parts = req.get("args", [])
+                print(f"[js-warn] {' '.join(str(a) for a in parts)}", file=sys.stderr)
+                return self._ok(True)
+
+            if op == "console.error":
+                parts = req.get("args", [])
+                print(f"[js-error] {' '.join(str(a) for a in parts)}", file=sys.stderr)
                 return self._ok(True)
 
             if op == "base64.encode":
@@ -260,18 +280,16 @@ class QuickJsBoardHost:
                 notify_channel = req.get("notifyChannel")
                 if notify_channel is not None and not isinstance(notify_channel, str):
                     return self._err("board.requestProcessAccumulated notifyChannel must be a string when provided")
-                node = shutil.which("node")
-                if not node:
-                    return self._err("node not found on PATH")
-                board_cli = self._node_board_cli_path()
-                if not board_cli.exists():
-                    return self._err(f"board CLI not found: {board_cli}")
+
+                board_pycli = self._python_board_pycli_path()
+                if not board_pycli.exists():
+                    return self._err(f"board pycli not found: {board_pycli}")
                 base_ref = f"::fs-path::{scope}"
                 executor = PythonCommandExecutor()
                 executor.spawn_detached(
-                    node,
+                    sys.executable,
                     [
-                        str(board_cli),
+                        str(board_pycli),
                         "process-accumulated-events",
                         "--base-ref",
                         base_ref,
@@ -307,20 +325,14 @@ class QuickJsBoardHost:
                 return self._ok(True)
 
             if op == "self.ref":
-                board_cli = self._node_board_cli_path()
-                if board_cli.exists():
-                    return self._ok(
-                        {
-                            "meta": "board-live-cards",
-                            "howToRun": "local-node",
-                            "whatToRun": f"::fs-path::{str(board_cli)}",
-                        }
-                    )
+                board_pycli = self._python_board_pycli_path()
+                if not board_pycli.exists():
+                    return self._err(f"board pycli not found: {board_pycli}")
                 return self._ok(
                     {
                         "meta": "board-live-cards",
-                        "howToRun": "built-in",
-                        "whatToRun": "::built-in::board-live-cards",
+                        "howToRun": "local-python",
+                        "whatToRun": f"::fs-path::{str(board_pycli)}",
                     }
                 )
 
@@ -347,7 +359,7 @@ def invoke_js_bundle_function(
     bootstrap_js: Optional[str] = None,
 ) -> Any:
     quickjs = _load_quickjs_module()
-    host = QuickJsBoardHost(bundle_path)
+    host = QuickJsBoardHost()
     ctx = quickjs.Context()
 
     ctx.add_callable("__pyHostCall", host.host_call)
@@ -366,6 +378,16 @@ globalThis.__hostCall = function(payload) {
 if (typeof globalThis.btoa !== 'function') {
     globalThis.btoa = function(input) {
         return globalThis.__hostCall({ op: 'base64.encode', value: String(input) });
+    };
+}
+
+if (typeof globalThis.console === 'undefined') {
+    globalThis.console = {
+        log:   function() { globalThis.__hostCall({ op: 'console.log', args: Array.prototype.slice.call(arguments) }); },
+        warn:  function() { globalThis.__hostCall({ op: 'console.warn', args: Array.prototype.slice.call(arguments) }); },
+        error: function() { globalThis.__hostCall({ op: 'console.error', args: Array.prototype.slice.call(arguments) }); },
+        info:  function() { globalThis.__hostCall({ op: 'console.log', args: Array.prototype.slice.call(arguments) }); },
+        debug: function() { globalThis.__hostCall({ op: 'console.log', args: Array.prototype.slice.call(arguments) }); },
     };
 }
 
@@ -417,6 +439,20 @@ if (typeof globalThis.TextDecoder !== 'function') {
 
     if bootstrap_js:
         ctx.eval(bootstrap_js)
+
+    # QuickJS bundle shims require('./jsonata-sync.cjs') from globalThis.__jsonataSync.
+    # Seed it before loading the main bundle to ensure projections/compute evaluate synchronously.
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    jsonata_sync_path = repo_root / "src" / "card-compute" / "jsonata-sync.cjs"
+    if jsonata_sync_path.exists():
+        ctx.eval(jsonata_sync_path.read_text(encoding="utf-8"))
+        ctx.eval(
+            """
+if (typeof globalThis.__jsonataSync !== 'function' && typeof globalThis.jsonata === 'function') {
+  globalThis.__jsonataSync = globalThis.jsonata;
+}
+"""
+        )
 
     bundle_code = Path(bundle_path).read_text(encoding="utf-8")
     ctx.eval(bundle_code)

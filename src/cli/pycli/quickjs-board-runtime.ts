@@ -6,7 +6,7 @@ import {
 } from '../common/board-live-cards-public.js';
 import { parseRef, serializeRef, type KindValueRef, type AtomicRelayLock } from '../common/storage-interface.js';
 import type { ExecutionRef } from '../common/execution-interface.js';
-import jsonata from 'jsonata';
+import jsonataSync from '../../card-compute/jsonata-sync.cjs';
 
 declare global {
   // Injected by Python host bridge.
@@ -211,5 +211,5 @@ async function invoke(payload: BoardInvokePayload): Promise<CommandResult | stri
   }
 }
 
-globalThis.__jsonataSync = jsonata;
+globalThis.__jsonataSync = jsonataSync;
 globalThis.pycliBoardInvoke = invoke;
