@@ -777,6 +777,7 @@ export function createExampleBoardServerRuntime(options = {}) {
     for (const entry of entries) {
       const name = path.basename(entry.key);
       if (name === '.processing') { processing = true; continue; }
+      if (!/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i.test(name)) continue;
       count += 1;
       const mtimeMs = entry.updatedAt ? Number(new Date(entry.updatedAt).getTime() || 0) : 0;
       if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
@@ -1041,6 +1042,31 @@ export function createExampleBoardServerRuntime(options = {}) {
     for (const entry of entries) stores.chats.remove(entry.key);
   }
 
+  function chatIndexKey(cardId) {
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    return `${safeCardId}/.index.json`;
+  }
+
+  function loadChatIndex(cardId) {
+    const stores = artifactsStores(cardId);
+    if (!stores.chats) return [];
+    const raw = stores.chats.getText(chatIndexKey(cardId));
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // ignore malformed index
+    }
+    return [];
+  }
+
+  function saveChatIndex(cardId, records) {
+    const stores = artifactsStores(cardId);
+    if (!stores.chats) return;
+    stores.chats.putText(chatIndexKey(cardId), JSON.stringify(records, null, 2), 'application/json; charset=utf-8');
+  }
+
   function nextFileSerial(cardId) {
     const names = [];
 
@@ -1069,12 +1095,8 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function nextChatStoredName(cardId, role) {
-    const { safeCardId } = ensureCardStorageDirs(cardId);
-    const stores = artifactsStores(cardId);
-    const names = stores.chats
-      ? stores.chats.list(`${safeCardId}/`).map((e) => path.basename(e.key))
-      : [];
-    const serial = nextSerialFromNames(names);
+    const index = loadChatIndex(cardId);
+    const serial = (index.length > 0 ? Number(index[index.length - 1].serial || 0) : 0) + 1;
     const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
     return `${String(serial).padStart(3, '0')}_${safeRole}.txt`;
   }
@@ -1103,6 +1125,16 @@ export function createExampleBoardServerRuntime(options = {}) {
     }
 
     if (stores.chats) stores.chats.putText(artifactKey, `${lines.join('\n')}\n`);
+    const serial = parseLeadingSerial(outName);
+    const index = loadChatIndex(cardId);
+    index.push({
+      serial,
+      role: role || 'system',
+      stored_name: outName,
+      path: `${cardId}/chats/${outName}`,
+      updated_at: now,
+    });
+    saveChatIndex(cardId, index);
     return {
       at: now,
       role: role || 'system',
@@ -1117,21 +1149,20 @@ export function createExampleBoardServerRuntime(options = {}) {
     const stores = artifactsStores(cardId);
     if (!stores.chats) return [];
 
+    const index = loadChatIndex(cardId);
     const out = [];
-    for (const entry of stores.chats.list(`${safeCardId}/`)) {
-      const name = path.basename(entry.key);
-      const parsed = String(name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
-      if (!parsed) continue; // skip .processing and other non-chat files
-      const serial = parseInt(parsed[1], 10);
-      const role = parsed[2].toLowerCase();
-      const text = stores.chats.getText(entry.key) ?? '';
+    for (const row of index) {
+      if (!row || typeof row.stored_name !== 'string') continue;
+      const key = `${safeCardId}/${row.stored_name}`;
+      const text = stores.chats.getText(key);
+      if (text === null) continue;
       out.push({
-        serial,
-        role,
+        serial: Number(row.serial || parseLeadingSerial(row.stored_name) || 0),
+        role: String(row.role || 'system').toLowerCase(),
         text,
-        path: `${cardId}/chats/${name}`,
-        stored_name: name,
-        updated_at: entry.updatedAt || null,
+        path: typeof row.path === 'string' ? row.path : `${cardId}/chats/${row.stored_name}`,
+        stored_name: row.stored_name,
+        updated_at: row.updated_at || null,
       });
     }
 
