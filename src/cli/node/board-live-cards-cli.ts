@@ -145,13 +145,22 @@ export async function cli(argv: string[]): Promise<void> {
       return;
     }
     case 'get-outputs': {
-      const type = requireFlag(rest, '--type', 'get-outputs --base-ref <ref> --type <data-object|computed-values> [--key <key>|--card-id <id>]');
+      const type = requireFlag(rest, '--type', 'get-outputs --base-ref <ref> --type <data-object|computed-values> [--key <key>] [--all]');
+      const all = rest.includes('--all');
       if (type === 'data-object') {
-        const key = requireFlag(rest, '--key', 'get-outputs --type data-object --base-ref <ref> --key <datakey>');
-        printResult(board().getOutputsDataObject({ params: { key } }));
+        if (all) {
+          printResult(board().getAllOutputsDataObjects({}));
+        } else {
+          const key = requireFlag(rest, '--key', 'get-outputs --type data-object --base-ref <ref> --key <datakey>');
+          printResult(board().getOutputsDataObject({ params: { key } }));
+        }
       } else if (type === 'computed-values') {
-        const key = requireFlag(rest, '--key', 'get-outputs --type computed-values --base-ref <ref> --key <card-id>');
-        printResult(board().getOutputsComputedValues({ params: { key } }));
+        if (all) {
+          printResult(board().getAllOutputsComputedValues({}));
+        } else {
+          const key = requireFlag(rest, '--key', 'get-outputs --type computed-values --base-ref <ref> --key <card-id>');
+          printResult(board().getOutputsComputedValues({ params: { key } }));
+        }
       } else {
         throw new Error(`get-outputs: unknown --type "${type}", expected data-object | computed-values`);
       }

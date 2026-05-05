@@ -527,8 +527,10 @@ export type OutputStoreEvent =
 export interface PublishedOutputsStore {
   writeComputedValues(cardId: string, values: Record<string, unknown>): void;
   readComputedValues(cardId: string): unknown | null;
+  readAllComputedValues(): Record<string, unknown>;
   writeDataObjects(data: Record<string, unknown>): void;
   readDataObject(key: string): unknown | null;
+  readAllDataObjects(): Record<string, unknown>;
   writeStatusSnapshot(status: unknown): void;
   readStatusSnapshot(): unknown | null;
 }
@@ -539,6 +541,14 @@ export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStor
       kv.write(`cards/${cardId}/computed_values`, values);
     },
     readComputedValues(cardId) { return kv.read(`cards/${cardId}/computed_values`); },
+    readAllComputedValues() {
+      const out: Record<string, unknown> = {};
+      for (const key of kv.listKeys('cards/')) {
+        const m = key.match(/^cards\/([^/]+)\/computed_values$/);
+        if (m) out[m[1]] = kv.read(key);
+      }
+      return out;
+    },
     writeDataObjects(data) {
       for (const [token, payload] of Object.entries(data)) {
         if (!token) continue;
@@ -546,6 +556,13 @@ export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStor
       }
     },
     readDataObject(key) { return kv.read(`data-objects/${key}`); },
+    readAllDataObjects() {
+      const out: Record<string, unknown> = {};
+      for (const key of kv.listKeys('data-objects/')) {
+        out[key.slice('data-objects/'.length)] = kv.read(key);
+      }
+      return out;
+    },
     writeStatusSnapshot(status) {
       kv.write('status', status);
     },

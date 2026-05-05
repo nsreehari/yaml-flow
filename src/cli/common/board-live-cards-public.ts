@@ -243,8 +243,12 @@ export interface BoardLiveCardsPublic {
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
+  // no params needed
+  getAllOutputsDataObjects(input: CommandInput): CommandResult<Record<string, unknown>>;
   // params: key
   getOutputsComputedValues(input: CommandInput): CommandResult;
+  // no params needed
+  getAllOutputsComputedValues(input: CommandInput): CommandResult<Record<string, unknown>>;
   // params: id
   removeCard(input: CommandInput): CommandResult;
   // params: id
@@ -816,6 +820,12 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
+  function getAllOutputsDataObjects(_input: CommandInput): CommandResult<Record<string, unknown>> {
+    try {
+      return ok(outputStore().readAllDataObjects()) as CommandResult<Record<string, unknown>>;
+    } catch (e) { return err(e) as CommandResult<Record<string, unknown>>; }
+  }
+
   function getOutputsComputedValues(input: CommandInput): CommandResult {
     try {
       const key = input.params?.['key'] as string | undefined;
@@ -825,8 +835,17 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
+  function getAllOutputsComputedValues(_input: CommandInput): CommandResult<Record<string, unknown>> {
+    try {
+      return ok(outputStore().readAllComputedValues()) as CommandResult<Record<string, unknown>>;
+    } catch (e) { return err(e) as CommandResult<Record<string, unknown>>; }
+  }
+
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef, getOutputsDataObject, getOutputsComputedValues, removeCard, retrigger, processAccumulatedEvents,
+    init, status, getCardStoreRef, getOutputsStoreRef,
+    getOutputsDataObject, getAllOutputsDataObjects,
+    getOutputsComputedValues, getAllOutputsComputedValues,
+    removeCard, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,
