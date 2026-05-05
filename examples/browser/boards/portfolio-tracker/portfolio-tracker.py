@@ -53,7 +53,8 @@ if RUN_PYCLI:
         sys.exit(1)
 
 # ── Runtime directories (under os.tmpdir()/experiment/) ───────────────────────
-_TMP_BASE       = os.path.join(tempfile.gettempdir(), 'experiment')
+_RUN_ID = f"{int(time.time() * 1000)}-{os.getpid()}"
+_TMP_BASE       = os.path.join(tempfile.gettempdir(), f'experiment-{_RUN_ID}')
 CARDSTORE_DIR   = os.path.join(_TMP_BASE, 'cardstore')
 BOARDRUNTIME_DIR = os.path.join(_TMP_BASE, 'boardruntime')
 OUTPUTS_DIR     = os.path.join(_TMP_BASE, 'outputs')
@@ -235,6 +236,30 @@ def read_json(path: str):
         return json.load(f)
 
 
+def _normalize_status_for_compare(status_obj: dict) -> dict:
+    normalized = json.loads(json.dumps(status_obj))
+    for card in normalized.get('cards', []):
+        runtime = card.get('runtime')
+        if isinstance(runtime, dict):
+            runtime.pop('status_age_ms', None)
+    return normalized
+
+
+def wait_for_status_file_match(cli_status: dict, status_path: str, timeout_s: float = 5.0, poll_s: float = 0.2):
+    target = _normalize_status_for_compare(cli_status)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            file_status = read_json(status_path)
+        except FileNotFoundError:
+            time.sleep(poll_s)
+            continue
+        if json.dumps(target, sort_keys=True) == json.dumps(_normalize_status_for_compare(file_status), sort_keys=True):
+            return file_status
+        time.sleep(poll_s)
+    return read_json(status_path)
+
+
 def wait_for_completed(label: str, timeout_s: float = 10.0, poll_s: float = 0.5):
     required_names = {'portfolio-form', 'price-fetch', 'holdings-table', 'portfolio-value'}
     deadline = time.monotonic() + timeout_s
@@ -256,8 +281,6 @@ def wait_for_completed(label: str, timeout_s: float = 10.0, poll_s: float = 0.5)
 
 # ── T0a — Create runtime directories ──────────────────────────────────────────
 print('\n=== T0a: Create runtime directories ===')
-if os.path.exists(_TMP_BASE):
-    shutil.rmtree(_TMP_BASE)
 for d in (CARDSTORE_DIR, BOARDRUNTIME_DIR, OUTPUTS_DIR):
     os.makedirs(d)
     print(f'  created: {d}')
@@ -373,10 +396,10 @@ _cli_raw = run_board_capture('status', '--base-ref', BOARDRUNTIME_REF)
 _cli_status = json.loads(_cli_raw)['data']
 
 # Step 3: Read status.json from outputs store
-_file_status = read_json(os.path.join(OUTPUTS_DIR, 'status.json'))
+_file_status = wait_for_status_file_match(_cli_status, os.path.join(OUTPUTS_DIR, 'status.json'))
 
 # Step 4: Cross-check CLI vs file status
-assert json.dumps(_cli_status, sort_keys=True) == json.dumps(_file_status, sort_keys=True), \
+assert json.dumps(_normalize_status_for_compare(_cli_status), sort_keys=True) == json.dumps(_normalize_status_for_compare(_file_status), sort_keys=True), \
     'T5: CLI status does not match status.json snapshot'
 print('[T5] cross-check passed: CLI status matches status.json.')
 
