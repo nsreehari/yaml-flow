@@ -115,6 +115,28 @@ describe('BoardLiveCardsPublic — init and status', () => {
     const result = await board.processAccumulatedEvents({});
     expect(result.status).toBe('success');
   });
+
+  it('getAllOutputsDataObjects({}) returns success with a map payload', () => {
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+
+    const result = board.getAllOutputsDataObjects({});
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data).toEqual({});
+    }
+  });
+
+  it('getAllOutputsComputedValues({}) returns success with a map payload', () => {
+    const { board, boardDir } = freshBoard();
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+
+    const result = board.getAllOutputsComputedValues({});
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data).toEqual({});
+    }
+  });
 });
 
 // ============================================================================

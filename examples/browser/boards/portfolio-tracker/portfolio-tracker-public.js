@@ -329,6 +329,63 @@ async function waitForCompleted(label, expectedCardCount, timeoutMs = 90_000, po
   process.exit(1);
 }
 
+function sortedKeys(obj) {
+  if (!obj || typeof obj !== 'object') return [];
+  return Object.keys(obj).sort();
+}
+
+function readOutputsDataObject(key) {
+  const result = makeBoard().getOutputsDataObject({ params: { key } });
+  return result.status === 'success' ? result.data : undefined;
+}
+
+function readOutputsComputedValues(key) {
+  const result = makeBoard().getOutputsComputedValues({ params: { key } });
+  return result.status === 'success' ? result.data : undefined;
+}
+
+async function waitForPortfolioOutputs(label, expectedHoldingsBySymbol, timeoutMs = 30_000, pollMs = 300) {
+  const deadline = Date.now() + timeoutMs;
+  const expectedSymbols = Object.keys(expectedHoldingsBySymbol).sort();
+  let pollCount = 0;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, pollMs));
+    pollCount++;
+
+    const prices = readOutputsDataObject('prices');
+    const holdingsTable = readOutputsComputedValues('holdings-table');
+    const rowsRaw = holdingsTable?.table?.rows;
+    if (!prices || rowsRaw === undefined || rowsRaw === null) continue;
+    const rows = [].concat(rowsRaw);
+
+    const priceSymbols = sortedKeys(prices);
+    const rowsBySymbol = Object.fromEntries(rows.map(r => [r.symbol, r.qty]));
+    const rowSymbols = sortedKeys(rowsBySymbol);
+    const hasSymbols = JSON.stringify(priceSymbols) === JSON.stringify(expectedSymbols)
+      && JSON.stringify(rowSymbols) === JSON.stringify(expectedSymbols);
+
+    let qtyMatches = true;
+    for (const sym of expectedSymbols) {
+      if (rowsBySymbol[sym] !== expectedHoldingsBySymbol[sym]) {
+        qtyMatches = false;
+        break;
+      }
+    }
+
+    if (hasSymbols && qtyMatches) {
+      return { prices, holdingsTable, rowsBySymbol };
+    }
+
+    if (pollCount % 5 === 0) {
+      console.log(`[${label}] waiting for output convergence: symbols=${JSON.stringify(priceSymbols)} rows=${JSON.stringify(rowSymbols)}`);
+    }
+  }
+
+  console.error(`[ERROR] ${label}: timed out waiting for outputs to match expected holdings.`);
+  process.exit(1);
+}
+
 // ── T0a — Create runtime directories ──────────────────────────────────────────
 console.log('\n=== T0a: Create runtime directories ===');
 if (fs.existsSync(_TMP_BASE)) {
@@ -389,15 +446,13 @@ for (const cardId of ['portfolio-form', 'price-fetch', 'holdings-table', 'portfo
 console.log('\n=== T1: Wait for all cards completed ===');
 await waitForCompleted('T1', 4);
 
-const pricesT1 = checkResult(makeBoard().getOutputsDataObject({ params: { key: 'prices' } }), 'T1 getOutputsDataObject prices');
+const { prices: pricesT1, holdingsTable: htCvT1, rowsBySymbol: rowsBySymbolT1 } = await waitForPortfolioOutputs('T1', { NVDA: 100 });
 assert(typeof pricesT1 === 'object' && pricesT1 !== null && Object.keys(pricesT1).length > 0,
   'T1: prices data object is empty or not an object');
 assert(JSON.stringify(Object.keys(pricesT1).sort()) === JSON.stringify(['NVDA']),
   `T1: expected keys {NVDA}, got ${JSON.stringify(Object.keys(pricesT1))}`);
 assert(Object.values(pricesT1).every(v => typeof v === 'number'),
   'T1: all price values must be numbers');
-const htCvT1 = checkResult(makeBoard().getOutputsComputedValues({ params: { key: 'holdings-table' } }), 'T1 getOutputsComputedValues holdings-table');
-const rowsBySymbolT1 = Object.fromEntries([].concat(htCvT1.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT1['NVDA'] === 100,
   `T1: expected NVDA qty=100, got ${rowsBySymbolT1['NVDA']}`);
 console.log('[T1] assertion passed: prices has NVDA with numeric values, NVDA qty=100.');
@@ -422,14 +477,12 @@ console.log(JSON.stringify({ status: 'success' }, null, 2));
 console.log('\n=== T2c: Wait for all cards completed ===');
 await waitForCompleted('T2c', 4);
 
-const pricesT2c = checkResult(makeBoard().getOutputsDataObject({ params: { key: 'prices' } }), 'T2c getOutputsDataObject prices');
+const { prices: pricesT2c, holdingsTable: htCvT2c, rowsBySymbol: rowsBySymbolT2c } = await waitForPortfolioOutputs('T2c', { NVDA: 50, GOOG: 100 });
 assert(JSON.stringify(Object.keys(pricesT2c).sort()) === JSON.stringify(['GOOG', 'NVDA']),
   `T2c: expected keys {GOOG, NVDA}, got ${JSON.stringify(Object.keys(pricesT2c))}`);
 
-const htCvT2c = checkResult(makeBoard().getOutputsComputedValues({ params: { key: 'holdings-table' } }), 'T2c getOutputsComputedValues holdings-table');
 assert(htCvT2c.table.rows.length === 2,
   `T2c: expected 2 rows in holdings-table, got ${htCvT2c.table.rows.length}`);
-const rowsBySymbolT2c = Object.fromEntries([].concat(htCvT2c.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT2c['NVDA'] === 50,
   `T2c: expected NVDA qty=50, got ${rowsBySymbolT2c['NVDA']}`);
 assert(rowsBySymbolT2c['GOOG'] === 100,
@@ -442,11 +495,9 @@ checkResult(makeBoard().retrigger({ params: { id: 'price-fetch' } }), 'retrigger
 console.log(JSON.stringify({ status: 'success' }, null, 2));
 await waitForCompleted('T3', 4);
 
-const pricesT3 = checkResult(makeBoard().getOutputsDataObject({ params: { key: 'prices' } }), 'T3 getOutputsDataObject prices');
+const { prices: pricesT3, rowsBySymbol: rowsBySymbolT3 } = await waitForPortfolioOutputs('T3', { NVDA: 50, GOOG: 100 });
 assert(JSON.stringify(Object.keys(pricesT3).sort()) === JSON.stringify(['GOOG', 'NVDA']),
   `T3: expected keys {GOOG, NVDA}, got ${JSON.stringify(Object.keys(pricesT3))}`);
-const htCvT3 = checkResult(makeBoard().getOutputsComputedValues({ params: { key: 'holdings-table' } }), 'T3 getOutputsComputedValues holdings-table');
-const rowsBySymbolT3 = Object.fromEntries([].concat(htCvT3.table.rows).map(r => [r.symbol, r.qty]));
 assert(rowsBySymbolT3['NVDA'] === 50,
   `T3: expected NVDA qty=50, got ${rowsBySymbolT3['NVDA']}`);
 assert(rowsBySymbolT3['GOOG'] === 100,
