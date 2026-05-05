@@ -82,6 +82,28 @@ def report_complete(callback: dict[str, Any], out_ref: str) -> None:
             raise RuntimeError(f"report_complete failed: {msg}")
         return
 
+    if how == "local-python":
+        script_path = _what_to_run_value(what_to_run)
+        cmd = [
+            sys.executable,
+            script_path,
+            "board-source-data-fetched",
+            "--base-ref",
+            _what_to_run_value(via.get("extra", {}).get("baseRef", "")) if isinstance(via.get("extra"), dict) else "",
+            "--ref",
+            out_ref,
+            "--token",
+            token,
+        ]
+        # baseRef is required by board pycli command and is carried in callback extra.
+        if not cmd[4]:
+            raise RuntimeError("report_complete failed: missing callback baseRef for local-python transport")
+        result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            msg = (result.stderr or result.stdout or "callback failed").strip()
+            raise RuntimeError(f"report_complete failed: {msg}")
+        return
+
     if how == "http:post":
         url = _what_to_run_value(what_to_run)
         payload = json.dumps({"status": "complete", "ref": out_ref, "token": token}).encode("utf-8")
@@ -104,6 +126,28 @@ def report_failed(callback: dict[str, Any], reason: str) -> None:
     if how in ("local-node", "local-process"):
         script_path = _what_to_run_value(what_to_run)
         cmd = ["node", script_path, "source-data-fetch-failure", "--token", token, "--reason", reason]
+        result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            msg = (result.stderr or result.stdout or "callback failed").strip()
+            raise RuntimeError(f"report_failed failed: {msg}")
+        return
+
+    if how == "local-python":
+        script_path = _what_to_run_value(what_to_run)
+        cmd = [
+            sys.executable,
+            script_path,
+            "board-source-data-fetch-failure",
+            "--base-ref",
+            _what_to_run_value(via.get("extra", {}).get("baseRef", "")) if isinstance(via.get("extra"), dict) else "",
+            "--token",
+            token,
+            "--reason",
+            reason,
+        ]
+        # baseRef is required by board pycli command and is carried in callback extra.
+        if not cmd[4]:
+            raise RuntimeError("report_failed failed: missing callback baseRef for local-python transport")
         result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
         if result.returncode != 0:
             msg = (result.stderr or result.stdout or "callback failed").strip()
