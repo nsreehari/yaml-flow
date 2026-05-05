@@ -99,7 +99,6 @@ export function createRuntimeRequestDispatcher(runtime) {
  * Manages multiple boards under a single DEMO_SETUP_DIR.
  * Directory layout:
  *   setupDir/
- *     boards-config.json          ← board registry
  *     board-default/              ← built-in example board
  *       runtime/                  ← board-graph.json, cards-inventory.jsonl
  *       surface/                  ← tmp-cards/
@@ -128,25 +127,34 @@ export function createMultiBoardServerRuntime(options = {}) {
   const defaultCardsDir = path.resolve(
     options.defaultCardsDir || path.join(__dirname, 'cards')
   );
-
-  const boardsConfigFile = path.join(setupDir, 'boards-config.json');
+  const configuredServerMetaStoreRef = typeof options.serverMetaStoreRef === 'string'
+    && options.serverMetaStoreRef.trim()
+    ? options.serverMetaStoreRef.trim()
+    : null;
+  const serverMetaStoreRef = configuredServerMetaStoreRef || `::fs-path::${setupDir}`;
+  const serverMetaArtifacts = createArtifactsStore(
+    createFsBoardPlatformAdapter(parseRef(serverMetaStoreRef), __dirname, { suppressSpawn: true })
+      .blobStorage('server-meta')
+  );
+  const boardsRegistryKey = 'boards-config.json';
   const boardServiceCache = new Map();
 
   fs.mkdirSync(setupDir, { recursive: true });
 
   function readBoardsConfig() {
-    if (!fs.existsSync(boardsConfigFile)) {
+    const raw = serverMetaArtifacts.getText(boardsRegistryKey);
+    if (!raw) {
       return { boards: [{ id: 'default', label: 'Default Board' }] };
     }
     try {
-      return JSON.parse(fs.readFileSync(boardsConfigFile, 'utf-8'));
+      return JSON.parse(raw);
     } catch {
       return { boards: [{ id: 'default', label: 'Default Board' }] };
     }
   }
 
   function writeBoardsConfig(config) {
-    fs.writeFileSync(boardsConfigFile, JSON.stringify(config, null, 2));
+    serverMetaArtifacts.putText(boardsRegistryKey, JSON.stringify(config, null, 2));
   }
 
   function safeBoardId(raw) {
@@ -326,6 +334,8 @@ export function createMultiBoardServerRuntime(options = {}) {
     apiBasePath,
     corsHeaders,
     setupDir,
+    serverMetaStoreRef,
+    boardsRegistryKey,
     parseUrl,
     json,
     handleBoardsRegistryApi,

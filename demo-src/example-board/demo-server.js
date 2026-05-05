@@ -46,6 +46,16 @@ function resolveFromConfig(configValue) {
   return path.resolve(__dirname, configValue);
 }
 
+function resolveKindRefFromConfig(configValue) {
+  if (typeof configValue !== 'string' || !configValue.trim()) return null;
+  const trimmed = configValue.trim();
+  if (!trimmed.startsWith('::fs-path::')) return trimmed;
+  const rawPath = trimmed.slice('::fs-path::'.length).trim();
+  if (!rawPath) return null;
+  const resolved = path.isAbsolute(rawPath) ? rawPath : path.resolve(__dirname, rawPath);
+  return `::fs-path::${resolved}`;
+}
+
 const serverConfig = loadServerConfig();
 const configuredCardsDir = resolveFromConfig(serverConfig.cardsDir);
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
@@ -56,6 +66,7 @@ const configuredGandalfCardsDir = resolveFromConfig(serverConfig.gandalfCardsDir
 const configuredGandalfTaskExecutorPath = resolveFromConfig(serverConfig.gandalfTaskExecutorPath);
 const configuredGandalfChatHandlerPath = resolveFromConfig(serverConfig.gandalfChatHandlerPath);
 const configuredGandalfInferenceAdapterPath = resolveFromConfig(serverConfig.gandalfInferenceAdapterPath);
+const configuredServerMetaStoreRef = resolveKindRefFromConfig(serverConfig.serverMetaStoreRef);
 
 if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath) {
   process.env.DEMO_STEP_MACHINE_CLI_PATH = configuredStepMachineCliPath;
@@ -88,6 +99,7 @@ const runtime = createMultiBoardServerRuntime({
   defaultGandalfTaskExecutorPath: process.env.DEMO_GANDALF_TASK_EXECUTOR_PATH || configuredGandalfTaskExecutorPath || null,
   defaultGandalfChatHandlerPath: process.env.DEMO_GANDALF_CHAT_HANDLER_PATH || configuredGandalfChatHandlerPath || null,
   defaultGandalfInferenceAdapterPath: process.env.DEMO_GANDALF_INFERENCE_ADAPTER_PATH || configuredGandalfInferenceAdapterPath || null,
+  serverMetaStoreRef: process.env.DEMO_SERVER_META_STORE_REF || configuredServerMetaStoreRef || null,
 });
 
 function resetRuntime() {
@@ -261,7 +273,8 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[demo-server] listening on http://127.0.0.1:${PORT}`);
   console.log(`[demo-server] setup dir: ${runtime.setupDir}`);
-  console.log(`[demo-server] boards config: ${runtime.setupDir}/boards-config.json`);
+  console.log(`[demo-server] server-meta store: ${runtime.serverMetaStoreRef}`);
+  console.log(`[demo-server] boards registry key: server-meta/${runtime.boardsRegistryKey}`);
   console.log('[demo-server] endpoints:');
   console.log(`  GET  ${runtime.apiBasePath}                          <- list boards`);
   console.log(`  POST ${runtime.apiBasePath}  {id, label?}            <- register board`);
