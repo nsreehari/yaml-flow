@@ -1161,8 +1161,18 @@ export function createExampleBoardServerRuntime(options = {}) {
     const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
     if (!handlerCmd) return;
     const boardSetupRoot = path.dirname(boardDir);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    const processingMarkerKey = `${safeCardId}/.processing`;
     const processingFile = path.join(chatsDir, '.processing');
-    try { fs.mkdirSync(chatsDir, { recursive: true }); fs.writeFileSync(processingFile, '', 'utf-8'); } catch {}
+    try {
+      if (stores.chats) {
+        stores.chats.putText(processingMarkerKey, '', 'text/plain; charset=utf-8');
+      } else {
+        fs.mkdirSync(chatsDir, { recursive: true });
+        fs.writeFileSync(processingFile, '', 'utf-8');
+      }
+    } catch {}
     const extra = Buffer.from(JSON.stringify({
       boardSetupRoot,
       boardRuntimeDir:  path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeDir : boardDir),
@@ -1186,7 +1196,13 @@ export function createExampleBoardServerRuntime(options = {}) {
       proc.unref();
       console.log(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
     } catch (err) {
-      try { fs.unlinkSync(processingFile); } catch {}
+      try {
+        if (stores.chats) {
+          stores.chats.remove(processingMarkerKey);
+        } else {
+          fs.unlinkSync(processingFile);
+        }
+      } catch {}
       console.warn(`[chat-handler] spawn failed for card "${cardId}":`, (err && err.message) || String(err));
     }
   }
