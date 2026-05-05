@@ -27,6 +27,7 @@ const runtimeFiles = [
   'examples/browser/boards/portfolio-tracker/portfolio-tracker.py',
   'examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py',
   'examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml',
+  'examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker-pycli.flow.yaml',
   'examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.input.json',
   'examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker-pycli.py',
   'examples/cli/step-machine-cli/portfolio-tracker/inline-python-demo.flow.yaml',
@@ -36,6 +37,7 @@ const runtimeFiles = [
 
 const runtimeExampleDirs = [
   'examples/cli/step-machine-cli/portfolio-tracker/handlers',
+  'examples/cli/step-machine-cli/portfolio-tracker/handlers-py',
 ];
 
 async function exists(p) {

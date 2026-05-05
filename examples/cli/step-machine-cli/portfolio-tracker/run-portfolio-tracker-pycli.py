@@ -30,7 +30,7 @@ def main() -> int:
     here = Path(__file__).resolve().parent
     repo_root = here.parents[3]
     pycli = repo_root / "pycli" / "main" / "step_machine_pycli.py"
-    flow = here / "portfolio-tracker.flow.yaml"
+    flow = here / "portfolio-tracker-pycli.flow.yaml"
     input_json = here / "portfolio-tracker.input.json"
 
     temp_root = Path(tempfile.gettempdir()) / "yaml-flow-step-machine-portfolio-tracker"
@@ -65,6 +65,10 @@ def main() -> int:
         cwd=str(here),
         shell=False,
         check=False,
+        env={
+            **os.environ,
+            "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""),
+        },
     )
     return proc.returncode
 
