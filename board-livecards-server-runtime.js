@@ -13,6 +13,7 @@ import {
   createArtifactsStore,
   createChatArtifactsStore,
   createFileArtifactsStore,
+  createCardFileMetadataStore,
   parseRef,
 } from './dist/cli/node/fs-board-adapter.js';
 
@@ -603,6 +604,10 @@ export function createExampleBoardServerRuntime(options = {}) {
     return createFileArtifactsStore(stores.files);
   }
 
+  function cardFileMetadataStore() {
+    return createCardFileMetadataStore();
+  }
+
   function parseLeadingSerial(fileName) {
     const m = String(fileName || '').match(/^(\d+)[-_]/);
     return m ? parseInt(m[1], 10) : 0;
@@ -1000,10 +1005,8 @@ export function createExampleBoardServerRuntime(options = {}) {
       const cardPath = findCardPath(cardId);
       if (cardPath && fs.existsSync(cardPath)) {
         const card = readJson(cardPath);
-        const files = card && card.card_data && Array.isArray(card.card_data.files) ? card.card_data.files : [];
-        for (const entry of files) {
-          if (entry && typeof entry.stored_name === 'string') names.push(entry.stored_name);
-        }
+        const metadata = cardFileMetadataStore().read(card && card.card_data ? card.card_data : null);
+        for (const entry of metadata) names.push(entry.stored_name);
       }
     } catch {
       // ignore malformed card file
@@ -1197,32 +1200,10 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
 
       if (actionType === 'file-upload') {
-        const files = Array.isArray(payload && payload.files)
-          ? payload.files
-              .map((f) => {
-                if (!f || typeof f !== 'object') return null;
-                if (typeof f.stored_name !== 'string') return null;
-                return {
-                  name: typeof f.name === 'string' ? f.name : f.stored_name,
-                  stored_name: f.stored_name,
-                  size: f.size || null,
-                  mime_type: f.mime_type || null,
-                  path: f.path || null,
-                  uploaded_at: f.uploaded_at || now,
-                };
-              })
-              .filter(Boolean)
-          : [];
+        const files = cardFileMetadataStore().normalizeIncoming(payload && payload.files, now);
 
         if (files.length > 0) {
-          const existing = Array.isArray(cardData.files) ? cardData.files.slice() : [];
-          const known = new Set(existing.map((f) => (f && f.stored_name ? f.stored_name : '')));
-          for (const f of files) {
-            if (known.has(f.stored_name)) continue;
-            existing.push(f);
-            known.add(f.stored_name);
-          }
-          cardData.files = existing;
+          cardFileMetadataStore().merge(cardData, files);
         }
 
         return card;
@@ -1392,19 +1373,15 @@ export function createExampleBoardServerRuntime(options = {}) {
             const now = new Date().toISOString();
             const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data : {};
             card.card_data = cardData;
-            const existing = Array.isArray(cardData.files) ? cardData.files.slice() : [];
-            const known = new Set(existing.map((f) => (f && f.stored_name ? f.stored_name : '')));
-            if (!known.has(file.stored_name)) {
-              existing.push({
-                name: typeof file.name === 'string' ? file.name : file.stored_name,
-                stored_name: file.stored_name,
-                size: file.size || null,
-                mime_type: file.mime_type || null,
-                path: file.path || null,
-                uploaded_at: file.uploaded_at || now,
-              });
-              cardData.files = existing;
-            }
+            const incoming = cardFileMetadataStore().normalizeIncoming([{
+              name: file.name,
+              stored_name: file.stored_name,
+              size: file.size,
+              mime_type: file.mime_type,
+              path: file.path,
+              uploaded_at: file.uploaded_at || now,
+            }], now);
+            cardFileMetadataStore().merge(cardData, incoming);
             return card;
           });
           writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
@@ -1433,21 +1410,17 @@ export function createExampleBoardServerRuntime(options = {}) {
           return true;
         }
 
-        const files = card.card_data && Array.isArray(card.card_data.files) ? card.card_data.files : [];
-        if (idx < 0 || idx >= files.length) {
+        const resolved = cardFileMetadataStore().resolve(card.card_data, idx, expectedStoredName);
+        if (!resolved.ok && resolved.reason === 'stale_reference') {
+          json(res, 409, { error: 'File reference is stale. Refresh and try again.' });
+          return true;
+        }
+        if (!resolved.ok) {
           json(res, 404, { error: 'File not found' });
           return true;
         }
 
-        const fileRecord = files[idx];
-        if (!fileRecord || !fileRecord.stored_name) {
-          json(res, 404, { error: 'File not found' });
-          return true;
-        }
-        if (expectedStoredName && expectedStoredName !== fileRecord.stored_name) {
-          json(res, 409, { error: 'File reference is stale. Refresh and try again.' });
-          return true;
-        }
+        const fileRecord = resolved.file;
 
         const { safeCardId } = ensureCardStorageDirs(cardId);
         const stores = artifactsStores(cardId);

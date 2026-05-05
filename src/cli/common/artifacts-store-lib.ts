@@ -60,6 +60,26 @@ export interface FileArtifactsStore {
   allocateStoredName(cardPrefix: string, displayName: string, opts?: { seedNames?: string[]; maxLen?: number }): string;
 }
 
+export interface CardFileMetadata {
+  name: string;
+  stored_name: string;
+  size: number | null;
+  mime_type: string | null;
+  path: string | null;
+  uploaded_at: string | null;
+}
+
+export type CardFileLookupResult =
+  | { ok: true; file: CardFileMetadata }
+  | { ok: false; reason: 'index_out_of_range' | 'missing_stored_name' | 'stale_reference' };
+
+export interface CardFileMetadataStore {
+  read(cardData: unknown): CardFileMetadata[];
+  normalizeIncoming(payloadFiles: unknown, defaultUploadedAt?: string): CardFileMetadata[];
+  merge(cardData: Record<string, unknown>, incoming: CardFileMetadata[]): CardFileMetadata[];
+  resolve(cardData: unknown, index: number, expectedStoredName?: string | null): CardFileLookupResult;
+}
+
 const INDEX_KEY = '.artifacts-index.json';
 
 interface ArtifactIndexEntry {
@@ -434,5 +454,68 @@ export function createFileArtifactsStore(store: ArtifactsStore): FileArtifactsSt
     nextSerial,
     buildStoredName,
     allocateStoredName,
+  };
+}
+
+export function createCardFileMetadataStore(): CardFileMetadataStore {
+  function normalizeIncoming(payloadFiles: unknown, defaultUploadedAt?: string): CardFileMetadata[] {
+    if (!Array.isArray(payloadFiles)) return [];
+    const out: CardFileMetadata[] = [];
+    for (const raw of payloadFiles) {
+      if (!raw || typeof raw !== 'object') continue;
+      const row = raw as Record<string, unknown>;
+      if (typeof row.stored_name !== 'string') continue;
+      out.push({
+        name: typeof row.name === 'string' ? row.name : row.stored_name,
+        stored_name: row.stored_name,
+        size: typeof row.size === 'number' && Number.isFinite(row.size) ? row.size : null,
+        mime_type: typeof row.mime_type === 'string' ? row.mime_type : null,
+        path: typeof row.path === 'string' ? row.path : null,
+        uploaded_at: typeof row.uploaded_at === 'string' ? row.uploaded_at : (defaultUploadedAt || null),
+      });
+    }
+    return out;
+  }
+
+  function read(cardData: unknown): CardFileMetadata[] {
+    if (!cardData || typeof cardData !== 'object') return [];
+    const row = cardData as Record<string, unknown>;
+    return normalizeIncoming(row.files, undefined);
+  }
+
+  function merge(cardData: Record<string, unknown>, incoming: CardFileMetadata[]): CardFileMetadata[] {
+    const existing = read(cardData);
+    if (incoming.length === 0) {
+      cardData.files = existing;
+      return existing;
+    }
+    const known = new Set(existing.map((f) => f.stored_name));
+    for (const file of incoming) {
+      if (known.has(file.stored_name)) continue;
+      existing.push(file);
+      known.add(file.stored_name);
+    }
+    cardData.files = existing;
+    return existing;
+  }
+
+  function resolve(cardData: unknown, index: number, expectedStoredName?: string | null): CardFileLookupResult {
+    const files = read(cardData);
+    if (!Number.isInteger(index) || index < 0 || index >= files.length) {
+      return { ok: false, reason: 'index_out_of_range' };
+    }
+    const file = files[index];
+    if (!file || !file.stored_name) return { ok: false, reason: 'missing_stored_name' };
+    if (expectedStoredName && expectedStoredName !== file.stored_name) {
+      return { ok: false, reason: 'stale_reference' };
+    }
+    return { ok: true, file };
+  }
+
+  return {
+    read,
+    normalizeIncoming,
+    merge,
+    resolve,
   };
 }
