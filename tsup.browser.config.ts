@@ -22,6 +22,11 @@ import type { Plugin } from 'esbuild';
 const browserStubPlugin: Plugin = {
   name: 'browser-node-stubs',
   setup(build) {
+    build.onResolve({ filter: /^module$/ }, () => ({
+      path: 'browser-module-shim',
+      namespace: 'browser-stub',
+    }));
+
     const stubbed = [
       'ajv',
       'ajv-formats',
@@ -43,10 +48,28 @@ const browserStubPlugin: Plugin = {
       return undefined;
     });
 
-    build.onLoad({ filter: /.*/, namespace: 'browser-stub' }, () => ({
-      contents: 'export default undefined; export {};',
-      loader: 'js',
-    }));
+    build.onLoad({ filter: /.*/, namespace: 'browser-stub' }, (args) => {
+      if (args.path === 'browser-module-shim') {
+        return {
+          contents: `
+            export function createRequire() {
+              return function(req) {
+                if (req === './jsonata-sync.cjs') {
+                  return (typeof globalThis !== 'undefined' && globalThis.__jsonataSync)
+                    || (typeof globalThis !== 'undefined' && globalThis.jsonata);
+                }
+                throw new Error('Unsupported require in browser bundle: ' + req);
+              };
+            }
+          `,
+          loader: 'js',
+        };
+      }
+      return {
+        contents: 'export default undefined; export {};',
+        loader: 'js',
+      };
+    });
   },
 };
 
@@ -86,7 +109,7 @@ export default defineConfig({
   platform: 'browser',
   outExtension: () => ({ js: '.js' }),
   target: 'es2020',
-  minify: false,
+  minify: true,
   sourcemap: true,
   dts: false,
   clean: false,

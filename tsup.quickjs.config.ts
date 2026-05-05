@@ -61,7 +61,7 @@ export default defineConfig({
   platform: 'browser',
   target: 'es2020',
   splitting: false,
-  minify: false,
+  minify: true,
   sourcemap: true,
   clean: false,
   dts: false,

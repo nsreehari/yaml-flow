@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "5.4.2",
+  "version": "6.0.0",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -124,8 +124,11 @@
   ],
   "scripts": {
     "build": "tsup",
-    "build:browser": "tsup --config tsup.browser.config.ts",
+    "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
     "build:quickjs": "tsup --config tsup.quickjs.config.ts",
+    "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
+    "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
+    "release:gate": "npm run -s test:run && npm run -s build && npm run -s build:browser && npm run -s build:quickjs && npm run -s check:bundle-budget && npm run -s check:browser-bundle",
     "standalone": "npm run -s test:cli-parity && npm run -s build && npm run -s build:quickjs && node scripts/build-standalone.mjs",
     "pycli:install": "python -m pip install -r pycli/requirements.txt",
     "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r pycli/requirements.txt",
@@ -143,7 +146,7 @@
     "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run build:browser"
+    "prepublishOnly": "npm run build && npm run build:browser && npm run check:bundle-budget && npm run check:browser-bundle"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
