@@ -27,6 +27,16 @@ const runtimeFiles = [
   'pycli/requirements.txt',
   'examples/browser/boards/portfolio-tracker/portfolio-tracker.py',
   'examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py',
+  'examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml',
+  'examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.input.json',
+  'examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker-pycli.py',
+  'examples/cli/step-machine-cli/portfolio-tracker/inline-python-demo.flow.yaml',
+  'examples/cli/step-machine-cli/portfolio-tracker/inline-python-handlers.py',
+  'examples/cli/step-machine-cli/portfolio-tracker/run-inline-python-demo-pycli.py',
+];
+
+const runtimeExampleDirs = [
+  'examples/cli/step-machine-cli/portfolio-tracker/handlers',
 ];
 
 const copiedPkgs = new Set();
@@ -160,6 +170,48 @@ async function minifyStandaloneJs() {
   }
 }
 
+async function copyJsonataSidecars() {
+  const sidecarRelPaths = [
+    'dist/jsonata-sync.cjs',
+    'dist/cli/node/jsonata-sync.cjs',
+    'dist/cli/browser-api/jsonata-sync.cjs',
+    'dist/card-compute/jsonata-sync.cjs',
+    'dist/continuous-event-graph/jsonata-sync.cjs',
+    'dist/board-livegraph-runtime/jsonata-sync.cjs',
+  ];
+
+  for (const rel of sidecarRelPaths) {
+    const src = path.join(root, rel);
+    if (!(await exists(src))) continue;
+    const dst = path.join(outDir, rel);
+    await fs.mkdir(path.dirname(dst), { recursive: true });
+    await fs.cp(src, dst, { force: true });
+  }
+}
+
+async function copyNodeCliRuntimeFiles() {
+  const relFiles = [
+    'dist/cli/node/board-live-cards-cli.js',
+    'dist/cli/node/board-live-cards-cli.cjs',
+    'dist/cli/node/card-store-cli.js',
+    'dist/cli/node/card-store-cli.cjs',
+    'dist/cli/node/fs-board-adapter.js',
+    'dist/cli/node/fs-board-adapter.cjs',
+    'dist/cli/node/source-cli-task-executor.js',
+    'dist/cli/node/source-cli-task-executor.cjs',
+    'dist/cli/node/artifacts-store-cli.js',
+    'dist/cli/node/artifacts-store-cli.cjs',
+  ];
+
+  for (const rel of relFiles) {
+    const src = path.join(root, rel);
+    if (!(await exists(src))) continue;
+    const dst = path.join(outDir, rel);
+    await fs.mkdir(path.dirname(dst), { recursive: true });
+    await fs.cp(src, dst, { force: true });
+  }
+}
+
 async function main() {
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(outDir, { recursive: true });
@@ -171,6 +223,9 @@ async function main() {
     await copyIntoDist(rel);
   }
   for (const rel of runtimeFiles) {
+    await copyIntoDist(rel);
+  }
+  for (const rel of runtimeExampleDirs) {
     await copyIntoDist(rel);
   }
 
@@ -187,6 +242,10 @@ async function main() {
   if (shouldMinifyJs) {
     await minifyStandaloneJs();
   }
+
+  // Keep required CommonJS sidecars available for runtime require() paths.
+  await copyJsonataSidecars();
+  await copyNodeCliRuntimeFiles();
 
   await writeReadme();
 
