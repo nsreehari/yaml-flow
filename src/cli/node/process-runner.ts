@@ -272,7 +272,7 @@ export function runDetached(spec: CommandSpec): void {
       child.unref();
       return;
     }
-    const child = spawn('cmd', ['/c', 'start', '/b', '', command, ...args], {
+    const child = spawn(command, args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
