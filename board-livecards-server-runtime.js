@@ -12,6 +12,7 @@ import {
   createCardStore,
   createArtifactsStore,
   createChatArtifactsStore,
+  createFileArtifactsStore,
   parseRef,
 } from './dist/cli/node/fs-board-adapter.js';
 
@@ -596,27 +597,10 @@ export function createExampleBoardServerRuntime(options = {}) {
     return createChatArtifactsStore(stores.chats, { indexFileName: '.index.json' });
   }
 
-  function normalizeDisplayFileName(name) {
-    const input = String(name || '').trim();
-    if (!input) return 'upload.bin';
-    const base = path.basename(input);
-    return base || 'upload.bin';
-  }
-
-  function normalizeStem(rawStem) {
-    const normalized = String(rawStem || '')
-      .toLowerCase()
-      .replace(/\s+/g, '_')
-      .replace(/[^a-z0-9_-]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_+|_+$/g, '');
-    return normalized || 'file';
-  }
-
-  function normalizeExt(rawExt) {
-    if (!rawExt || rawExt === '.') return '';
-    const extBody = String(rawExt).replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return extBody ? `.${extBody}` : '';
+  function fileArtifactsForCard(cardId) {
+    const stores = artifactsStores(cardId);
+    if (!stores.files) return null;
+    return createFileArtifactsStore(stores.files);
   }
 
   function parseLeadingSerial(fileName) {
@@ -624,35 +608,11 @@ export function createExampleBoardServerRuntime(options = {}) {
     return m ? parseInt(m[1], 10) : 0;
   }
 
-  function nextSerialFromNames(names) {
-    let maxSeen = 0;
-    for (const name of names) {
-      const n = parseLeadingSerial(name);
-      if (Number.isFinite(n) && n > maxSeen) maxSeen = n;
-    }
-    return maxSeen + 1;
-  }
-
-  function buildStoredFileName(displayName, serial) {
-    const base = normalizeDisplayFileName(displayName);
-    const ext = normalizeExt(path.extname(base));
-    const stemRaw = ext ? base.slice(0, -path.extname(base).length) : base;
-    const stemNorm = normalizeStem(stemRaw);
-    const prefix = `${String(serial).padStart(3, '0')}-`;
-
-    let keepExt = ext;
-    let stemBudget = MAX_STORED_FILE_NAME_LEN - prefix.length - keepExt.length;
-    if (stemBudget < 1) {
-      keepExt = '';
-      stemBudget = MAX_STORED_FILE_NAME_LEN - prefix.length;
-    }
-
-    const stem = stemNorm.slice(0, Math.max(1, stemBudget));
-    let out = `${prefix}${stem}${keepExt}`;
-    if (out.length > MAX_STORED_FILE_NAME_LEN) {
-      out = out.slice(0, MAX_STORED_FILE_NAME_LEN).replace(/\.$/, '');
-    }
-    return out;
+  function normalizeDisplayFileName(name) {
+    const input = String(name || '').trim();
+    if (!input) return 'upload.bin';
+    const base = path.basename(input);
+    return base || 'upload.bin';
   }
 
   function shellQuote(s) {
@@ -1034,9 +994,8 @@ export function createExampleBoardServerRuntime(options = {}) {
     chatStore.clear(safeCardId);
   }
 
-  function nextFileSerial(cardId) {
+  function readCardStoredFileNames(cardId) {
     const names = [];
-
     try {
       const cardPath = findCardPath(cardId);
       if (cardPath && fs.existsSync(cardPath)) {
@@ -1047,18 +1006,9 @@ export function createExampleBoardServerRuntime(options = {}) {
         }
       }
     } catch {
-      // ignore malformed card file and fall back to dir scan
+      // ignore malformed card file
     }
-
-    const { safeCardId } = ensureCardStorageDirs(cardId);
-    const stores = artifactsStores(cardId);
-    if (stores.files) {
-      for (const entry of stores.files.list(`${safeCardId}/`)) {
-        names.push(path.basename(entry.key));
-      }
-    }
-
-    return nextSerialFromNames(names);
+    return names;
   }
 
   function nextChatStoredName(cardId, role) {
@@ -1127,13 +1077,13 @@ export function createExampleBoardServerRuntime(options = {}) {
     const { safeCardId } = ensureCardStorageDirs(cardId);
     const stores = artifactsStores(cardId);
     const displayName = normalizeDisplayFileName(requestedName);
-
-    let serial = nextFileSerial(cardId);
-    let storedName = buildStoredFileName(displayName, serial);
-    while (stores.files && stores.files.exists(`${safeCardId}/${storedName}`)) {
-      serial += 1;
-      storedName = buildStoredFileName(displayName, serial);
-    }
+    const fileStore = fileArtifactsForCard(cardId);
+    const storedName = fileStore
+      ? fileStore.allocateStoredName(safeCardId, displayName, {
+        seedNames: readCardStoredFileNames(cardId),
+        maxLen: MAX_STORED_FILE_NAME_LEN,
+      })
+      : `${String(Date.now())}-${displayName}`;
 
     if (stores.files) {
       stores.files.putBytes(`${safeCardId}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');

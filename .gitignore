@@ -41,3 +41,5 @@ examples/cli/step-machine-cli/portfolio-tracker/runtime/
 examples/example-board/
 demo-src/example-board/runtime
 standalone/
+pydist/
+

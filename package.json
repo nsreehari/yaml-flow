@@ -126,6 +126,7 @@
     "build": "tsup",
     "build:browser": "tsup --config tsup.browser.config.ts",
     "build:quickjs": "tsup --config tsup.quickjs.config.ts",
+    "standalone": "npm run -s build && npm run -s build:quickjs && node scripts/build-standalone.mjs",
     "pycli:install": "python -m pip install -r pycli/requirements.txt",
     "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r pycli/requirements.txt",
     "pycli:install:py312": "py -3.12 -m pip install -r pycli/requirements.txt",

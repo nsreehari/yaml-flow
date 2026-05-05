@@ -54,6 +54,12 @@ export interface ChatArtifactsStore {
   readSignal(cardPrefix: string): ChatSignal;
 }
 
+export interface FileArtifactsStore {
+  nextSerial(cardPrefix: string, seedNames?: string[]): number;
+  buildStoredName(displayName: string, serial: number, opts?: { maxLen?: number }): string;
+  allocateStoredName(cardPrefix: string, displayName: string, opts?: { seedNames?: string[]; maxLen?: number }): string;
+}
+
 const INDEX_KEY = '.artifacts-index.json';
 
 interface ArtifactIndexEntry {
@@ -113,6 +119,42 @@ function updateIndex(index: ArtifactIndex, key: string, info: ArtifactInfo): voi
 function parseLeadingSerial(fileName: string): number {
   const m = String(fileName || '').match(/^(\d+)[-_]/);
   return m ? parseInt(m[1], 10) : 0;
+}
+
+function normalizeDisplayFileName(name: string): string {
+  const input = String(name || '').trim();
+  if (!input) return 'upload.bin';
+  const slash = Math.max(input.lastIndexOf('/'), input.lastIndexOf('\\'));
+  const base = slash >= 0 ? input.slice(slash + 1) : input;
+  return base || 'upload.bin';
+}
+
+function normalizeStem(rawStem: string): string {
+  const normalized = String(rawStem || '')
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || 'file';
+}
+
+function normalizeExt(rawExt: string): string {
+  if (!rawExt || rawExt === '.') return '';
+  const extBody = String(rawExt).replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return extBody ? `.${extBody}` : '';
+}
+
+function splitBaseExt(name: string): { stem: string; ext: string } {
+  const base = normalizeDisplayFileName(name);
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return { stem: base, ext: '' };
+  return { stem: base.slice(0, dot), ext: base.slice(dot) };
+}
+
+function basenameFromKey(key: string): string {
+  const slash = key.lastIndexOf('/');
+  return slash >= 0 ? key.slice(slash + 1) : key;
 }
 
 export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
@@ -340,5 +382,57 @@ export function createChatArtifactsStore(
     readRecords,
     clear,
     readSignal,
+  };
+}
+
+export function createFileArtifactsStore(store: ArtifactsStore): FileArtifactsStore {
+  function nextSerial(cardPrefix: string, seedNames?: string[]): number {
+    let maxSeen = 0;
+    const names: string[] = [];
+    if (Array.isArray(seedNames)) names.push(...seedNames);
+    for (const entry of store.list(`${cardPrefix}/`)) {
+      names.push(basenameFromKey(entry.key));
+    }
+    for (const name of names) {
+      const serial = parseLeadingSerial(name);
+      if (Number.isFinite(serial) && serial > maxSeen) maxSeen = serial;
+    }
+    return maxSeen + 1;
+  }
+
+  function buildStoredName(displayName: string, serial: number, opts?: { maxLen?: number }): string {
+    const maxLen = Number(opts?.maxLen || 32);
+    const { stem, ext } = splitBaseExt(displayName);
+    const safeExt = normalizeExt(ext);
+    const safeStem = normalizeStem(stem);
+    const prefix = `${String(serial).padStart(3, '0')}-`;
+
+    let keepExt = safeExt;
+    let stemBudget = maxLen - prefix.length - keepExt.length;
+    if (stemBudget < 1) {
+      keepExt = '';
+      stemBudget = maxLen - prefix.length;
+    }
+
+    const outStem = safeStem.slice(0, Math.max(1, stemBudget));
+    let out = `${prefix}${outStem}${keepExt}`;
+    if (out.length > maxLen) out = out.slice(0, maxLen).replace(/\.$/, '');
+    return out;
+  }
+
+  function allocateStoredName(cardPrefix: string, displayName: string, opts?: { seedNames?: string[]; maxLen?: number }): string {
+    let serial = nextSerial(cardPrefix, opts?.seedNames);
+    let out = buildStoredName(displayName, serial, { maxLen: opts?.maxLen });
+    while (store.exists(`${cardPrefix}/${out}`)) {
+      serial += 1;
+      out = buildStoredName(displayName, serial, { maxLen: opts?.maxLen });
+    }
+    return out;
+  }
+
+  return {
+    nextSerial,
+    buildStoredName,
+    allocateStoredName,
   };
 }
