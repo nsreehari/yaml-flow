@@ -18,9 +18,11 @@ import argparse
 
 
 _CLI_PARSER = argparse.ArgumentParser()
-_CLI_PARSER.add_argument('--run-pycli', action='store_true', help='Use pycli for board/card operations')
+_MODE_GROUP = _CLI_PARSER.add_mutually_exclusive_group()
+_MODE_GROUP.add_argument('--run-pycli', action='store_true', help='Use pycli for board/card operations (default)')
+_MODE_GROUP.add_argument('--run-nodecli', action='store_true', help='Use node cli for board/card operations')
 _CLI_ARGS = _CLI_PARSER.parse_args()
-RUN_PYCLI = _CLI_ARGS.run_pycli
+RUN_PYCLI = not _CLI_ARGS.run_nodecli
 
 # ── Path resolution ────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,15 +42,12 @@ if not PYTHON:
     print('[ERROR] python not found on PATH (required for portfolio-tracker-fetch-prices.py)', file=sys.stderr)
     sys.exit(1)
 
-PYTHON312 = os.path.join(_REPO_ROOT, '.venv312', 'Scripts', 'python.exe')
+PYTHON_RUNNER = sys.executable or PYTHON
+
 PYCLI = os.path.join(_REPO_ROOT, 'pycli', 'main', 'board_live_cards_pycli.py')
 QUICKJS_BUNDLE = os.path.join(_REPO_ROOT, 'dist', 'pycli', 'quickjs-board-runtime.global.js')
 
 if RUN_PYCLI:
-    if not os.path.exists(PYTHON312):
-        print(f'[ERROR] Python 3.12 venv not found: {PYTHON312}', file=sys.stderr)
-        print('Run from yaml-flow root: npm run pycli:install:venv312', file=sys.stderr)
-        sys.exit(1)
     if not os.path.exists(PYCLI):
         print(f'[ERROR] pycli entry not found: {PYCLI}', file=sys.stderr)
         sys.exit(1)
@@ -227,7 +226,7 @@ def _map_board_args(args: list[str]) -> list[str]:
 
 def _run_pycli(args: list[str], *, capture: bool = False) -> str:
     result = subprocess.run(
-        [PYTHON312, PYCLI, *args],
+        [PYTHON_RUNNER, PYCLI, *args],
         check=True,
         shell=False,
         capture_output=capture,
