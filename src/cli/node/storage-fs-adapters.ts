@@ -453,23 +453,23 @@ export function createFsCardStorageAdapter(kvDir: string): {
   cardExists(key: string): boolean;
   defaultCardKey(cardId: string): string;
 } {
-  const kv = createFsKvStorage(kvDir);
+  const json = createFsJsonStorage(kvDir);
   return {
     readIndex() {
-      return kv.read('_index') as CardIndex | null;
+      return json.read('_index') as CardIndex | null;
     },
     writeIndex(index) {
-      kv.write('_index', index);
+      json.write('_index', index);
     },
     readCard(id) {
-      return kv.read(id) as LiveCard | null;
+      return json.read(id) as LiveCard | null;
     },
     writeCard(id, card) {
-      kv.write(id, card);
+      json.write(id, card);
       return computeStableJsonHash(card);
     },
     cardExists(id) {
-      return kv.read(id) !== null;
+      return json.read(id) !== null;
     },
     defaultCardKey(cardId) {
       return cardId;

@@ -44,6 +44,14 @@ export interface CardStorePublic {
    * params.id: string   — delete a single card (alternative, can combine with body.ids)
    */
   del(input: CommandInput): CommandResult<{ count: number }>;
+
+  /**
+   * Patch one card using dot-path assignment.
+   * params.id: string
+   * params.path: dot path (e.g. "card_data.form.name")
+   * body.value: value to assign (or body itself if value is omitted)
+   */
+  patch(input: CommandInput): CommandResult<{ count: number }>;
 }
 
 // ============================================================================
@@ -98,6 +106,23 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
         if (ids.length === 0) return fail('del requires body.ids (string[]) or params.id');
         for (const id of ids) store.removeCard(id);
         return ok({ count: ids.length });
+      } catch (e) { return oops(e); }
+    },
+
+    patch(input: CommandInput): CommandResult<{ count: number }> {
+      try {
+        const id = input.params?.['id'] as string | undefined;
+        const jsonPath = input.params?.['path'] as string | undefined;
+        if (!id) return fail('patch requires params.id');
+        if (!jsonPath) return fail('patch requires params.path');
+
+        const body = input.body as { value?: unknown } | undefined;
+        const value = body && Object.prototype.hasOwnProperty.call(body, 'value')
+          ? body.value
+          : input.body;
+
+        store.patchCard(id, jsonPath, value);
+        return ok({ count: 1 });
       } catch (e) { return oops(e); }
     },
   };

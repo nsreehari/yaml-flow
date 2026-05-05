@@ -485,6 +485,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       notification: makeNotificationState(),
       pipeServer: null,
       initialized: false,
+      cardsBootstrapped: false,
     };
   }
 
@@ -680,8 +681,17 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readCardDefinitions() {
-    const base = cardFilesFromDir(tmpCardsDir, cardPathById);
-    const side = gandalfCtx ? cardFilesFromDir(tmpGandalfCardsDir, gandalfCardPathById) : [];
+    const fromCtx = (ctx, fallbackDir, fallbackMap) => {
+      if (!ctx || !ctx.cardStore) return cardFilesFromDir(fallbackDir, fallbackMap);
+      const result = ctx.cardStore.get({});
+      if (result.status !== 'success' || !Array.isArray(result.data?.cards)) {
+        return cardFilesFromDir(fallbackDir, fallbackMap);
+      }
+      return result.data.cards;
+    };
+
+    const base = fromCtx(baseCtx, tmpCardsDir, cardPathById);
+    const side = gandalfCtx ? fromCtx(gandalfCtx, tmpGandalfCardsDir, gandalfCardPathById) : [];
     return [...base, ...side];
   }
 
@@ -875,6 +885,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
   async function upsertCardsFromDir(ctx, outMap) {
     if (!ctx) return;
+    if (ctx.cardsBootstrapped) return;
     const cards = cardFilesFromDir(ctx.cardsRootDir, outMap);
     for (const card of cards) {
       const setResult = ctx.cardStore.set({ body: card });
@@ -882,6 +893,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       ctx.board.upsertCard({ params: { cardId: card.id, restart: true } });
     }
     await ctx.board.processAccumulatedEvents({});
+    ctx.cardsBootstrapped = true;
   }
 
   async function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
@@ -897,32 +909,50 @@ export function createExampleBoardServerRuntime(options = {}) {
     if (gandalfCtx) await upsertCardsFromDir(gandalfCtx, gandalfCardPathById);
   }
 
-  function findCardPath(cardId) {
-    if (gandalfCardPathById.has(cardId)) return gandalfCardPathById.get(cardId);
-    return cardPathById.get(cardId) ?? null;
+  function cardContextForCard(cardId) {
+    return isGandalfCard(cardId) ? gandalfCtx : baseCtx;
+  }
+
+  function readCardFromStore(cardId) {
+    const ctx = cardContextForCard(cardId);
+    if (!ctx) return null;
+    const result = ctx.cardStore.get({ params: { id: cardId } });
+    if (result.status !== 'success') return null;
+    const cards = Array.isArray(result.data?.cards) ? result.data.cards : [];
+    return cards.length > 0 ? cards[0] : null;
   }
 
   function mutateCard(cardId, updateFn, opts) {
     const options = opts && typeof opts === 'object' ? opts : {};
     const syncBoard = options.syncBoard !== false;
-    const cardPath = findCardPath(cardId);
-    if (!cardPath || !fs.existsSync(cardPath)) {
+    const ctx = cardContextForCard(cardId);
+    if (!ctx) {
       const err = new Error(`Card not found: ${cardId}`);
       err.statusCode = 404;
       throw err;
     }
 
-    const card = readJson(cardPath);
+    const card = readCardFromStore(cardId);
+    if (!card || typeof card !== 'object') {
+      const err = new Error(`Card not found: ${cardId}`);
+      err.statusCode = 404;
+      throw err;
+    }
+
     const nextCard = updateFn(card) || card;
-    fs.writeFileSync(cardPath, JSON.stringify(nextCard, null, 2));
+    const setResult = ctx.cardStore.set({ body: nextCard });
+    if (setResult.status !== 'success') {
+      const err = new Error(setResult.error || `Failed to persist card: ${cardId}`);
+      err.statusCode = 500;
+      throw err;
+    }
 
     if (syncBoard) {
-      const ctx = isGandalfCard(cardId) ? gandalfCtx : baseCtx;
-      if (ctx) {
-        const setResult = ctx.cardStore.set({ body: nextCard });
-        if (setResult.status === 'success') {
-          ctx.board.upsertCard({ params: { cardId, restart: true } });
-        }
+      const upsertResult = ctx.board.upsertCard({ params: { cardId, restart: true } });
+      if (upsertResult.status !== 'success') {
+        const err = new Error(upsertResult.error || `Failed to upsert card: ${cardId}`);
+        err.statusCode = 500;
+        throw err;
       }
     }
   }
@@ -1002,12 +1032,10 @@ export function createExampleBoardServerRuntime(options = {}) {
   function readCardStoredFileNames(cardId) {
     const names = [];
     try {
-      const cardPath = findCardPath(cardId);
-      if (cardPath && fs.existsSync(cardPath)) {
-        const card = readJson(cardPath);
-        const metadata = cardFileMetadataStore().read(card && card.card_data ? card.card_data : null);
-        for (const entry of metadata) names.push(entry.stored_name);
-      }
+      const card = readCardFromStore(cardId);
+      if (!card) return names;
+      const metadata = cardFileMetadataStore().read(card && card.card_data ? card.card_data : null);
+      for (const entry of metadata) names.push(entry.stored_name);
     } catch {
       // ignore malformed card file
     }
@@ -1330,6 +1358,7 @@ export function createExampleBoardServerRuntime(options = {}) {
         const cardId = decodeURIComponent(cardMatch[1]);
         const body = await readJsonBody(req);
         patchCard(cardId, body);
+        broadcastToSseClients();
         json(res, 200, { ok: true });
         return true;
       }
@@ -1340,6 +1369,7 @@ export function createExampleBoardServerRuntime(options = {}) {
         const cardId = decodeURIComponent(cardActionMatch[1]);
         const body = await readJsonBody(req);
         applyCardAction(cardId, body && body.actionType, body && body.payload);
+        broadcastToSseClients();
         json(res, 200, { ok: true });
         return true;
       }
@@ -1386,6 +1416,7 @@ export function createExampleBoardServerRuntime(options = {}) {
           });
           writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
         }
+        broadcastToSseClients();
         json(res, 200, { ok: true, file });
         return true;
       }
@@ -1396,16 +1427,8 @@ export function createExampleBoardServerRuntime(options = {}) {
         const idx = parseInt(cardFileDownloadMatch[2], 10);
         const expectedStoredName = url.searchParams.get('sn');
 
-        const cardPath = findCardPath(cardId);
-        if (!cardPath || !fs.existsSync(cardPath)) {
-          json(res, 404, { error: 'Card not found' });
-          return true;
-        }
-
-        let card;
-        try {
-          card = readJson(cardPath);
-        } catch {
+        const card = readCardFromStore(cardId);
+        if (!card || typeof card !== 'object') {
           json(res, 404, { error: 'Card not found' });
           return true;
         }

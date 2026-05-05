@@ -8,6 +8,7 @@
  *   card-store get --store-ref <ref> [--id <card-id>] [--yaml]
  *   card-store set --store-ref <ref> [--ref <jsonfile> | --ref-yaml <yamlfile>] [--yaml]
  *   card-store del --store-ref <ref> --id <card-id> [--id <card-id> ...]
+ *   card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]
  */
 
 import * as fs from 'node:fs';
@@ -56,6 +57,10 @@ const HELP = [
   '',
   '  card-store del --store-ref <ref> --id <card-id> [--id <card-id> ...]',
   '    Delete one or more cards by ID.',
+  '',
+  '  card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]',
+  '    Patch one card field by dot-path assignment.',
+  '    If --value-json is omitted, stdin is parsed as JSON value.',
 ].join('\n');
 
 export async function cli(argv: string[]): Promise<void> {
@@ -145,6 +150,37 @@ export async function cli(argv: string[]): Promise<void> {
       process.exit(1);
     }
     console.error(`card-store del: removed ${result.data.count} card(s)`);
+    return;
+  }
+
+  // ── patch ───────────────────────────────────────────────────────────────
+  if (cmd === 'patch') {
+    const id = requireFlag(rest, '--id', 'card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]');
+    const jsonPath = requireFlag(rest, '--path', 'card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]');
+    const valueJson = optFlag(rest, '--value-json');
+    let value: unknown;
+    try {
+      if (typeof valueJson === 'string') {
+        value = JSON.parse(valueJson);
+      } else {
+        const text = await readStdin();
+        if (!text.trim()) {
+          console.error('card-store patch: provide --value-json or JSON value via stdin');
+          process.exit(1);
+        }
+        value = JSON.parse(text);
+      }
+    } catch (e) {
+      console.error(`card-store patch: JSON parse error: ${(e as Error).message}`);
+      process.exit(1);
+    }
+
+    const result = storePublic.patch({ params: { id, path: jsonPath }, body: { value } });
+    if (result.status !== 'success') {
+      console.error(`card-store patch: ${result.error}`);
+      process.exit(1);
+    }
+    console.error('card-store patch: ok');
     return;
   }
 

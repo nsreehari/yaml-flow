@@ -105,6 +105,7 @@ export interface CardUpsertValidation {
 export interface CardAdminStore extends CardStore {
   validateUpsert(id: string, cardKey: string): CardUpsertValidation;
   writeCard(id: string, card: LiveCard, cardKey?: string): void;
+  patchCard(id: string, jsonPath: string, value: unknown): void;
   removeCard(id: string): void;
   readIndex(): CardIndex;
 }
@@ -116,6 +117,29 @@ export interface CardAdminStore extends CardStore {
 export function createCardStore(adapter: CardStorageAdapter, onWarn?: (msg: string) => void): CardAdminStore {
   function loadIndex(): CardIndex {
     return adapter.readIndex() ?? {};
+  }
+
+  function applyJsonPath(obj: Record<string, unknown>, jsonPath: string, value: unknown): Record<string, unknown> {
+    const segments = String(jsonPath || '').split('.').filter(Boolean);
+    if (segments.length === 0) {
+      return (value && typeof value === 'object' && !Array.isArray(value))
+        ? value as Record<string, unknown>
+        : { value };
+    }
+
+    const out: Record<string, unknown> = { ...obj };
+    let target: Record<string, unknown> = out;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const key = segments[i];
+      const cur = target[key];
+      const next = (cur && typeof cur === 'object' && !Array.isArray(cur))
+        ? { ...(cur as Record<string, unknown>) }
+        : {};
+      target[key] = next;
+      target = next;
+    }
+    target[segments[segments.length - 1]] = value;
+    return out;
   }
 
   return {
@@ -174,6 +198,22 @@ export function createCardStore(adapter: CardStorageAdapter, onWarn?: (msg: stri
       const resolvedKey = cardKey ?? index[id]?.key ?? adapter.defaultCardKey(id);
       const checksum = adapter.writeCard(resolvedKey, card);
       index[id] = { key: resolvedKey, checksum, updatedAt: new Date().toISOString() };
+      adapter.writeIndex(index);
+    },
+
+    patchCard(id: string, jsonPath: string, value: unknown): void {
+      const index = loadIndex();
+      const entry = index[id];
+      if (!entry || !adapter.cardExists(entry.key)) {
+        throw new Error(`card "${id}" not found`);
+      }
+      const current = adapter.readCard(entry.key);
+      if (!current || typeof current !== 'object' || Array.isArray(current)) {
+        throw new Error(`card "${id}" is not patchable`);
+      }
+      const next = applyJsonPath(current as Record<string, unknown>, jsonPath, value) as LiveCard;
+      const checksum = adapter.writeCard(entry.key, next);
+      index[id] = { key: entry.key, checksum, updatedAt: new Date().toISOString() };
       adapter.writeIndex(index);
     },
 
