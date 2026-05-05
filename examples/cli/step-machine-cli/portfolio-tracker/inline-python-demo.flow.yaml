@@ -1,0 +1,26 @@
+id: inline-python-demo
+settings:
+  start_step: greet
+  max_total_steps: 5
+
+steps:
+  greet:
+    description: Build a greeting message using Python inline handler
+    handler:
+      inline: greet_user
+    transitions:
+      success: add
+
+  add:
+    description: Add two numbers with Python inline handler
+    expects_data: [a, b]
+    produces_data: [total]
+    handler:
+      inline: add_numbers
+    transitions:
+      success: done
+
+terminal_states:
+  done:
+    return_intent: success
+    return_artifacts: [message, total]

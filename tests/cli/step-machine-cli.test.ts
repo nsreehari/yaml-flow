@@ -894,8 +894,7 @@ export default {
     const output = parseLastJsonObject(result.stdout ?? '');
     expect(output.intent).toBe('success');
     expect(output.finalStep).toBe('success_state');
-    expect(output.data.t1_done).toBe(true);
-    expect(output.data.t2_done).toBe(true);
-    expect(output.data.t3_done).toBe(true);
+    expect(output.data.cards_added).toBe(3);
+    expect(output.data.all_completed).toBe(true);
   }, 120_000);
 });

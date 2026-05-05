@@ -1,0 +1,32 @@
+{
+  "graph": {
+    "version": 1,
+    "config": {
+      "settings": {
+        "completion": "manual",
+        "refreshStrategy": "data-changed"
+      },
+      "tasks": {}
+    },
+    "state": {
+      "status": "running",
+      "tasks": {},
+      "availableOutputs": [],
+      "stuckDetection": {
+        "is_stuck": false,
+        "stuck_description": null,
+        "outputs_unresolvable": [],
+        "tasks_blocked": []
+      },
+      "lastUpdated": "2026-05-02T15:18:33.305Z",
+      "executionId": "live-1777735113305",
+      "executionConfig": {
+        "executionMode": "eligibility-mode",
+        "conflictStrategy": "alphabetical",
+        "completionStrategy": "manual"
+      }
+    },
+    "snapshotAt": "2026-05-02T15:18:33.305Z"
+  },
+  "lastDrainedJournalId": ""
+}

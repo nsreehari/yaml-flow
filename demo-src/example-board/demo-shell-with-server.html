@@ -16,6 +16,7 @@
   </style>
   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"></script>
   <script src="../../browser/card-compute.js"></script>
   <script src="../../browser/live-cards.js"></script>
   <script src="../../browser/board-livegraph-engine.js"></script>
@@ -68,7 +69,7 @@
   <script>
     (function () {
       const { buildLiveCardModelsFromArtifacts } = window.BoardLiveGraph || {};
-      let currentMode = 'board';
+      let currentMode = 'canvas';
       let bootstrapCompleted = false;
       let activeBoardId = 'default';
       let runtimeClient = null;

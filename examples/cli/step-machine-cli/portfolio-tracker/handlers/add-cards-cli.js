@@ -1,24 +1,33 @@
 #!/usr/bin/env node
 
-import { readStdinJson, runBoardCli, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, runCardStoreCliWithInput, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
   const boardDir = String(input.BOARD_DIR ?? '').trim();
-  const cardsGlob = String(input.CARDS_GLOB ?? '').trim();
+  const cards = Array.isArray(input.CARDS) ? input.CARDS : [];
 
-  if (!boardDir || !cardsGlob) {
-    writeFailure('BOARD_DIR and CARDS_GLOB are required');
+  if (!boardDir || cards.length === 0) {
+    writeFailure('BOARD_DIR and CARDS (array) are required');
     process.exit(0);
   }
 
-  runBoardCli(['upsert-card', '--rg', boardDir, '--card-glob', cardsGlob]);
+  const baseRef = `::fs-path::${boardDir}`;
+
+  // Write all cards to the card store in one call
+  runCardStoreCliWithInput(
+    ['set', '--store-ref', baseRef],
+    JSON.stringify(cards),
+  );
+
+  // Upsert all cards at once
+  runBoardCli(['upsert-card', '--base-ref', baseRef, '--all']);
 
   writeResult({
     result: 'success',
     data: {
       board_dir: boardDir,
-      cards_glob: cardsGlob,
+      count: cards.length,
     },
   });
 } catch (error) {

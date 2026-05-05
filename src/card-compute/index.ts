@@ -26,6 +26,11 @@
  */
 
 import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+// QuickJS bundles may initialize the shim binding after this module executes.
+// Fallback to the standard jsonata import so sync evaluation still works.
+const jsonataSync: typeof jsonata = (_require('./jsonata-sync.cjs') ?? jsonata) as typeof jsonata;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,6 +139,44 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
   }
 
   return node;
+}
+
+/**
+ * Synchronous version of run() — uses a vendored sync JSONata build
+ * (async/await stripped from jsonata.js since all built-in functions
+ * are CPU-only).
+ *
+ * Same semantics as `run()`: evaluates all compute steps, populates
+ * `node.computed_values`, returns the mutated node.
+ *
+ * @returns `{ ok: true, node }` when all steps evaluated successfully.
+ *          `{ ok: false, node }` is currently never returned but reserved
+ *          for future use if an expression requires true async evaluation.
+ */
+function runSync(node: ComputeNode, options?: RunOptions): { ok: boolean; node: ComputeNode } {
+  if (!node?.compute?.length) return { ok: true, node };
+  if (!node.card_data) node.card_data = {};
+  node.computed_values = {};
+  node._sourcesData = options?.sourcesData ?? {};
+
+  const ctx: Record<string, unknown> = {
+    card_data: node.card_data,
+    requires: node.requires ?? {},
+    fetched_sources: node._sourcesData,
+    computed_values: node.computed_values,
+  };
+
+  for (const step of node.compute) {
+    try {
+      const val = jsonataSync(step.expr).evaluate(ctx);
+      deepSet(node.computed_values, step.bindTo, val);
+      ctx.computed_values = node.computed_values;
+    } catch (err) {
+      console.error(`CardCompute.runSync error on "${node.id ?? '?'}.${step.bindTo}":`, err);
+    }
+  }
+
+  return { ok: true, node };
 }
 
 /**
@@ -351,12 +394,45 @@ async function enrichSources(
   );
 }
 
+function enrichSourcesSync(
+  source_defs: any[] | undefined,
+  context: {
+    card_data?: Record<string, any>;
+    requires?: Record<string, any>;
+  }
+): any[] {
+  if (!source_defs || source_defs.length === 0) return [];
+
+  const evalCtx = {
+    card_data: context.card_data ?? {},
+    requires: context.requires ?? {},
+  };
+
+  return source_defs.map((src: any) => {
+    const _projections: Record<string, unknown> = {};
+    if (src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
+      for (const [key, expr] of Object.entries(src.projections as Record<string, string>)) {
+        if (typeof expr === 'string' && expr.trim().length > 0) {
+          try {
+            _projections[key] = jsonataSync(expr).evaluate(evalCtx);
+          } catch {
+            _projections[key] = undefined;
+          }
+        }
+      }
+    }
+    return { ...src, _projections };
+  });
+}
+
 export const CardCompute = {
   run,
+  runSync,
   eval: evalExpr,
   resolve,
   validate: validateNode,
   enrichSources,
+  enrichSourcesSync,
 };
 
 export {

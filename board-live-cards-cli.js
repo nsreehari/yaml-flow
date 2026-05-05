@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const distCli = path.join(__dirname, 'dist', 'cli', 'board-live-cards-cli.js');
-const srcCli = path.join(__dirname, 'src', 'cli', 'board-live-cards-cli.ts');
+const distCli = path.join(__dirname, 'dist', 'cli', 'node', 'board-live-cards-cli.js');
+const srcCli = path.join(__dirname, 'src', 'cli', 'node', 'board-live-cards-cli.ts');
 const tsxCli = path.join(__dirname, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 if (fs.existsSync(distCli)) {

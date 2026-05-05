@@ -121,6 +121,7 @@
         <li><strong>Chart.js</strong> — optional; if present enables chart elements in card views; falls back to a table if absent</li>
         <li><strong>marked</strong> — optional; if present enables markdown rendering in card text elements</li>
         <li><strong>DOMPurify</strong> — optional; recommended alongside marked to sanitize rendered HTML</li>
+        <li><strong>LeaderLine</strong> — optional; if present, canvas-mode edges upgrade from basic SVG lines to smooth animated connectors with arrow plugs</li>
       </ul>
     </section>
 
@@ -143,6 +144,8 @@
 &lt;script src="bootstrap.bundle.min.js"&gt;&lt;/script&gt;
 
 &lt;!-- 2. Load browser runtime --&gt;
+&lt;!-- Optional: animated edge connectors --&gt;
+&lt;script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"&gt;&lt;/script&gt;
 &lt;script src="browser/card-compute.js"&gt;&lt;/script&gt;
 &lt;script src="browser/live-cards.js"&gt;&lt;/script&gt;
 

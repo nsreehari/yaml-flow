@@ -10,6 +10,7 @@
   "types": "./dist/index.d.ts",
   "bin": {
     "board-live-cards-cli": "./board-live-cards-cli.js",
+    "card-store": "./card-store.js",
     "step-machine-cli": "./step-machine-cli.js"
   },
   "exports": {
@@ -83,6 +84,28 @@
       "import": "./dist/runtime-artifacts/index.js",
       "require": "./dist/runtime-artifacts/index.cjs"
     },
+    "./storage-refs": {
+      "types": "./dist/storage-refs.d.ts",
+      "import": "./dist/storage-refs.js",
+      "require": "./dist/storage-refs.cjs"
+    },
+    "./execution-refs": {
+      "types": "./dist/execution-refs.d.ts",
+      "import": "./dist/execution-refs.js",
+      "require": "./dist/execution-refs.cjs"
+    },
+    "./board-live-cards-browser": {
+      "types": "./dist/cli/browser-api/board-live-cards-browser-adapter.d.ts",
+      "import": "./dist/cli/browser-api/board-live-cards-browser-adapter.js"
+    },
+    "./board-live-cards-node": {
+      "types": "./dist/cli/node/fs-board-adapter.d.ts",
+      "import": "./dist/cli/node/fs-board-adapter.js"
+    },
+    "./card-store-browser": {
+      "types": "./dist/cli/browser-api/card-store-browser-api.d.ts",
+      "import": "./dist/cli/browser-api/card-store-browser-api.js"
+    },
     "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
     "./package.json": "./package.json"
   },
@@ -91,6 +114,7 @@
   },
   "files": [
     "board-live-cards-cli.js",
+    "storage-refs.js",
     "step-machine-cli.js",
     "board-livecards-server-runtime.js",
     "dist",
@@ -101,10 +125,19 @@
   "scripts": {
     "build": "tsup",
     "build:browser": "tsup --config tsup.browser.config.ts",
+    "build:quickjs": "tsup --config tsup.quickjs.config.ts",
+    "standalone": "npm run -s test:cli-parity && npm run -s build && npm run -s build:quickjs && node scripts/build-standalone.mjs",
+    "pycli:install": "python -m pip install -r pycli/requirements.txt",
+    "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r pycli/requirements.txt",
+    "pycli:install:py312": "py -3.12 -m pip install -r pycli/requirements.txt",
+    "pycli:install:venv312": "./.venv312/Scripts/python.exe -m pip install -r pycli/requirements.txt",
     "build:example": "node demo-src/example-board/build.js",
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:cli-parity": "npm run -s build:quickjs && python scripts/cli_parity_check.py",
+    "test:cli-parity:full": "npm run -s build:quickjs && python scripts/cli_parity_check.py --include-portfolio",
+    "test:e2e": "npm run -s build:quickjs && .\\.venv312\\Scripts\\python.exe examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
     "test:example-board": "vitest run tests/examples/example-board.test.ts",
     "check:example-board": "npm run test:example-board && npm run validate:cards -- \"examples/example-board/cards/*.json\"",
     "validate:cards": "tsx scripts/validate-live-cards.ts",

@@ -424,3 +424,131 @@ describe('CardCompute.validate', () => {
     expect(r.errors.some(e => e.includes('outputFile'))).toBe(true);
   });
 });
+
+// ===========================================================================
+// CardCompute.runSync
+// ===========================================================================
+
+describe('CardCompute.runSync', () => {
+  it('returns ok:true immediately for nodes with no compute steps', () => {
+    const n = node({ x: 1 }, []);
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(result.node).toBe(n);
+  });
+
+  it('returns ok:true for undefined compute', () => {
+    const n = node({ x: 1 });
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(result.node).toBe(n);
+  });
+
+  it('evaluates simple expressions synchronously', () => {
+    const n = node(
+      { data: [{ v: 10 }, { v: 20 }, { v: 30 }] },
+      [{ bindTo: 'total', expr: '$sum(card_data.data.v)' }],
+    );
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(result.node.computed_values!['total']).toBe(60);
+  });
+
+  it('handles chained steps where later steps see earlier results', () => {
+    const n = node(
+      { items: [1, 2, 3] },
+      [
+        { bindTo: 'count', expr: '$count(card_data.items)' },
+        { bindTo: 'doubled', expr: 'computed_values.count * 2' },
+      ],
+    );
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(result.node.computed_values!['count']).toBe(3);
+    expect(result.node.computed_values!['doubled']).toBe(6);
+  });
+
+  it('uses sourcesData in fetched_sources namespace', () => {
+    const n: ComputeNode = {
+      id: 'test',
+      card_data: {},
+      compute: [{ bindTo: 'price', expr: 'fetched_sources.prices.AAPL' }],
+    };
+    const result = CardCompute.runSync(n, { sourcesData: { prices: { AAPL: 150.5 } } });
+    expect(result.ok).toBe(true);
+    expect(result.node.computed_values!['price']).toBe(150.5);
+  });
+
+  it('accesses requires namespace', () => {
+    const n = node(
+      {},
+      [{ bindTo: 'val', expr: 'requires.upstream.amount' }],
+      { upstream: { amount: 42 } },
+    );
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(result.node.computed_values!['val']).toBe(42);
+  });
+
+  it('does not throw on a bad expression; subsequent steps still run', () => {
+    const n = node(
+      { x: 10 },
+      [
+        { bindTo: 'bad', expr: '$INVALID_FN_THAT_DOES_NOT_EXIST(card_data.x)' },
+        { bindTo: 'good', expr: 'card_data.x + 1' },
+      ],
+    );
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(result.node.computed_values!['bad']).toBeUndefined();
+    expect(result.node.computed_values!['good']).toBe(11);
+  });
+
+  it('produces the same results as async run for standard expressions', async () => {
+    const compute = [
+      { bindTo: 'total', expr: '$sum(card_data.data.v)' },
+      { bindTo: 'avg', expr: '$average(card_data.data.v)' },
+      { bindTo: 'count', expr: '$count(card_data.data)' },
+    ];
+    const data = { data: [{ v: 10 }, { v: 20 }, { v: 30 }] };
+
+    const nSync = node({ ...data }, [...compute]);
+    CardCompute.runSync(nSync);
+
+    const nAsync = node({ ...data }, [...compute]);
+    await CardCompute.run(nAsync);
+
+    expect(nSync.computed_values).toEqual(nAsync.computed_values);
+  });
+
+  it('supports deep bindTo paths', () => {
+    const n = node(
+      { x: 5 },
+      [{ bindTo: 'nested.value', expr: 'card_data.x * 3' }],
+    );
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect((result.node.computed_values as any)?.nested?.value).toBe(15);
+  });
+
+  it('resolve() works after runSync for nodes without compute', () => {
+    const n: ComputeNode = {
+      id: 'test',
+      card_data: { value: 42 },
+    };
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(CardCompute.resolve(result.node, 'card_data.value')).toBe(42);
+  });
+
+  it('resolve() works with fetched_sources after runSync', () => {
+    const n: ComputeNode = {
+      id: 'test',
+      card_data: {},
+      _sourcesData: { prices: { AAPL: 150 } },
+    };
+    const result = CardCompute.runSync(n);
+    expect(result.ok).toBe(true);
+    expect(CardCompute.resolve(result.node, 'fetched_sources.prices.AAPL')).toBe(150);
+  });
+});

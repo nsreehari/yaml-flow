@@ -5,7 +5,7 @@ import {
   nextEntryAfterFetchDelivery,
   nextEntryAfterFetchFailure,
   type SourceRuntimeEntry,
-} from '../../src/cli/board-live-cards-cli.js';
+} from '../../src/cli/common/board-live-cards-lib.js';
 
 describe('board-live-cards-cli queueRequestedAt-based dispatch helpers', () => {
   it('dispatches when no entry exists', () => {

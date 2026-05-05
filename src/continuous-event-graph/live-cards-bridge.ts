@@ -76,8 +76,6 @@ export interface LiveCard {
     kind?: 'api' | 'websocket' | 'static' | 'llm';
     [key: string]: unknown;
   }[];
-  /** Custom task completion rule: when true, invokes inference adapter instead of default source-delivery gating. */
-  when_is_task_completed?: string;
   view?: Record<string, unknown>;
 }
 

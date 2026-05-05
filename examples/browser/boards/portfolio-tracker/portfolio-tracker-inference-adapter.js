@@ -1,20 +1,27 @@
 #!/usr/bin/env node
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { parseRef, blobStorageForRef } from 'yaml-flow/storage-refs';
 
 function parseArgs(argv) {
-  const inIdx = argv.indexOf('--in');
-  const outIdx = argv.indexOf('--out');
-  const errIdx = argv.indexOf('--err');
-  const inFile = inIdx !== -1 ? argv[inIdx + 1] : undefined;
-  const outFile = outIdx !== -1 ? argv[outIdx + 1] : undefined;
-  const errFile = errIdx !== -1 ? argv[errIdx + 1] : undefined;
-  if (!inFile || !outFile || !errFile) {
-    console.error('Usage: <adapter> run-inference --in <input.json> --out <output.json> --err <error.txt>');
+  const inIdx  = argv.indexOf('--in-ref');
+  const outIdx = argv.indexOf('--out-ref');
+  const errIdx = argv.indexOf('--err-ref');
+  const inRefStr  = inIdx  !== -1 ? argv[inIdx + 1]  : undefined;
+  const outRefStr = outIdx !== -1 ? argv[outIdx + 1] : undefined;
+  const errRefStr = errIdx !== -1 ? argv[errIdx + 1] : undefined;
+  if (!inRefStr || !outRefStr || !errRefStr) {
+    console.error('Usage: <adapter> run-inference --in-ref <::kind::value> --out-ref <::kind::value> --err-ref <::kind::value>');
     process.exit(1);
   }
-  return { inFile, outFile, errFile };
+  const inRef  = parseRef(inRefStr);
+  const outRef = parseRef(outRefStr);
+  const errRef = parseRef(errRefStr);
+  const inStorage  = blobStorageForRef(inRef);
+  const outStorage = blobStorageForRef(outRef);
+  const errStorage = blobStorageForRef(errRef);
+  return { inRef, outRef, errRef, inStorage, outStorage, errStorage };
 }
 
 const envBoardDir = (process.env.BOARD_DIR ?? '').trim();
@@ -144,10 +151,12 @@ async function main() {
     process.exit(1);
   }
 
-  const { inFile, outFile, errFile } = parseArgs(process.argv.slice(3));
+  const { inRef, outRef, errRef, inStorage, outStorage, errStorage } = parseArgs(process.argv.slice(3));
 
   try {
-    const payload = JSON.parse(fs.readFileSync(inFile, 'utf-8'));
+    const rawIn = inStorage.read(inRef.value);
+    if (rawIn === null) throw new Error(`Input not found: ${inRef.value}`);
+    const payload = JSON.parse(rawIn);
     const tmpCandidates = resolveSyncTmpFileCandidates(payload);
     if (tmpCandidates.length > 0) {
       await waitForTmpSyncInput(tmpCandidates);
@@ -174,12 +183,12 @@ async function main() {
       };
     }
 
-    fs.writeFileSync(outFile, JSON.stringify(result), 'utf-8');
-    fs.writeFileSync(errFile, '', 'utf-8');
+    outStorage.write(outRef.value, JSON.stringify(result));
+    errStorage.write(errRef.value, '');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    fs.writeFileSync(errFile, message, 'utf-8');
-    fs.writeFileSync(outFile, JSON.stringify({ isTaskCompleted: false, reason: message, evidence: '' }), 'utf-8');
+    errStorage.write(errRef.value, message);
+    outStorage.write(outRef.value, JSON.stringify({ isTaskCompleted: false, reason: message, evidence: '' }));
     process.exit(1);
   }
 }

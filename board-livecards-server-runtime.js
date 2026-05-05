@@ -3,7 +3,19 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import net from 'node:net';
 import { execFileSync, spawn } from 'node:child_process';
+import {
+  createBoardLiveCardsPublic,
+  createFsBoardPlatformAdapter,
+  createCardStorePublic,
+  createCardStore,
+  createArtifactsStore,
+  createChatArtifactsStore,
+  createFileArtifactsStore,
+  createCardFileMetadataStore,
+  parseRef,
+} from './dist/cli/node/fs-board-adapter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,7 +99,6 @@ export function createRuntimeRequestDispatcher(runtime) {
  * Manages multiple boards under a single DEMO_SETUP_DIR.
  * Directory layout:
  *   setupDir/
- *     boards-config.json          ← board registry
  *     board-default/              ← built-in example board
  *       runtime/                  ← board-graph.json, cards-inventory.jsonl
  *       surface/                  ← tmp-cards/
@@ -116,25 +127,34 @@ export function createMultiBoardServerRuntime(options = {}) {
   const defaultCardsDir = path.resolve(
     options.defaultCardsDir || path.join(__dirname, 'cards')
   );
-
-  const boardsConfigFile = path.join(setupDir, 'boards-config.json');
+  const configuredServerMetaStoreRef = typeof options.serverMetaStoreRef === 'string'
+    && options.serverMetaStoreRef.trim()
+    ? options.serverMetaStoreRef.trim()
+    : null;
+  const serverMetaStoreRef = configuredServerMetaStoreRef || `::fs-path::${setupDir}`;
+  const serverMetaArtifacts = createArtifactsStore(
+    createFsBoardPlatformAdapter(parseRef(serverMetaStoreRef), __dirname, { suppressSpawn: true })
+      .blobStorage('server-meta')
+  );
+  const boardsRegistryKey = 'boards-config.json';
   const boardServiceCache = new Map();
 
   fs.mkdirSync(setupDir, { recursive: true });
 
   function readBoardsConfig() {
-    if (!fs.existsSync(boardsConfigFile)) {
+    const raw = serverMetaArtifacts.getText(boardsRegistryKey);
+    if (!raw) {
       return { boards: [{ id: 'default', label: 'Default Board' }] };
     }
     try {
-      return JSON.parse(fs.readFileSync(boardsConfigFile, 'utf-8'));
+      return JSON.parse(raw);
     } catch {
       return { boards: [{ id: 'default', label: 'Default Board' }] };
     }
   }
 
   function writeBoardsConfig(config) {
-    fs.writeFileSync(boardsConfigFile, JSON.stringify(config, null, 2));
+    serverMetaArtifacts.putText(boardsRegistryKey, JSON.stringify(config, null, 2));
   }
 
   function safeBoardId(raw) {
@@ -252,12 +272,6 @@ export function createMultiBoardServerRuntime(options = {}) {
       config.boards.push(entry);
       writeBoardsConfig(config);
 
-      // Pre-create board directory tree so the board is immediately usable.
-      const boardRoot = path.join(setupDir, `board-${id}`);
-      fs.mkdirSync(path.join(boardRoot, 'runtime'), { recursive: true });
-      fs.mkdirSync(path.join(boardRoot, 'surface'), { recursive: true });
-      fs.mkdirSync(path.join(boardRoot, 'runtime-out'), { recursive: true });
-
       json(res, 200, { ok: true, board: entry });
       return true;
     }
@@ -314,6 +328,8 @@ export function createMultiBoardServerRuntime(options = {}) {
     apiBasePath,
     corsHeaders,
     setupDir,
+    serverMetaStoreRef,
+    boardsRegistryKey,
     parseUrl,
     json,
     handleBoardsRegistryApi,
@@ -377,18 +393,11 @@ export function createExampleBoardServerRuntime(options = {}) {
       : path.resolve(process.cwd(), options.defaultInferenceAdapterPath))
     : null;
 
-  const statusSnapshotFile = path.join(runtimeOutDir, 'board-livegraph-status.json');
-  const boardFile = path.join(boardDir, 'board-graph.json');
-  const inventoryFile = path.join(boardDir, 'cards-inventory.jsonl');
-
   // Board-cards: parallel runtime dirs for the board-manager board.
   const gandalfCardsDir = options.gandalfCardsDir ? path.resolve(options.gandalfCardsDir) : null;
   const gandalfRuntimeDir = path.resolve(options.gandalfRuntimeDir || path.join(path.dirname(boardDir), 'gandalf-runtime'));
   const gandalfRuntimeOutDir = path.resolve(options.gandalfRuntimeOutDir || path.join(path.dirname(boardDir), 'gandalf-runtime-out'));
   const tmpGandalfCardsDir = gandalfCardsDir;
-  const gandalfInventoryFile = path.join(gandalfRuntimeDir, 'cards-inventory.jsonl');
-  const gandalfBoardFile = path.join(gandalfRuntimeDir, 'board-graph.json');
-  const gandalfStatusSnapshotFile = path.join(gandalfRuntimeOutDir, 'board-livegraph-status.json');
 
   // Explicit gandalf-card executor paths — no fallback to regular-card paths.
   const configuredGandalfTaskExecutorPath = typeof options.gandalfTaskExecutorPath === 'string' && options.gandalfTaskExecutorPath.trim()
@@ -407,62 +416,206 @@ export function createExampleBoardServerRuntime(options = {}) {
     ? options.serverUrl.trim().replace(/\/$/, '')
     : null;
 
-  // Board-card ID cache: O(1) lookup, mtime-refreshed each SSE tick.
-  let _gandalfCardIds = new Set();
-  let _gandalfInventoryMtime = 0;
-  function _refreshGandalfCardCache() {
-    if (!fs.existsSync(gandalfInventoryFile)) { _gandalfCardIds = new Set(); return; }
-    const mtime = fs.statSync(gandalfInventoryFile).mtimeMs;
-    if (mtime === _gandalfInventoryMtime) return;
-    _gandalfInventoryMtime = mtime;
-    _gandalfCardIds = new Set(
-      fs.readFileSync(gandalfInventoryFile, 'utf-8')
-        .split('\n').filter(Boolean)
-        .map(l => { try { return JSON.parse(l).cardId; } catch { return null; } })
-        .filter(Boolean)
-    );
+  const sseClients = new Set();
+  const cardPathById = new Map();
+  const gandalfCardPathById = new Map();
+
+  function isGandalfCard(cardId) { return gandalfCardPathById.has(cardId); }
+
+  function namedPipePath(pipeName) {
+    if (process.platform === 'win32') return `\\\\.\\pipe\\${pipeName}`;
+    return path.join(os.tmpdir(), `${pipeName}.sock`);
   }
-  function isGandalfCard(cardId) { return _gandalfCardIds.has(cardId); }
 
-  function resolveCliJsPath() {
-    if (configuredBoardLiveCardsCliJs && fs.existsSync(configuredBoardLiveCardsCliJs)) return configuredBoardLiveCardsCliJs;
+  function makeNotificationState() {
+    return {
+      status: null,
+      computedValues: {},
+      dataObjects: {},
+      cards: {},
+      sockets: new Set(),
+    };
+  }
 
-    const envOverride = process.env.BOARD_LIVE_CARDS_CLI_JS;
-    if (envOverride && fs.existsSync(envOverride)) return envOverride;
+  function appendNotification(state, event) {
+    if (!event || typeof event !== 'object') return;
+    if (event.kind === 'status') state.status = event.status;
+    if (event.kind === 'computed_values' && event.cardId) state.computedValues[event.cardId] = event.values;
+    if (event.kind === 'data_object' && event.key) state.dataObjects[event.key] = event.payload;
+    if (event.kind === 'card_refreshed' && event.cardId) state.cards[event.cardId] = event.card;
+  }
 
-    const repoDevPath = path.join(path.resolve(__dirname, '../..'), 'dist', 'cli', 'board-live-cards-cli.js');
-    if (fs.existsSync(repoDevPath)) return repoDevPath;
+  function makeBoardContext(label, runtimeDir, outputsDir, cardsRootDir, taskExecutorPath, chatHandlerPath, inferenceAdapterPath) {
+    const notifyChannel = `yaml-flow-server-${label}-${boardId || 'default'}-${process.pid}`;
+    const baseRefStr = `::fs-path::${runtimeDir}`;
+    const cardStoreRef = `::fs-path::${path.join(cardsRootDir, 'cards')}`;
+    const outputsStoreRef = `::fs-path::${path.join(outputsDir, '.outputs')}`;
+    const baseRef = parseRef(baseRefStr);
+    const adapter = createFsBoardPlatformAdapter(baseRef, __dirname, {
+      onWarn: (msg) => console.warn(`[server-runtime:${label}] ${msg}`),
+      suppressSpawn: true,
+      notifyChannel,
+    });
+    const board = createBoardLiveCardsPublic(baseRef, adapter);
+    const kv = adapter.kvStorageForRef(cardStoreRef);
+    const cardAdapterObj = {
+      readIndex: () => kv.read('_index'),
+      writeIndex: (idx) => kv.write('_index', idx),
+      readCard: (id) => kv.read(id),
+      writeCard: (id, card) => { kv.write(id, card); return id; },
+      cardExists: (id) => kv.read(id) !== null,
+      defaultCardKey: (id) => id,
+    };
+    const cardStore = createCardStorePublic(createCardStore(cardAdapterObj, console.warn));
+    const artifactsRef = parseRef(`::fs-path::${cardsRootDir}`);
+    const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, __dirname, { suppressSpawn: true });
+    const filesArtifacts = createArtifactsStore(artifactsAdapter.blobStorage('files'));
+    const chatsArtifacts = createArtifactsStore(artifactsAdapter.blobStorage('chats'));
+    return {
+      label,
+      runtimeDir,
+      outputsDir,
+      cardsRootDir,
+      notifyChannel,
+      board,
+      cardStore,
+      filesArtifacts,
+      chatsArtifacts,
+      cardStoreRef,
+      outputsStoreRef,
+      taskExecutorPath,
+      chatHandlerPath,
+      inferenceAdapterPath,
+      notification: makeNotificationState(),
+      pipeServer: null,
+      initialized: false,
+      cardsBootstrapped: false,
+    };
+  }
 
-    try {
-      const pkgJsonPath = require.resolve('yaml-flow/package.json', { paths: [process.cwd(), __dirname] });
-      const pkgRoot = path.dirname(pkgJsonPath);
-      const pkgCli = path.join(pkgRoot, 'board-live-cards-cli.js');
-      if (fs.existsSync(pkgCli)) return pkgCli;
+  const baseCtx = makeBoardContext(
+    'base',
+    boardDir,
+    runtimeOutDir,
+    tmpCardsDir,
+    configuredTaskExecutorPath,
+    configuredChatHandlerPath,
+    configuredInferenceAdapterPath,
+  );
 
-      const pkgDistCli = path.join(pkgRoot, 'dist', 'cli', 'board-live-cards-cli.js');
-      if (fs.existsSync(pkgDistCli)) return pkgDistCli;
-    } catch {
-      // fall through
+  const gandalfCtx = configuredGandalfTaskExecutorPath && tmpGandalfCardsDir
+    ? makeBoardContext(
+      'gandalf',
+      gandalfRuntimeDir,
+      gandalfRuntimeOutDir,
+      tmpGandalfCardsDir,
+      configuredGandalfTaskExecutorPath,
+      configuredGandalfChatHandlerPath,
+      configuredGandalfInferenceAdapterPath,
+    )
+    : null;
+
+  function cardFilesFromDir(dirPath, outMap) {
+    outMap.clear();
+    if (!dirPath || !fs.existsSync(dirPath)) return [];
+    const out = [];
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
+      const full = path.join(dirPath, entry.name);
+      try {
+        const card = JSON.parse(fs.readFileSync(full, 'utf-8'));
+        if (!card || typeof card.id !== 'string') continue;
+        outMap.set(card.id, full);
+        out.push(card);
+      } catch {
+        // ignore malformed files
+      }
     }
-
-    return null;
+    return out;
   }
 
-  const cliJs = resolveCliJsPath();
+  function toExecutionRef(scriptPath, extraObj) {
+    if (!scriptPath) return null;
+    return {
+      howToRun: 'local-node',
+      whatToRun: `::fs-path::${scriptPath}`,
+      extra: extraObj,
+    };
+  }
 
-  if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath && fs.existsSync(configuredStepMachineCliPath)) {
-    process.env.DEMO_STEP_MACHINE_CLI_PATH = configuredStepMachineCliPath;
+  async function ensurePipeConsumer(ctx) {
+    if (!ctx || ctx.pipeServer) return;
+    const pipePath = namedPipePath(ctx.notifyChannel);
+    if (process.platform !== 'win32' && fs.existsSync(pipePath)) {
+      try { fs.rmSync(pipePath, { force: true }); } catch { /* best-effort */ }
+    }
+    const server = net.createServer((socket) => {
+      ctx.notification.sockets.add(socket);
+      socket.on('close', () => ctx.notification.sockets.delete(socket));
+      let buf = '';
+      socket.on('data', (chunk) => {
+        buf += chunk.toString('utf-8');
+        while (true) {
+          const i = buf.indexOf('\n');
+          if (i < 0) break;
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line);
+            const n = msg?.notification ?? msg;
+            appendNotification(ctx.notification, n);
+          } catch {
+            // ignore malformed lines
+          }
+        }
+        broadcastToSseClients();
+      });
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(pipePath, () => resolve());
+    });
+    ctx.pipeServer = { server, pipePath };
   }
 
   function ensureCardStorageDirs(cardId) {
     const safeCardId = String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
     const baseDir = isGandalfCard(cardId) ? tmpGandalfCardsDir : tmpCardsDir;
-    const cardDir = path.join(baseDir, safeCardId);
-    const filesDir = path.join(cardDir, 'files');
-    const chatsDir = path.join(cardDir, 'chats');
+    const filesDir = path.join(baseDir, 'files', safeCardId);
+    const chatsDir = path.join(baseDir, 'chats', safeCardId);
     fs.mkdirSync(filesDir, { recursive: true });
     fs.mkdirSync(chatsDir, { recursive: true });
-    return { filesDir, chatsDir };
+    return { filesDir, chatsDir, safeCardId };
+  }
+
+  function artifactsStores(cardId) {
+    const ctx = isGandalfCard(cardId) ? gandalfCtx : baseCtx;
+    return {
+      files: ctx ? ctx.filesArtifacts : null,
+      chats: ctx ? ctx.chatsArtifacts : null,
+    };
+  }
+
+  function chatArtifactsForCard(cardId) {
+    const stores = artifactsStores(cardId);
+    if (!stores.chats) return null;
+    return createChatArtifactsStore(stores.chats, { indexFileName: '.index.json' });
+  }
+
+  function fileArtifactsForCard(cardId) {
+    const stores = artifactsStores(cardId);
+    if (!stores.files) return null;
+    return createFileArtifactsStore(stores.files);
+  }
+
+  function cardFileMetadataStore() {
+    return createCardFileMetadataStore();
+  }
+
+  function parseLeadingSerial(fileName) {
+    const m = String(fileName || '').match(/^(\d+)[-_]/);
+    return m ? parseInt(m[1], 10) : 0;
   }
 
   function normalizeDisplayFileName(name) {
@@ -472,77 +625,12 @@ export function createExampleBoardServerRuntime(options = {}) {
     return base || 'upload.bin';
   }
 
-  function normalizeStem(rawStem) {
-    const normalized = String(rawStem || '')
-      .toLowerCase()
-      .replace(/\s+/g, '_')
-      .replace(/[^a-z0-9_-]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_+|_+$/g, '');
-    return normalized || 'file';
-  }
-
-  function normalizeExt(rawExt) {
-    if (!rawExt || rawExt === '.') return '';
-    const extBody = String(rawExt).replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return extBody ? `.${extBody}` : '';
-  }
-
-  function parseLeadingSerial(fileName) {
-    const m = String(fileName || '').match(/^(\d+)[-_]/);
-    return m ? parseInt(m[1], 10) : 0;
-  }
-
-  function nextSerialFromNames(names) {
-    let maxSeen = 0;
-    for (const name of names) {
-      const n = parseLeadingSerial(name);
-      if (Number.isFinite(n) && n > maxSeen) maxSeen = n;
-    }
-    return maxSeen + 1;
-  }
-
-  function buildStoredFileName(displayName, serial) {
-    const base = normalizeDisplayFileName(displayName);
-    const ext = normalizeExt(path.extname(base));
-    const stemRaw = ext ? base.slice(0, -path.extname(base).length) : base;
-    const stemNorm = normalizeStem(stemRaw);
-    const prefix = `${String(serial).padStart(3, '0')}-`;
-
-    let keepExt = ext;
-    let stemBudget = MAX_STORED_FILE_NAME_LEN - prefix.length - keepExt.length;
-    if (stemBudget < 1) {
-      keepExt = '';
-      stemBudget = MAX_STORED_FILE_NAME_LEN - prefix.length;
-    }
-
-    const stem = stemNorm.slice(0, Math.max(1, stemBudget));
-    let out = `${prefix}${stem}${keepExt}`;
-    if (out.length > MAX_STORED_FILE_NAME_LEN) {
-      out = out.slice(0, MAX_STORED_FILE_NAME_LEN).replace(/\.$/, '');
-    }
-    return out;
-  }
-
   function shellQuote(s) {
     return '"' + String(s).replace(/"/g, '\\"') + '"';
   }
 
-  function ensureBuilt() {
-    if (!cliJs || !fs.existsSync(cliJs)) {
-      throw new Error(
-        'Unable to locate board-live-cards CLI. Set boardLiveCardsCliJs option, BOARD_LIVE_CARDS_CLI_JS, or install yaml-flow in this project.'
-      );
-    }
-  }
-
-  function runCli(args) {
-    ensureBuilt();
-    return execFileSync(process.execPath, [cliJs, ...args], {
-      cwd: process.cwd(),
-      stdio: 'pipe',
-      encoding: 'utf-8',
-    });
+  function runCli(_args) {
+    throw new Error('CLI path is no longer used by server runtime. Use board public APIs.');
   }
 
   function clearDirContents(dirPath) {
@@ -559,78 +647,97 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readInventory() {
-    if (!fs.existsSync(inventoryFile)) return [];
-    return fs
-      .readFileSync(inventoryFile, 'utf-8')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
+    return [...cardPathById.entries()].map(([cardId, cardFilePath]) => ({ cardId, cardFilePath }));
   }
 
   function readGandalfInventory() {
-    if (!fs.existsSync(gandalfInventoryFile)) return [];
-    return fs
-      .readFileSync(gandalfInventoryFile, 'utf-8')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
+    return [...gandalfCardPathById.entries()].map(([cardId, cardFilePath]) => ({ cardId, cardFilePath }));
   }
 
   function readStatusSnapshot() {
-    const base = fs.existsSync(statusSnapshotFile) ? readJson(statusSnapshotFile) : null;
-    const boardSnap = fs.existsSync(gandalfStatusSnapshotFile) ? readJson(gandalfStatusSnapshotFile) : null;
-    if (!base && !boardSnap) return null;
-    if (!boardSnap) return base;
-    if (!base) return boardSnap;
-    return { ...base, tasks: { ...(base.tasks || {}), ...(boardSnap.tasks || {}) } };
+    const base = baseCtx.notification.status;
+    const side = gandalfCtx ? gandalfCtx.notification.status : null;
+    if (!base && !side) return null;
+    if (!side) return base;
+    if (!base) return side;
+
+    const baseCards = Array.isArray(base.cards) ? base.cards : [];
+    const sideCards = Array.isArray(side.cards) ? side.cards : [];
+    const mergedCards = [...baseCards, ...sideCards];
+
+    const sum = (obj, k) => Number(obj?.summary?.[k] || 0);
+    return {
+      ...base,
+      cards: mergedCards,
+      summary: {
+        ...(base.summary || {}),
+        card_count: mergedCards.length,
+        completed: sum(base, 'completed') + sum(side, 'completed'),
+        eligible: sum(base, 'eligible') + sum(side, 'eligible'),
+        pending: sum(base, 'pending') + sum(side, 'pending'),
+        blocked: sum(base, 'blocked') + sum(side, 'blocked'),
+        unresolved: sum(base, 'unresolved') + sum(side, 'unresolved'),
+        failed: sum(base, 'failed') + sum(side, 'failed'),
+        in_progress: sum(base, 'in_progress') + sum(side, 'in_progress'),
+        orphan_cards: sum(base, 'orphan_cards') + sum(side, 'orphan_cards'),
+      },
+    };
   }
 
   function readCardDefinitions() {
-    function readFromInventory(invFile) {
-      if (!fs.existsSync(invFile)) return [];
-      const inv = fs.readFileSync(invFile, 'utf-8').split('\n').map(l => l.trim()).filter(Boolean).map(l => JSON.parse(l));
-      const out = [];
-      for (const entry of inv) {
-        if (!entry || !entry.cardId || !entry.cardFilePath) continue;
-        if (!fs.existsSync(entry.cardFilePath)) continue;
-        out.push(readJson(entry.cardFilePath));
+    const fromCtx = (ctx, fallbackDir, fallbackMap) => {
+      if (!ctx || !ctx.cardStore) return cardFilesFromDir(fallbackDir, fallbackMap);
+      const result = ctx.cardStore.get({});
+      if (result.status !== 'success' || !Array.isArray(result.data?.cards)) {
+        return cardFilesFromDir(fallbackDir, fallbackMap);
       }
-      return out;
-    }
-    return [...readFromInventory(inventoryFile), ...readFromInventory(gandalfInventoryFile)];
+      return result.data.cards;
+    };
+
+    const base = fromCtx(baseCtx, tmpCardsDir, cardPathById);
+    const side = gandalfCtx ? fromCtx(gandalfCtx, tmpGandalfCardsDir, gandalfCardPathById) : [];
+    return [...base, ...side];
   }
 
   function readCardRuntimeArtifacts() {
-    function readFromDir(dir) {
-      const cardsOutDir = path.join(dir, 'cards');
-      if (!fs.existsSync(cardsOutDir)) return {};
-      const out = {};
-      for (const entry of fs.readdirSync(cardsOutDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.computed.json')) continue;
-        const cardId = entry.name.slice(0, -'.computed.json'.length);
-        out[cardId] = readJson(path.join(cardsOutDir, entry.name));
-      }
-      return out;
+    const out = {};
+    for (const [cardId, values] of Object.entries(baseCtx.notification.computedValues)) {
+      const card = baseCtx.notification.cards[cardId];
+      out[cardId] = {
+        schema_version: 'v1',
+        card_id: cardId,
+        card_data: card?.card_data ?? {},
+        computed_values: values ?? {},
+        fetched_sources: {},
+        requires: {},
+      };
     }
-    return { ...readFromDir(runtimeOutDir), ...readFromDir(gandalfRuntimeOutDir) };
+    if (gandalfCtx) {
+      for (const [cardId, values] of Object.entries(gandalfCtx.notification.computedValues)) {
+        const card = gandalfCtx.notification.cards[cardId];
+        out[cardId] = {
+          schema_version: 'v1',
+          card_id: cardId,
+          card_data: card?.card_data ?? {},
+          computed_values: values ?? {},
+          fetched_sources: {},
+          requires: {},
+        };
+      }
+    }
+    return out;
   }
 
   function readSourcePayloads(cardDefinition) {
     const out = {};
     if (!cardDefinition || !Array.isArray(cardDefinition.source_defs)) return out;
 
+    const ctx = isGandalfCard(cardDefinition.id) ? gandalfCtx : baseCtx;
+    const dataObjects = ctx ? ctx.notification.dataObjects : {};
     for (const sourceDef of cardDefinition.source_defs) {
-      if (!sourceDef || !sourceDef.bindTo || !sourceDef.outputFile) continue;
-      const filePath = path.join(boardDir, cardDefinition.id, sourceDef.outputFile);
-      if (!fs.existsSync(filePath)) continue;
-
-      const raw = fs.readFileSync(filePath, 'utf-8').trim();
-      try {
-        out[sourceDef.bindTo] = JSON.parse(raw);
-      } catch {
-        out[sourceDef.bindTo] = raw;
+      if (!sourceDef || !sourceDef.bindTo) continue;
+      if (Object.prototype.hasOwnProperty.call(dataObjects, sourceDef.bindTo)) {
+        out[sourceDef.bindTo] = dataObjects[sourceDef.bindTo];
       }
     }
 
@@ -638,48 +745,17 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readDataObjectsByToken() {
-    const dirPath = path.join(runtimeOutDir, 'data-objects');
-    if (!fs.existsSync(dirPath)) return {};
-
-    const out = {};
-    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const token = entry.name;
-      const filePath = path.join(dirPath, entry.name);
-      try {
-        out[token] = readJson(filePath);
-      } catch {
-        // Ignore malformed token files and continue.
-      }
-    }
-
-    return out;
+    return {
+      ...(baseCtx.notification.dataObjects || {}),
+      ...(gandalfCtx ? gandalfCtx.notification.dataObjects : {}),
+    };
   }
 
   function readChatSignal(cardId) {
-    const baseDir = isGandalfCard(cardId) ? tmpGandalfCardsDir : tmpCardsDir;
-    const chatsDir = path.join(baseDir, cardId, 'chats');
-    if (!fs.existsSync(chatsDir)) {
-      return { count: 0, latest_mtime_ms: 0, processing: false };
-    }
-
-    let count = 0;
-    let latestMtimeMs = 0;
-    let processing = false;
-    for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (entry.name === '.processing') { processing = true; continue; }
-      count += 1;
-      try {
-        const st = fs.statSync(path.join(chatsDir, entry.name));
-        const mtimeMs = Number(st.mtimeMs || 0);
-        if (mtimeMs > latestMtimeMs) latestMtimeMs = mtimeMs;
-      } catch {
-        // Ignore transient file stat/read errors.
-      }
-    }
-
-    return { count, latest_mtime_ms: latestMtimeMs, processing };
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const chatStore = chatArtifactsForCard(cardId);
+    if (!chatStore) return { count: 0, latest_mtime_ms: 0, processing: false };
+    return chatStore.readSignal(safeCardId);
   }
 
   function buildPublishedRuntimePayload() {
@@ -773,192 +849,115 @@ export function createExampleBoardServerRuntime(options = {}) {
     return resolved;
   }
 
-  function resolveGandalfTaskExecutorPath() {
-    if (!configuredGandalfTaskExecutorPath) return null;
-    if (!fs.existsSync(configuredGandalfTaskExecutorPath)) {
-      const err = new Error(`Gandalf task executor script not found: ${configuredGandalfTaskExecutorPath}`);
-      err.statusCode = 400;
-      throw err;
-    }
-    return configuredGandalfTaskExecutorPath;
-  }
+  async function initContext(ctx, taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
+    if (!ctx) return;
+    if (ctx.initialized) return;
 
-  function resolveGandalfChatHandlerPath() {
-    if (!configuredGandalfChatHandlerPath) return null;
-    if (!fs.existsSync(configuredGandalfChatHandlerPath)) {
-      const err = new Error(`Gandalf chat handler script not found: ${configuredGandalfChatHandlerPath}`);
-      err.statusCode = 400;
-      throw err;
-    }
-    return configuredGandalfChatHandlerPath;
-  }
-
-  function resolveGandalfInferenceAdapterPath() {
-    if (!configuredGandalfInferenceAdapterPath) return null;
-    if (!fs.existsSync(configuredGandalfInferenceAdapterPath)) {
-      const err = new Error(`Gandalf inference adapter script not found: ${configuredGandalfInferenceAdapterPath}`);
-      err.statusCode = 400;
-      throw err;
-    }
-    return configuredGandalfInferenceAdapterPath;
-  }
-
-  function initGandalfCards() {
-    const taskExecutorPath = resolveGandalfTaskExecutorPath();
-    if (!taskExecutorPath) return; // gandalf-cards not configured; skip.
-    fs.mkdirSync(gandalfRuntimeDir, { recursive: true });
-    const chatHandlerPath = resolveGandalfChatHandlerPath();
-    const inferenceAdapterPath = resolveGandalfInferenceAdapterPath();
-    const taskExecutorCmd = `${shellQuote(process.execPath)} ${shellQuote(taskExecutorPath)}`;
-    const chatHandlerCmd = chatHandlerPath ? `${shellQuote(process.execPath)} ${shellQuote(chatHandlerPath)}` : null;
-    const inferenceAdapterCmd = inferenceAdapterPath ? `${shellQuote(process.execPath)} ${shellQuote(inferenceAdapterPath)}` : null;
+    const te = resolveTaskExecutorPath(taskExecutorPathParam || ctx.taskExecutorPath);
+    const ch = resolveChatHandlerPath(chatHandlerPathParam || ctx.chatHandlerPath);
+    const ia = resolveInferenceAdapterPath(inferenceAdapterPathParam || ctx.inferenceAdapterPath);
     const boardSetupRoot = path.dirname(boardDir);
-    const taskExecutorExtra = JSON.stringify({
+    const extra = {
       boardSetupRoot,
       boardId,
-      boardRuntimeDir:  path.relative(boardSetupRoot, gandalfRuntimeDir),
-      runtimeStatusDir: path.relative(boardSetupRoot, gandalfRuntimeOutDir),
-      cardsDir:         path.relative(boardSetupRoot, tmpGandalfCardsDir),
-      ...(serverUrl ? { serverUrl } : {}),
-    });
-    const initArgs = ['init', gandalfRuntimeDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
-    if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
-    if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
-    initArgs.push('--runtime-out', gandalfRuntimeOutDir);
-    try {
-      runCli(initArgs);
-    } catch (err) {
-      const msg = String((err && err.message) || err);
-      if (!msg.includes('no valid board-graph.json')) throw err;
-      clearDirContents(gandalfRuntimeDir);
-      fs.mkdirSync(gandalfRuntimeDir, { recursive: true });
-      runCli(initArgs);
-    }
-  }
-
-  function initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
-    fs.mkdirSync(boardDir, { recursive: true });
-
-    const taskExecutorPath = resolveTaskExecutorPath(taskExecutorPathParam);
-    const chatHandlerPath = resolveChatHandlerPath(chatHandlerPathParam);
-    const inferenceAdapterPath = resolveInferenceAdapterPath(inferenceAdapterPathParam);
-    const taskExecutorCmd = `${shellQuote(process.execPath)} ${shellQuote(taskExecutorPath)}`;
-    const chatHandlerCmd = chatHandlerPath
-      ? `${shellQuote(process.execPath)} ${shellQuote(chatHandlerPath)}`
-      : null;
-    const inferenceAdapterCmd = inferenceAdapterPath
-      ? `${shellQuote(process.execPath)} ${shellQuote(inferenceAdapterPath)}`
-      : null;
-
-    const boardSetupRoot = path.dirname(boardDir);
-    const taskExecutorExtra = JSON.stringify({
-      boardSetupRoot,
-      boardId,
-      boardRuntimeDir:  path.relative(boardSetupRoot, boardDir),
-      runtimeStatusDir: path.relative(boardSetupRoot, runtimeOutDir),
-      cardsDir:         path.relative(boardSetupRoot, tmpCardsDir),
-      ...(serverUrl ? { serverUrl } : {}),
-    });
-
-    const initArgs = ['init', boardDir, '--task-executor', taskExecutorCmd, '--task-executor-extra', taskExecutorExtra];
-    if (chatHandlerCmd) initArgs.push('--chat-handler', chatHandlerCmd);
-    if (inferenceAdapterCmd) initArgs.push('--inference-adapter', inferenceAdapterCmd);
-    initArgs.push('--runtime-out', runtimeOutDir);
-
-    try {
-      runCli(initArgs);
-    } catch (err) {
-      const msg = String((err && err.message) || err);
-      if (!msg.includes('no valid board-graph.json')) throw err;
-
-      clearDirContents(boardDir);
-      fs.mkdirSync(boardDir, { recursive: true });
-      runCli(initArgs);
-    }
-  }
-
-  function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
-    if (!fs.existsSync(boardFile)) {
-      initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
-    }
-
-    const expectedCardsRoot = path.resolve(tmpCardsDir);
-    const hasStaleMapping = readInventory().some((entry) => {
-      if (!entry || !entry.cardFilePath) return false;
-      const mapped = path.resolve(entry.cardFilePath);
-      return !mapped.startsWith(expectedCardsRoot + path.sep) && mapped !== expectedCardsRoot;
-    });
-
-    if (hasStaleMapping) {
-      clearDirContents(boardDir);
-      initBoard(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
-    }
-
-    // Always refresh the extra in .task-executor so serverUrl and other runtime fields stay current
-    // even when initBoard is skipped (board already initialized from a previous run).
-    refreshTaskExecutorExtra(boardDir, {
-      boardSetupRoot: path.dirname(boardDir),
-      boardId,
-      boardRuntimeDir:  path.relative(path.dirname(boardDir), boardDir),
-      runtimeStatusDir: path.relative(path.dirname(boardDir), runtimeOutDir),
-      cardsDir:         path.relative(path.dirname(boardDir), tmpCardsDir),
+      boardRuntimeDir: path.relative(boardSetupRoot, ctx.runtimeDir),
+      runtimeStatusDir: path.relative(boardSetupRoot, ctx.outputsDir),
+      cardsDir: path.relative(boardSetupRoot, ctx.cardsRootDir),
       ...(serverUrl ? { serverUrl } : {}),
       ...(configuredBoardLiveCardsCliJs ? { boardLiveCardsCliJs: configuredBoardLiveCardsCliJs } : {}),
       ...(configuredStepMachineCliPath ? { stepMachineCliPath: configuredStepMachineCliPath } : {}),
-    });
+    };
 
-    // Board-cards runtime: init if configured but not yet initialized.
-    if (resolveGandalfTaskExecutorPath() && !fs.existsSync(gandalfBoardFile)) {
-      initGandalfCards();
+    const params = {
+      cardStoreRef: ctx.cardStoreRef,
+      outputsStoreRef: ctx.outputsStoreRef,
+    };
+    const body = {};
+    body['task-executor-ref'] = toExecutionRef(te, extra);
+    if (ch) body['chat-handler-ref'] = toExecutionRef(ch, extra);
+    if (ia) body['inference-adapter-ref'] = toExecutionRef(ia, extra);
+
+    const initResult = ctx.board.init({ params, body });
+    if (initResult.status !== 'success') {
+      const err = new Error(initResult.error || `init failed for ${ctx.label}`);
+      err.statusCode = 500;
+      throw err;
+    }
+    await ensurePipeConsumer(ctx);
+    ctx.initialized = true;
+  }
+
+  async function upsertCardsFromDir(ctx, outMap) {
+    if (!ctx) return;
+    if (ctx.cardsBootstrapped) return;
+    const cards = cardFilesFromDir(ctx.cardsRootDir, outMap);
+    for (const card of cards) {
+      const setResult = ctx.cardStore.set({ body: card });
+      if (setResult.status !== 'success') continue;
+      ctx.board.upsertCard({ params: { cardId: card.id, restart: true } });
+    }
+    await ctx.board.processAccumulatedEvents({});
+    ctx.cardsBootstrapped = true;
+  }
+
+  async function initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam) {
+    await initContext(baseCtx, taskExecutorPathParam, chatHandlerPathParam, inferenceAdapterPathParam);
+    if (gandalfCtx && gandalfCtx.taskExecutorPath) {
+      await initContext(gandalfCtx, gandalfCtx.taskExecutorPath, gandalfCtx.chatHandlerPath, gandalfCtx.inferenceAdapterPath);
     }
   }
 
-  function bootstrapGandalfCards() {
-    if (!fs.existsSync(tmpGandalfCardsDir)) return;
-    if (!fs.existsSync(gandalfBoardFile)) return; // runtime not initialized; initBoardAndSetup handles it
-    const jsonFiles = (fs.readdirSync(tmpGandalfCardsDir)).filter(f => f.endsWith('.json'));
-    if (!jsonFiles.length) return;
-    runCli(['upsert-card', '--rg', gandalfRuntimeDir, '--card-glob', path.join(tmpGandalfCardsDir, '*.json')]);
-    _refreshGandalfCardCache();
+  async function bootstrapBoard() {
+    await initBoardAndSetup();
+    await upsertCardsFromDir(baseCtx, cardPathById);
+    if (gandalfCtx) await upsertCardsFromDir(gandalfCtx, gandalfCardPathById);
   }
 
-  function bootstrapCards() {
-    runCli(['upsert-card', '--rg', boardDir, '--card-glob', path.join(tmpCardsDir, '*.json')]);
+  function cardContextForCard(cardId) {
+    return isGandalfCard(cardId) ? gandalfCtx : baseCtx;
   }
 
-  function bootstrapBoard() {
-    initBoardAndSetup();
-    bootstrapCards();
-    bootstrapGandalfCards();
-  }
-
-  function findCardPath(cardId) {
-    if (isGandalfCard(cardId)) {
-      const found = readGandalfInventory().find((e) => e.cardId === cardId);
-      return found ? found.cardFilePath : null;
-    }
-    const inv = readInventory();
-    const found = inv.find((e) => e.cardId === cardId);
-    return found ? found.cardFilePath : null;
+  function readCardFromStore(cardId) {
+    const ctx = cardContextForCard(cardId);
+    if (!ctx) return null;
+    const result = ctx.cardStore.get({ params: { id: cardId } });
+    if (result.status !== 'success') return null;
+    const cards = Array.isArray(result.data?.cards) ? result.data.cards : [];
+    return cards.length > 0 ? cards[0] : null;
   }
 
   function mutateCard(cardId, updateFn, opts) {
     const options = opts && typeof opts === 'object' ? opts : {};
     const syncBoard = options.syncBoard !== false;
-    const cardPath = findCardPath(cardId);
-    if (!cardPath || !fs.existsSync(cardPath)) {
+    const ctx = cardContextForCard(cardId);
+    if (!ctx) {
       const err = new Error(`Card not found: ${cardId}`);
       err.statusCode = 404;
       throw err;
     }
 
-    const card = readJson(cardPath);
+    const card = readCardFromStore(cardId);
+    if (!card || typeof card !== 'object') {
+      const err = new Error(`Card not found: ${cardId}`);
+      err.statusCode = 404;
+      throw err;
+    }
+
     const nextCard = updateFn(card) || card;
-    fs.writeFileSync(cardPath, JSON.stringify(nextCard, null, 2));
+    const setResult = ctx.cardStore.set({ body: nextCard });
+    if (setResult.status !== 'success') {
+      const err = new Error(setResult.error || `Failed to persist card: ${cardId}`);
+      err.statusCode = 500;
+      throw err;
+    }
 
     if (syncBoard) {
-      const rg = isGandalfCard(cardId) ? gandalfRuntimeDir : boardDir;
-      runCli(['upsert-card', '--rg', rg, '--card', cardPath, '--restart']);
+      const upsertResult = ctx.board.upsertCard({ params: { cardId, restart: true } });
+      if (upsertResult.status !== 'success') {
+        const err = new Error(upsertResult.error || `Failed to upsert card: ${cardId}`);
+        err.statusCode = 500;
+        throw err;
+      }
     }
   }
 
@@ -1028,52 +1027,39 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function clearChatRecords(cardId) {
-    const { chatsDir } = ensureCardStorageDirs(cardId);
-    clearDirContents(chatsDir);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const chatStore = chatArtifactsForCard(cardId);
+    if (!chatStore) return;
+    chatStore.clear(safeCardId);
   }
 
-  function nextFileSerial(cardId) {
+  function readCardStoredFileNames(cardId) {
     const names = [];
-
     try {
-      const cardPath = findCardPath(cardId);
-      if (cardPath && fs.existsSync(cardPath)) {
-        const card = readJson(cardPath);
-        const files = card && card.card_data && Array.isArray(card.card_data.files) ? card.card_data.files : [];
-        for (const entry of files) {
-          if (entry && typeof entry.stored_name === 'string') names.push(entry.stored_name);
-        }
-      }
+      const card = readCardFromStore(cardId);
+      if (!card) return names;
+      const metadata = cardFileMetadataStore().read(card && card.card_data ? card.card_data : null);
+      for (const entry of metadata) names.push(entry.stored_name);
     } catch {
-      // ignore malformed card file and fall back to dir scan
+      // ignore malformed card file
     }
-
-    const { filesDir } = ensureCardStorageDirs(cardId);
-    if (fs.existsSync(filesDir)) {
-      for (const entry of fs.readdirSync(filesDir, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        names.push(entry.name);
-      }
-    }
-
-    return nextSerialFromNames(names);
+    return names;
   }
 
   function nextChatStoredName(cardId, role) {
-    const { chatsDir } = ensureCardStorageDirs(cardId);
-    const names = fs.existsSync(chatsDir)
-      ? fs.readdirSync(chatsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)
-      : [];
-    const serial = nextSerialFromNames(names);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const chatStore = chatArtifactsForCard(cardId);
+    const serial = chatStore ? chatStore.nextSerial(safeCardId) : 1;
     const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
     return `${String(serial).padStart(3, '0')}_${safeRole}.txt`;
   }
 
   function writeChatRecord(cardId, role, text, files) {
     const now = new Date().toISOString();
-    const { chatsDir } = ensureCardStorageDirs(cardId);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
     const outName = nextChatStoredName(cardId, role || 'system');
-    const outPath = path.join(chatsDir, outName);
+    const artifactKey = `${safeCardId}/${outName}`;
 
     const lines = [];
     const msg = typeof text === 'string' ? text.trim() : '';
@@ -1091,7 +1077,18 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
     }
 
-    fs.writeFileSync(outPath, `${lines.join('\n')}\n`, 'utf-8');
+    if (stores.chats) stores.chats.putText(artifactKey, `${lines.join('\n')}\n`);
+    const serial = parseLeadingSerial(outName);
+    const chatStore = chatArtifactsForCard(cardId);
+    if (chatStore) {
+      chatStore.appendIndexRecord(safeCardId, {
+        serial,
+        role: role || 'system',
+        stored_name: outName,
+        path: `${cardId}/chats/${outName}`,
+        updated_at: now,
+      });
+    }
     return {
       at: now,
       role: role || 'system',
@@ -1102,47 +1099,30 @@ export function createExampleBoardServerRuntime(options = {}) {
   }
 
   function readChatRecords(cardId) {
-    const { chatsDir } = ensureCardStorageDirs(cardId);
-    if (!fs.existsSync(chatsDir)) return [];
-
-    const out = [];
-    for (const entry of fs.readdirSync(chatsDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const name = entry.name;
-      const parsed = String(name).match(/^(\d+)[-_]([a-z0-9_-]+)\.txt$/i);
-      if (!parsed) continue; // skip .processing and other non-chat files
-      const serial = parseInt(parsed[1], 10);
-      const role = parsed[2].toLowerCase();
-      const filePath = path.join(chatsDir, name);
-      const text = fs.readFileSync(filePath, 'utf-8');
-      const stat = fs.statSync(filePath);
-      out.push({
-        serial,
-        role,
-        text,
-        path: `${cardId}/chats/${name}`,
-        stored_name: name,
-        updated_at: new Date(stat.mtimeMs).toISOString(),
-      });
-    }
-
-    out.sort((a, b) => a.serial - b.serial || a.stored_name.localeCompare(b.stored_name));
-    return out;
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const chatStore = chatArtifactsForCard(cardId);
+    if (!chatStore) return [];
+    return chatStore.readRecords(safeCardId).map((row) => ({
+      ...row,
+      path: `${cardId}/chats/${row.stored_name}`,
+    }));
   }
 
   function persistUploadedFile(cardId, requestedName, contentType, buffer) {
-    const { filesDir } = ensureCardStorageDirs(cardId);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
     const displayName = normalizeDisplayFileName(requestedName);
+    const fileStore = fileArtifactsForCard(cardId);
+    const storedName = fileStore
+      ? fileStore.allocateStoredName(safeCardId, displayName, {
+        seedNames: readCardStoredFileNames(cardId),
+        maxLen: MAX_STORED_FILE_NAME_LEN,
+      })
+      : `${String(Date.now())}-${displayName}`;
 
-    let serial = nextFileSerial(cardId);
-    let storedName = buildStoredFileName(displayName, serial);
-    while (fs.existsSync(path.join(filesDir, storedName))) {
-      serial += 1;
-      storedName = buildStoredFileName(displayName, serial);
+    if (stores.files) {
+      stores.files.putBytes(`${safeCardId}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
     }
-
-    const targetPath = path.join(filesDir, storedName);
-    fs.writeFileSync(targetPath, buffer);
 
     return {
       name: displayName,
@@ -1163,6 +1143,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   //   runtimeStatusDir    — relative: 'runtime-out'
   //   cardsDir            — relative: 'surface/tmp-cards' (or 'surface/tmp-gandalf-cards')
   //   chatDir             — relative (from cardsDir): e.g. 'card-portfolio/chats'
+  //   chatProcessingMarkerKey — relative marker key in chats artifacts store, e.g. 'card-portfolio/.processing'
   //   lastChatFile        — filename of the just-written user message, e.g. '001_user.txt'
   //   boardLiveCardsCliJs — absolute path to board-live-cards-cli.js (if configured)
   //   stepMachineCliPath  — absolute path to step-machine-cli.js (if configured)
@@ -1175,14 +1156,25 @@ export function createExampleBoardServerRuntime(options = {}) {
     const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
     if (!handlerCmd) return;
     const boardSetupRoot = path.dirname(boardDir);
+    const { safeCardId } = ensureCardStorageDirs(cardId);
+    const stores = artifactsStores(cardId);
+    const processingMarkerKey = `${safeCardId}/.processing`;
     const processingFile = path.join(chatsDir, '.processing');
-    try { fs.mkdirSync(chatsDir, { recursive: true }); fs.writeFileSync(processingFile, '', 'utf-8'); } catch {}
+    try {
+      if (stores.chats) {
+        stores.chats.putText(processingMarkerKey, '', 'text/plain; charset=utf-8');
+      } else {
+        fs.mkdirSync(chatsDir, { recursive: true });
+        fs.writeFileSync(processingFile, '', 'utf-8');
+      }
+    } catch {}
     const extra = Buffer.from(JSON.stringify({
       boardSetupRoot,
       boardRuntimeDir:  path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeDir : boardDir),
       runtimeStatusDir: path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeOutDir : runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, isGandalf ? tmpGandalfCardsDir : tmpCardsDir),
       chatDir:          chatsDir,
+      chatProcessingMarkerKey: processingMarkerKey,
       lastChatFile,
       ...(serverUrl ? { serverUrl } : {}),
       ...(configuredBoardLiveCardsCliJs ? { boardLiveCardsCliJs: configuredBoardLiveCardsCliJs } : {}),
@@ -1192,7 +1184,6 @@ export function createExampleBoardServerRuntime(options = {}) {
       const proc = spawn(handlerCmd, [
         '--boardId', boardId, '--cardId', String(cardId),
         '--extraEncJson', extra,
-        '--cleanOnExit', processingFile,
       ], {
         shell: true,
         stdio: 'ignore',
@@ -1200,7 +1191,13 @@ export function createExampleBoardServerRuntime(options = {}) {
       proc.unref();
       console.log(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
     } catch (err) {
-      try { fs.unlinkSync(processingFile); } catch {}
+      try {
+        if (stores.chats) {
+          stores.chats.remove(processingMarkerKey);
+        } else {
+          fs.unlinkSync(processingFile);
+        }
+      } catch {}
       console.warn(`[chat-handler] spawn failed for card "${cardId}":`, (err && err.message) || String(err));
     }
   }
@@ -1252,32 +1249,10 @@ export function createExampleBoardServerRuntime(options = {}) {
       }
 
       if (actionType === 'file-upload') {
-        const files = Array.isArray(payload && payload.files)
-          ? payload.files
-              .map((f) => {
-                if (!f || typeof f !== 'object') return null;
-                if (typeof f.stored_name !== 'string') return null;
-                return {
-                  name: typeof f.name === 'string' ? f.name : f.stored_name,
-                  stored_name: f.stored_name,
-                  size: f.size || null,
-                  mime_type: f.mime_type || null,
-                  path: f.path || null,
-                  uploaded_at: f.uploaded_at || now,
-                };
-              })
-              .filter(Boolean)
-          : [];
+        const files = cardFileMetadataStore().normalizeIncoming(payload && payload.files, now);
 
         if (files.length > 0) {
-          const existing = Array.isArray(cardData.files) ? cardData.files.slice() : [];
-          const known = new Set(existing.map((f) => (f && f.stored_name ? f.stored_name : '')));
-          for (const f of files) {
-            if (known.has(f.stored_name)) continue;
-            existing.push(f);
-            known.add(f.stored_name);
-          }
-          cardData.files = existing;
+          cardFileMetadataStore().merge(cardData, files);
         }
 
         return card;
@@ -1323,6 +1298,18 @@ export function createExampleBoardServerRuntime(options = {}) {
     return Buffer.concat(chunks);
   }
 
+  function broadcastToSseClients() {
+    const payload = buildPublishedRuntimePayload();
+    const data = `data: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) {
+      try {
+        client.write(data);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }
+
   function handleSse(req, res) {
     res.writeHead(200, {
       ...corsHeaders,
@@ -1331,45 +1318,16 @@ export function createExampleBoardServerRuntime(options = {}) {
       Connection: 'keep-alive',
     });
 
-    const stablePayloadString = (payload) =>
-      JSON.stringify(payload, (key, value) => {
-        if (key === 'status_age_ms') return undefined;
-        return value;
-      });
+    sseClients.add(res);
+    res.write(`data: ${JSON.stringify(buildPublishedRuntimePayload())}\n\n`);
 
-    let lastPublishedHash = '';
-
-    const emitCards = (payload) => {
-      res.write(`data: ${JSON.stringify(payload)}\n\n`);
-    };
-
-    const initialPayload = buildPublishedRuntimePayload();
-    lastPublishedHash = stablePayloadString(initialPayload);
-    emitCards(initialPayload);
-
-    const poll = setInterval(() => {
-      try {
-        runCli(['process-accumulated-events', '--rg', boardDir]);
-        if (fs.existsSync(gandalfBoardFile)) {
-          runCli(['process-accumulated-events', '--rg', gandalfRuntimeDir]);
-        }
-        _refreshGandalfCardCache();
-
-        const nextPayload = buildPublishedRuntimePayload();
-        const nextHash = stablePayloadString(nextPayload);
-        if (nextHash !== lastPublishedHash) {
-          lastPublishedHash = nextHash;
-          emitCards(nextPayload);
-        } else {
-          res.write(': keepalive\n\n');
-        }
-      } catch (err) {
-        res.write(`data: ${JSON.stringify({ error: String((err && err.message) || err) })}\n\n`);
-      }
-    }, 800);
+    const keepAlive = setInterval(() => {
+      try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
+    }, 15_000);
 
     req.on('close', () => {
-      clearInterval(poll);
+      clearInterval(keepAlive);
+      sseClients.delete(res);
       res.end();
     });
   }
@@ -1387,25 +1345,25 @@ export function createExampleBoardServerRuntime(options = {}) {
       if (method === 'GET' && p === `${apiBasePath}/init-board`) {
         const taskExecutorPathParam = url.searchParams.get('taskExecutorPath') || '';
         const chatHandlerPathParam = url.searchParams.get('chatHandlerPath') || '';
-        initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam);
+        await initBoardAndSetup(taskExecutorPathParam, chatHandlerPathParam);
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }
 
       if (method === 'GET' && p === `${apiBasePath}/bootstrap-cards`) {
-        bootstrapCards();
+        await bootstrapBoard();
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }
 
       if (method === 'GET' && p === `${apiBasePath}/bootstrap`) {
-        bootstrapBoard();
+        await bootstrapBoard();
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }
 
       if (method === 'GET' && p === `${apiBasePath}/sse`) {
-        bootstrapBoard();
+        await bootstrapBoard();
         handleSse(req, res);
         return true;
       }
@@ -1417,27 +1375,29 @@ export function createExampleBoardServerRuntime(options = {}) {
 
       const cardMatch = p.match(new RegExp(`^${apiBasePath}/cards/([^/]+)$`));
       if (method === 'PATCH' && cardMatch) {
-        bootstrapBoard();
+        await bootstrapBoard();
         const cardId = decodeURIComponent(cardMatch[1]);
         const body = await readJsonBody(req);
         patchCard(cardId, body);
+        broadcastToSseClients();
         json(res, 200, { ok: true });
         return true;
       }
 
       const cardActionMatch = p.match(new RegExp(`^${apiBasePath}/cards/([^/]+)/actions$`));
       if (method === 'POST' && cardActionMatch) {
-        bootstrapBoard();
+        await bootstrapBoard();
         const cardId = decodeURIComponent(cardActionMatch[1]);
         const body = await readJsonBody(req);
         applyCardAction(cardId, body && body.actionType, body && body.payload);
+        broadcastToSseClients();
         json(res, 200, { ok: true });
         return true;
       }
 
       const cardChatsMatch = p.match(new RegExp(`^${apiBasePath}/cards/([^/]+)/chats$`));
       if (method === 'GET' && cardChatsMatch) {
-        bootstrapBoard();
+        await bootstrapBoard();
         const cardId = decodeURIComponent(cardChatsMatch[1]);
         json(res, 200, { ok: true, messages: readChatRecords(cardId) });
         return true;
@@ -1445,7 +1405,7 @@ export function createExampleBoardServerRuntime(options = {}) {
 
       const cardFileMatch = p.match(new RegExp(`^${apiBasePath}/cards/([^/]+)/files$`));
       if (method === 'POST' && cardFileMatch) {
-        bootstrapBoard();
+        await bootstrapBoard();
         const cardId = decodeURIComponent(cardFileMatch[1]);
         const inChat = String(url.searchParams.get('inChat') || '').toLowerCase() === 'true';
         const encodedName = req.headers['x-file-name'];
@@ -1464,23 +1424,20 @@ export function createExampleBoardServerRuntime(options = {}) {
             const now = new Date().toISOString();
             const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data : {};
             card.card_data = cardData;
-            const existing = Array.isArray(cardData.files) ? cardData.files.slice() : [];
-            const known = new Set(existing.map((f) => (f && f.stored_name ? f.stored_name : '')));
-            if (!known.has(file.stored_name)) {
-              existing.push({
-                name: typeof file.name === 'string' ? file.name : file.stored_name,
-                stored_name: file.stored_name,
-                size: file.size || null,
-                mime_type: file.mime_type || null,
-                path: file.path || null,
-                uploaded_at: file.uploaded_at || now,
-              });
-              cardData.files = existing;
-            }
+            const incoming = cardFileMetadataStore().normalizeIncoming([{
+              name: file.name,
+              stored_name: file.stored_name,
+              size: file.size,
+              mime_type: file.mime_type,
+              path: file.path,
+              uploaded_at: file.uploaded_at || now,
+            }], now);
+            cardFileMetadataStore().merge(cardData, incoming);
             return card;
           });
           writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
         }
+        broadcastToSseClients();
         json(res, 200, { ok: true, file });
         return true;
       }
@@ -1491,53 +1448,35 @@ export function createExampleBoardServerRuntime(options = {}) {
         const idx = parseInt(cardFileDownloadMatch[2], 10);
         const expectedStoredName = url.searchParams.get('sn');
 
-        const cardPath = findCardPath(cardId);
-        if (!cardPath || !fs.existsSync(cardPath)) {
+        const card = readCardFromStore(cardId);
+        if (!card || typeof card !== 'object') {
           json(res, 404, { error: 'Card not found' });
           return true;
         }
 
-        let card;
-        try {
-          card = readJson(cardPath);
-        } catch {
-          json(res, 404, { error: 'Card not found' });
-          return true;
-        }
-
-        const files = card.card_data && Array.isArray(card.card_data.files) ? card.card_data.files : [];
-        if (idx < 0 || idx >= files.length) {
-          json(res, 404, { error: 'File not found' });
-          return true;
-        }
-
-        const fileRecord = files[idx];
-        if (!fileRecord || !fileRecord.stored_name) {
-          json(res, 404, { error: 'File not found' });
-          return true;
-        }
-        if (expectedStoredName && expectedStoredName !== fileRecord.stored_name) {
+        const resolved = cardFileMetadataStore().resolve(card.card_data, idx, expectedStoredName);
+        if (!resolved.ok && resolved.reason === 'stale_reference') {
           json(res, 409, { error: 'File reference is stale. Refresh and try again.' });
           return true;
         }
-
-        const { filesDir } = ensureCardStorageDirs(cardId);
-        const filePath = path.join(filesDir, fileRecord.stored_name);
-
-        const realPath = path.resolve(filePath);
-        const realFilesDir = path.resolve(filesDir);
-        if (!realPath.startsWith(realFilesDir)) {
-          json(res, 403, { error: 'Forbidden' });
-          return true;
-        }
-
-        if (!fs.existsSync(filePath)) {
+        if (!resolved.ok) {
           json(res, 404, { error: 'File not found' });
           return true;
         }
 
-        const buffer = fs.readFileSync(filePath);
-        const filename = fileRecord.name || path.basename(filePath);
+        const fileRecord = resolved.file;
+
+        const { safeCardId } = ensureCardStorageDirs(cardId);
+        const stores = artifactsStores(cardId);
+        const fileKey = `${safeCardId}/${fileRecord.stored_name}`;
+        const bytes = stores.files ? stores.files.getBytes(fileKey) : null;
+        if (!bytes) {
+          json(res, 404, { error: 'File not found' });
+          return true;
+        }
+
+        const buffer = Buffer.from(bytes);
+        const filename = fileRecord.name || fileRecord.stored_name;
         const mimeType = fileRecord.mime_type || 'application/octet-stream';
         res.writeHead(200, {
           'Content-Type': mimeType,

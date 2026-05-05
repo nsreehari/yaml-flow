@@ -1,174 +1,416 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nsreehari.github.io/boards/live-cards.schema.json",
-
   "definitions": {
-
     "bind_ref": {
       "description": "A card data path reference, e.g. 'card_data.raw_quotes' or 'requires.upstream'",
       "type": "string",
       "pattern": "^(card_data|requires|fetched_sources|computed_values)(\\.|$)"
     },
-
     "bind_or_literal": {
       "description": "A literal value or a bind reference object",
       "oneOf": [
-        { "type": "string" },
-        { "type": "number" },
-        { "type": "boolean" },
-        { "type": "array" },
-        { "type": "object",
-          "properties": { "bind": { "$ref": "#/definitions/bind_ref" } },
-          "required": ["bind"]
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bind": {
+              "$ref": "#/definitions/bind_ref"
+            }
+          },
+          "required": [
+            "bind"
+          ]
         }
       ]
     },
-
     "compute_expr": {
       "description": "A declarative JSON compute expression",
       "type": "object",
-      "required": ["fn"],
+      "required": [
+        "fn"
+      ],
       "properties": {
         "fn": {
           "type": "string",
           "description": "Function name from the built-in vocabulary",
           "enum": [
-            "sum", "avg", "min", "max", "count", "first", "last",
-            "add", "sub", "mul", "div", "round", "abs", "mod",
-            "gt", "gte", "lt", "lte", "eq", "neq",
-            "if", "and", "or", "not",
-            "concat", "upper", "lower", "template",
-            "filter", "pluck", "map", "sort", "slice", "flat", "unique", "group",
-            "get", "default",
-            "now", "diff_days", "format_date"
+            "sum",
+            "avg",
+            "min",
+            "max",
+            "count",
+            "first",
+            "last",
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "round",
+            "abs",
+            "mod",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "eq",
+            "neq",
+            "if",
+            "and",
+            "or",
+            "not",
+            "concat",
+            "upper",
+            "lower",
+            "template",
+            "filter",
+            "pluck",
+            "map",
+            "sort",
+            "slice",
+            "flat",
+            "unique",
+            "group",
+            "get",
+            "default",
+            "now",
+            "diff_days",
+            "format_date"
           ]
         },
         "input": {
           "description": "card_data.path, literal, array of inputs, or nested compute_expr",
           "oneOf": [
-            { "type": "string" },
-            { "type": "number" },
-            { "type": "boolean" },
-            { "type": "array" },
-            { "$ref": "#/definitions/compute_expr" }
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array"
+            },
+            {
+              "$ref": "#/definitions/compute_expr"
+            }
           ]
         },
-        "field": { "type": "string", "description": "For pluck/sum/group — the object key to extract" },
-        "where": { "$ref": "#/definitions/compute_expr", "description": "For filter — predicate expression ($ = current item)" },
-        "cond":  { "$ref": "#/definitions/compute_expr", "description": "For if — condition expression" },
-        "then":  { "description": "For if — value when cond is truthy" },
-        "else":  { "description": "For if — value when cond is falsy" },
-        "format": { "type": "string", "description": "For format_date — date format string" }
+        "field": {
+          "type": "string",
+          "description": "For pluck/sum/group — the object key to extract"
+        },
+        "where": {
+          "$ref": "#/definitions/compute_expr",
+          "description": "For filter — predicate expression ($ = current item)"
+        },
+        "cond": {
+          "$ref": "#/definitions/compute_expr",
+          "description": "For if — condition expression"
+        },
+        "then": {
+          "description": "For if — value when cond is truthy"
+        },
+        "else": {
+          "description": "For if — value when cond is falsy"
+        },
+        "format": {
+          "type": "string",
+          "description": "For format_date — date format string"
+        }
       }
     },
-
     "meta": {
       "type": "object",
       "properties": {
-        "title": { "type": "string" },
-        "tags":  { "type": "array", "items": { "type": "string" } }
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
-
     "requires": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "IDs of upstream nodes this node depends on"
     },
-
     "provides": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["bindTo", "ref"],
+        "required": [
+          "bindTo",
+          "ref"
+        ],
         "properties": {
-          "bindTo": { "type": "string", "description": "Token name published downstream" },
-          "ref":    { "type": "string", "description": "Path to read value from (card_data.*, requires.*, fetched_sources.*, computed_values.*)" }
+          "bindTo": {
+            "type": "string",
+            "description": "Token name published downstream"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Path to read value from (card_data.*, requires.*, fetched_sources.*, computed_values.*)"
+          }
         }
       },
       "description": "Explicit bindings exposing computed or card_data values downstream as named tokens"
     },
-
     "compute_step": {
       "description": "A single ordered compute step: reads card_data.*/requires.*/computed_values.*, writes to computed_values[bindTo]",
       "type": "object",
-      "required": ["bindTo", "expr"],
+      "required": [
+        "bindTo",
+        "expr"
+      ],
       "properties": {
-        "bindTo": { "type": "string", "description": "Key in computed_values to write result" },
-        "expr":   { "type": "string", "description": "JSONata expression evaluated against { card_data, requires, fetched_sources, computed_values }" }
+        "bindTo": {
+          "type": "string",
+          "description": "Key in computed_values to write result"
+        },
+        "expr": {
+          "type": "string",
+          "description": "JSONata expression evaluated against { card_data, requires, fetched_sources, computed_values }"
+        }
       }
     },
-
     "source_def": {
       "description": "One source entry. The engine requires 'bindTo' (compute namespace key) and 'outputFile' (delivery signal path). bindTo and outputFile must be unique across all source_defs in a card. Every other property is yours — add whatever your task-executor needs: kind, url, headers, mailbox, channel, model, query, etc. The full object is passed verbatim as the --in JSON to the executor.",
       "type": "object",
-      "required": ["bindTo", "outputFile"],
+      "required": [
+        "bindTo",
+        "outputFile"
+      ],
       "additionalProperties": true,
       "properties": {
-        "bindTo":     { "type": "string",  "description": "Key under fetched_sources.* available in compute expressions" },
-        "outputFile": { "type": "string",  "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery." },
+        "bindTo": {
+          "type": "string",
+          "description": "Key under fetched_sources.* available in compute expressions"
+        },
+        "outputFile": {
+          "type": "string",
+          "description": "Board-relative path the executor writes its JSON result to. Presence of this file signals delivery."
+        },
         "projections": {
           "type": "object",
           "description": "Named data projections from card_data or requires, evaluated before the executor is called. Each key is a ref name; each value is a JSONata expression rooted at card_data or requires. The resolved values are passed to the executor as _projections. fetched_sources, computed_values, and source_defs are not accessible here — sources run before those exist.",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
-        "optionalForCompletionGating":   { "type": "boolean", "default": false, "description": "When true this source does not gate card completion. Default false when absent, so source_defs are completion-gating by default." },
-        "timeout":    { "type": "integer", "minimum": 0, "default": 120000, "description": "Executor/script timeout in ms. Default: 120 000 (2 min)." },
-        "script":     { "type": "string",  "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result." }
+        "optionalForCompletionGating": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true this source does not gate card completion. Default false when absent, so source_defs are completion-gating by default."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 120000,
+          "description": "Executor/script timeout in ms. Default: 120 000 (2 min)."
+        },
+        "script": {
+          "type": "string",
+          "description": "Legacy direct-run: shell command executed when no .task-executor is registered. stdout is captured as the result."
+        }
       }
     },
-
     "render_element": {
       "type": "object",
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
-        "id":        { "type": "string", "description": "Optional element ID for targeted updates" },
-        "kind":      {
-          "enum": ["metric", "table", "editable-table", "chart", "form", "filter", "list",
-                   "notes", "todo", "alert", "narrative", "badge", "text",
-                   "markdown", "ref", "custom", "actions"]
+        "id": {
+          "type": "string",
+          "description": "Optional element ID for targeted updates"
         },
-        "label":     { "type": "string", "description": "Heading above this element" },
-        "className": { "type": "string", "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'" },
-        "visible":   { "type": "string", "description": "card_data/requires/fetched_sources/computed_values path — element shown only if truthy" },
+        "kind": {
+          "enum": [
+            "metric",
+            "table",
+            "editable-table",
+            "chart",
+            "form",
+            "filter",
+            "list",
+            "notes",
+            "todo",
+            "alert",
+            "narrative",
+            "badge",
+            "text",
+            "markdown",
+            "ref",
+            "custom",
+            "actions"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "description": "Heading above this element"
+        },
+        "className": {
+          "type": "string",
+          "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'"
+        },
+        "visible": {
+          "type": "string",
+          "description": "card_data/requires/fetched_sources/computed_values path — element shown only if truthy"
+        },
         "data": {
           "type": "object",
           "properties": {
-            "bind":        { "$ref": "#/definitions/bind_ref", "description": "card_data/requires/fetched_sources/computed_values path to read data from" },
-            "writeTo":     { "$ref": "#/definitions/bind_ref", "description": "card_data path for user input (form, filter, todo, notes)" },
-            "columns":     { "type": "array", "items": { "type": "string" }, "description": "table: visible columns" },
-            "maxRows":     { "type": "integer", "description": "table/list: max rows to display" },
-            "sortable":    { "type": "boolean", "default": true, "description": "table: enable click-to-sort" },
-            "placeholder": { "type": "string", "description": "Empty-state message" },
-            "chartType":   { "enum": ["bar", "line", "pie", "doughnut"] },
-            "chartOptions": { "type": "object", "description": "Chart.js options passthrough" },
-            "fields":      { "type": "object", "description": "JSON Schema for form/filter fields" },
-            "thresholds":  {
+            "bind": {
+              "$ref": "#/definitions/bind_ref",
+              "description": "card_data/requires/fetched_sources/computed_values path to read data from"
+            },
+            "writeTo": {
+              "$ref": "#/definitions/bind_ref",
+              "description": "card_data path for user input (form, filter, todo, notes)"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "table: visible columns"
+            },
+            "maxRows": {
+              "type": "integer",
+              "description": "table/list: max rows to display"
+            },
+            "sortable": {
+              "type": "boolean",
+              "default": true,
+              "description": "table: enable click-to-sort"
+            },
+            "placeholder": {
+              "type": "string",
+              "description": "Empty-state message"
+            },
+            "chartType": {
+              "enum": [
+                "bar",
+                "line",
+                "pie",
+                "doughnut"
+              ]
+            },
+            "chartOptions": {
+              "type": "object",
+              "description": "Chart.js options passthrough"
+            },
+            "fields": {
+              "type": "object",
+              "description": "JSON Schema for form/filter fields"
+            },
+            "thresholds": {
               "type": "object",
               "properties": {
-                "green": { "type": "string" },
-                "amber": { "type": "string" }
+                "green": {
+                  "type": "string"
+                },
+                "amber": {
+                  "type": "string"
+                }
               }
             },
-            "colorMap": { "type": "object", "description": "badge: value → Bootstrap color" },
-            "style":    { "enum": ["heading", "muted", "default"], "description": "text: display style" },
-            "upload":   { "type": "boolean", "default": true, "description": "file-upload: show drop zone (false = read-only file list)" },
-            "accept":   { "type": "array", "items": { "type": "string" }, "description": "file-upload: allowed extensions" },
-            "multiple": { "type": "boolean", "default": true, "description": "file-upload: allow multiple files" },
-            "fileAttach": { "type": "boolean", "default": false, "description": "chat: enable inline file attachments" },
-            "fileAccept": { "type": "array", "items": { "type": "string" }, "description": "chat: allowed attachment extensions" },
-            "buttons":  {
+            "colorMap": {
+              "type": "object",
+              "description": "badge: value → Bootstrap color"
+            },
+            "style": {
+              "enum": [
+                "heading",
+                "muted",
+                "default"
+              ],
+              "description": "text: display style"
+            },
+            "upload": {
+              "type": "boolean",
+              "default": true,
+              "description": "file-upload: show drop zone (false = read-only file list)"
+            },
+            "accept": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "file-upload: allowed extensions"
+            },
+            "multiple": {
+              "type": "boolean",
+              "default": true,
+              "description": "file-upload: allow multiple files"
+            },
+            "fileAttach": {
+              "type": "boolean",
+              "default": false,
+              "description": "chat: enable inline file attachments"
+            },
+            "fileAccept": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "chat: allowed attachment extensions"
+            },
+            "buttons": {
               "type": "array",
               "description": "actions: button definitions",
               "items": {
                 "type": "object",
-                "required": ["id", "label"],
+                "required": [
+                  "id",
+                  "label"
+                ],
                 "properties": {
-                  "id":       { "type": "string" },
-                  "label":    { "type": "string" },
-                  "style":    { "type": "string", "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'" },
-                  "size":     { "type": "string", "default": "sm" },
-                  "disabled": { "oneOf": [{ "type": "boolean" }, { "type": "string", "description": "card_data/requires/fetched_sources/computed_values path — truthy = disabled" }] }
+                  "id": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "style": {
+                    "type": "string",
+                    "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'"
+                  },
+                  "size": {
+                    "type": "string",
+                    "default": "sm"
+                  },
+                  "disabled": {
+                    "oneOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "string",
+                        "description": "card_data/requires/fetched_sources/computed_values path — truthy = disabled"
+                      }
+                    ]
+                  }
                 }
               }
             }
@@ -176,15 +418,18 @@
         }
       }
     },
-
     "view": {
       "type": "object",
-      "required": ["elements"],
+      "required": [
+        "elements"
+      ],
       "properties": {
         "elements": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/definitions/render_element" }
+          "items": {
+            "$ref": "#/definitions/render_element"
+          }
         },
         "layout": {
           "type": "object",
@@ -192,17 +437,31 @@
             "board": {
               "type": "object",
               "properties": {
-                "col":   { "type": "integer", "minimum": 1, "maximum": 12 },
-                "order": { "type": "integer" }
+                "col": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 12
+                },
+                "order": {
+                  "type": "integer"
+                }
               }
             },
             "canvas": {
               "type": "object",
               "properties": {
-                "x": { "type": "number" },
-                "y": { "type": "number" },
-                "w": { "type": "number" },
-                "h": { "type": "number" }
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                },
+                "w": {
+                  "type": "number"
+                },
+                "h": {
+                  "type": "number"
+                }
               }
             }
           }
@@ -210,26 +469,46 @@
         "features": {
           "type": "object",
           "properties": {
-            "chat":    { "type": "boolean", "default": false },
-            "notes":   { "type": "boolean", "default": false },
-            "refresh": { "type": "boolean", "default": true }
+            "chat": {
+              "type": "boolean",
+              "default": false
+            },
+            "notes": {
+              "type": "boolean",
+              "default": false
+            },
+            "refresh": {
+              "type": "boolean",
+              "default": true
+            }
           }
         }
       }
     }
   },
-
   "title": "LiveCard",
   "description": "A unified card node. Behavior depends on which sections are present (source_defs, compute, view, etc.)",
   "type": "object",
-  "required": ["id"],
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
   "properties": {
-    "id":       { "type": "string" },
-    "requires": { "$ref": "#/definitions/requires" },
-    "provides": { "$ref": "#/definitions/provides" },
-    "meta":     { "$ref": "#/definitions/meta" },
-    "view":     { "$ref": "#/definitions/view" },
+    "id": {
+      "type": "string"
+    },
+    "requires": {
+      "$ref": "#/definitions/requires"
+    },
+    "provides": {
+      "$ref": "#/definitions/provides"
+    },
+    "meta": {
+      "$ref": "#/definitions/meta"
+    },
+    "view": {
+      "$ref": "#/definitions/view"
+    },
     "card_data": {
       "type": "object",
       "description": "Authored card data and runtime metadata. Includes uploaded-file metadata maintained by host handlers and inference evaluation results.",
@@ -239,9 +518,15 @@
           "description": "Optional uploaded-file metadata maintained by host handlers. Stored name is normalized and serial-prefixed (for example 001-my_file.pdf).",
           "items": {
             "type": "object",
-            "required": ["name", "stored_name"],
+            "required": [
+              "name",
+              "stored_name"
+            ],
             "properties": {
-              "name": { "type": "string", "minLength": 1 },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
               "stored_name": {
                 "type": "string",
                 "minLength": 5,
@@ -250,28 +535,29 @@
               },
               "size": {
                 "oneOf": [
-                  { "type": "integer", "minimum": 0 },
-                  { "type": "null" }
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
-              "mime_type": { "type": "string" },
-              "path": { "type": "string", "pattern": "^[^\\s]+/files/[0-9]{3,}-[a-z0-9._-]+$" },
-              "uploaded_at": { "type": "string", "format": "date-time" }
+              "mime_type": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[^\\s]+/files/[0-9]{3,}-[a-z0-9._-]+$"
+              },
+              "uploaded_at": {
+                "type": "string",
+                "format": "date-time"
+              }
             },
             "additionalProperties": false
           }
-        },
-        "llm_task_completion_inference": {
-          "type": "object",
-          "description": "Runtime state written by the inference adapter (advanced/undocumented). Prefer the standard source_defs → compute → provides pattern for LLM-based signals.",
-          "properties": {
-            "inferenceRequested": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request was initiated" },
-            "inferenceCompletedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the latest inference request completed" },
-            "isTaskCompleted": { "type": "boolean", "description": "Whether the task is considered complete by the adapter" },
-            "reasoning": { "type": "string", "description": "Explanation of completion decision" },
-            "evidence": { "type": "array", "description": "Supporting evidence from source_defs/compute" }
-          },
-          "additionalProperties": true
         }
       },
       "additionalProperties": true
@@ -279,16 +565,16 @@
     "source_defs": {
       "type": "array",
       "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Sources gate completion by default. Set optionalForCompletionGating: true for enrichment-only source_defs that should not block task-completed.",
-      "items": { "$ref": "#/definitions/source_def" }
+      "items": {
+        "$ref": "#/definitions/source_def"
+      }
     },
     "compute": {
       "type": "array",
       "description": "Ordered array of compute steps. Each reads card_data.*/requires.*/fetched_sources.*/computed_values.* and writes to ephemeral computed_values[bindTo].",
-      "items": { "$ref": "#/definitions/compute_step" }
-    },
-    "when_is_task_completed": {
-      "type": "string",
-      "description": "Advanced/undocumented: invokes a registered inference adapter instead of the default source-delivery completion gate. Prefer the standard pattern: use an LLM-backed source, compute a verdict token, and publish it via provides."
+      "items": {
+        "$ref": "#/definitions/compute_step"
+      }
     }
   }
 }

@@ -1,19 +1,58 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { cli, loadBoard } from '../../src/cli/board-live-cards-cli.js';
-import type { BoardLiveCard } from '../../src/cli/board-live-cards-cli.js';
+import {
+  createBoardLiveCardsPublic,
+} from '../../src/cli/common/board-live-cards-public.js';
+import {
+  createFsBoardPlatformAdapter,
+} from '../../src/cli/node/fs-board-adapter.js';
+import {
+  createStateSnapshotStore,
+  snapshotEntriesToBoardEnvelope,
+  BOARD_GRAPH_KEY,
+  createCardStore,
+} from '../../src/cli/common/board-live-cards-lib.js';
+import type { BoardLiveCard } from '../../src/cli/common/board-live-cards-lib.js';
+import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
+import { createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
+import { restore } from '../../src/continuous-event-graph/index.js';
 
-process.env.BOARD_LIVE_CARDS_NO_SPAWN = '1';
 
+
+const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
+const cardStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.cards');
+const outputsStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.output');
 const ticks = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-async function pollBoard(dir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
+const cliDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
+
+function board(dir: string) {
+  const br = ref(dir);
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {}, suppressSpawn: true }));
+}
+
+const snapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
+
+function loadBoard(baseRef: { kind: string; value: string }) {
+  const snap = snapshotStore.readSnapshot(baseRef.value);
+  if (!snap.values[BOARD_GRAPH_KEY]) throw new Error(`Missing board state at: ${baseRef.value}`);
+  return restore(snapshotEntriesToBoardEnvelope(snap.values).graph);
+}
+
+function writeCardToStore(boardDir: string, card: { id: string } & Record<string, unknown>): void {
+  const result = createCardStorePublic(
+    createCardStore(createFsCardStorageAdapter(path.join(boardDir, '.cards'))),
+  ).set({ body: card });
+  if (result.status !== 'success') throw new Error(`writeCardToStore failed: ${result.error}`);
+}
+
+async function pollBoard(boardDir: string, pred: (tasks: Record<string, unknown>) => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const live = loadBoard(dir);
+    const live = loadBoard(ref(boardDir));
     if (pred(live.config.tasks as Record<string, unknown>)) return;
     await ticks(100);
   }
@@ -42,12 +81,10 @@ describe('board-live-cards CLI persistence', () => {
     tmpDir = '';
   });
 
-  it('writes provided token payloads to runtime-out/data-objects', async () => {
+  it('writes provided token payloads to .output/data-objects/', async () => {
     const dir = path.join(freshDir(), 'board');
-    const runtimeOutDir = path.join(tmpDir, 'runtime-out');
-    cli(['init', dir, '--runtime-out', runtimeOutDir]);
+    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
 
-    const cardFile = path.join(tmpDir, 'orders-source.json');
     const card: BoardLiveCard = {
       id: 'orders-source',
       provides: [
@@ -62,16 +99,15 @@ describe('board-live-cards CLI persistence', () => {
         metadata: { source: 'test-suite', version: 1 },
       },
     };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
+    writeCardToStore(dir, card);
 
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
-    logSpy.mockRestore();
+    board(dir).upsertCard({ params: { cardId: 'orders-source' } });
 
     await pollBoard(dir, (tasks) => !!tasks['orders-source']);
 
-    const ordersFile = path.join(runtimeOutDir, 'data-objects', 'orders');
-    const metadataFile = path.join(runtimeOutDir, 'data-objects', 'metadata');
+    const dataObjectsDir = path.join(dir, '.output', 'data-objects');
+    const ordersFile = path.join(dataObjectsDir, 'orders.json');
+    const metadataFile = path.join(dataObjectsDir, 'metadata.json');
     await pollForFile(ordersFile);
     await pollForFile(metadataFile);
 
@@ -79,12 +115,10 @@ describe('board-live-cards CLI persistence', () => {
     expect(JSON.parse(fs.readFileSync(metadataFile, 'utf-8'))).toEqual(card.card_data?.metadata);
   });
 
-  it('writes computed_values snapshots even when the card has no provides', async () => {
+  it('writes computed_values snapshots to .output/cards/<cardId>/computed_values.json', async () => {
     const dir = path.join(freshDir(), 'board');
-    const runtimeOutDir = path.join(tmpDir, 'runtime-out');
-    cli(['init', dir, '--runtime-out', runtimeOutDir]);
+    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
 
-    const cardFile = path.join(tmpDir, 'totals.json');
     const card: BoardLiveCard = {
       id: 'totals-card',
       card_data: {
@@ -95,24 +129,18 @@ describe('board-live-cards CLI persistence', () => {
         { bindTo: 'count', expr: '$count(card_data.items)' },
       ],
     };
-    fs.writeFileSync(cardFile, JSON.stringify(card));
+    writeCardToStore(dir, card);
 
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cli(['upsert-card', '--rg', dir, '--card', cardFile]);
-    logSpy.mockRestore();
+    board(dir).upsertCard({ params: { cardId: 'totals-card' } });
 
     await pollBoard(dir, (tasks) => !!tasks['totals-card']);
 
-    const computedFile = path.join(runtimeOutDir, 'cards', 'totals-card.computed.json');
+    const computedFile = path.join(dir, '.output', 'cards', 'totals-card', 'computed_values.json');
     await pollForFile(computedFile);
 
     expect(JSON.parse(fs.readFileSync(computedFile, 'utf-8'))).toEqual({
-      schema_version: 'v1',
-      card_id: 'totals-card',
-      computed_values: {
-        total: 50,
-        count: 3,
-      },
+      total: 50,
+      count: 3,
     });
   });
 });
