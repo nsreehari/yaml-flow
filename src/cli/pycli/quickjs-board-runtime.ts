@@ -29,7 +29,9 @@ type BoardInvokePayload = {
     | 'getCardStoreRef'
     | 'getOutputsStoreRef'
     | 'getOutputsDataObject'
+    | 'getAllOutputsDataObjects'
     | 'getOutputsComputedValues'
+    | 'getAllOutputsComputedValues'
     | 'removeCard'
     | 'retrigger'
     | 'processAccumulatedEvents'
@@ -182,8 +184,12 @@ async function invoke(payload: BoardInvokePayload): Promise<CommandResult | stri
       return board.getOutputsStoreRef(input);
     case 'getOutputsDataObject':
       return board.getOutputsDataObject(input);
+    case 'getAllOutputsDataObjects':
+      return board.getAllOutputsDataObjects(input);
     case 'getOutputsComputedValues':
       return board.getOutputsComputedValues(input);
+    case 'getAllOutputsComputedValues':
+      return board.getAllOutputsComputedValues(input);
     case 'removeCard':
       return board.removeCard(input);
     case 'retrigger':
