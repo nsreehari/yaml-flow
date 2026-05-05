@@ -136,6 +136,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:cli-parity": "npm run -s build:quickjs && python scripts/cli_parity_check.py",
+    "test:cli-parity:full": "npm run -s build:quickjs && python scripts/cli_parity_check.py --include-portfolio",
     "test:e2e": "npm run -s build:quickjs && .\\.venv312\\Scripts\\python.exe examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
     "test:example-board": "vitest run tests/examples/example-board.test.ts",
     "check:example-board": "npm run test:example-board && npm run validate:cards -- \"examples/example-board/cards/*.json\"",

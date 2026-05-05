@@ -607,9 +607,10 @@ export function createBoardLiveCardsPublic(
       const continuation = () => {
         const envelope = loadEnvelope();
         const { events } = journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
-        if (events.length > 0) {
-          void drain();
+        if (events.length <= 0) {
+          return;
         }
+        void drain();
         // Also fire the platform continuation (e.g. detached process for source fetches)
         adapter.requestProcessAccumulated?.();
       };

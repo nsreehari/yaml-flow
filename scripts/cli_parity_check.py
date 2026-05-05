@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import json
 import os
 import re
@@ -403,6 +404,14 @@ def run_portfolio_tracker_dual_mode_parity(repo_root: Path, py_for_board: str) -
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--include-portfolio",
+        action="store_true",
+        help="Run heavy portfolio dual-mode parity in addition to CLI parity checks",
+    )
+    args = parser.parse_args()
+
     repo_root = Path(__file__).resolve().parents[1]
 
     node = shutil.which("node")
@@ -417,7 +426,7 @@ def main() -> int:
 
     board_bundle = repo_root / "dist" / "pycli" / "quickjs-board-runtime.global.js"
     board_py = _pick_board_python(repo_root, py)
-    include_portfolio = os.environ.get("CLI_PARITY_INCLUDE_PORTFOLIO", "1") != "0"
+    include_portfolio = args.include_portfolio or (os.environ.get("CLI_PARITY_INCLUDE_PORTFOLIO", "0") != "0")
 
     try:
         run_card_store_parity(repo_root, node, py)
