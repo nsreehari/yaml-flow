@@ -107,6 +107,11 @@ var LiveCard = (function () {
       .lc-token-gem-requires.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); }
       .lc-token-gem-provides { background:var(--bs-secondary,#6c757d); border:1.5px solid var(--bs-secondary,#6c757d); }
       .lc-token-gem-provides.lc-token-available { background:var(--bs-success,#198754); border-color:var(--bs-success,#198754); }
+      .lc-running { animation:lc-running-pulse 2s ease-in-out infinite; position:relative; }
+      .lc-running::before { content:''; position:absolute; inset:-2px; border-radius:inherit; background:linear-gradient(90deg,transparent,rgba(13,110,253,.45),rgba(102,16,242,.4),rgba(13,110,253,.45),transparent); background-size:300% 100%; animation:lc-running-shimmer 2s linear infinite; z-index:-1; pointer-events:none; }
+      @keyframes lc-running-pulse { 0%,100%{ box-shadow:0 0 4px rgba(13,110,253,.15); } 50%{ box-shadow:0 0 14px 3px rgba(13,110,253,.35); } }
+      @keyframes lc-running-shimmer { 0%{ background-position:100% 0; } 100%{ background-position:-100% 0; } }
+      .lc-running .card-header { border-bottom-color:rgba(13,110,253,.35); }
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
@@ -2655,8 +2660,9 @@ var LiveCard = (function () {
       const card = node && node.card ? node.card : {};
       const isSimulation = card.meta && card.meta.simulation === true;
       const isGandalfCard  = card.meta && card.meta._gandalfCard === true;
+      const isRunning     = node && node.runtime_state && node.runtime_state.task_status === 'running';
       const extraClass   = isSimulation ? ' lc-simulation-card' : (isGandalfCard ? ' lc-gandalf-card' : '');
-      wrap.className = 'card shadow-sm h-100' + extraClass;
+      wrap.className = 'card shadow-sm h-100' + extraClass + (isRunning ? ' lc-running' : '');
       const header = document.createElement('div');
       header.className = 'card-header d-flex align-items-center gap-2 py-2';
       const title = (card.meta && card.meta.title) || node.id;
