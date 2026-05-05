@@ -32,7 +32,10 @@
  *     "boardId":          "<board id>",        // e.g. "default"
  *     "boardRuntimeDir":  "<relative>",        // e.g. "runtime"
  *     "runtimeStatusDir": "<relative>",        // e.g. "runtime-out"
- *     "cardsDir":         "<relative>"         // e.g. "surface/tmp-cards"
+ *     "cardsDir":         "<relative>",        // e.g. "surface/tmp-cards"
+ *     "serverUrl":        "<base url>",        // optional; e.g. "http://127.0.0.1:7799"
+ *     "boardLiveCardsCliJs":"<abs path>",      // optional; path to board-live-cards-cli.js
+ *     "stepMachineCliPath":"<abs path>"        // optional; path to step-machine-cli.js
  *   }
  *
  * Supported source kinds (based on custom fields in --in):
@@ -691,6 +694,8 @@ const CAPABILITIES = {
       runtimeStatusDir: { type: 'string', description: 'Relative path to runtime-out dir.' },
       cardsDir:         { type: 'string', description: 'Relative path to cards dir.' },
       serverUrl:        { type: 'string', description: 'Base URL of the hosting server (e.g. http://127.0.0.1:7799). Used by source kinds that call server-side proxy endpoints.' },
+      boardLiveCardsCliJs: { type: 'string', description: 'Absolute path to board-live-cards-cli.js when configured by the runtime.' },
+      stepMachineCliPath: { type: 'string', description: 'Absolute path to step-machine-cli.js when configured by the runtime.' },
     },
   },
 };

@@ -1149,6 +1149,7 @@ export function createExampleBoardServerRuntime(options = {}) {
   //   runtimeStatusDir    — relative: 'runtime-out'
   //   cardsDir            — relative: 'surface/tmp-cards' (or 'surface/tmp-gandalf-cards')
   //   chatDir             — relative (from cardsDir): e.g. 'card-portfolio/chats'
+  //   chatProcessingMarkerKey — relative marker key in chats artifacts store, e.g. 'card-portfolio/.processing'
   //   lastChatFile        — filename of the just-written user message, e.g. '001_user.txt'
   //   boardLiveCardsCliJs — absolute path to board-live-cards-cli.js (if configured)
   //   stepMachineCliPath  — absolute path to step-machine-cli.js (if configured)
@@ -1179,6 +1180,7 @@ export function createExampleBoardServerRuntime(options = {}) {
       runtimeStatusDir: path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeOutDir : runtimeOutDir),
       cardsDir:         path.relative(boardSetupRoot, isGandalf ? tmpGandalfCardsDir : tmpCardsDir),
       chatDir:          chatsDir,
+      chatProcessingMarkerKey: processingMarkerKey,
       lastChatFile,
       ...(serverUrl ? { serverUrl } : {}),
       ...(configuredBoardLiveCardsCliJs ? { boardLiveCardsCliJs: configuredBoardLiveCardsCliJs } : {}),
@@ -1188,7 +1190,6 @@ export function createExampleBoardServerRuntime(options = {}) {
       const proc = spawn(handlerCmd, [
         '--boardId', boardId, '--cardId', String(cardId),
         '--extraEncJson', extra,
-        '--cleanOnExit', processingFile,
       ], {
         shell: true,
         stdio: 'ignore',

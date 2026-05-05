@@ -10,6 +10,7 @@
  *   runtimeStatusDir— relative subdir: 'runtime-out'
  *   cardsDir        — relative subdir: 'surface/tmp-cards'
  *   chatDir         — absolute path to the card's chats directory
+ *   chatProcessingMarkerKey — relative marker key in chats artifacts store (e.g. 'card-portfolio/.processing')
  *   lastChatFile    — filename of the just-written user message, e.g. '001_user.txt'
  *   serverUrl       — base URL of hosting server (e.g. http://127.0.0.1:7799), optional
  *
@@ -37,13 +38,12 @@ function getArg(name) {
 const boardId     = getArg('--boardId') || '';
 const cardId      = getArg('--cardId') || '';
 const extraStr    = getArg('--extraEncJson') || '';
-const cleanOnExit = getArg('--cleanOnExit') || '';
 
 let extra = {};
 try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
 catch { console.error('[demo-chat-handler] bad --extraEncJson'); process.exit(0); }
 
-const { boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, lastChatFile, serverUrl } = extra;
+const { boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, chatProcessingMarkerKey, lastChatFile, serverUrl } = extra;
 if (!boardSetupRoot || !chatDir || !lastChatFile) {
   console.error('[demo-chat-handler] missing boardSetupRoot/chatDir/lastChatFile');
   process.exit(0);
@@ -153,7 +153,17 @@ try {
 } catch (err) {
   console.error('[demo-chat-handler] wrapper failed: ' + (err?.message ?? err));
 } finally {
-  if (cleanOnExit) {
-    try { fs.unlinkSync(cleanOnExit); } catch {}
+  cleanupProcessingMarker();
+}
+function cleanupProcessingMarker() {
+  // Prefer artifacts-style marker key from extra payload so runtime/handler contract
+  // does not rely on passing an absolute file path argument.
+  if (chatProcessingMarkerKey) {
+    try {
+      const markerPath = path.join(cardsDirAbs, chatProcessingMarkerKey);
+      fs.unlinkSync(markerPath);
+      return;
+    } catch {}
   }
+  try { fs.unlinkSync(path.join(chatDirAbs, '.processing')); } catch {}
 }
