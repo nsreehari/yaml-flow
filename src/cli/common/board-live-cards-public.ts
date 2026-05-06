@@ -241,6 +241,8 @@ export interface BoardLiveCardsPublic {
   // no params needed
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
+  // params: key — one of: 'task-executor', 'chat-handler', 'card-store-ref', 'outputs-store-ref'
+  getConfig(input: CommandInput): CommandResult<{ value: unknown }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
   // no params needed
@@ -812,6 +814,23 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
   }
 
+  function getConfig(input: CommandInput): CommandResult<{ value: unknown }> {
+    try {
+      const key = input.params?.['key'] as string | undefined;
+      if (!key) return fail('getConfig requires params.key') as CommandResult<{ value: unknown }>;
+      const cfg = configStore();
+      let value: unknown;
+      switch (key) {
+        case 'task-executor':     value = cfg.readTaskExecutorRef() ?? null; break;
+        case 'chat-handler':      value = cfg.readChatHandlerRef()  ?? null; break;
+        case 'card-store-ref':    value = cfg.readCardStoreRef(); break;
+        case 'outputs-store-ref': value = cfg.readOutputsStoreRef(); break;
+        default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
+      }
+      return ok({ value }) as CommandResult<{ value: unknown }>;
+    } catch (e) { return err(e) as CommandResult<{ value: unknown }>; }
+  }
+
   function getOutputsDataObject(input: CommandInput): CommandResult {
     try {
       const key = input.params?.['key'] as string | undefined;
@@ -843,7 +862,7 @@ export function createBoardLiveCardsPublic(
   }
 
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef,
+    init, status, getCardStoreRef, getOutputsStoreRef, getConfig,
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     removeCard, retrigger, processAccumulatedEvents,

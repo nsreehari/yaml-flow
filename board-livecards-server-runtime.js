@@ -50,22 +50,6 @@ function parseUrl(urlString) {
   return new URL(urlString, 'http://localhost');
 }
 
-/**
- * Merges `extraFields` into the `extra` object inside a `.task-executor` JSON file.
- * No-op if the file doesn't exist or isn't valid JSON.
- */
-function refreshTaskExecutorExtra(runtimeDir, extraFields) {
-  const taskExecutorFile = path.join(runtimeDir, '.task-executor');
-  if (!fs.existsSync(taskExecutorFile)) return;
-  try {
-    const current = JSON.parse(fs.readFileSync(taskExecutorFile, 'utf-8'));
-    const merged = { ...current, extra: { ...(current.extra || {}), ...extraFields } };
-    fs.writeFileSync(taskExecutorFile, JSON.stringify(merged, null, 2), 'utf-8');
-  } catch {
-    // Silently ignore — board will still function, extra is best-effort
-  }
-}
-
 export function createRuntimeRequestDispatcher(runtime) {
   if (!runtime || typeof runtime !== 'object') {
     throw new Error('runtime is required');
@@ -1150,24 +1134,23 @@ export function createExampleBoardServerRuntime(options = {}) {
   // Handler failures are logged and silently ignored — chat-send response is never affected.
   function invokeChatHandler(cardId, chatsDir, lastChatFile) {
     const isGandalf = isGandalfCard(cardId);
-    const runtimeDir = isGandalf ? gandalfRuntimeDir : boardDir;
-    const handlerFile = path.join(runtimeDir, '.chat-handler');
-    if (!fs.existsSync(handlerFile)) return;
-    const handlerCmd = fs.readFileSync(handlerFile, 'utf-8').trim();
-    if (!handlerCmd) return;
+    const ctx = isGandalf ? gandalfCtx : baseCtx;
+    if (!ctx) return;
+    const cfgResult = ctx.board.getConfig({ params: { key: 'chat-handler' } });
+    if (cfgResult.status !== 'success') return;
+    const handlerRef = cfgResult.data && cfgResult.data.value;
+    if (!handlerRef || typeof handlerRef !== 'object') return;
+    const whatToRun = String(handlerRef.whatToRun || '');
+    const scriptPath = whatToRun.startsWith('::fs-path::') ? whatToRun.slice('::fs-path::'.length) : '';
+    if (!scriptPath || handlerRef.howToRun !== 'local-node') {
+      console.warn(`[chat-handler] unsupported handler ref for card "${cardId}": howToRun=${handlerRef.howToRun}`);
+      return;
+    }
     const boardSetupRoot = path.dirname(boardDir);
     const { safeCardId } = ensureCardStorageDirs(cardId);
     const stores = artifactsStores(cardId);
     const processingMarkerKey = `${safeCardId}/.processing`;
-    const processingFile = path.join(chatsDir, '.processing');
-    try {
-      if (stores.chats) {
-        stores.chats.putText(processingMarkerKey, '', 'text/plain; charset=utf-8');
-      } else {
-        fs.mkdirSync(chatsDir, { recursive: true });
-        fs.writeFileSync(processingFile, '', 'utf-8');
-      }
-    } catch {}
+    try { stores.chats.putText(processingMarkerKey, '', 'text/plain; charset=utf-8'); } catch {}
     const extra = Buffer.from(JSON.stringify({
       boardSetupRoot,
       boardRuntimeDir:  path.relative(boardSetupRoot, isGandalf ? gandalfRuntimeDir : boardDir),
@@ -1181,23 +1164,18 @@ export function createExampleBoardServerRuntime(options = {}) {
       ...(configuredStepMachineCliPath ? { stepMachineCliPath: configuredStepMachineCliPath } : {}),
     })).toString('base64');
     try {
-      const proc = spawn(handlerCmd, [
+      const proc = spawn(process.execPath, [
+        scriptPath,
         '--boardId', boardId, '--cardId', String(cardId),
         '--extraEncJson', extra,
       ], {
-        shell: true,
         stdio: 'ignore',
+        windowsHide: true,
       });
       proc.unref();
       console.log(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
     } catch (err) {
-      try {
-        if (stores.chats) {
-          stores.chats.remove(processingMarkerKey);
-        } else {
-          fs.unlinkSync(processingFile);
-        }
-      } catch {}
+      try { stores.chats.remove(processingMarkerKey); } catch {}
       console.warn(`[chat-handler] spawn failed for card "${cardId}":`, (err && err.message) || String(err));
     }
   }
