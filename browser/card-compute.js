@@ -1,13 +1,14 @@
 // card-compute.js — JSONata-powered compute engine for LiveCards (browser build)
 //
-// Requires JSONata to be loaded first:
-//   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+// Requires jsonata-sync to be loaded first:
+//   <script src="../../src/card-compute/jsonata-sync.cjs"></script>
 //
-// API (all async where noted):
-//   CardCompute.run(node, options)         → Promise<node>  — eval all compute steps → computed_values
-//   CardCompute.eval(expr, node)           → Promise<value> — eval single JSONata expression
-//   CardCompute.resolve(node, path)        → value          — sync deep-get "card_data.foo" or "fetched_sources.foo"
-//   CardCompute.validate(node)             → { ok, errors } — sync structural validator
+// API (all synchronous):
+//   CardCompute.run(node, options)         → node   — eval all compute steps → computed_values
+//   CardCompute.runSync(node, options)     → node   — alias for run
+//   CardCompute.eval(expr, node)           → value  — eval single JSONata expression
+//   CardCompute.resolve(node, path)        → value  — deep-get "card_data.foo" or "fetched_sources.foo"
+//   CardCompute.validate(node)             → { ok, errors } — structural validator
 //
 // Compute steps shape: { bindTo: string, expr: string }
 //   expr is a JSONata expression evaluated against { card_data, requires, fetched_sources, computed_values }
@@ -53,19 +54,19 @@
   }
 
   // ===========================================================================
-  // run — evaluate all compute steps on a node (async, returns Promise<node>)
+  // run — evaluate all compute steps on a node (sync, returns node)
   // ===========================================================================
 
   function run(node, options) {
-    if (!node || !node.compute || !node.compute.length) return Promise.resolve(node);
+    if (!node || !node.compute || !node.compute.length) return node;
 
     if (!node.card_data) node.card_data = {};
     node.computed_values = {};
     node._sourcesData = (options && options.sourcesData) || {};
 
-    if (typeof jsonata === 'undefined') {
-      console.error('CardCompute: JSONata not loaded. Add <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script> before card-compute.js');
-      return Promise.resolve(node);
+    if (typeof jsonataSync === 'undefined') {
+      console.error('CardCompute: jsonataSync not loaded. Add <script src="../../src/card-compute/jsonata-sync.cjs"></script> before card-compute.js');
+      return node;
     }
 
     var ctx = {
@@ -75,30 +76,28 @@
       computed_values: node.computed_values,
     };
 
-    var chain = Promise.resolve();
     node.compute.forEach(function (step) {
-      chain = chain.then(function () {
-        if (!step || typeof step.expr !== 'string') return;
-        return jsonata(step.expr).evaluate(ctx).then(function (val) {
-          _deepSet(node.computed_values, step.bindTo, val);
-          ctx.computed_values = node.computed_values; // subsequent steps see earlier results
-        }).catch(function (e) {
-          console.error('CardCompute.run error on "' + (node.id || '?') + '.' + step.bindTo + '":', e);
-        });
-      });
+      if (!step || typeof step.expr !== 'string') return;
+      try {
+        var val = jsonataSync(step.expr).evaluate(ctx);
+        _deepSet(node.computed_values, step.bindTo, val);
+        ctx.computed_values = node.computed_values;
+      } catch (e) {
+        console.error('CardCompute.run error on "' + (node.id || '?') + '.' + step.bindTo + '":', e);
+      }
     });
 
-    return chain.then(function () { return node; });
+    return node;
   }
 
   // ===========================================================================
-  // eval — evaluate a single JSONata expression (async, returns Promise<value>)
+  // eval — evaluate a single JSONata expression (sync, returns value)
   // ===========================================================================
 
   function evalExpr(expr, node) {
-    if (typeof jsonata === 'undefined') {
-      console.error('CardCompute: JSONata not loaded.');
-      return Promise.resolve(undefined);
+    if (typeof jsonataSync === 'undefined') {
+      console.error('CardCompute: jsonataSync not loaded.');
+      return undefined;
     }
     var ctx = {
       card_data: (node && node.card_data) || {},
@@ -106,7 +105,7 @@
       fetched_sources: (node && node._sourcesData) || {},
       computed_values: (node && node.computed_values) || {},
     };
-    return jsonata(expr).evaluate(ctx);
+    return jsonataSync(expr).evaluate(ctx);
   }
 
   // ===========================================================================
@@ -257,6 +256,7 @@
 
   return {
     run: run,
+    runSync: run,
     eval: evalExpr,
     resolve: resolve,
     validate: validateNode,

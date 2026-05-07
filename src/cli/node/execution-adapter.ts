@@ -45,7 +45,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const _requireJsonata = createRequire(import.meta.url);
+const jsonata: (expr: string) => { evaluate: (data: unknown) => unknown } = _requireJsonata('../../card-compute/jsonata-sync.cjs');
 import type { ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
 import { parseRef } from '../common/storage-interface.js';
 import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.js';

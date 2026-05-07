@@ -3,7 +3,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const jsonata = require('../../src/card-compute/jsonata-sync.cjs');
 
 import { CardCompute as ServerCardCompute } from '../../src/card-compute/index.js';
 import type { ComputeNode, ValidationResult } from '../../src/card-compute/index.js';
@@ -19,8 +21,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const browserCardComputePath = path.join(repoRoot, 'browser', 'card-compute.js');
 
 function loadBrowserCardCompute(): BrowserCardComputeApi {
-  // Browser bundle expects jsonata as a global; mirror browser runtime in Node tests.
-  (globalThis as Record<string, unknown>).jsonata = jsonata;
+  // Browser bundle expects jsonataSync as a global; mirror browser runtime in Node tests.
+  (globalThis as Record<string, unknown>).jsonataSync = jsonata;
   delete (globalThis as Record<string, unknown>).CardCompute;
 
   const source = fs.readFileSync(browserCardComputePath, 'utf-8');
@@ -67,7 +69,7 @@ describe('card-compute parity', () => {
     );
 
     const expr = 'computed_values.total - requires.fee';
-    await expect(BrowserCardCompute.eval(expr, browserNode)).resolves.toEqual(
+    expect(BrowserCardCompute.eval(expr, browserNode)).toEqual(
       await ServerCardCompute.eval(expr, serverNode),
     );
 

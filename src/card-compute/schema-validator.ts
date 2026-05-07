@@ -17,7 +17,9 @@ import type { ValidationResult } from './index.js';
 import liveCardsSchema from '../../schema/live-cards.schema.json';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const jsonata: (expr: string) => { evaluate: (data: unknown) => unknown } = _require('./jsonata-sync.cjs');
 
 type AjvValidateFunction = {
   (data: unknown): boolean;

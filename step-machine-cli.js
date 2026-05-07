@@ -2,9 +2,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const __require = createRequire(import.meta.url);
+const jsonata = __require('./src/card-compute/jsonata-sync.cjs');
 
 const { loadStepFlow, createStepMachine, MemoryStore, FileStore } = await import('./dist/index.js');
 const PAUSE_FILE_NAME = '.pause';

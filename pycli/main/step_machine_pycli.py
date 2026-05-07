@@ -15,23 +15,13 @@ _PYCLI_ROOT = os.path.normpath(os.path.join(_HERE, ".."))
 if _PYCLI_ROOT not in sys.path:
     sys.path.insert(0, _PYCLI_ROOT)
 
-from sub.step_machine_quickjs_bridge import QuickJsUnavailableError, invoke_step_machine_bundle
+from sub.step_machine_native_bridge import invoke_step_machine_native
 
-DEFAULT_QUICKJS_BUNDLE = "dist/pycli/quickjs-step-machine-runtime.global.js"
 PAUSE_FILE_NAME = ".pause"
 
 
 def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=True))
-
-
-def _resolve_bundle_path(bundle_arg: str | None) -> str:
-    bundle = bundle_arg or DEFAULT_QUICKJS_BUNDLE
-    if os.path.exists(bundle):
-        return bundle
-    here = os.path.dirname(os.path.abspath(__file__))
-    alt = os.path.normpath(os.path.join(here, "..", "..", bundle))
-    return alt
 
 
 def _resolve_input_path(input_path: str) -> str:
@@ -218,7 +208,7 @@ def _print_store_status(store_context: Dict[str, Any]) -> Dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="step-machine-pycli",
-        description="Python host + QuickJS runtime for step-machine CLI flows.",
+        description="Python-native step-machine CLI.",
     )
     parser.add_argument("flow", nargs="?", help="Path to step flow file (.yaml/.json)")
     parser.add_argument("--handlers", help="Python handlers module path (supports inline handler names)")
@@ -228,7 +218,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true", help="Resume most recent paused run")
     parser.add_argument("--pause", action="store_true", help="Request pause for active file-store run")
     parser.add_argument("--status", action="store_true", help="Show file-store run status")
-    parser.add_argument("--bundle", help="QuickJS bundle path")
     return parser
 
 
@@ -290,26 +279,16 @@ def main() -> int:
         payload["pauseFilePath"] = store_context["pauseFilePath"]
 
     try:
-        result_raw = invoke_step_machine_bundle(
-            bundle_path=_resolve_bundle_path(args.bundle),
-            function_name="pycliStepMachineInvoke",
-            function_arg=payload,
+        result = invoke_step_machine_native(
+            payload=payload,
             inline_handlers=inline_handlers,
         )
-    except QuickJsUnavailableError as e:
+    except Exception as e:
         _print_json({"status": "error", "error": str(e)})
         return 2
 
-    result: Any = result_raw
-    if isinstance(result_raw, str):
-        try:
-            result = json.loads(result_raw)
-        except Exception:
-            _print_json({"status": "error", "error": str(result_raw)})
-            return 2
-
     if not isinstance(result, dict):
-        _print_json({"status": "error", "error": "Unexpected non-object result from QuickJS runtime"})
+        _print_json({"status": "error", "error": "Unexpected non-dict result"})
         return 2
 
     _print_json(result)

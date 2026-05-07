@@ -5,10 +5,10 @@
  * Global: window.BoardLiveGraph
  *
  * External users need only two script tags:
- *   <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+ *   <script src="../../src/card-compute/jsonata-sync.cjs"></script>
  *   <script src="browser/board-livegraph-engine.js"></script>
  *
- * jsonata is kept external (window.jsonata must be loaded first, same as card-compute.js).
+ * jsonataSync is kept external (window.jsonataSync must be loaded first, same as card-compute.js).
  * All Node-only modules (ajv, ajv-formats, child_process, proper-lockfile, yaml, etc.)
  * are stubbed out — they are dead code in the browser execution path.
  */
@@ -56,7 +56,7 @@ const browserStubPlugin: Plugin = {
               return function(req) {
                 if (req === './jsonata-sync.cjs') {
                   return (typeof globalThis !== 'undefined' && globalThis.__jsonataSync)
-                    || (typeof globalThis !== 'undefined' && globalThis.jsonata);
+                    || (typeof globalThis !== 'undefined' && globalThis.jsonataSync);
                 }
                 throw new Error('Unsupported require in browser bundle: ' + req);
               };
@@ -87,10 +87,10 @@ const jsonataGlobalShim: Plugin = {
       namespace: 'jsonata-global-shim',
     }));
     build.onLoad({ filter: /.*/, namespace: 'jsonata-global-shim' }, () => ({
-      // Expose window.jsonata as the default export so the card-compute import works.
+      // Expose window.jsonataSync as the default export so the card-compute import works.
       contents: `
-        const _jsonata = (typeof globalThis !== 'undefined' && globalThis.jsonata)
-          || (typeof window !== 'undefined' && window.jsonata);
+        const _jsonata = (typeof globalThis !== 'undefined' && globalThis.jsonataSync)
+          || (typeof window !== 'undefined' && window.jsonataSync);
         export default _jsonata;
         export { _jsonata as jsonata };
       `,

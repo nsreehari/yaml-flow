@@ -1,7 +1,9 @@
 import { createStepMachine } from '../../step-machine/index.js';
 import { MemoryStore } from '../../stores/memory.js';
 import type { StepFlowConfig, StepHandler, StepMachineStore, StepMachineState, StepResult } from '../../step-machine/types.js';
-import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const _requireJsonata = createRequire(import.meta.url);
+const jsonata: (expr: string) => { evaluate: (data: unknown) => unknown } = _requireJsonata('../../card-compute/jsonata-sync.cjs');
 
 declare global {
   // Injected by Python host bridge.
