@@ -274,14 +274,15 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   const artifactsRef = parseRef(`::fs-path::${cardsDir}`);
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, __dirname, { suppressSpawn: true });
 
+  const cardStoreRef = serializeRef({ kind: 'fs-path', value: path.join(cardsDir, 'cards') });
+
   return {
     label,
     boardAdapter,
     artifactsAdapter,
     baseRef,
-    cardStoreRef: serializeRef({ kind: 'fs-path', value: path.join(cardsDir, 'cards') }),
+    cardStoreRef,
     outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(path.dirname(boardDir), 'runtime-out', '.outputs') }),
-    cardSource: createFsCardSource(cardsDir),
     notifyRef: { kind: 'named-pipe', value: namedPipePath(notifyChannel) },
     taskExecutorRef: makeExecutionRef(taskExecPath, 'task-executor'),
     chatHandlerRef: makeExecutionRef(chatHandlerPath, 'chat-handler'),
@@ -322,7 +323,7 @@ const runtime = createMultiBoardServerRuntime({
     // Store host config for demo-setup (FS paths are host concerns)
     boardHostConfig.set(boardId, { cardsDir, gandalfCardsDir: gandalfCardsDir_, boardDir, boardRoot });
 
-    return createSingleBoardServerRuntime({
+    const singleBoardRuntime = createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
       boardId,
       boards,
@@ -336,6 +337,16 @@ const runtime = createMultiBoardServerRuntime({
         ...(stepMachinePath ? { stepMachineCliPath: stepMachinePath } : {}),
       },
     });
+
+    // Host concern (Part A): seed card store from FS source only if empty
+    const existing = singleBoardRuntime.cardStore.get({});
+    const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
+    if (isEmpty) {
+      const cards = createFsCardSource(cardsDir).listCards();
+      if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
+    }
+
+    return singleBoardRuntime;
   },
 });
 

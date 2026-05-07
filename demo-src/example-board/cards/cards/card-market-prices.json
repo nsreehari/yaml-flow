@@ -1,0 +1,80 @@
+{
+  "id": "card-market-prices",
+  "meta": {
+    "title": "Market Prices",
+    "tags": [
+      "prices",
+      "market"
+    ],
+    "desc": "Fetches live prices for portfolio tickers. Publishes enriched quote data for downstream portfolio value calculations."
+  },
+  "requires": [
+    "holdings"
+  ],
+  "source_defs": [
+    {
+      "bindTo": "quotes",
+      "outputFile": "market-prices-quotes.json",
+      "projections": {
+        "url_list": "requires.holdings.ticker.('https://query1.finance.yahoo.com/v8/finance/chart/' & $ & '?interval=1d&range=1d')"
+      },
+      "url-list": {
+        "headers": {
+          "User-Agent": "Mozilla/5.0 (compatible; portfolio-tracker-demo/1.0)"
+        },
+        "cacheTimeout": 3600
+      }
+    }
+  ],
+  "compute": [
+    {
+      "bindTo": "normalizedQuotes",
+      "expr": "{ \"quoteResponse\": { \"result\": $map(fetched_sources.quotes, function($r) { $r.chart.result[0].meta.{ \"symbol\": symbol, \"shortName\": longName, \"regularMarketPrice\": regularMarketPrice, \"regularMarketChange\": regularMarketChange, \"regularMarketChangePercent\": regularMarketChangePercent } }), \"error\": null } }"
+    },
+    {
+      "bindTo": "prices",
+      "expr": "$map(computed_values.normalizedQuotes.quoteResponse.result, function($q) { {\"ticker\": $q.symbol, \"name\": $q.shortName, \"price\": $round($q.regularMarketPrice, 2), \"change\": $round($q.regularMarketChange, 2), \"chg_pct\": $round($q.regularMarketChangePercent, 2)} })"
+    }
+  ],
+  "provides": [
+    {
+      "bindTo": "quotes",
+      "ref": "computed_values.normalizedQuotes"
+    }
+  ],
+  "view": {
+    "elements": [
+      {
+        "kind": "table",
+        "label": "Prices",
+        "data": {
+          "bind": "computed_values.prices",
+          "columns": [
+            "ticker",
+            "name",
+            "price",
+            "change",
+            "chg_pct"
+          ],
+          "sortable": true
+        }
+      }
+    ],
+    "layout": {
+      "board": {
+        "col": 4,
+        "order": 2
+      },
+      "canvas": {
+        "x": 400,
+        "y": 50,
+        "w": 400,
+        "h": 340
+      }
+    },
+    "features": {
+      "refresh": true
+    }
+  },
+  "card_data": {}
+}
