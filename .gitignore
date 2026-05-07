@@ -43,3 +43,4 @@ demo-src/example-board/runtime
 standalone/
 pydist/
 
+metafile-iife.json

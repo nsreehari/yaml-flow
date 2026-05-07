@@ -118,8 +118,8 @@ export interface SingleBoardRuntimeOptions {
   corsHeaders?: Record<string, string>;
   boardId?: string;
 
-  base: BoardContextConfig;
-  gandalf?: BoardContextConfig;
+  /** One or more board layers composing this board surface (e.g. base cards + admin cards). */
+  boards: BoardContextConfig[];
 
   invocationAdapter: InvocationAdapter;
   notificationTransport?: NotificationTransport;

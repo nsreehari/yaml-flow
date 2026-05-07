@@ -227,14 +227,14 @@ export const boardApi = onRequest(
       const runtimeOptions: SingleBoardRuntimeOptions = {
         apiBasePath: '/api/board',
         boardId,
-        base: {
+        boards: [{
           label: 'base',
           boardAdapter: boardAdapterBundle.adapter,
           baseRef: { kind: 'firestore', value: `boards/${boardId}` },
           cardStoreRef: `::firestore::boards/${boardId}/card-store`,
           outputsStoreRef: `::firestore::boards/${boardId}/outputs`,
           cardSource,
-        },
+        }],
         invocationAdapter,
         logger: {
           info: (...args: unknown[]) => console.log(`[board:${boardId}]`, ...args),
