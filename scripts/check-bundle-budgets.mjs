@@ -11,6 +11,7 @@ const budgets = [
   { file: 'dist/cli/node/board-live-cards-cli.js', maxBytes: 240_000 },
   { file: 'dist/cli/node/fs-board-adapter.js', maxBytes: 240_000 },
   { file: 'browser/board-livegraph-engine.js', maxBytes: 60_000 },
+  { file: 'browser/board-livecards-localstorage.js', maxBytes: 85_000 },
   { file: 'dist/pycli/quickjs-board-runtime.global.js', maxBytes: 240_000 },
   { file: 'dist/pycli/quickjs-step-machine-runtime.global.js', maxBytes: 120_000 },
 ];

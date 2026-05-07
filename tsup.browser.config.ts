@@ -99,14 +99,13 @@ const jsonataGlobalShim: Plugin = {
   },
 };
 
-export default defineConfig({
-  entry: {
-    'board-livegraph-engine': 'src/board-livegraph-runtime/index.ts',
-  },
+/**
+ * Shared browser build options (minus entry/globalName).
+ */
+const sharedBrowserOptions = {
   outDir: 'browser',
-  format: ['iife'],
-  globalName: 'BoardLiveGraph',
-  platform: 'browser',
+  format: ['iife' as const],
+  platform: 'browser' as const,
   outExtension: () => ({ js: '.js' }),
   target: 'es2020',
   minify: true,
@@ -115,5 +114,21 @@ export default defineConfig({
   clean: false,
   splitting: false,
   treeshake: true,
-  esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
-});
+};
+
+export default defineConfig([
+  // ── board-livegraph-engine (existing) ─────────────────────────────────────
+  {
+    ...sharedBrowserOptions,
+    entry: { 'board-livegraph-engine': 'src/board-livegraph-runtime/index.ts' },
+    globalName: 'BoardLiveGraph',
+    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
+  },
+  // ── board-livecards-localstorage (new — public API + localStorage adapter) ─
+  {
+    ...sharedBrowserOptions,
+    entry: { 'board-livecards-localstorage': 'src/board-livecards-localstorage-runtime/index.ts' },
+    globalName: 'BoardLiveCardsLocalStorage',
+    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
+  },
+]);

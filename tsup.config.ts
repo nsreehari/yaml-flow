@@ -43,6 +43,7 @@ export default defineConfig({
     'stores/file': 'src/stores/file.ts',
     'storage-refs': 'src/cli/node/public-storage-adapter.ts',
     'execution-refs': 'src/cli/common/execution-interface.ts',
+    'server-runtime/index': 'src/server-runtime/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

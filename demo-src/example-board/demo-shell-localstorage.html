@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Example Board Demo (LocalStorage Runtime)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"></script>
+  <script src="../../browser/card-compute.js"></script>
+  <script src="../../browser/live-cards.js"></script>
+  <script src="../../browser/board-livegraph-engine.js"></script>
+  <script src="../../browser/board-livecards-localstorage.js"></script>
+</head>
+<body class="bg-light">
+  <div class="container-fluid py-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div>
+        <h1 class="h4 mb-0" id="boardTitle">Example Board (LocalStorage Runtime)</h1>
+        <div class="small text-muted" id="boardDesc"></div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-sm btn-outline-primary" id="modeBoard">Board</button>
+        <button class="btn btn-sm btn-outline-primary" id="modeCanvas">Canvas</button>
+        <button class="btn btn-sm btn-outline-secondary" id="autoLayout">Auto Layout</button>
+        <button class="btn btn-sm btn-outline-dark" id="refreshAll">Refresh All</button>
+        <button class="btn btn-sm btn-outline-danger" id="resetDemo">Reset Demo</button>
+        <div class="form-check ms-2">
+          <input class="form-check-input" type="checkbox" id="devModeToggle" />
+          <label class="form-check-label" for="devModeToggle">Dev Mode</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-info small py-2 mb-3">
+      LocalStorage runtime mode: board state persisted in browser localStorage via
+      <code>board-livecards-localstorage</code> + <code>server-runtime</code>.
+      Source fetches are done by a demo task executor in this HTML using source_def url/url-list and
+      reporting results via <code>reportCompleted</code>.
+    </div>
+
+    <div id="boardRoot">
+      <div class="d-flex align-items-center justify-content-center" style="height: 72vh;">
+        <div class="text-center">
+          <div class="spinner-border mb-3" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <p class="text-muted">Initializing board...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var buildLiveCardModelsFromArtifacts = window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts;
+      var createBoardLiveCardsLocalStorage = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.create;
+
+      if (!buildLiveCardModelsFromArtifacts || !createBoardLiveCardsLocalStorage) {
+        document.getElementById('boardRoot').innerHTML =
+          '<div class="alert alert-danger">Required scripts not loaded. Run <code>npm run build:browser</code> first.</div>';
+        return;
+      }
+
+      var NAMESPACE = 'demo-board';
+      var currentMode = 'canvas';
+      var board = null;
+      var nodesById = {};
+      var app = null;
+      var drainInterval = null;
+      var sourceExecutor = null;
+
+      function clone(x) { return JSON.parse(JSON.stringify(x)); }
+      function nowIso() { return new Date().toISOString(); }
+
+      var INLINE_CARDS = [
+        {
+          id: 'card-portfolio',
+          meta: {
+            title: 'My Portfolio',
+            tags: ['portfolio'],
+            desc: 'Manage your holdings inline. Changes propagate downstream.',
+          },
+          provides: [{ bindTo: 'holdings', ref: 'card_data.holdings' }],
+          compute: [],
+          view: {
+            elements: [
+              {
+                kind: 'editable-table',
+                label: 'Holdings',
+                data: {
+                  bind: 'card_data.holdings',
+                  writeTo: 'card_data.holdings',
+                  columns: ['ticker', 'quantity', 'cost_basis'],
+                  schema: { properties: { quantity: { type: 'number' }, cost_basis: { type: 'number' } } },
+                },
+              },
+            ],
+            layout: { board: { col: 4, order: 1 }, canvas: { x: 20, y: 50, w: 340, h: 330 } },
+            features: { refresh: true, chat: true },
+          },
+          card_data: {
+            holdings: [
+              { ticker: 'AAPL', quantity: 10, cost_basis: 150 },
+              { ticker: 'MSFT', quantity: 5, cost_basis: 310 },
+              { ticker: 'GOOGL', quantity: 2, cost_basis: 280 },
+              { ticker: 'TSLA', quantity: 3, cost_basis: 200 },
+            ],
+          },
+        },
+        {
+          id: 'card-market-prices',
+          meta: {
+            title: 'Market Prices',
+            tags: ['prices', 'market'],
+            desc: 'Fetches prices from Yahoo Finance v8 API using source_def url-list.',
+          },
+          requires: ['holdings'],
+          source_defs: [
+            {
+              bindTo: 'quotes',
+              outputFile: 'market-prices-quotes.json',
+              projections: {
+                url_list: "requires.holdings.ticker.('https://query1.finance.yahoo.com/v8/finance/chart/' & $ & '?interval=1d&range=1d')",
+              },
+              'url-list': {
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; portfolio-tracker-demo/1.0)' },
+                cacheTimeout: 300,
+              },
+            },
+          ],
+          compute: [],
+          provides: [{ bindTo: 'quotes', ref: 'computed_values.normalizedQuotes' }],
+          view: {
+            elements: [
+              {
+                kind: 'table',
+                label: 'Prices',
+                data: { bind: 'computed_values.prices', columns: ['ticker', 'name', 'price', 'change', 'chg_pct'], sortable: true },
+              },
+            ],
+            layout: { board: { col: 4, order: 2 }, canvas: { x: 400, y: 50, w: 400, h: 340 } },
+            features: { refresh: true },
+          },
+          card_data: {},
+        },
+        {
+          id: 'card-portfolio-value',
+          meta: {
+            title: 'Portfolio Value',
+            tags: ['portfolio', 'value'],
+            desc: 'Calculates value and P&L from holdings + quotes.',
+          },
+          requires: ['holdings', 'quotes'],
+          provides: [{ bindTo: 'positions', ref: 'computed_values.positions' }],
+          compute: [],
+          view: {
+            elements: [
+              { kind: 'metric', label: 'Portfolio Value ($)', data: { bind: 'computed_values.totalValue' } },
+              { kind: 'text', data: { bind: 'computed_values.gainersLosers' } },
+              { kind: 'table', label: 'Positions', data: { bind: 'computed_values.positions', columns: ['ticker', 'value', 'gain_$', 'gain_%'], sortable: true } },
+            ],
+            layout: { board: { col: 4, order: 3 }, canvas: { x: 840, y: 50, w: 420, h: 380 } },
+            features: { chat: true },
+          },
+          card_data: {},
+        },
+        {
+          id: 'card-portfolio-intelligence',
+          meta: {
+            title: 'Portfolio Intelligence',
+            tags: ['portfolio', 'analysis'],
+            desc: 'Derived analysis from computed positions.',
+          },
+          requires: ['positions'],
+          compute: [],
+          provides: [
+            { bindTo: 'portfolio_mix', ref: 'computed_values.mix' },
+            { bindTo: 'portfolio_pnl', ref: 'computed_values.pnl' },
+            { bindTo: 'portfolio_risks', ref: 'computed_values.risks' },
+            { bindTo: 'portfolio_action', ref: 'computed_values.action' },
+          ],
+          view: {
+            elements: [
+              { kind: 'markdown', label: 'Mix', data: { bind: 'computed_values.mix' } },
+              { kind: 'markdown', label: 'P&L', data: { bind: 'computed_values.pnl' } },
+            ],
+            layout: { board: { col: 3, order: 4 }, canvas: { x: 1300, y: 50, w: 340, h: 200 } },
+            features: { refresh: true, chat: true },
+          },
+          card_data: {},
+        },
+        {
+          id: 'card-portfolio-risks',
+          meta: { title: 'Risk Watch', tags: ['portfolio', 'risk'], desc: 'Risk signals from Portfolio Intelligence.' },
+          requires: ['portfolio_risks'],
+          view: {
+            elements: [{ kind: 'markdown', data: { bind: 'requires.portfolio_risks' } }],
+            layout: { board: { col: 3, order: 5 }, canvas: { x: 1300, y: 270, w: 340, h: 220 } },
+          },
+          card_data: {},
+        },
+        {
+          id: 'card-portfolio-action',
+          meta: { title: 'Action Signal', tags: ['portfolio', 'action'], desc: 'Action recommendation from Portfolio Intelligence.' },
+          requires: ['portfolio_action'],
+          view: {
+            elements: [{ kind: 'markdown', data: { bind: 'requires.portfolio_action' } }],
+            layout: { board: { col: 4, order: 6 }, canvas: { x: 1660, y: 50, w: 300, h: 160 } },
+          },
+          card_data: {},
+        },
+      ];
+
+      function hasPersistedBoardState() {
+        var key = NAMESPACE + ':card-store:kv:_index';
+        try { return localStorage.getItem(key) !== null; } catch { return false; }
+      }
+
+      function createHttpSourceExecutor() {
+        var completed = {};
+        var failures = {};
+        var cache = new Map();
+        var fallbackQuotesBySymbol = {
+          AAPL: { symbol: 'AAPL', longName: 'Apple Inc.', regularMarketPrice: 290, regularMarketChange: 0, regularMarketChangePercent: 0 },
+          MSFT: { symbol: 'MSFT', longName: 'Microsoft', regularMarketPrice: 420, regularMarketChange: 0, regularMarketChangePercent: 0 },
+          GOOGL: { symbol: 'GOOGL', longName: 'Alphabet', regularMarketPrice: 395, regularMarketChange: 0, regularMarketChangePercent: 0 },
+          TSLA: { symbol: 'TSLA', longName: 'Tesla', regularMarketPrice: 399, regularMarketChange: 0, regularMarketChangePercent: 0 },
+        };
+
+        function buildFallbackYahooResponse(url) {
+          var m = String(url || '').match(/\/chart\/([^?]+)/);
+          var symbol = m ? decodeURIComponent(m[1]).toUpperCase() : 'UNKNOWN';
+          var meta = fallbackQuotesBySymbol[symbol] || {
+            symbol: symbol,
+            longName: symbol,
+            regularMarketPrice: 100,
+            regularMarketChange: 0,
+            regularMarketChangePercent: 0,
+          };
+          return {
+            chart: {
+              result: [{ meta: meta }],
+              error: null,
+            },
+          };
+        }
+
+        function reportCompleted(cardId, bindTo, value) {
+          if (!completed[cardId]) completed[cardId] = {};
+          completed[cardId][bindTo] = clone(value);
+          if (failures[cardId]) delete failures[cardId][bindTo];
+        }
+
+        function reportFailed(cardId, bindTo, error) {
+          if (!failures[cardId]) failures[cardId] = {};
+          failures[cardId][bindTo] = String(error || 'unknown error');
+        }
+
+        function interpolate(text, context) {
+          return String(text || '').replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, function (_m, key) {
+            return context && Object.prototype.hasOwnProperty.call(context, key) ? String(context[key]) : '';
+          });
+        }
+
+        async function fetchJsonWithCache(url, headers, ttlSec) {
+          var ttlMs = Number(ttlSec || 300) * 1000;
+          var key = 'GET:' + url + ':' + JSON.stringify(headers || {});
+          var now = Date.now();
+          var hit = cache.get(key);
+          if (hit && now - hit.at < ttlMs) return clone(hit.value);
+
+          var json;
+          try {
+            var resp = await fetch(url, { method: 'GET', headers: headers || {} });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + url);
+            json = await resp.json();
+          } catch (_directErr) {
+            // Browser CORS fallback for Yahoo endpoints.
+            try {
+              var proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+              var proxied = await fetch(proxyUrl, { method: 'GET' });
+              if (!proxied.ok) throw new Error('HTTP ' + proxied.status + ' for proxied ' + url);
+              json = await proxied.json();
+            } catch (_proxyErr) {
+              // Keep demo usable even when public proxy is down/throttled.
+              json = buildFallbackYahooResponse(url);
+            }
+          }
+
+          cache.set(key, { at: now, value: clone(json) });
+          return json;
+        }
+
+        function resolveUrlsFromSourceDef(sourceDef, context) {
+          if (sourceDef.url && sourceDef.url.url) {
+            return [interpolate(sourceDef.url.url, context || {})];
+          }
+
+          if (sourceDef['url-list']) {
+            if (Array.isArray(sourceDef._projections && sourceDef._projections.url_list)) {
+              return sourceDef._projections.url_list;
+            }
+
+            // Demo-specific url_list resolution for Yahoo v8 from holdings tickers.
+            var holdings = context && Array.isArray(context.holdings) ? context.holdings : [];
+            var tickers = holdings.map(function (h) { return h && h.ticker; }).filter(Boolean);
+            return tickers.map(function (t) {
+              return 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(t) + '?interval=1d&range=1d';
+            });
+          }
+
+          return [];
+        }
+
+        async function runSourceDef(cardId, sourceDef, context) {
+          var bindTo = sourceDef && sourceDef.bindTo;
+          if (!bindTo) return;
+
+          try {
+            var urls = resolveUrlsFromSourceDef(sourceDef, context);
+            if (!urls.length) {
+              reportFailed(cardId, bindTo, 'No URLs resolved from source_def');
+              return;
+            }
+
+            var headers = sourceDef.url && sourceDef.url.headers
+              ? sourceDef.url.headers
+              : (sourceDef['url-list'] && sourceDef['url-list'].headers ? sourceDef['url-list'].headers : {});
+            var cacheTimeout = sourceDef.url && sourceDef.url.cacheTimeout != null
+              ? sourceDef.url.cacheTimeout
+              : (sourceDef['url-list'] && sourceDef['url-list'].cacheTimeout != null ? sourceDef['url-list'].cacheTimeout : 300);
+
+            if (sourceDef.url) {
+              var one = await fetchJsonWithCache(urls[0], headers, cacheTimeout);
+              reportCompleted(cardId, bindTo, one);
+            } else {
+              var many = [];
+              for (var i = 0; i < urls.length; i++) {
+                many.push(await fetchJsonWithCache(urls[i], headers, cacheTimeout));
+              }
+              reportCompleted(cardId, bindTo, many);
+            }
+          } catch (e) {
+            reportFailed(cardId, bindTo, e && e.message ? e.message : String(e));
+          }
+        }
+
+        async function run(cards, contextByCardId) {
+          var list = Array.isArray(cards) ? cards : [];
+          for (var i = 0; i < list.length; i++) {
+            var card = list[i];
+            var srcs = Array.isArray(card && card.source_defs) ? card.source_defs : [];
+            for (var j = 0; j < srcs.length; j++) {
+              await runSourceDef(card.id, srcs[j], (contextByCardId && contextByCardId[card.id]) || {});
+            }
+          }
+        }
+
+        function snapshot() {
+          return {
+            completed: clone(completed),
+            failures: clone(failures),
+          };
+        }
+
+        return {
+          run: run,
+          snapshot: snapshot,
+          reportCompleted: reportCompleted,
+          reportFailed: reportFailed,
+        };
+      }
+
+      function computePositions(holdings, quoteResult) {
+        var hMap = {};
+        (Array.isArray(holdings) ? holdings : []).forEach(function (h) {
+          if (h && typeof h.ticker === 'string') hMap[h.ticker] = h;
+        });
+
+        return (Array.isArray(quoteResult) ? quoteResult : []).map(function (q) {
+          var h = hMap[q.symbol] || { quantity: 0, cost_basis: 0 };
+          var qty = Number(h.quantity || 0);
+          var cb = Number(h.cost_basis || 0);
+          var price = Number(q.regularMarketPrice || 0);
+          var value = +(price * qty).toFixed(2);
+          var cost = +(cb * qty).toFixed(2);
+          var gain = +(value - cost).toFixed(2);
+          var gainPct = cost ? +((gain / cost) * 100).toFixed(2) : 0;
+          var chg = +(Number(q.regularMarketChange || 0) * qty).toFixed(2);
+          var chgPct = +(Number(q.regularMarketChangePercent || 0)).toFixed(2);
+          return {
+            ticker: q.symbol,
+            quantity: qty,
+            cost_basis: cb,
+            price: +price.toFixed(2),
+            value: value,
+            'gain_$': gain,
+            'gain_%': gainPct,
+            'chg_$': chg,
+            'chg_pct': chgPct,
+          };
+        });
+      }
+
+      function buildAnalysisFromPositions(positions) {
+        var list = Array.isArray(positions) ? positions : [];
+        if (!list.length) {
+          return {
+            mix: '- No positions yet.',
+            pnl: '- No P&L data yet.',
+            risks: '- No risk signal yet.',
+            action: '- Add holdings to get recommendations.',
+          };
+        }
+
+        var total = list.reduce(function (s, p) { return s + Number(p.value || 0); }, 0);
+        var sortedByValue = list.slice().sort(function (a, b) { return Number(b.value || 0) - Number(a.value || 0); });
+        var top = sortedByValue[0];
+        var topPct = total > 0 ? ((Number(top.value || 0) / total) * 100).toFixed(1) : '0.0';
+
+        var sortedByGain = list.slice().sort(function (a, b) { return Number(b['gain_%'] || 0) - Number(a['gain_%'] || 0); });
+        var best = sortedByGain[0];
+        var worst = sortedByGain[sortedByGain.length - 1];
+
+        var risks = list.map(function (p) {
+          var pct = Number(p['chg_pct'] || 0);
+          var sev = Math.abs(pct) >= 2 ? 'elevated volatility' : 'normal volatility';
+          return '- ' + p.ticker + ': ' + sev + ' (' + pct + '% today)';
+        }).join('\n');
+
+        var action = '- ' + (Number(topPct) > 35
+          ? ('Consider trimming ' + top.ticker + ' concentration (' + topPct + '% of portfolio).')
+          : ('Keep allocation stable; largest position is ' + top.ticker + ' at ' + topPct + '%.'));
+
+        return {
+          mix: '- Largest holding: ' + top.ticker + ' (' + topPct + '%).\n- Portfolio is tech-heavy by composition.',
+          pnl: '- Best: ' + best.ticker + ' ' + best['gain_%'] + '% (+' + best['gain_$'] + '$).\n- Worst: ' + worst.ticker + ' ' + worst['gain_%'] + '% (' + worst['gain_$'] + '$).',
+          risks: risks,
+          action: action,
+        };
+      }
+
+      function enrichPayload(basePayload, execSnapshot) {
+        var payload = clone(basePayload || {});
+        payload.cardRuntimeById = payload.cardRuntimeById || {};
+        payload.dataObjectsByToken = payload.dataObjectsByToken || {};
+
+        var portfolio = payload.cardRuntimeById['card-portfolio'] || {};
+        var holdings = portfolio.card_data && Array.isArray(portfolio.card_data.holdings)
+          ? portfolio.card_data.holdings
+          : [];
+
+        var quoteRawList = execSnapshot && execSnapshot.completed
+          && execSnapshot.completed['card-market-prices']
+          ? execSnapshot.completed['card-market-prices'].quotes
+          : null;
+
+        var quoteResult = Array.isArray(quoteRawList)
+          ? quoteRawList.map(function (r) {
+              var m = r && r.chart && r.chart.result && r.chart.result[0] && r.chart.result[0].meta;
+              return m ? {
+                symbol: m.symbol,
+                shortName: m.longName || m.shortName || m.symbol,
+                regularMarketPrice: m.regularMarketPrice,
+                regularMarketChange: m.regularMarketChange,
+                regularMarketChangePercent: m.regularMarketChangePercent,
+              } : null;
+            }).filter(Boolean)
+          : [];
+
+        var normalizedQuotes = {
+          quoteResponse: {
+            result: quoteResult,
+            error: null,
+          },
+        };
+
+        var prices = quoteResult.map(function (q) {
+          return {
+            ticker: q.symbol,
+            name: q.shortName,
+            price: +(Number(q.regularMarketPrice || 0)).toFixed(2),
+            change: +(Number(q.regularMarketChange || 0)).toFixed(2),
+            chg_pct: +(Number(q.regularMarketChangePercent || 0)).toFixed(2),
+          };
+        });
+
+        var positions = computePositions(holdings, quoteResult);
+        var totalValue = +positions.reduce(function (sum, p) { return sum + Number(p.value || 0); }, 0).toFixed(2);
+        var gainers = positions.filter(function (p) { return Number(p.chg_pct || 0) > 0; }).length;
+        var losers = positions.filter(function (p) { return Number(p.chg_pct || 0) < 0; }).length;
+
+        var analysis = buildAnalysisFromPositions(positions);
+
+        payload.cardRuntimeById['card-market-prices'] = Object.assign({}, payload.cardRuntimeById['card-market-prices'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-market-prices',
+          card_data: (payload.cardRuntimeById['card-market-prices'] && payload.cardRuntimeById['card-market-prices'].card_data) || {},
+          computed_values: {
+            normalizedQuotes: normalizedQuotes,
+            prices: prices,
+          },
+          fetched_sources: {
+            quotes: quoteRawList || [],
+          },
+          requires: {
+            holdings: holdings,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-value'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-value'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-value',
+          card_data: (payload.cardRuntimeById['card-portfolio-value'] && payload.cardRuntimeById['card-portfolio-value'].card_data) || {},
+          computed_values: {
+            positions: positions,
+            totalValue: totalValue,
+            gainers: gainers,
+            losers: losers,
+            gainersLosers: gainers + ' up · ' + losers + ' down',
+          },
+          fetched_sources: {},
+          requires: {
+            holdings: holdings,
+            quotes: normalizedQuotes,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-intelligence'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-intelligence'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-intelligence',
+          card_data: (payload.cardRuntimeById['card-portfolio-intelligence'] && payload.cardRuntimeById['card-portfolio-intelligence'].card_data) || {},
+          computed_values: {
+            mix: analysis.mix,
+            pnl: analysis.pnl,
+            risks: analysis.risks,
+            action: analysis.action,
+          },
+          fetched_sources: {
+            analysis: analysis,
+          },
+          requires: {
+            positions: positions,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-risks'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-risks'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-risks',
+          card_data: (payload.cardRuntimeById['card-portfolio-risks'] && payload.cardRuntimeById['card-portfolio-risks'].card_data) || {},
+          computed_values: {},
+          fetched_sources: {},
+          requires: {
+            portfolio_risks: analysis.risks,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-action'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-action'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-action',
+          card_data: (payload.cardRuntimeById['card-portfolio-action'] && payload.cardRuntimeById['card-portfolio-action'].card_data) || {},
+          computed_values: {},
+          fetched_sources: {},
+          requires: {
+            portfolio_action: analysis.action,
+          },
+        });
+
+        payload.dataObjectsByToken.quotes = quoteRawList || [];
+        payload.dataObjectsByToken.analysis = analysis;
+
+        return payload;
+      }
+
+      function contextByCard(payload) {
+        var byId = {};
+        var holdings = payload && payload.cardRuntimeById && payload.cardRuntimeById['card-portfolio']
+          && payload.cardRuntimeById['card-portfolio'].card_data
+          && Array.isArray(payload.cardRuntimeById['card-portfolio'].card_data.holdings)
+          ? payload.cardRuntimeById['card-portfolio'].card_data.holdings
+          : [];
+
+        byId['card-market-prices'] = { holdings: holdings };
+        return byId;
+      }
+
+      function replaceNodeInPlace(target, source) {
+        Object.keys(target).forEach(function (k) { delete target[k]; });
+        Object.assign(target, clone(source));
+      }
+
+      function syncBoardNodes(nextNodes) {
+        var existingIds = new Set(board ? board.nodes.map(function (n) { return n.id; }) : []);
+        var nextById = {};
+        nextNodes.forEach(function (n) { nextById[n.id] = n; });
+
+        if (board) {
+          existingIds.forEach(function (id) {
+            if (!nextById[id]) board.remove(id);
+          });
+        }
+
+        nextNodes.forEach(function (nextNode) {
+          var existing = nodesById[nextNode.id];
+          if (existing) {
+            replaceNodeInPlace(existing, nextNode);
+          } else {
+            nodesById[nextNode.id] = clone(nextNode);
+            if (board) board.add(nodesById[nextNode.id]);
+          }
+        });
+
+        if (board) board.refresh();
+      }
+
+      async function refreshDisplay() {
+        try {
+          var base = app.buildPublishedRuntimePayload();
+          await sourceExecutor.run(INLINE_CARDS, contextByCard(base));
+          var payload = enrichPayload(base, sourceExecutor.snapshot());
+          var nodes = buildLiveCardModelsFromArtifacts(payload);
+          syncBoardNodes(nodes);
+        } catch (err) {
+          console.error('refreshDisplay failed:', err);
+        }
+      }
+
+      async function bootstrap() {
+        var initCards = hasPersistedBoardState() ? [] : clone(INLINE_CARDS);
+
+        sourceExecutor = createHttpSourceExecutor();
+
+        // Inject task executor at init time only.
+        app = createBoardLiveCardsLocalStorage(NAMESPACE, {
+          cards: initCards,
+          taskExecutor: async function (_ref, _args) {
+            // Keep init-time executor non-blocking. Real source fetches are
+            // executed by sourceExecutor.run(...) inside refreshDisplay().
+            return { dispatched: true };
+          },
+          onWarn: function (msg) { console.warn('[localstorage-runtime]', msg); },
+        });
+
+        document.getElementById('boardTitle').textContent = 'Portfolio Tracker (LocalStorage Runtime)';
+        document.getElementById('boardDesc').textContent =
+          'Cards are inline in HTML. Runtime state is persisted in localStorage.';
+
+        await Promise.race([
+          app.bootstrap(),
+          new Promise(function (resolve) { setTimeout(resolve, 1500); }),
+        ]);
+
+        var basePayload = app.buildPublishedRuntimePayload();
+        var payload = enrichPayload(basePayload, sourceExecutor.snapshot());
+        var initialNodes = buildLiveCardModelsFromArtifacts(payload);
+        initialNodes.forEach(function (n) { nodesById[n.id] = clone(n); });
+
+        var engine = LiveCard.init({
+          resolve: function (id) { return nodesById[id]; },
+          onPatchState: function (id, patch) {
+            app.patchCard(id, patch || {});
+            refreshDisplay();
+          },
+          onRefresh: function (_id) {
+            refreshDisplay();
+          },
+          onAction: function (id, actionType, payload) {
+            app.applyCardAction(id, actionType, payload || {});
+            refreshDisplay();
+          },
+          getChatMessages: function (id) {
+            return app.readChatRecords(id).map(function (m) {
+              return {
+                role: m && typeof m.role === 'string' ? m.role : 'system',
+                text: m && typeof m.text === 'string' ? m.text : '',
+                files: Array.isArray(m && m.files) ? m.files : [],
+              };
+            });
+          },
+        });
+
+        document.getElementById('boardRoot').innerHTML = '';
+        board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
+          nodes: Object.values(nodesById),
+          mode: currentMode,
+          canvas: {},
+        });
+
+        // Run real source fetching after first paint.
+        refreshDisplay().catch(function () {});
+
+        drainInterval = setInterval(function () {
+          refreshDisplay().catch(function () {});
+        }, 30_000);
+
+        document.getElementById('modeBoard').addEventListener('click', function () {
+          currentMode = 'board';
+          if (board) board.setMode('board');
+        });
+
+        document.getElementById('modeCanvas').addEventListener('click', function () {
+          currentMode = 'canvas';
+          if (board) board.setMode('canvas');
+        });
+
+        document.getElementById('autoLayout').addEventListener('click', function () {
+          currentMode = 'canvas';
+          if (board) {
+            board.setMode('canvas');
+            board.autoLayout();
+          }
+        });
+
+        document.getElementById('refreshAll').addEventListener('click', function () {
+          refreshDisplay();
+        });
+
+        document.getElementById('devModeToggle').addEventListener('change', function () {
+          if (board) board.setDevMode(this.checked);
+        });
+      }
+
+      function resetDemoStorage() {
+        if (drainInterval) clearInterval(drainInterval);
+        localStorage.clear();
+      }
+
+      document.getElementById('resetDemo').addEventListener('click', function () {
+        resetDemoStorage();
+        window.location.reload();
+      });
+
+      bootstrap().catch(function (err) {
+        console.error(err);
+        document.getElementById('boardRoot').innerHTML =
+          '<div class="alert alert-danger">Failed to start LocalStorage runtime demo: ' +
+          String(err && err.message || err) + '</div>';
+      });
+
+      window.addEventListener('beforeunload', function () {
+        if (drainInterval) clearInterval(drainInterval);
+      });
+    })();
+  </script>
+</body>
+</html>

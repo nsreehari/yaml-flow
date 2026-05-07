@@ -32,6 +32,7 @@ const BOARD_DIR = path.join(BOARD_ROOT, 'runtime');
 const RUNTIME_OUT_DIR = path.join(BOARD_ROOT, 'runtime-out');
 const TMP_CARDS_DIR = path.join(SURFACE_DIR, 'tmp-cards');
 const TMP_CHATS_DIR = path.join(TMP_CARDS_DIR, 'chats');
+const ECHO_HANDLER_PATH = path.join(TEST_ROOT, 'echo-chat-handler.mjs');
 const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/boards/default`;
 
 let serverProc: ChildProcess | null = null;
@@ -41,6 +42,32 @@ function createMinimalFixtureDirs() {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   fs.mkdirSync(SETUP_DIR, { recursive: true });
+  // Pre-write the echo chat-handler to a known path so it can be registered via
+  // DEMO_CHAT_HANDLER_PATH at server startup (public init writes the ExecutionRef
+  // into the board config store; the runtime reads it back via getConfig).
+  const echoHandlerSrc = `#!/usr/bin/env node
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+const args = process.argv.slice(2);
+function getArg(name) { const i = args.indexOf(name); return i !== -1 ? args[i + 1] : null; }
+const extraStr = getArg('--extraEncJson') || '';
+let extra = {};
+try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); } catch {}
+const { chatDir, lastChatFile } = extra;
+if (!chatDir || !lastChatFile) process.exit(0);
+let lastUserText = '';
+try {
+  const files = fs.readdirSync(chatDir).filter(f => /_user\\.txt$/.test(f)).sort();
+  if (files.length) lastUserText = fs.readFileSync(path.join(chatDir, files[files.length - 1]), 'utf-8').trim();
+} catch {}
+// Only echo for the dedicated chat-handler test message; other tests send unrelated chats
+// and rely on chat counts being deterministic.
+if (!/chat-handler test/.test(lastUserText)) process.exit(0);
+const serial = parseInt(String(lastChatFile).match(/^(\\d+)/)?.[1] ?? '0', 10) + 1;
+const outFile = path.join(chatDir, String(serial).padStart(3,'0') + '_assistant.txt');
+fs.writeFileSync(outFile, 'Echoing: ' + lastUserText + '\\n', 'utf-8');
+`;
+  fs.writeFileSync(ECHO_HANDLER_PATH, echoHandlerSrc, 'utf-8');
   // Pre-populate TMP_CARDS_DIR with source card JSON files so the runtime
   // can bootstrap cards and write chat files into the test-controlled location.
   fs.mkdirSync(TMP_CARDS_DIR, { recursive: true });
@@ -78,6 +105,7 @@ beforeAll(async () => {
       DEMO_SETUP_DIR: SETUP_DIR,
       DEMO_CARDS_DIR: TMP_CARDS_DIR,
       DEMO_TASK_EXECUTOR_PATH: path.join(exampleBoardDir, 'demo-task-executor.js'),
+      DEMO_CHAT_HANDLER_PATH: ECHO_HANDLER_PATH,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -487,33 +515,9 @@ describe('demo-server file upload + card list + download', () => {
   it('invokes .chat-handler after chat-send and demo handler writes an echo assistant reply', async () => {
     const chatCardId = 'card-portfolio';
 
-    // Write a minimal echo handler to the board runtime directory so the server picks it up.
-    // This avoids calling the real Copilot CLI (which is an LLM and not available in tests).
-    fs.mkdirSync(BOARD_DIR, { recursive: true });
-    const echoHandlerSrc = `#!/usr/bin/env node
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-const args = process.argv.slice(2);
-function getArg(name) { const i = args.indexOf(name); return i !== -1 ? args[i + 1] : null; }
-const extraStr = getArg('--extraEncJson') || '';
-let extra = {};
-try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); } catch {}
-const { chatDir, lastChatFile } = extra;
-if (!chatDir || !lastChatFile) process.exit(0);
-let lastUserText = '';
-try {
-  const files = fs.readdirSync(chatDir).filter(f => /_user\\.txt$/.test(f)).sort();
-  if (files.length) lastUserText = fs.readFileSync(path.join(chatDir, files[files.length - 1]), 'utf-8').trim();
-} catch {}
-const serial = parseInt(String(lastChatFile).match(/^(\\d+)/)?.[1] ?? '0', 10) + 1;
-const outFile = path.join(chatDir, String(serial).padStart(3,'0') + '_assistant.txt');
-fs.writeFileSync(outFile, 'Echoing: ' + lastUserText + '\\n', 'utf-8');
-`;
-    const echoHandlerPath = path.join(TEST_ROOT, 'echo-chat-handler.mjs');
-    fs.writeFileSync(echoHandlerPath, echoHandlerSrc, 'utf-8');
-    const handlerCmd = `"${process.execPath}" "${echoHandlerPath}"`;
-    fs.writeFileSync(path.join(BOARD_DIR, '.chat-handler'), handlerCmd, 'utf-8');
-
+    // The echo chat-handler is pre-registered via DEMO_CHAT_HANDLER_PATH at server
+    // startup (see beforeAll). Init records it as an ExecutionRef in the board's
+    // config store; the runtime reads it back via the public getConfig API.
     // Ensure board is bootstrapped so the card chats dir exists.
     await fetch(`${API_BASE}/bootstrap`);
 
@@ -538,8 +542,5 @@ fs.writeFileSync(outFile, 'Echoing: ' + lastUserText + '\\n', 'utf-8');
     const reply = fs.readFileSync(assistantPath, 'utf-8');
     expect(reply).toContain('Echoing');
     expect(reply).toContain(testMsg);
-
-    // Cleanup: remove .chat-handler so it does not affect other tests.
-    try { fs.unlinkSync(path.join(BOARD_DIR, '.chat-handler')); } catch { /* best-effort */ }
   }, 30000);
 });
