@@ -154,7 +154,7 @@ export function create(
 
   const serverRuntime = createSingleBoardServerRuntime({
     boardId: namespace,
-    base: {
+    boards: [{
       label: namespace,
       boardAdapter,
       baseRef,
@@ -163,7 +163,7 @@ export function create(
       cardSource,
       taskExecutorRef,
       chatHandlerRef,
-    },
+    }],
     invocationAdapter,
     logger: {
       info: (...args: unknown[]) => console.log('[board]', ...args),
