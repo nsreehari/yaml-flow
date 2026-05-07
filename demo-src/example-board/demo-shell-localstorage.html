@@ -73,7 +73,6 @@
       var nodesById = {};
       var app = null;
       var drainInterval = null;
-      var sourceExecutor = null;
 
       function clone(x) { return JSON.parse(JSON.stringify(x)); }
       function nowIso() { return new Date().toISOString(); }
@@ -236,162 +235,50 @@
         try { localStorage.setItem(TASK_CACHE_KEY, JSON.stringify(cache)); } catch (_) {}
       }
 
-      function createHttpSourceExecutor() {
-        var taskCache = readTaskCache();
-        var completed = taskCache.completed || {};
-        var failures = {};
-        var cache = new Map();
-        var fallbackQuotesBySymbol = {
-          AAPL: { symbol: 'AAPL', longName: 'Apple Inc.', regularMarketPrice: 290, regularMarketChange: 0, regularMarketChangePercent: 0 },
-          MSFT: { symbol: 'MSFT', longName: 'Microsoft', regularMarketPrice: 420, regularMarketChange: 0, regularMarketChangePercent: 0 },
-          GOOGL: { symbol: 'GOOGL', longName: 'Alphabet', regularMarketPrice: 395, regularMarketChange: 0, regularMarketChangePercent: 0 },
-          TSLA: { symbol: 'TSLA', longName: 'Tesla', regularMarketPrice: 399, regularMarketChange: 0, regularMarketChangePercent: 0 },
-        };
+      // ── Yahoo API helpers (demo) ─────────────────────────────────────────────
 
-        function buildFallbackYahooResponse(url) {
-          var m = String(url || '').match(/\/chart\/([^?]+)/);
-          var symbol = m ? decodeURIComponent(m[1]).toUpperCase() : 'UNKNOWN';
-          var meta = fallbackQuotesBySymbol[symbol] || {
-            symbol: symbol,
-            longName: symbol,
-            regularMarketPrice: 100,
-            regularMarketChange: 0,
-            regularMarketChangePercent: 0,
-          };
-          return {
-            chart: {
-              result: [{ meta: meta }],
-              error: null,
-            },
-          };
-        }
+      var MOCK_QUOTES = {
+        AAPL: { symbol: 'AAPL', longName: 'Apple Inc.', regularMarketPrice: 290, regularMarketChange: 0, regularMarketChangePercent: 0 },
+        MSFT: { symbol: 'MSFT', longName: 'Microsoft', regularMarketPrice: 420, regularMarketChange: 0, regularMarketChangePercent: 0 },
+        GOOGL: { symbol: 'GOOGL', longName: 'Alphabet', regularMarketPrice: 395, regularMarketChange: 0, regularMarketChangePercent: 0 },
+        TSLA: { symbol: 'TSLA', longName: 'Tesla', regularMarketPrice: 399, regularMarketChange: 0, regularMarketChangePercent: 0 },
+      };
 
-        function reportCompleted(cardId, bindTo, value) {
-          if (!completed[cardId]) completed[cardId] = {};
-          completed[cardId][bindTo] = clone(value);
-          if (failures[cardId]) delete failures[cardId][bindTo];
-        }
+      function buildMockYahooResponse(url) {
+        var m = String(url || '').match(/\/chart\/([^?]+)/);
+        var symbol = m ? decodeURIComponent(m[1]).toUpperCase() : 'UNKNOWN';
+        var meta = MOCK_QUOTES[symbol] || { symbol: symbol, longName: symbol, regularMarketPrice: 100, regularMarketChange: 0, regularMarketChangePercent: 0 };
+        return { chart: { result: [{ meta: meta }], error: null } };
+      }
 
-        function reportFailed(cardId, bindTo, error) {
-          if (!failures[cardId]) failures[cardId] = {};
-          failures[cardId][bindTo] = String(error || 'unknown error');
-        }
-
-        function interpolate(text, context) {
-          return String(text || '').replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, function (_m, key) {
+      function resolveUrlsForSourceDef(sourceDef, context) {
+        if (sourceDef.url && sourceDef.url.url) {
+          return [String(sourceDef.url.url).replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, function (_m, key) {
             return context && Object.prototype.hasOwnProperty.call(context, key) ? String(context[key]) : '';
+          })];
+        }
+        if (sourceDef['url-list']) {
+          if (Array.isArray(sourceDef._projections && sourceDef._projections.url_list)) {
+            return sourceDef._projections.url_list;
+          }
+          var holdings = context && Array.isArray(context.holdings) ? context.holdings : [];
+          return holdings.map(function (h) { return h && h.ticker; }).filter(Boolean).map(function (t) {
+            return 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(t) + '?interval=1d&range=1d';
           });
         }
+        return [];
+      }
 
-        async function fetchJsonWithCache(url, headers, ttlSec) {
-          var ttlMs = Number(ttlSec || 300) * 1000;
-          var key = 'GET:' + url + ':' + JSON.stringify(headers || {});
-          var now = Date.now();
-          var hit = cache.get(key);
-          if (hit && now - hit.at < ttlMs) return clone(hit.value);
-
-          var json;
-          try {
-            var resp = await fetch(url, { method: 'GET', headers: headers || {} });
-            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + url);
-            json = await resp.json();
-          } catch (_directErr) {
-            // Browser CORS fallback for Yahoo endpoints (5s timeout).
-            try {
-              var proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-              var controller = new AbortController();
-              var timeoutId = setTimeout(function () { controller.abort(); }, 5000);
-              var proxied = await fetch(proxyUrl, { method: 'GET', signal: controller.signal });
-              clearTimeout(timeoutId);
-              if (!proxied.ok) throw new Error('HTTP ' + proxied.status + ' for proxied ' + url);
-              json = await proxied.json();
-            } catch (_proxyErr) {
-              // Keep demo usable even when public proxy is down/throttled.
-              json = buildFallbackYahooResponse(url);
-            }
-          }
-
-          cache.set(key, { at: now, value: clone(json) });
-          return json;
-        }
-
-        function resolveUrlsFromSourceDef(sourceDef, context) {
-          if (sourceDef.url && sourceDef.url.url) {
-            return [interpolate(sourceDef.url.url, context || {})];
-          }
-
-          if (sourceDef['url-list']) {
-            if (Array.isArray(sourceDef._projections && sourceDef._projections.url_list)) {
-              return sourceDef._projections.url_list;
-            }
-
-            // Demo-specific url_list resolution for Yahoo v8 from holdings tickers.
-            var holdings = context && Array.isArray(context.holdings) ? context.holdings : [];
-            var tickers = holdings.map(function (h) { return h && h.ticker; }).filter(Boolean);
-            return tickers.map(function (t) {
-              return 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(t) + '?interval=1d&range=1d';
-            });
-          }
-
-          return [];
-        }
-
-        async function runSourceDef(cardId, sourceDef, context) {
-          var bindTo = sourceDef && sourceDef.bindTo;
-          if (!bindTo) return;
-
-          try {
-            var urls = resolveUrlsFromSourceDef(sourceDef, context);
-            if (!urls.length) {
-              reportFailed(cardId, bindTo, 'No URLs resolved from source_def');
-              return;
-            }
-
-            var headers = sourceDef.url && sourceDef.url.headers
-              ? sourceDef.url.headers
-              : (sourceDef['url-list'] && sourceDef['url-list'].headers ? sourceDef['url-list'].headers : {});
-            var cacheTimeout = sourceDef.url && sourceDef.url.cacheTimeout != null
-              ? sourceDef.url.cacheTimeout
-              : (sourceDef['url-list'] && sourceDef['url-list'].cacheTimeout != null ? sourceDef['url-list'].cacheTimeout : 300);
-
-            if (sourceDef.url) {
-              var one = await fetchJsonWithCache(urls[0], headers, cacheTimeout);
-              reportCompleted(cardId, bindTo, one);
-            } else {
-              var many = await Promise.all(urls.map(function (u) {
-                return fetchJsonWithCache(u, headers, cacheTimeout);
-              }));
-              reportCompleted(cardId, bindTo, many);
-            }
-          } catch (e) {
-            reportFailed(cardId, bindTo, e && e.message ? e.message : String(e));
-          }
-        }
-
-        async function run(cards, contextByCardId) {
-          var list = Array.isArray(cards) ? cards : [];
-          for (var i = 0; i < list.length; i++) {
-            var card = list[i];
-            var srcs = Array.isArray(card && card.source_defs) ? card.source_defs : [];
-            for (var j = 0; j < srcs.length; j++) {
-              await runSourceDef(card.id, srcs[j], (contextByCardId && contextByCardId[card.id]) || {});
-            }
-          }
-        }
-
-        function snapshot() {
-          return {
-            completed: clone(completed),
-            failures: clone(failures),
-          };
-        }
-
-        return {
-          run: run,
-          snapshot: snapshot,
-          reportCompleted: reportCompleted,
-          reportFailed: reportFailed,
-        };
+      /** Attempt a real network fetch for a single URL (direct → CORS proxy). Returns null on failure. */
+      function fetchUrlFromNetwork(url, headers) {
+        return fetch(url, { method: 'GET', headers: headers || {} })
+          .then(function (resp) { if (!resp.ok) throw new Error('HTTP ' + resp.status); return resp.json(); })
+          .catch(function () {
+            var proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+            return fetch(proxyUrl, { method: 'GET' })
+              .then(function (resp) { if (!resp.ok) throw new Error('HTTP ' + resp.status); return resp.json(); });
+          })
+          .catch(function () { return null; });
       }
 
       function computePositions(holdings, quoteResult) {
@@ -652,42 +539,78 @@
       async function bootstrap() {
         var initCards = hasPersistedBoardState() ? [] : clone(INLINE_CARDS);
 
-        sourceExecutor = createHttpSourceExecutor();
-
         // Task executor: the ONLY place that does HTTP fetches and caches results.
         // Invoked by the drain cycle via the in-browser execution ref.
+        //
+        // Strategy:
+        //   1. Immediately respond with cached data (or mock if first call).
+        //   2. Fire a background network fetch (not awaited) that writes to
+        //      localStorage cache when complete — available on next invocation.
+        //   3. One reportCompleted per execution. No refreshDisplay from here.
         app = createBoardLiveCardsLocalStorage(NAMESPACE, {
           cards: initCards,
           taskExecutor: async function (_ref, args) {
+            var sourceDef = args && args.source_def;
+            if (!sourceDef || !sourceDef.bindTo) return { dispatched: true };
+
+            // Extract cardId from callback token
+            var cardId = 'unknown';
             try {
-              var sourceDef = args && args.source_def;
-              if (!sourceDef || !sourceDef.bindTo) return { dispatched: true };
+              var token = args.callback && args.callback.token;
+              if (token) {
+                var decoded = JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/')));
+                cardId = decoded.cid || 'unknown';
+              }
+            } catch (_) {}
 
-              // Extract cardId from the callback token (base64url-encoded JSON with cid field)
-              var cardId = 'unknown';
-              try {
-                var token = args.callback && args.callback.token;
-                if (token) {
-                  var decoded = JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/')));
-                  cardId = decoded.cid || 'unknown';
-                }
-              } catch (_) {}
+            var bindTo = sourceDef.bindTo;
+            var context = contextByCard(app.buildPublishedRuntimePayload());
+            var cardContext = (context && context[cardId]) || {};
+            var urls = resolveUrlsForSourceDef(sourceDef, cardContext);
+            var headers = sourceDef.url && sourceDef.url.headers
+              ? sourceDef.url.headers
+              : (sourceDef['url-list'] && sourceDef['url-list'].headers ? sourceDef['url-list'].headers : {});
 
-              // Run the fetch through sourceExecutor (handles CORS fallback)
-              var context = contextByCard(app.buildPublishedRuntimePayload());
-              await sourceExecutor.run(
-                [{ id: cardId, source_defs: [sourceDef] }],
-                context
-              );
+            // Read existing cache
+            var taskCache = readTaskCache();
+            var cachedResult = taskCache.completed && taskCache.completed[cardId] && taskCache.completed[cardId][bindTo];
 
-              // Persist to localStorage — task executor owns the cache
-              writeTaskCache({ completed: sourceExecutor.snapshot().completed });
-
-              // Update display with fresh data
-              refreshDisplay();
-            } catch (e) {
-              console.warn('[task-executor] fetch failed:', e);
+            // Immediate response: use cached data if available, otherwise mock
+            var immediateResult;
+            if (cachedResult) {
+              immediateResult = cachedResult;
+            } else {
+              // First call — build mock responses for each URL
+              if (sourceDef.url) {
+                immediateResult = buildMockYahooResponse(urls[0] || '');
+              } else {
+                immediateResult = urls.map(function (u) { return buildMockYahooResponse(u); });
+              }
+              // Seed cache with mock so subsequent reads have something
+              if (!taskCache.completed) taskCache.completed = {};
+              if (!taskCache.completed[cardId]) taskCache.completed[cardId] = {};
+              taskCache.completed[cardId][bindTo] = clone(immediateResult);
+              writeTaskCache(taskCache);
             }
+
+            // Background fetch: update localStorage cache silently (no refreshDisplay)
+            Promise.all(urls.map(function (u) { return fetchUrlFromNetwork(u, headers); }))
+              .then(function (results) {
+                // Only update cache if at least one URL succeeded
+                var hasAny = results.some(function (r) { return r !== null; });
+                if (!hasAny) return;
+                var finalResults = results.map(function (r, i) {
+                  return r !== null ? r : buildMockYahooResponse(urls[i]);
+                });
+                var value = sourceDef.url ? finalResults[0] : finalResults;
+                var freshCache = readTaskCache();
+                if (!freshCache.completed) freshCache.completed = {};
+                if (!freshCache.completed[cardId]) freshCache.completed[cardId] = {};
+                freshCache.completed[cardId][bindTo] = clone(value);
+                writeTaskCache(freshCache);
+              })
+              .catch(function () { /* network failed — cache unchanged, next call uses existing */ });
+
             return { dispatched: true };
           },
           onWarn: function (msg) { console.warn('[localstorage-runtime]', msg); },
