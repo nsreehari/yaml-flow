@@ -639,7 +639,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat handler invocation ──────────────────────────────────────────────
 
-  function invokeChatHandler(cardId: string, chatsDir: string, lastChatFile: string): void {
+  function invokeChatHandler(cardId: string, chatsKeyPrefix: string, lastChatFile: string): void {
     const ctx = cardContextForCard(cardId);
     if (!ctx) return;
 
@@ -656,7 +656,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const args: Record<string, unknown> = {
       boardId,
       cardId: String(cardId),
-      chatDir: chatsDir,
+      chatDir: chatsKeyPrefix,
       chatProcessingMarkerKey: processingMarkerKey,
       lastChatFile,
       ...executionExtra,
@@ -683,7 +683,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): void {
     const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
-    let chatHandlerResult: { chatsDir: string; lastChatFile: string } | undefined;
+    let chatHandlerResult: { chatsKeyPrefix: string; lastChatFile: string } | undefined;
 
     persistCard(cardId, (card) => {
       const now = new Date().toISOString();
@@ -709,7 +709,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const userRecord = writeChatRecord(cardId, 'user', text, files);
           const recPath = userRecord.path as string;
           const lastSeg = recPath.includes('/') ? recPath.slice(recPath.lastIndexOf('/') + 1) : recPath;
-          chatHandlerResult = { chatsDir: `${sid}/chats`, lastChatFile: lastSeg };
+          chatHandlerResult = { chatsKeyPrefix: `${sid}/chats`, lastChatFile: lastSeg };
           for (const file of files) {
             if (!file || typeof file !== 'object') continue;
             const display = typeof file.name === 'string' ? file.name : 'file';
@@ -738,7 +738,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
 
     if (chatHandlerResult) {
-      invokeChatHandler(cardId, chatHandlerResult.chatsDir, chatHandlerResult.lastChatFile);
+      invokeChatHandler(cardId, chatHandlerResult.chatsKeyPrefix, chatHandlerResult.lastChatFile);
     }
   }
 

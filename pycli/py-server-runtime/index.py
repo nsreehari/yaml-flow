@@ -1117,7 +1117,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
 
     # ── Chat handler invocation ──────────────────────────────────────────────
 
-    def invoke_chat_handler(card_id: str, chats_dir: str, last_chat_file: str) -> None:
+    def invoke_chat_handler(card_id: str, chats_key_prefix: str, last_chat_file: str) -> None:
         ctx = card_context_for_card(card_id)
         if not ctx:
             return
@@ -1141,7 +1141,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         args = {
             "boardId": board_id,
             "cardId": str(card_id),
-            "chatDir": chats_dir,
+            "chatDir": chats_key_prefix,
             "chatProcessingMarkerKey": processing_marker_key,
             "lastChatFile": last_chat_file,
             **execution_extra,
@@ -1203,7 +1203,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                     user_record = write_chat_record(card_id, "user", text, files)
                     rec_path = user_record["path"]
                     last_seg = rec_path[rec_path.rfind("/") + 1:] if "/" in rec_path else rec_path
-                    chat_handler_result[0] = {"chatsDir": f"{sid}/chats", "lastChatFile": last_seg}
+                    chat_handler_result[0] = {"chatsKeyPrefix": f"{sid}/chats", "lastChatFile": last_seg}
                     for file in files:
                         if not file or not isinstance(file, dict):
                             continue
@@ -1234,7 +1234,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         persist_card(card_id, _action_updater)
 
         if chat_handler_result[0]:
-            invoke_chat_handler(card_id, chat_handler_result[0]["chatsDir"], chat_handler_result[0]["lastChatFile"])
+            invoke_chat_handler(card_id, chat_handler_result[0]["chatsKeyPrefix"], chat_handler_result[0]["lastChatFile"])
 
     # ── HTTP helpers ─────────────────────────────────────────────────────────
 
@@ -1304,7 +1304,9 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                 return True
 
             if method == "GET" and p == f"{api_base_path}/board-status":
-                json_response(res, 200, build_published_runtime_payload())
+                payload = build_published_runtime_payload()
+                payload["boardId"] = board_id
+                json_response(res, 200, payload)
                 return True
 
             # PATCH /cards/:id
