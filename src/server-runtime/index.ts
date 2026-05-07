@@ -43,7 +43,6 @@ import type {
   BoardContextConfig,
   InvocationAdapter,
   NotificationTransport,
-  CardSourceAdapter,
 } from './types.js';
 
 export type {
@@ -57,7 +56,6 @@ export type {
   BoardContextConfig,
   InvocationAdapter,
   NotificationTransport,
-  CardSourceAdapter,
 };
 
 // Re-export types for hosts
@@ -81,7 +79,6 @@ interface BoardContext {
   cardStore: ReturnType<typeof createCardStorePublic>;
   readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
   readonly chatsArtifacts: ReturnType<typeof createArtifactsStore>;
-  cardSource: CardSourceAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
   notifyRef?: import('./types.js').KindValueRef;
@@ -161,7 +158,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardStore,
       get filesArtifacts() { return _filesArtifacts ??= createArtifactsStore(artAdapter.blobStorage('files')); },
       get chatsArtifacts() { return _chatsArtifacts ??= createArtifactsStore(artAdapter.blobStorage('chats')); },
-      cardSource: cfg.cardSource,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
       notifyRef: cfg.notifyRef,
@@ -269,12 +265,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   async function upsertCardsFromSource(ctx: BoardContext, ctxIndex: number): Promise<void> {
     if (!ctx) return;
     if (ctx.cardsBootstrapped) return;
-    const cards = ctx.cardSource.listCards();
+    const result = ctx.cardStore.get({});
+    const cards: Array<Record<string, unknown>> = (result.status === 'success' && Array.isArray((result as any).data?.cards))
+      ? (result as any).data.cards
+      : [];
     for (const card of cards) {
       if (typeof card.id !== 'string') continue;
       cardOwnerIndex.set(card.id as string, ctxIndex);
-      const setResult = ctx.cardStore.set({ body: card });
-      if (setResult.status !== 'success') continue;
       ctx.board.upsertCard({ params: { cardId: card.id as string, restart: true } });
     }
     await ctx.board.processAccumulatedEvents({});
@@ -314,7 +311,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (!ctx || !ctx.cardStore) return [];
       const result = ctx.cardStore.get({});
       if (result.status !== 'success' || !Array.isArray((result as any).data?.cards)) {
-        return ctx.cardSource.listCards();
+        return [];
       }
       return (result as any).data.cards;
     };
@@ -963,6 +960,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     handleRuntimeApi,
     buildPublishedRuntimePayload,
     clearChatRecords,
+    get cardStore() { return boardContexts[0]?.cardStore ?? { set() { return { status: 'fail', error: 'no board context' }; } }; },
   };
 }
 

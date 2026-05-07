@@ -461,14 +461,15 @@ def build_board_context_config(label, board_dir, cards_dir, task_exec_path, chat
     artifacts_ref = parse_ref(f"::fs-path::{cards_dir}")
     artifacts_adapter = create_fs_board_platform_adapter(artifacts_ref)
 
+    card_store_ref = serialize_ref({"kind": "fs-path", "value": os.path.join(cards_dir, "cards")})
+
     return {
         "label": label,
         "board_adapter": board_adapter,
         "artifacts_adapter": artifacts_adapter,
         "base_ref": base_ref,
-        "card_store_ref": serialize_ref({"kind": "fs-path", "value": os.path.join(cards_dir, "cards")}),
+        "card_store_ref": card_store_ref,
         "outputs_store_ref": serialize_ref({"kind": "fs-path", "value": os.path.join(os.path.dirname(board_dir), "runtime-out", ".outputs")}),
-        "card_source": create_fs_card_source(cards_dir),
         "notify_ref": {"kind": "named-pipe", "value": notify_channel},
         "task_executor_ref": make_execution_ref(task_exec_path, "task-executor"),
         "chat_handler_ref": make_execution_ref(chat_handler_path_, "chat-handler"),
@@ -477,7 +478,7 @@ def build_board_context_config(label, board_dir, cards_dir, task_exec_path, chat
 
 
 def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
-    cards_dir = os.path.normpath(entry["cardsDir"]) if isinstance(entry.get("cardsDir"), str) else default_cards_dir
+    cards_dir = os.path.abspath(entry["cardsDir"]) if isinstance(entry.get("cardsDir"), str) else default_cards_dir
     board_root = os.path.join(setup_dir, f"board-{board_id_}")
     board_dir = os.path.join(board_root, "runtime")
 
@@ -504,7 +505,7 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
 
     board_host_config[board_id_] = {"cardsDir": cards_dir, "gandalfCardsDir": gandalf_cards_dir_, "boardDir": board_dir, "boardRoot": board_root}
 
-    return create_single_board_server_runtime({
+    single_board_runtime = create_single_board_server_runtime({
         "api_base_path": f"{api_base_path}/{board_id_}",
         "board_id": board_id_,
         "boards": boards,
@@ -516,6 +517,13 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
             "chatsBlobBasePath": os.path.join(cards_dir, "chats"),
         },
     })
+
+    # Host concern (Part A): read cards from FS source, seed into card store
+    cards = create_fs_card_source(cards_dir).list_cards()
+    if cards:
+        single_board_runtime.card_store.set({"body": cards})
+
+    return single_board_runtime
 
 
 runtime = create_multi_board_server_runtime({

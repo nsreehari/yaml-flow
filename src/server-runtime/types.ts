@@ -20,18 +20,6 @@ export type { ExecutionRef };
 export type { KindValueRef, KVStorage, BlobStorage };
 
 // ============================================================================
-// CardSourceAdapter — enumerates card JSON files for bootstrap
-// ============================================================================
-
-export interface CardSourceAdapter {
-  /**
-   * List all card definitions from the card source.
-   * Returns parsed card objects (each must have an `id: string` field).
-   */
-  listCards(): Array<Record<string, unknown>>;
-}
-
-// ============================================================================
 // InvocationAdapter — dispatches execution requests
 // ============================================================================
 
@@ -101,7 +89,6 @@ export interface BoardContextConfig {
   baseRef: KindValueRef;
   cardStoreRef: string;
   outputsStoreRef: string;
-  cardSource: CardSourceAdapter;
   /** Notification endpoint ref — e.g. ::named-pipe::<path> or ::firestore-watch::<path> */
   notifyRef?: KindValueRef;
   taskExecutorRef?: ExecutionRef;
@@ -156,6 +143,8 @@ export interface SingleBoardRuntime {
   handleRuntimeApi(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean>;
   buildPublishedRuntimePayload(): unknown;
   clearChatRecords(cardId: string): void;
+  /** Exposed card store — host calls cardStore.set({body: cards}) to seed definitions. */
+  readonly cardStore: { set(input: { body: unknown }): { status: string; error?: string } };
 }
 
 // ============================================================================

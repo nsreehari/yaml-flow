@@ -666,7 +666,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
             "card_store": card_store,
             "get_files_artifacts": get_files_artifacts,
             "get_chats_artifacts": get_chats_artifacts,
-            "card_source": cfg["card_source"],
             "card_store_ref": cfg["card_store_ref"],
             "outputs_store_ref": cfg["outputs_store_ref"],
             "notify_ref": cfg.get("notify_ref"),
@@ -785,14 +784,13 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
     def upsert_cards_from_source(ctx: Dict[str, Any], ctx_index: int) -> None:
         if not ctx or ctx.get("cards_bootstrapped"):
             return
-        cards = ctx["card_source"].list_cards()
+        result = ctx["card_store"].get({})
+        cards = (result.get("data", {}).get("cards", [])
+                 if result.get("status") == "success" else [])
         for card in cards:
             if not isinstance(card.get("id"), str):
                 continue
             card_owner_index[card["id"]] = ctx_index
-            set_result = ctx["card_store"].set({"body": card})
-            if set_result.get("status") != "success":
-                continue
             ctx["board"].upsert_card({"params": {"cardId": card["id"], "restart": True}})
         ctx["board"].process_accumulated_events({})
         ctx["cards_bootstrapped"] = True
@@ -828,8 +826,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
             result = ctx["card_store"].get({})
             if result.get("status") == "success" and isinstance(result.get("data", {}).get("cards"), list):
                 all_cards.extend(result["data"]["cards"])
-            else:
-                all_cards.extend(ctx["card_source"].list_cards())
         return all_cards
 
     # ── Status & runtime artifacts ───────────────────────────────────────────
@@ -1432,6 +1428,10 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         @property
         def cors_headers(self):
             return cors_headers
+
+        @property
+        def card_store(self):
+            return board_contexts[0]["card_store"] if board_contexts else None
 
     _SingleBoardRuntime.handle_runtime_api = staticmethod(handle_runtime_api)
     _SingleBoardRuntime.build_published_runtime_payload = staticmethod(build_published_runtime_payload)
