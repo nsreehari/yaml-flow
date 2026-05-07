@@ -107,6 +107,10 @@
       "import": "./dist/cli/browser-api/card-store-browser-api.js"
     },
     "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
+    "./server-runtime": {
+      "types": "./dist/server-runtime/index.d.ts",
+      "import": "./dist/server-runtime/index.js"
+    },
     "./package.json": "./package.json"
   },
   "browser": {
