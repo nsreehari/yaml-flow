@@ -144,7 +144,10 @@ export interface SingleBoardRuntime {
   buildPublishedRuntimePayload(): unknown;
   clearChatRecords(cardId: string): void;
   /** Exposed card store — host calls cardStore.set({body: cards}) to seed definitions. */
-  readonly cardStore: { set(input: { body: unknown }): { status: string; error?: string } };
+  readonly cardStore: {
+    get(input: { params?: { id?: string } }): { status: string; data?: { cards?: Array<Record<string, unknown>> }; error?: string };
+    set(input: { body: unknown }): { status: string; error?: string };
+  };
 }
 
 // ============================================================================

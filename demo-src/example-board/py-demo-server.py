@@ -518,10 +518,13 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
         },
     })
 
-    # Host concern (Part A): read cards from FS source, seed into card store
-    cards = create_fs_card_source(cards_dir).list_cards()
-    if cards:
-        single_board_runtime.card_store.set({"body": cards})
+    # Host concern (Part A): seed card store from FS source only if empty
+    existing = single_board_runtime.card_store.get({})
+    is_empty = existing.get("status") != "success" or not existing.get("data", {}).get("cards")
+    if is_empty:
+        cards = create_fs_card_source(cards_dir).list_cards()
+        if cards:
+            single_board_runtime.card_store.set({"body": cards})
 
     return single_board_runtime
 

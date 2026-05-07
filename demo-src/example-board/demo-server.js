@@ -338,9 +338,13 @@ const runtime = createMultiBoardServerRuntime({
       },
     });
 
-    // Host concern (Part A): read cards from FS source, seed into card store
-    const cards = createFsCardSource(cardsDir).listCards();
-    if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
+    // Host concern (Part A): seed card store from FS source only if empty
+    const existing = singleBoardRuntime.cardStore.get({});
+    const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
+    if (isEmpty) {
+      const cards = createFsCardSource(cardsDir).listCards();
+      if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
+    }
 
     return singleBoardRuntime;
   },
