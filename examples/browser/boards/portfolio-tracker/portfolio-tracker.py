@@ -46,7 +46,6 @@ PYTHON_RUNNER = sys.executable or PYTHON
 
 BOARD_PYCLI = os.path.join(_REPO_ROOT, 'pycli', 'main', 'board_live_cards_pycli.py')
 CARD_STORE_PYCLI = os.path.join(_REPO_ROOT, 'pycli', 'main', 'card_store_pycli.py')
-QUICKJS_BUNDLE = os.path.join(_REPO_ROOT, 'dist', 'pycli', 'quickjs-board-runtime.global.js')
 
 if RUN_PYCLI:
     if not os.path.exists(BOARD_PYCLI):
@@ -55,15 +54,11 @@ if RUN_PYCLI:
     if not os.path.exists(CARD_STORE_PYCLI):
         print(f'[ERROR] pycli entry not found: {CARD_STORE_PYCLI}', file=sys.stderr)
         sys.exit(1)
-    if not os.path.exists(QUICKJS_BUNDLE):
-        print(f'[ERROR] quickjs bundle not found: {QUICKJS_BUNDLE}', file=sys.stderr)
-        print('Run from yaml-flow root: npm run build:quickjs', file=sys.stderr)
-        sys.exit(1)
 
 if RUN_PYCLI:
     ACTIVE_BOARD_BIN = [PYTHON_RUNNER, BOARD_PYCLI]
     ACTIVE_CARD_STORE_BIN = [PYTHON_RUNNER, CARD_STORE_PYCLI]
-    ACTIVE_BOARD_SUFFIX = ['--bundle', QUICKJS_BUNDLE]
+    ACTIVE_BOARD_SUFFIX = []
 else:
     ACTIVE_BOARD_BIN = [NODE, BOARD_CLI]
     ACTIVE_CARD_STORE_BIN = [NODE, CARD_STORE_CLI]

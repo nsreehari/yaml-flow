@@ -731,7 +731,14 @@ def create_card_handler_fn(
 
         # Enriched card for source dispatch
         enriched_card = {**card}
-        enriched_card["source_defs"] = all_sources
+        if CardCompute:
+            enriched_sources = CardCompute.enrich_sources_sync(
+                all_sources,
+                {"card_data": card.get("card_data") or {}, "requires": requires},
+            )
+        else:
+            enriched_sources = all_sources
+        enriched_card["source_defs"] = enriched_sources
 
         now = _now_iso()
         run_queued_at = None if update else now

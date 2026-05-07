@@ -112,6 +112,49 @@ def _err(e: Any) -> dict:
 
 
 # ============================================================================
+# Dispatch helper
+# ============================================================================
+
+def _dispatch_source_fetch(entry: dict, executor_ref: dict, base_ref: dict, adapter: Any, warn) -> None:
+    """Dispatch a single execution-request entry (source-fetch)."""
+    if entry.get("taskKind") != "source-fetch":
+        warn(f'[process-accumulated-events] unknown taskKind "{entry.get("taskKind")}" — skipping')
+        return
+    p = entry.get("payload", {})
+    enriched_card = p.get("enrichedCard", {})
+    card_id = enriched_card.get("id", "unknown")
+    source_defs = enriched_card.get("source_defs", [])
+    callback_token = p.get("callbackToken", "")
+    rqt = p.get("rqt", "")
+    board_ref_str = p.get("boardRef", serialize_ref(base_ref))
+
+    for src in source_defs:
+        output_file = src.get("outputFile")
+        if not output_file:
+            warn(f'[dispatch] source "{src.get("bindTo")}" has no outputFile — skipping')
+            continue
+        source_token = encode_source_token({
+            "cbk": callback_token,
+            "rg": base_ref["value"],
+            "br": board_ref_str,
+            "cid": card_id,
+            "b": src.get("bindTo", ""),
+            "d": output_file,
+            "cs": None,
+            "rqt": rqt,
+        })
+        try:
+            adapter.dispatch_execution(executor_ref, {
+                "source_def": src,
+                "base_ref": board_ref_str,
+                "callback": {"token": source_token, "via": adapter.self_ref},
+            })
+        except Exception as e:
+            # Match TS: .catch((e) => taskFailedFn(cardId, e.message))
+            warn(f"[dispatch] source fetch failed for {card_id}: {e}")
+
+
+# ============================================================================
 # createBoardLiveCardsPublic — factory
 # ============================================================================
 
@@ -350,87 +393,119 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
 
         def process_accumulated_events(self, input_data: dict | None = None) -> dict:
             try:
-                on_dispatch_failed = lambda entry, error: append_journal_event({
-                    "type": "task-failed",
-                    "taskName": ((entry.get("payload") or {}).get("enrichedCard") or {}).get("id", "unknown"),
-                    "error": error,
-                    "timestamp": _now_iso(),
-                })
-
-                exec_req_store = create_execution_request_store(
-                    adapter.kv_storage("execution-requests"), on_dispatch_failed
-                )
-                real_card_runtime_store = create_card_runtime_store(adapter.kv_storage("card-runtime"))
-                real_fetched_sources_store = create_fetched_sources_store(
-                    adapter.blob_storage("sources"),
-                    lambda ref: adapter.resolve_blob(ref),
-                )
-
-                card_handler_adapters = {
-                    "cardStore": card_store(),
-                    "cardRuntimeStore": real_card_runtime_store,
-                    "fetchedSourcesStore": real_fetched_sources_store,
-                    "outputStore": output_store(),
-                    "executionRequestStore": exec_req_store,
-                }
-
-                envelope = load_envelope()
-                live = restore(envelope["graph"])
-                j_store = journal_store()
-                result = j_store.read_entries_after_cursor(envelope["lastDrainedJournalId"])
-                undrained = result["events"]
-                new_cursor = result["newCursor"]
-
-                tx: list[dict] = list(undrained)
-                cx: list[dict] = []
-                dx: list[dict] = []
-
-                def task_completed_fn(task_name: str, data: dict) -> None:
-                    tx.append({"type": "task-completed", "taskName": task_name, "data": data, "timestamp": _now_iso()})
-
-                def task_failed_fn(task_name: str, error: str) -> None:
-                    append_journal_event({"type": "task-failed", "taskName": task_name, "error": error, "timestamp": _now_iso()})
-
-                def write_cv_fn(card_id: str, values: dict) -> None:
-                    cx.append({"cardId": card_id, "values": values})
-
-                def write_do_fn(data: dict) -> None:
-                    dx.append(data)
-
-                handler_fn = create_card_handler_fn(
-                    base_ref, new_cursor, card_handler_adapters,
-                    task_completed_fn, task_failed_fn, write_cv_fn, write_do_fn,
-                )
-
-                rg = create_reactive_graph(live, {"handlers": {"card-handler": handler_fn}})
-
-                while tx:
-                    pending = tx
-                    tx = []
-                    rg.push_all(pending)
-                    rg.wait_for_handlers()
-
-                final_live = rg.get_state()
-                rg.dispose()
-
-                current_version = snapshot_store().read_snapshot(base_ref["value"]).get("version")
-                commit_envelope({"lastDrainedJournalId": new_cursor, "graph": snapshot(final_live)}, current_version)
-
-                out = output_store()
-                for item in cx:
-                    out.write_computed_values(item["cardId"], item["values"])
-                for data in dx:
-                    out.write_data_objects(data)
+                # Match TS withRelayLock: try-acquire, skip if already held
+                lock_adapter = adapter.lock
+                release = lock_adapter.try_acquire()
+                if not release:
+                    return _ok({"ran": False})  # relay: holder is already doing the work
 
                 try:
-                    status_obj = build_board_status_object(board_path, final_live)
-                    out.write_status_snapshot(status_obj)
-                except Exception as e:
-                    warn(f"[board-live-cards-public] status publish failed: {e}")
+                    self._drain_cycle()
+                finally:
+                    release()
+
+                # Continuation: check for new events accumulated while we held the lock
+                envelope = load_envelope()
+                j_store = journal_store()
+                result = j_store.read_entries_after_cursor(envelope["lastDrainedJournalId"])
+                if result["events"]:
+                    adapter.request_process_accumulated()
 
                 return _ok({"ran": True})
             except Exception as e:
                 return _err(e)
+
+        def _drain_cycle(self) -> None:
+            on_dispatch_failed = lambda entry, error: append_journal_event({
+                "type": "task-failed",
+                "taskName": ((entry.get("payload") or {}).get("enrichedCard") or {}).get("id", "unknown"),
+                "error": error,
+                "timestamp": _now_iso(),
+            })
+
+            exec_req_store = create_execution_request_store(
+                adapter.kv_storage("execution-requests"), on_dispatch_failed
+            )
+            real_card_runtime_store = create_card_runtime_store(adapter.kv_storage("card-runtime"))
+            real_fetched_sources_store = create_fetched_sources_store(
+                adapter.blob_storage("sources"),
+                lambda ref: adapter.resolve_blob(ref),
+            )
+
+            card_handler_adapters = {
+                "cardStore": card_store(),
+                "cardRuntimeStore": real_card_runtime_store,
+                "fetchedSourcesStore": real_fetched_sources_store,
+                "outputStore": output_store(),
+                "executionRequestStore": exec_req_store,
+            }
+
+            envelope = load_envelope()
+            live = restore(envelope["graph"])
+            j_store = journal_store()
+            result = j_store.read_entries_after_cursor(envelope["lastDrainedJournalId"])
+            undrained = result["events"]
+            new_cursor = result["newCursor"]
+
+            tx: list[dict] = list(undrained)
+            cx: list[dict] = []
+            dx: list[dict] = []
+
+            def task_completed_fn(task_name: str, data: dict) -> None:
+                tx.append({"type": "task-completed", "taskName": task_name, "data": data, "timestamp": _now_iso()})
+
+            def task_failed_fn(task_name: str, error: str) -> None:
+                append_journal_event({"type": "task-failed", "taskName": task_name, "error": error, "timestamp": _now_iso()})
+
+            def write_cv_fn(card_id: str, values: dict) -> None:
+                cx.append({"cardId": card_id, "values": values})
+
+            def write_do_fn(data: dict) -> None:
+                dx.append(data)
+
+            handler_fn = create_card_handler_fn(
+                base_ref, new_cursor, card_handler_adapters,
+                task_completed_fn, task_failed_fn, write_cv_fn, write_do_fn,
+            )
+
+            rg = create_reactive_graph(live, {"handlers": {"card-handler": handler_fn}})
+
+            while tx:
+                pending = tx
+                tx = []
+                rg.push_all(pending)
+                rg.wait_for_handlers()
+
+            final_live = rg.get_state()
+            rg.dispose()
+
+            current_version = snapshot_store().read_snapshot(base_ref["value"]).get("version")
+            commit_envelope({"lastDrainedJournalId": new_cursor, "graph": snapshot(final_live)}, current_version)
+
+            out = output_store()
+            for item in cx:
+                out.write_computed_values(item["cardId"], item["values"])
+            for data in dx:
+                out.write_data_objects(data)
+
+            # Flush card runtime overlay → real store
+            # (In current Python port, we use real stores directly — no overlay yet)
+
+            try:
+                status_obj = build_board_status_object(board_path, final_live)
+                out.write_status_snapshot(status_obj)
+            except Exception as e:
+                warn(f"[board-live-cards-public] status publish failed: {e}")
+
+            # Dispatch execution requests (source fetches) — detached, fire-and-forget
+            executor_ref = config_store().read_task_executor_ref() or {
+                "howToRun": "built-in",
+                "whatToRun": "::built-in::source-cli-task-executor",
+            }
+
+            exec_req_store.dispatch_entries_for_journal_id(new_cursor, lambda entry: _dispatch_source_fetch(
+                entry, executor_ref, base_ref, adapter, warn
+            ))
 
         def upsert_card(self, input_data: dict | None = None) -> dict:
             try:
@@ -531,20 +606,40 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 ref = params.get("ref")
                 if not token:
                     return _fail("sourceDataFetched requires params.token")
+                if not ref:
+                    return _fail("sourceDataFetched requires params.ref")
                 decoded = decode_source_token(token)
                 if not decoded:
                     return _fail("Invalid source token")
+
+                # Stage the fetched source data (matches TS ingestSourceDataStaged)
+                fetched_sources_store = create_fetched_sources_store(
+                    adapter.blob_storage("sources"),
+                    lambda r: adapter.resolve_blob(r),
+                )
+                delivery_token = adapter.gen_id()
+                fetched_sources_store.ingest_source_data_staged(
+                    decoded["cid"], decoded["d"], parse_ref(ref), delivery_token
+                )
+
+                # Decode the callback token to get taskName
+                cbk_decoded = decode_callback_token(decoded["cbk"])
+                if not cbk_decoded:
+                    return _fail("Invalid callback token embedded in source token")
+
+                fetched_at = _now_iso()
                 append_journal_event({
                     "type": "task-progress",
-                    "taskName": decoded["cid"],
+                    "taskName": cbk_decoded["taskName"],
                     "update": {
                         "bindTo": decoded["b"],
                         "outputFile": decoded["d"],
+                        "fetchedAt": fetched_at,
+                        "deliveryToken": delivery_token,
+                        "sourceChecksum": decoded.get("cs"),
                         "rqt": decoded.get("rqt", ""),
-                        "ref": ref,
-                        "deliveryToken": adapter.gen_id() if ref else None,
                     },
-                    "timestamp": _now_iso(),
+                    "timestamp": fetched_at,
                 })
                 self.process_accumulated_events()
                 return _ok()
@@ -561,14 +656,20 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 decoded = decode_source_token(token)
                 if not decoded:
                     return _fail("Invalid source token")
+
+                cbk_decoded = decode_callback_token(decoded["cbk"])
+                if not cbk_decoded:
+                    return _fail("Invalid callback token embedded in source token")
+
                 append_journal_event({
                     "type": "task-progress",
-                    "taskName": decoded["cid"],
+                    "taskName": cbk_decoded["taskName"],
                     "update": {
                         "bindTo": decoded["b"],
                         "outputFile": decoded["d"],
                         "failure": True,
                         "reason": reason,
+                        "sourceChecksum": decoded.get("cs"),
                     },
                     "timestamp": _now_iso(),
                 })

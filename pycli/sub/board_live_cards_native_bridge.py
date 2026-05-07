@@ -33,6 +33,7 @@ from sub.board_live_cards_adapters import (
     FsBlobStorage,
     FsJournalStorageAdapter,
     FsKvStorage,
+    PythonCommandExecutor,
     compute_stable_json_hash,
     dispatch_execution,
     parse_execution_ref as adapters_parse_execution_ref,
@@ -88,12 +89,37 @@ class NativeBoardPlatformAdapter:
         }
 
     def dispatch_execution(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
+        import tempfile
+        import uuid
+
         exec_ref = ExecutionRef(
             meta=ref.get("meta"),
-            how_to_run=ref.get("howToRun", ""),
-            what_to_run=ref.get("whatToRun", ""),
+            howToRun=ref.get("howToRun", ""),
+            whatToRun=ref.get("whatToRun", ""),
         )
-        return dispatch_execution(exec_ref, args, cwd=self._scope)
+
+        # Marshal high-level args into temp files (same as TS fs-board-adapter)
+        label = (args.get("source_def") or {}).get("bindTo") or uuid.uuid4().hex[:8]
+        board_tmp_dir = os.path.join(self._scope, ".tmp")
+        os.makedirs(board_tmp_dir, exist_ok=True)
+
+        in_file = os.path.join(board_tmp_dir, f"exec-in-{label}.json")
+        out_file = os.path.join(board_tmp_dir, f"exec-out-{label}.json")
+        err_file = os.path.join(board_tmp_dir, f"exec-err-{label}.txt")
+
+        with open(in_file, "w", encoding="utf-8") as f:
+            json.dump(args, f, indent=2)
+
+        in_ref = f"::fs-path::{in_file}"
+        out_ref = f"::fs-path::{out_file}"
+        err_ref = f"::fs-path::{err_file}"
+
+        return dispatch_execution(exec_ref, {
+            "subcommand": "run-source-fetch",
+            "inRef": in_ref,
+            "outRef": out_ref,
+            "errRef": err_ref,
+        }, cwd=self._scope, detached=True)
 
     def resolve_blob(self, ref: Dict[str, str]) -> str:
         kind = ref.get("kind", "")
@@ -111,7 +137,22 @@ class NativeBoardPlatformAdapter:
         return uuid.uuid4().hex[:32]
 
     def request_process_accumulated(self):
-        pass  # no-op for now; same as QuickJS bridge
+        """Spawn a detached process-accumulated-events pass (fire-and-forget).
+
+        Matches TS requestProcessAccumulatedDetached: spawns a background
+        process that re-acquires the lock and drains any new journal entries.
+        """
+        board_pycli = os.path.join(
+            self._repo_root, "pycli", "main", "board_live_cards_pycli.py"
+        )
+        cmd_args = [
+            board_pycli,
+            "process-accumulated-events",
+            "--base-ref", serialize_ref(self._base_ref),
+        ]
+        if self._notify_channel:
+            cmd_args.extend(["--notify-channel", self._notify_channel])
+        PythonCommandExecutor().spawn_detached(sys.executable, cmd_args, cwd=self._scope)
 
     def publish_board_change_notifications(self, notifications):
         pass  # no-op for now
