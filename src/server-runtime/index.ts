@@ -172,16 +172,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  const baseCtx = buildContext(options.base);
-  const gandalfCtx = options.gandalf ? buildContext(options.gandalf) : null;
-  const gandalfCardIdSet = new Set<string>();
+  const boardContexts: BoardContext[] = options.boards.map(buildContext);
+  const cardOwnerIndex = new Map<string, number>();
 
-  function isGandalfCard(cardId: string): boolean { return gandalfCardIdSet.has(cardId); }
+  function ownerIndex(cardId: string): number { return cardOwnerIndex.get(cardId) ?? 0; }
 
   // ── Artifacts stores ─────────────────────────────────────────────────────
 
   function artifactsStores(cardId: string) {
-    const ctx = isGandalfCard(cardId) ? gandalfCtx : baseCtx;
+    const ctx = boardContexts[ownerIndex(cardId)];
     return {
       files: ctx ? ctx.filesArtifacts : null,
       chats: ctx ? ctx.chatsArtifacts : null,
@@ -278,8 +277,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     await ctx.board.processAccumulatedEvents({});
     ctx.cardsBootstrapped = true;
   }
-
-  const cardIdSet = new Set<string>();
 
   async function initBoardAndSetup(): Promise<void> {
     for (const ctx of boardContexts) {

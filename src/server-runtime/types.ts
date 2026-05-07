@@ -90,7 +90,7 @@ export interface RuntimeLogger {
 }
 
 // ============================================================================
-// BoardContextConfig — per-board-context configuration (base or gandalf)
+// BoardContextConfig — per-board-layer configuration
 // ============================================================================
 
 export interface BoardContextConfig {

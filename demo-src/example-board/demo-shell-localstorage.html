@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Example Board Demo (LocalStorage Runtime)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/jsonata/jsonata.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"></script>
+  <script src="../../browser/card-compute.js"></script>
+  <script src="../../browser/live-cards.js"></script>
+  <script src="../../browser/board-livegraph-engine.js"></script>
+  <script src="../../browser/board-livecards-localstorage.js"></script>
+</head>
+<body class="bg-light">
+  <div class="container-fluid py-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div>
+        <h1 class="h4 mb-0" id="boardTitle">Example Board (LocalStorage Runtime)</h1>
+        <div class="small text-muted" id="boardDesc"></div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-sm btn-outline-primary" id="modeBoard">Board</button>
+        <button class="btn btn-sm btn-outline-primary" id="modeCanvas">Canvas</button>
+        <button class="btn btn-sm btn-outline-secondary" id="autoLayout">Auto Layout</button>
+        <button class="btn btn-sm btn-outline-dark" id="refreshAll">Refresh All</button>
+        <button class="btn btn-sm btn-outline-danger" id="clearStorage">Clear Storage</button>
+        <div class="form-check ms-2">
+          <input class="form-check-input" type="checkbox" id="devModeToggle" />
+          <label class="form-check-label" for="devModeToggle">Dev Mode</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-info small py-2 mb-3">
+      LocalStorage runtime mode: board state persisted in browser localStorage via
+      <code>board-livecards-localstorage</code> + <code>server-runtime</code>.
+      Source fetches use an in-browser mock task executor. No server required.
+    </div>
+
+    <div id="boardRoot">
+      <div class="d-flex align-items-center justify-content-center" style="height: 72vh;">
+        <div class="text-center">
+          <div class="spinner-border mb-3" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <p class="text-muted">Initializing board...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var buildLiveCardModelsFromArtifacts = window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts;
+      var createBoardLiveCardsLocalStorage = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.create;
+
+      if (!buildLiveCardModelsFromArtifacts || !createBoardLiveCardsLocalStorage) {
+        document.getElementById('boardRoot').innerHTML =
+          '<div class="alert alert-danger">Required scripts not loaded. Run <code>npm run build:browser</code> first.</div>';
+        return;
+      }
+
+      // ====================================================================
+      // Mock data — same portfolio domain as demo-shell-browser.html
+      // ====================================================================
+
+      var CARD_FILES = [
+        'card-portfolio.json',
+        'card-market-prices.json',
+        'card-portfolio-value.json',
+        'card-concentration.json',
+        'card-portfolio-risks.json',
+        'card-portfolio-action.json',
+      ];
+
+      var QUOTES_SEED = {
+        quoteResponse: {
+          result: [
+            { symbol: 'AAPL',  shortName: 'Apple Inc.',  regularMarketPrice: 180, regularMarketChange:  2.5, regularMarketChangePercent:  1.41 },
+            { symbol: 'MSFT',  shortName: 'Microsoft',   regularMarketPrice: 420, regularMarketChange: -1.2, regularMarketChangePercent: -0.28 },
+            { symbol: 'GOOGL', shortName: 'Alphabet',    regularMarketPrice: 165, regularMarketChange:  0.8, regularMarketChangePercent:  0.49 },
+            { symbol: 'TSLA',  shortName: 'Tesla',       regularMarketPrice: 250, regularMarketChange: -5.0, regularMarketChangePercent: -1.96 },
+          ],
+        },
+      };
+
+      var MOCK_ANALYSIS = {
+        mix:    '- AAPL dominates at 36%\n- Tech-heavy portfolio',
+        pnl:    '- Best: MSFT +35%\n- Worst: GOOGL -41%',
+        risks:  '- AAPL: earnings risk\n- TSLA: high volatility',
+        action: '- Trim GOOGL — below cost basis and deteriorating momentum',
+      };
+
+      // ====================================================================
+      // Mock task executor — resolves source_defs in-browser
+      // ====================================================================
+
+      function makeMockTaskExecutor() {
+        var quoteData = JSON.parse(JSON.stringify(QUOTES_SEED));
+        var mockAnalysis = JSON.parse(JSON.stringify(MOCK_ANALYSIS));
+
+        return {
+          executor: async function (_ref, args) {
+            // The dispatch args contain { source_def, base_ref, callback }
+            var sourceDef = args && args.source_def;
+            if (!sourceDef) return { dispatched: false, error: 'No source_def in args' };
+
+            // Simulate fetch delay
+            await new Promise(function (r) { setTimeout(r, 100); });
+
+            // Produce mock data based on the source_def shape
+            var data = null;
+            if (sourceDef.mock === 'quotes' || (sourceDef.projections && sourceDef.projections.url_list)) {
+              data = JSON.parse(JSON.stringify(quoteData));
+            } else if (sourceDef.copilot || sourceDef.model) {
+              data = JSON.parse(JSON.stringify(mockAnalysis));
+            }
+
+            if (data !== null && args.callback && args.callback.token) {
+              // Call sourceDataFetched back on the board to deliver the data
+              // In a real SPA this would be an HTTP callback; here we write directly
+              // to localStorage under the staged path
+              var token = args.callback.token;
+              var outputFile = sourceDef.outputFile || sourceDef.bindTo + '.json';
+              var ns = 'demo-board';
+              var stagedKey = ns + ':sources:blob:' + sourceDef.bindTo + '/.staged/' + token + '/' + outputFile;
+              try {
+                localStorage.setItem(stagedKey, JSON.stringify(data));
+              } catch (e) {
+                return { dispatched: false, error: 'Failed to stage data: ' + e.message };
+              }
+            }
+
+            return { dispatched: true };
+          },
+          setQuotes: function (next) { quoteData = JSON.parse(JSON.stringify(next)); },
+        };
+      }
+
+      // ====================================================================
+      // Board rendering
+      // ====================================================================
+
+      var NAMESPACE = 'demo-board';
+      var currentMode = 'canvas';
+      var board = null;
+      var nodesById = {};
+      var app = null;
+      var drainInterval = null;
+
+      function clone(x) { return JSON.parse(JSON.stringify(x)); }
+
+      function replaceNodeInPlace(target, source) {
+        Object.keys(target).forEach(function (k) { delete target[k]; });
+        Object.assign(target, clone(source));
+      }
+
+      function syncBoardNodes(nextNodes) {
+        var existingIds = new Set(board ? board.nodes.map(function (n) { return n.id; }) : []);
+        var nextById = {};
+        nextNodes.forEach(function (n) { nextById[n.id] = n; });
+
+        if (board) {
+          existingIds.forEach(function (id) {
+            if (!nextById[id]) board.remove(id);
+          });
+        }
+
+        nextNodes.forEach(function (nextNode) {
+          var existing = nodesById[nextNode.id];
+          if (existing) {
+            replaceNodeInPlace(existing, nextNode);
+          } else {
+            nodesById[nextNode.id] = clone(nextNode);
+            if (board) board.add(nodesById[nextNode.id]);
+          }
+        });
+
+        if (board) board.refresh();
+      }
+
+      function refreshDisplay() {
+        try {
+          var payload = app.buildPublishedRuntimePayload();
+          var nodes = buildLiveCardModelsFromArtifacts(payload);
+          syncBoardNodes(nodes);
+        } catch (err) {
+          console.error('refreshDisplay failed:', err);
+        }
+      }
+
+      async function bootstrap() {
+        // Load card definitions from JSON files
+        var cards = await Promise.all(
+          CARD_FILES.map(function (name) {
+            return fetch('./cards/' + name).then(function (r) { return r.json(); });
+          })
+        );
+
+        var mockServer = makeMockTaskExecutor();
+
+        // Create the localStorage-backed runtime
+        app = createBoardLiveCardsLocalStorage(NAMESPACE, {
+          cards: cards,
+          taskExecutor: mockServer.executor,
+          onWarn: function (msg) { console.warn('[localstorage-runtime]', msg); },
+        });
+
+        document.getElementById('boardTitle').textContent = 'Portfolio Tracker (LocalStorage Runtime)';
+        document.getElementById('boardDesc').textContent =
+          'Board state persisted in localStorage. Mock sources, no server.';
+
+        // Bootstrap: init + upsert cards + processAccumulatedEvents
+        await app.bootstrap();
+
+        // Build initial payload and render
+        var payload = app.buildPublishedRuntimePayload();
+        var initialNodes = buildLiveCardModelsFromArtifacts(payload);
+        initialNodes.forEach(function (n) { nodesById[n.id] = clone(n); });
+
+        var engine = LiveCard.init({
+          resolve: function (id) { return nodesById[id]; },
+          onPatchState: function (id, patch) {
+            app.patchCard(id, patch || {});
+            // Re-drain after patch to propagate downstream compute
+            app.bootstrap().then(refreshDisplay);
+          },
+          onRefresh: function (id) {
+            app.patchCard(id, {}); // trigger re-upsert
+            app.bootstrap().then(refreshDisplay);
+          },
+          onAction: function (id, actionType, payload) {
+            app.applyCardAction(id, actionType, payload || {});
+            refreshDisplay();
+          },
+          getChatMessages: function (id) {
+            return app.readChatRecords(id).map(function (m) {
+              return {
+                role: m && typeof m.role === 'string' ? m.role : 'system',
+                text: m && typeof m.text === 'string' ? m.text : '',
+                files: Array.isArray(m && m.files) ? m.files : [],
+              };
+            });
+          },
+        });
+
+        board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
+          nodes: Object.values(nodesById),
+          mode: currentMode,
+          canvas: { height: '72vh', overflow: 'auto' },
+        });
+
+        // Poll for drain-cycle updates (source callbacks write to localStorage)
+        drainInterval = setInterval(function () {
+          app.bootstrap().then(refreshDisplay).catch(function () {});
+        }, 3000);
+
+        // Expose for console debugging
+        window.demoLocalStorage = {
+          app: app,
+          setQuotes: function (nextQuotes) {
+            mockServer.setQuotes(nextQuotes);
+            app.bootstrap().then(refreshDisplay);
+          },
+          clearStorage: function () {
+            clearBoardStorage();
+            window.location.reload();
+          },
+        };
+
+        // Wire UI controls
+        document.getElementById('modeBoard').addEventListener('click', function () {
+          currentMode = 'board';
+          if (board) board.setMode('board');
+        });
+
+        document.getElementById('modeCanvas').addEventListener('click', function () {
+          currentMode = 'canvas';
+          if (board) board.setMode('canvas');
+        });
+
+        document.getElementById('autoLayout').addEventListener('click', function () {
+          currentMode = 'canvas';
+          if (board) {
+            board.setMode('canvas');
+            board.autoLayout();
+          }
+        });
+
+        document.getElementById('refreshAll').addEventListener('click', function () {
+          app.bootstrap().then(refreshDisplay);
+        });
+
+        document.getElementById('devModeToggle').addEventListener('change', function () {
+          if (board) board.setDevMode(this.checked);
+        });
+      }
+
+      function clearBoardStorage() {
+        if (drainInterval) clearInterval(drainInterval);
+        var prefix = NAMESPACE + ':';
+        var keysToRemove = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var key = localStorage.key(i);
+          if (key && key.startsWith(prefix)) keysToRemove.push(key);
+        }
+        keysToRemove.forEach(function (k) { localStorage.removeItem(k); });
+      }
+
+      document.getElementById('clearStorage').addEventListener('click', function () {
+        clearBoardStorage();
+        window.location.reload();
+      });
+
+      bootstrap().catch(function (err) {
+        console.error(err);
+        document.getElementById('boardRoot').innerHTML =
+          '<div class="alert alert-danger">Failed to start LocalStorage runtime demo: ' +
+          String(err && err.message || err) + '</div>';
+      });
+
+      window.addEventListener('beforeunload', function () {
+        if (drainInterval) clearInterval(drainInterval);
+      });
+    })();
+  </script>
+</body>
+</html>
