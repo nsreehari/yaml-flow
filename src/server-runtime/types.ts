@@ -42,6 +42,13 @@ export interface InvocationAdapter {
    * Returns a promise that resolves when the invocation is dispatched (not completed).
    */
   invoke(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
+
+  /**
+   * Optional synchronous describe call — asks the target to identify itself.
+   * Used for pre-init validation (e.g. confirming a chat-handler reports kind='chat-handler').
+   * Hosts that pre-register capabilities at deploy time may omit this.
+   */
+  describe?(ref: ExecutionRef): Promise<DescribeEnvelope | null>;
 }
 
 // ============================================================================
@@ -50,11 +57,15 @@ export interface InvocationAdapter {
 
 export interface NotificationTransport {
   /**
-   * Start listening for events on the given channel.
+   * Start listening for events on a notification endpoint identified by a kind-ref.
+   * The ref kind determines the transport mechanism:
+   *   ::named-pipe::/tmp/board-x.sock
+   *   ::firestore-watch::collections/board-x/notifications
+   *   ::signalr::https://x.service.signalr.net/hub/board-x
    * onEvent is called with parsed JSON notification objects.
    * Returns a teardown function.
    */
-  subscribe(channel: string, onEvent: (event: unknown) => void): Promise<() => void>;
+  subscribe(ref: KindValueRef, onEvent: (event: unknown) => void): Promise<() => void>;
 }
 
 // ============================================================================
@@ -85,10 +96,14 @@ export interface RuntimeLogger {
 export interface BoardContextConfig {
   label: string;
   boardAdapter: BoardPlatformAdapter;
+  /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
+  artifactsAdapter?: BoardPlatformAdapter;
   baseRef: KindValueRef;
   cardStoreRef: string;
   outputsStoreRef: string;
   cardSource: CardSourceAdapter;
+  /** Notification endpoint ref — e.g. ::named-pipe::<path> or ::firestore-watch::<path> */
+  notifyRef?: KindValueRef;
   taskExecutorRef?: ExecutionRef;
   chatHandlerRef?: ExecutionRef;
   inferenceAdapterRef?: ExecutionRef;

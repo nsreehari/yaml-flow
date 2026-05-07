@@ -84,6 +84,7 @@ interface BoardContext {
   cardSource: CardSourceAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
+  notifyRef?: import('./types.js').KindValueRef;
   taskExecutorRef?: import('./types.js').ExecutionRef;
   chatHandlerRef?: import('./types.js').ExecutionRef;
   inferenceAdapterRef?: import('./types.js').ExecutionRef;
@@ -147,8 +148,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       defaultCardKey: (id: string) => id,
     };
     const cardStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
-    const filesArtifacts = createArtifactsStore(cfg.boardAdapter.blobStorage('files'));
-    const chatsArtifacts = createArtifactsStore(cfg.boardAdapter.blobStorage('chats'));
+    const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
+    const filesArtifacts = createArtifactsStore(artAdapter.blobStorage('files'));
+    const chatsArtifacts = createArtifactsStore(artAdapter.blobStorage('chats'));
 
     return {
       label: cfg.label,
@@ -159,6 +161,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardSource: cfg.cardSource,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
+      notifyRef: cfg.notifyRef,
       taskExecutorRef: cfg.taskExecutorRef,
       chatHandlerRef: cfg.chatHandlerRef,
       inferenceAdapterRef: cfg.inferenceAdapterRef,
@@ -211,9 +214,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   async function ensureNotificationConsumer(ctx: BoardContext): Promise<void> {
     if (!ctx || ctx.notificationTeardown) return;
-    if (!notificationTransport) return;
-    const channel = `yaml-flow-server-${ctx.label}-${boardId || 'default'}`;
-    const teardown = await notificationTransport.subscribe(channel, (event) => {
+    if (!notificationTransport || !ctx.notifyRef) return;
+    const teardown = await notificationTransport.subscribe(ctx.notifyRef, (event) => {
       appendNotification(ctx.notification, event);
       broadcastToSseClients();
     });
@@ -244,6 +246,21 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
 
     await ensureNotificationConsumer(ctx);
+
+    // Pre-init validation: describe chat-handler if adapter supports it
+    if (ctx.chatHandlerRef && invocationAdapter.describe) {
+      try {
+        const desc = await invocationAdapter.describe(ctx.chatHandlerRef);
+        if (desc && desc.kind !== 'chat-handler') {
+          logger.warn(`[init] chat-handler describe returned kind="${desc.kind}", expected "chat-handler" for ${ctx.label}`);
+        } else if (desc) {
+          logger.info(`[init] chat-handler validated: ${desc.name} (protocol ${desc.protocolVersion}) for ${ctx.label}`);
+        }
+      } catch (err: unknown) {
+        logger.warn(`[init] chat-handler describe failed for ${ctx.label}: ${(err as Error)?.message || String(err)}`);
+      }
+    }
+
     ctx.initialized = true;
   }
 
