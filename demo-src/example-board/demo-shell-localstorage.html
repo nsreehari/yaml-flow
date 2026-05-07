@@ -350,7 +350,7 @@
         };
       }
 
-      function enrichPayload(basePayload, execSnapshot) {
+      function enrichPayload(basePayload) {
         var payload = clone(basePayload || {});
         payload.cardRuntimeById = payload.cardRuntimeById || {};
         payload.dataObjectsByToken = payload.dataObjectsByToken || {};
@@ -360,10 +360,18 @@
           ? portfolio.card_data.holdings
           : [];
 
-        var quoteRawList = execSnapshot && execSnapshot.completed
-          && execSnapshot.completed['card-market-prices']
-          ? execSnapshot.completed['card-market-prices'].quotes
+        // Read quotes from runtime's fetched_sources (populated by sourceDataFetched)
+        // Fall back to localStorage task cache for data from previous sessions
+        var marketPricesRuntime = payload.cardRuntimeById['card-market-prices'] || {};
+        var quoteRawList = marketPricesRuntime.fetched_sources && marketPricesRuntime.fetched_sources.quotes
+          ? marketPricesRuntime.fetched_sources.quotes
           : null;
+        if (!quoteRawList) {
+          var taskCache = readTaskCache();
+          quoteRawList = taskCache.completed && taskCache.completed['card-market-prices']
+            ? taskCache.completed['card-market-prices'].quotes
+            : null;
+        }
 
         var quoteResult = Array.isArray(quoteRawList)
           ? quoteRawList.map(function (r) {
@@ -526,9 +534,7 @@
       async function refreshDisplay() {
         try {
           var base = app.buildPublishedRuntimePayload();
-          // Read cached fetch results from task executor cache (no fetching here)
-          var cachedSnapshot = { completed: readTaskCache().completed || {} };
-          var payload = enrichPayload(base, cachedSnapshot);
+          var payload = enrichPayload(base);
           var nodes = buildLiveCardModelsFromArtifacts(payload);
           syncBoardNodes(nodes);
         } catch (err) {
@@ -539,28 +545,29 @@
       async function bootstrap() {
         var initCards = hasPersistedBoardState() ? [] : clone(INLINE_CARDS);
 
-        // Task executor: the ONLY place that does HTTP fetches and caches results.
+        // Task executor: the ONLY place that does HTTP fetches.
         // Invoked by the drain cycle via the in-browser execution ref.
         //
         // Strategy:
-        //   1. Immediately respond with cached data (or mock if first call).
+        //   1. Immediately respond with cached data (or mock if first call) via
+        //      writeMemoryBlob + reportSourceFetched → board transitions card.
         //   2. Fire a background network fetch (not awaited) that writes to
-        //      localStorage cache when complete — available on next invocation.
-        //   3. One reportCompleted per execution. No refreshDisplay from here.
+        //      localStorage cache. Next invocation returns fresher data.
+        //   3. One reportSourceFetched per execution — the board handles the rest.
         app = createBoardLiveCardsLocalStorage(NAMESPACE, {
           cards: initCards,
           taskExecutor: async function (_ref, args) {
             var sourceDef = args && args.source_def;
             if (!sourceDef || !sourceDef.bindTo) return { dispatched: true };
 
+            var callbackToken = args.callback && args.callback.token;
+            if (!callbackToken) return { dispatched: true };
+
             // Extract cardId from callback token
             var cardId = 'unknown';
             try {
-              var token = args.callback && args.callback.token;
-              if (token) {
-                var decoded = JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/')));
-                cardId = decoded.cid || 'unknown';
-              }
+              var decoded = JSON.parse(atob(callbackToken.replace(/-/g, '+').replace(/_/g, '/')));
+              cardId = decoded.cid || 'unknown';
             } catch (_) {}
 
             var bindTo = sourceDef.bindTo;
@@ -571,7 +578,7 @@
               ? sourceDef.url.headers
               : (sourceDef['url-list'] && sourceDef['url-list'].headers ? sourceDef['url-list'].headers : {});
 
-            // Read existing cache
+            // Read existing localStorage cache
             var taskCache = readTaskCache();
             var cachedResult = taskCache.completed && taskCache.completed[cardId] && taskCache.completed[cardId][bindTo];
 
@@ -580,23 +587,25 @@
             if (cachedResult) {
               immediateResult = cachedResult;
             } else {
-              // First call — build mock responses for each URL
-              if (sourceDef.url) {
-                immediateResult = buildMockYahooResponse(urls[0] || '');
-              } else {
-                immediateResult = urls.map(function (u) { return buildMockYahooResponse(u); });
-              }
-              // Seed cache with mock so subsequent reads have something
+              // First call — build mock responses
+              immediateResult = sourceDef.url
+                ? buildMockYahooResponse(urls[0] || '')
+                : urls.map(function (u) { return buildMockYahooResponse(u); });
+              // Seed localStorage cache with mock
               if (!taskCache.completed) taskCache.completed = {};
               if (!taskCache.completed[cardId]) taskCache.completed[cardId] = {};
               taskCache.completed[cardId][bindTo] = clone(immediateResult);
               writeTaskCache(taskCache);
             }
 
-            // Background fetch: update localStorage cache silently (no refreshDisplay)
+            // Write immediate result to in-memory blob and report to board
+            var blobKey = cardId + '/' + (sourceDef.outputFile || bindTo + '.json');
+            var blobRef = app.writeMemoryBlob(blobKey, JSON.stringify(immediateResult));
+            app.reportSourceFetched(callbackToken, blobRef);
+
+            // Background fetch: update localStorage cache silently for next invocation
             Promise.all(urls.map(function (u) { return fetchUrlFromNetwork(u, headers); }))
               .then(function (results) {
-                // Only update cache if at least one URL succeeded
                 var hasAny = results.some(function (r) { return r !== null; });
                 if (!hasAny) return;
                 var finalResults = results.map(function (r, i) {
@@ -609,7 +618,7 @@
                 freshCache.completed[cardId][bindTo] = clone(value);
                 writeTaskCache(freshCache);
               })
-              .catch(function () { /* network failed — cache unchanged, next call uses existing */ });
+              .catch(function () { /* network failed — cache unchanged */ });
 
             return { dispatched: true };
           },
@@ -626,8 +635,7 @@
         ]);
 
         var basePayload = app.buildPublishedRuntimePayload();
-        var cachedSnapshot = { completed: readTaskCache().completed || {} };
-        var payload = enrichPayload(basePayload, cachedSnapshot);
+        var payload = enrichPayload(basePayload);
         var initialNodes = buildLiveCardModelsFromArtifacts(payload);
         initialNodes.forEach(function (n) { nodesById[n.id] = clone(n); });
 

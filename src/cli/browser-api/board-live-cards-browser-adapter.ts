@@ -113,7 +113,10 @@ export function createBrowserBoardPlatformAdapter(
     notifyChannel?: string;
     onWarn?: (msg: string) => void;
   },
-): BoardPlatformAdapter & { registerHandler(name: string, handler: InBrowserHandler): void } {
+): BoardPlatformAdapter & {
+  registerHandler(name: string, handler: InBrowserHandler): void;
+  writeMemoryBlob(key: string, data: string): string;
+} {
   const selfRef = opts?.callbackBaseUrl
     ? {
         meta: 'board-live-cards',
@@ -128,6 +131,9 @@ export function createBrowserBoardPlatformAdapter(
 
   // In-browser handler registry: maps whatToRun → handler function
   const handlerRegistry = new Map<string, InBrowserHandler>();
+
+  // In-memory blob store: ephemeral key→value map for blob refs (kind: 'in-memory')
+  const memoryBlobs = new Map<string, string>();
 
   const lock = createInMemoryRelayLock();
 
@@ -199,8 +205,15 @@ export function createBrowserBoardPlatformAdapter(
     },
 
     resolveBlob(ref: KindValueRef): string {
-      // In the browser, blobs are stored in localStorage under the board namespace.
-      // The ref value is treated as a logical localStorage key.
+      // In-memory blobs: written by task executors, ephemeral (page-lifetime)
+      if (ref.kind === 'in-memory') {
+        const content = memoryBlobs.get(ref.value);
+        if (content === null || content === undefined) {
+          throw new Error(`resolveBlob: in-memory blob not found: ${serializeRef(ref)}`);
+        }
+        return content;
+      }
+      // localStorage blobs: persistent across page reloads
       const storage = createLocalStorageBlobStorage(namespace);
       const content = storage.read(ref.value);
       if (content === null) {
@@ -228,6 +241,11 @@ export function createBrowserBoardPlatformAdapter(
 
     registerHandler(name: string, handler: InBrowserHandler) {
       handlerRegistry.set(name, handler);
+    },
+
+    writeMemoryBlob(key: string, data: string): string {
+      memoryBlobs.set(key, data);
+      return `::in-memory::${key}`;
     },
   };
 }

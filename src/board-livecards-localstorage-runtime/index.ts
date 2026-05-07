@@ -88,6 +88,25 @@ export interface BrowserBoardRuntime {
   /** Clear chat records for a card. */
   clearChatRecords(cardId: string): void;
 
+  /**
+   * Write data to an in-memory blob and return its serialized ref (::in-memory::key).
+   * Use this to stage fetched source data before calling reportSourceFetched.
+   */
+  writeMemoryBlob(key: string, data: string): string;
+
+  /**
+   * Report that a source fetch completed successfully.
+   * The ref must point to a blob containing the fetched data (e.g. from writeMemoryBlob).
+   * This triggers the board's sourceDataFetched → journal event → drain → card transition.
+   */
+  reportSourceFetched(token: string, ref: string): void;
+
+  /**
+   * Report that a source fetch failed.
+   * This triggers the board's sourceDataFetchFailure → journal event → drain.
+   */
+  reportSourceFetchFailure(token: string, reason: string): void;
+
   /** Access the underlying SingleBoardRuntime for advanced use. */
   readonly runtime: SingleBoardRuntime;
 }
@@ -115,12 +134,6 @@ export function create(
   const baseRef = parseRef(`::localstorage::${namespace}`);
   const cardStoreRef = serializeRef({ kind: 'localstorage', value: `${namespace}:card-store` });
   const outputsStoreRef = serializeRef({ kind: 'localstorage', value: `${namespace}:outputs` });
-
-  // ── Card source adapter — serves the cards passed at creation time ───────
-
-  const cardSource = {
-    listCards: () => cards,
-  };
 
   // ── Invocation adapter — routes to in-browser functions or HTTP ──────────
 
@@ -173,7 +186,6 @@ export function create(
       baseRef,
       cardStoreRef,
       outputsStoreRef,
-      cardSource,
       notifyRef: { kind: 'in-memory-bus', value: notifyChannel },
       taskExecutorRef,
       chatHandlerRef,
@@ -186,6 +198,16 @@ export function create(
       error: (...args: unknown[]) => console.error('[board]', ...args),
     },
   });
+
+  // ── Host concern (Part A): seed card store only if empty ─────────────────
+
+  if (cards.length) {
+    const existing = serverRuntime.cardStore.get({});
+    const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
+    if (isEmpty) {
+      serverRuntime.cardStore.set({ body: cards });
+    }
+  }
 
   // ── Expose direct-call methods via handleRuntimeApi with synthetic req/res
 
@@ -271,6 +293,18 @@ export function create(
 
     clearChatRecords(cardId: string) {
       serverRuntime.clearChatRecords(cardId);
+    },
+
+    writeMemoryBlob(key: string, data: string): string {
+      return boardAdapter.writeMemoryBlob(key, data);
+    },
+
+    reportSourceFetched(token: string, ref: string) {
+      serverRuntime.reportSourceFetched(token, ref);
+    },
+
+    reportSourceFetchFailure(token: string, reason: string) {
+      serverRuntime.reportSourceFetchFailure(token, reason);
     },
 
     get runtime() {

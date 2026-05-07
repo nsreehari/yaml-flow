@@ -23,7 +23,7 @@ import {
 } from '../cli/common/board-live-cards-public.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
-import { createCardStore } from '../cli/common/board-live-cards-lib.js';
+import { createCardStore, createFetchedSourcesStore } from '../cli/common/board-live-cards-lib.js';
 
 import {
   createArtifactsStore,
@@ -79,6 +79,7 @@ interface BoardContext {
   cardStore: ReturnType<typeof createCardStorePublic>;
   readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
   readonly chatsArtifacts: ReturnType<typeof createArtifactsStore>;
+  boardAdapter: import('./types.js').BoardPlatformAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
   notifyRef?: import('./types.js').KindValueRef;
@@ -158,6 +159,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardStore,
       get filesArtifacts() { return _filesArtifacts ??= createArtifactsStore(artAdapter.blobStorage('files')); },
       get chatsArtifacts() { return _chatsArtifacts ??= createArtifactsStore(artAdapter.blobStorage('chats')); },
+      boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
       notifyRef: cfg.notifyRef,
@@ -378,12 +380,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   function readSourcePayloads(cardDef: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     if (!Array.isArray(cardDef.source_defs)) return out;
-    const ctx = boardContexts[ownerIndex(cardDef.id as string)];
-    const dataObjects = ctx ? ctx.notification.dataObjects : {};
+    const cardId = cardDef.id as string;
+    const ctx = boardContexts[ownerIndex(cardId)];
+    if (!ctx) return out;
+    const sourcesStore = createFetchedSourcesStore(
+      ctx.boardAdapter.blobStorage('sources'),
+      (ref) => ctx.boardAdapter.resolveBlob(ref),
+    );
     for (const sd of cardDef.source_defs as Array<Record<string, unknown>>) {
-      if (!sd?.bindTo) continue;
-      if (Object.prototype.hasOwnProperty.call(dataObjects, sd.bindTo as string)) {
-        out[sd.bindTo as string] = dataObjects[sd.bindTo as string];
+      if (!sd?.bindTo || !sd?.outputFile) continue;
+      const content = sourcesStore.readSourceData(cardId, sd.outputFile as string);
+      if (content !== null) {
+        out[sd.bindTo as string] = content;
       }
     }
     return out;
@@ -433,6 +441,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
 
     return {
+      boardId,
       cardDefinitions,
       statusSnapshot: readStatusSnapshot(),
       dataObjectsByToken,
@@ -960,6 +969,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     handleRuntimeApi,
     buildPublishedRuntimePayload,
     clearChatRecords,
+    reportSourceFetched(token: string, ref: string) {
+      const ctx = boardContexts[0];
+      if (!ctx) return { status: 'fail', error: 'no board context' };
+      return ctx.board.sourceDataFetched({ params: { token, ref } });
+    },
+    reportSourceFetchFailure(token: string, reason: string) {
+      const ctx = boardContexts[0];
+      if (!ctx) return { status: 'fail', error: 'no board context' };
+      return ctx.board.sourceDataFetchFailure({ params: { token, reason } });
+    },
     get cardStore() { return boardContexts[0]?.cardStore ?? { set() { return { status: 'fail', error: 'no board context' }; } }; },
   };
 }
