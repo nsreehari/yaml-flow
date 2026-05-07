@@ -296,10 +296,13 @@
             if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + url);
             json = await resp.json();
           } catch (_directErr) {
-            // Browser CORS fallback for Yahoo endpoints.
+            // Browser CORS fallback for Yahoo endpoints (5s timeout).
             try {
               var proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-              var proxied = await fetch(proxyUrl, { method: 'GET' });
+              var controller = new AbortController();
+              var timeoutId = setTimeout(function () { controller.abort(); }, 5000);
+              var proxied = await fetch(proxyUrl, { method: 'GET', signal: controller.signal });
+              clearTimeout(timeoutId);
               if (!proxied.ok) throw new Error('HTTP ' + proxied.status + ' for proxied ' + url);
               json = await proxied.json();
             } catch (_proxyErr) {
@@ -740,8 +743,16 @@
           canvas: {},
         });
 
-        // Run real source fetching after first paint.
-        refreshDisplay().catch(function () {});
+        // Run source fetching immediately at bootstrap (don't wait for drain cycle)
+        (async function () {
+          try {
+            var context = contextByCard(app.buildPublishedRuntimePayload());
+            var cardsWithSources = INLINE_CARDS.filter(function (c) { return c.source_defs && c.source_defs.length; });
+            await sourceExecutor.run(cardsWithSources, context);
+            writeTaskCache({ completed: sourceExecutor.snapshot().completed });
+            refreshDisplay();
+          } catch (_) { /* drain cycle will retry */ }
+        })();
 
         drainInterval = setInterval(function () {
           refreshDisplay().catch(function () {});
