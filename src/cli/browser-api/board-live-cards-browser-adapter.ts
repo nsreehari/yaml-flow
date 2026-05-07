@@ -38,18 +38,70 @@ function createInMemoryRelayLock(): AtomicRelayLock {
 }
 
 // ============================================================================
+// In-memory notification bus (keyed by channel name)
+//
+// Same role as named-pipe in Node.js: the adapter publishes to a channel,
+// and a NotificationTransport subscribes on a matching KindValueRef.
+// Kind: "in-memory-bus" — e.g. { kind: 'in-memory-bus', value: 'my-board:notify' }
+// ============================================================================
+
+interface InMemoryBus {
+  publish(event: unknown): void;
+  subscribe(onEvent: (event: unknown) => void): () => void;
+}
+
+const _busRegistry = new Map<string, InMemoryBus>();
+
+function getInMemoryNotificationBus(channel: string): InMemoryBus {
+  let bus = _busRegistry.get(channel);
+  if (!bus) {
+    const listeners = new Set<(event: unknown) => void>();
+    bus = {
+      publish(event) { for (const fn of listeners) fn(event); },
+      subscribe(onEvent) {
+        listeners.add(onEvent);
+        return () => { listeners.delete(onEvent); };
+      },
+    };
+    _busRegistry.set(channel, bus);
+  }
+  return bus;
+}
+
+/**
+ * In-memory NotificationTransport for the browser.
+ * Subscribes to the same in-memory bus that the adapter publishes to.
+ * Use with notifyRef: { kind: 'in-memory-bus', value: '<channel>' }
+ */
+export function createInMemoryNotificationTransport(): import('../../server-runtime/types.js').NotificationTransport {
+  return {
+    async subscribe(ref, onEvent) {
+      if (ref.kind !== 'in-memory-bus') {
+        console.warn(`[in-memory-transport] unsupported kind: ${ref.kind}`);
+        return () => {};
+      }
+      const bus = getInMemoryNotificationBus(ref.value);
+      return bus.subscribe(onEvent);
+    },
+  };
+}
+
+// ============================================================================
 // createBrowserBoardPlatformAdapter
 //
 // namespace — logical name for this board instance (e.g. 'my-board').
 //   Used as the localStorage key prefix so multiple boards can coexist.
 // opts.callbackBaseUrl — if set, used as selfRef.whatToRun for http callbacks.
 //   e.g. 'https://my-app.example.com/api/board'
+// opts.notifyChannel — in-memory notification channel name.
+//   The adapter publishes to this channel; pair with notifyRef { kind: 'in-memory-bus', value: channel }.
 // ============================================================================
 
 export function createBrowserBoardPlatformAdapter(
   namespace: string,
   opts?: {
     callbackBaseUrl?: string;
+    notifyChannel?: string;
     onWarn?: (msg: string) => void;
   },
 ): BoardPlatformAdapter {
@@ -144,6 +196,12 @@ export function createBrowserBoardPlatformAdapter(
     genId: (): string => globalThis.crypto.randomUUID().replace(/-/g, ''),
 
     kvStorageForRef: (ref: string) => createLocalStorageKvStorage(parseRef(ref).value),
+
+    publishBoardChangeNotifications(notifications) {
+      if (!opts?.notifyChannel || notifications.length === 0) return;
+      const bus = getInMemoryNotificationBus(opts.notifyChannel);
+      for (const n of notifications) bus.publish(n);
+    },
 
     // requestProcessAccumulated is intentionally absent — the browser caller
     // drives drain cycles via polling or setInterval.

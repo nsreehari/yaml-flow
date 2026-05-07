@@ -22,7 +22,7 @@
 
 import { createSingleBoardServerRuntime } from '../server-runtime/index.js';
 import type { SingleBoardRuntime, ExecutionRef, InvocationAdapter } from '../server-runtime/types.js';
-import { createBrowserBoardPlatformAdapter } from '../cli/browser-api/board-live-cards-browser-adapter.js';
+import { createBrowserBoardPlatformAdapter, createInMemoryNotificationTransport } from '../cli/browser-api/board-live-cards-browser-adapter.js';
 import { parseRef, serializeRef } from '../cli/common/storage-interface.js';
 
 // ============================================================================
@@ -105,8 +105,10 @@ export function create(
 
   // ── Build localStorage-backed platform adapter ───────────────────────────
 
+  const notifyChannel = `${namespace}:notify`;
   const boardAdapter = createBrowserBoardPlatformAdapter(namespace, {
     callbackBaseUrl: opts?.callbackBaseUrl,
+    notifyChannel,
     onWarn,
   });
 
@@ -152,6 +154,8 @@ export function create(
 
   // ── Create server runtime with localStorage adapters ─────────────────────
 
+  const notificationTransport = createInMemoryNotificationTransport();
+
   const serverRuntime = createSingleBoardServerRuntime({
     boardId: namespace,
     boards: [{
@@ -161,10 +165,12 @@ export function create(
       cardStoreRef,
       outputsStoreRef,
       cardSource,
+      notifyRef: { kind: 'in-memory-bus', value: notifyChannel },
       taskExecutorRef,
       chatHandlerRef,
     }],
     invocationAdapter,
+    notificationTransport,
     logger: {
       info: (...args: unknown[]) => console.log('[board]', ...args),
       warn: (...args: unknown[]) => { onWarn(String(args[0])); console.warn('[board]', ...args); },

@@ -728,9 +728,19 @@
         localStorage.clear();
       }
 
+      function showResetOverlay() {
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);';
+        overlay.innerHTML = '<div style="color:#fff;font-size:2rem;font-weight:600;letter-spacing:0.05em;">Resetting\u2026</div>';
+        document.body.appendChild(overlay);
+      }
+
       document.getElementById('resetDemo').addEventListener('click', function () {
-        resetDemoStorage();
-        window.location.reload();
+        showResetOverlay();
+        setTimeout(function () {
+          resetDemoStorage();
+          window.location.reload();
+        }, 400);
       });
 
       bootstrap().catch(function (err) {
