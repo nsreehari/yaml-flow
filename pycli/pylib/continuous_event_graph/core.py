@@ -374,11 +374,11 @@ def restore(data: Any) -> dict:
     config = data["config"]
     state = data["state"]
 
-    if not config.get("settings") or not isinstance(config["settings"], dict):
+    if not isinstance(config.get("settings"), dict):
         raise ValueError("Invalid snapshot: config.settings missing")
-    if not config.get("tasks") or not isinstance(config.get("tasks"), dict):
+    if not isinstance(config.get("tasks"), dict):
         raise ValueError("Invalid snapshot: config.tasks missing")
-    if not state.get("tasks") or not isinstance(state.get("tasks"), dict):
+    if not isinstance(state.get("tasks"), dict):
         raise ValueError("Invalid snapshot: state.tasks missing")
     if not isinstance(state.get("availableOutputs"), list):
         raise ValueError("Invalid snapshot: state.availableOutputs must be an array")

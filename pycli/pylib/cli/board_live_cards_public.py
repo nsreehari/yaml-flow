@@ -331,6 +331,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 if not card_id:
                     return _fail("removeCard requires params.id")
                 append_journal_event({"type": "task-removal", "taskName": card_id, "timestamp": _now_iso()})
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)
@@ -342,6 +343,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 if not card_id:
                     return _fail("retrigger requires params.id")
                 append_journal_event({"type": "task-restart", "taskName": card_id, "timestamp": _now_iso()})
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)
@@ -475,6 +477,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                             "timestamp": _now_iso(),
                         })
 
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)
@@ -495,6 +498,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     "error": error_msg,
                     "timestamp": _now_iso(),
                 })
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)
@@ -515,6 +519,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     "update": body,
                     "timestamp": _now_iso(),
                 })
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)
@@ -541,6 +546,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     },
                     "timestamp": _now_iso(),
                 })
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)
@@ -566,6 +572,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     },
                     "timestamp": _now_iso(),
                 })
+                self.process_accumulated_events()
                 return _ok()
             except Exception as e:
                 return _err(e)

@@ -523,19 +523,19 @@ def build_board_status_object(board_path: str, live: dict) -> dict:
                 if dep != name:
                     unblocks.add(dep)
 
-        error_entry = None
+        card_obj: dict = {
+            "name": name,
+            "status": st,
+        }
         if state.get("error"):
-            error_entry = {
+            card_obj["error"] = {
                 "message": state["error"],
                 "code": "TASK_FAILED",
                 "at": state.get("failedAt"),
                 "source": "task-runtime",
             }
 
-        cards.append({
-            "name": name,
-            "status": st,
-            "error": error_entry,
+        card_obj.update({
             "requires": requires,
             "requires_satisfied": requires_satisfied,
             "requires_missing": requires_missing,
@@ -553,6 +553,7 @@ def build_board_status_object(board_path: str, live: dict) -> dict:
                 "status_age_ms": 0 if state.get("lastUpdated") else None,
             },
         })
+        cards.append(card_obj)
 
     status_counts["pending"] = len(sched.get("pending", []))
     status_counts["blocked"] = len(sched.get("blocked", []))

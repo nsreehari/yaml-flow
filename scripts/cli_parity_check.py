@@ -131,8 +131,7 @@ def _node_board_cmd(repo_root: Path, node: str, args: List[str]) -> List[str]:
 
 
 def _py_board_cmd(repo_root: Path, py: str, args: List[str]) -> List[str]:
-    bundle = repo_root / "dist" / "pycli" / "quickjs-board-runtime.global.js"
-    return [py, str(repo_root / "pycli" / "main" / "board_live_cards_pycli.py"), *args, "--bundle", str(bundle)]
+    return [py, str(repo_root / "pycli" / "main" / "board_live_cards_pycli.py"), *args]
 
 
 def _assert_cmd_parity(label: str, left: CmdResult, right: CmdResult) -> None:
@@ -263,7 +262,6 @@ def _pick_board_python(repo_root: Path, default_py: str) -> str | None:
     env_py = os.environ.get("CLI_PARITY_BOARD_PYTHON")
     candidates = [
         env_py,
-        str(repo_root / ".venv312" / "Scripts" / "python.exe"),
         default_py,
     ]
     for cand in candidates:
@@ -271,7 +269,11 @@ def _pick_board_python(repo_root: Path, default_py: str) -> str | None:
             continue
         if not Path(cand).exists() and os.path.sep in cand:
             continue
-        probe = _run([cand, "-c", "import quickjs"], cwd=repo_root)
+        # Verify the native bridge is importable
+        probe = _run(
+            [cand, "-c", "import sys, os; sys.path.insert(0, os.path.join(r'" + str(repo_root) + "', 'pycli')); from sub.board_live_cards_native_bridge import invoke_board_command_native"],
+            cwd=repo_root,
+        )
         if probe.code == 0:
             return cand
     return None
@@ -424,7 +426,6 @@ def main() -> int:
         print("[FAIL] python executable unavailable", file=sys.stderr)
         return 2
 
-    board_bundle = repo_root / "dist" / "pycli" / "quickjs-board-runtime.global.js"
     board_py = _pick_board_python(repo_root, py)
     include_portfolio = args.include_portfolio or (os.environ.get("CLI_PARITY_INCLUDE_PORTFOLIO", "0") != "0")
 
@@ -433,10 +434,8 @@ def main() -> int:
         print("[OK] card-store parity")
         run_artifacts_store_parity(repo_root, node, py)
         print("[OK] artifacts-store parity")
-        if not board_bundle.exists():
-            print("[SKIP] board-live-cards parity (missing dist/pycli/quickjs-board-runtime.global.js)")
-        elif not board_py:
-            print("[SKIP] board-live-cards parity (no Python env with quickjs module; set CLI_PARITY_BOARD_PYTHON)")
+        if not board_py:
+            print("[SKIP] board-live-cards parity (no Python env with native bridge; set CLI_PARITY_BOARD_PYTHON)")
         else:
             run_board_live_cards_parity(repo_root, node, board_py)
             print(f"[OK] board-live-cards parity (python={board_py})")
