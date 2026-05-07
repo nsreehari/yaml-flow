@@ -129,6 +129,6 @@ export default defineConfig([
     ...sharedBrowserOptions,
     entry: { 'board-livecards-localstorage': 'src/board-livecards-localstorage-runtime/index.ts' },
     globalName: 'BoardLiveCardsLocalStorage',
-    esbuildPlugins: [browserStubPlugin],
+    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
   },
 ]);
