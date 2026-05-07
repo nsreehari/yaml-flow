@@ -24,7 +24,7 @@
         <button class="btn btn-sm btn-outline-primary" id="modeCanvas">Canvas</button>
         <button class="btn btn-sm btn-outline-secondary" id="autoLayout">Auto Layout</button>
         <button class="btn btn-sm btn-outline-dark" id="refreshAll">Refresh All</button>
-        <button class="btn btn-sm btn-outline-danger" id="clearStorage">Clear Storage</button>
+        <button class="btn btn-sm btn-outline-danger" id="resetDemo">Reset Demo</button>
         <div class="form-check ms-2">
           <input class="form-check-input" type="checkbox" id="devModeToggle" />
           <label class="form-check-label" for="devModeToggle">Dev Mode</label>
@@ -137,6 +137,12 @@
             return { dispatched: true };
           },
           setQuotes: function (next) { quoteData = JSON.parse(JSON.stringify(next)); },
+          getSnapshot: function () {
+            return {
+              quoteData: JSON.parse(JSON.stringify(quoteData)),
+              mockAnalysis: JSON.parse(JSON.stringify(mockAnalysis)),
+            };
+          },
         };
       }
 
@@ -184,7 +190,7 @@
 
       function refreshDisplay() {
         try {
-          var payload = app.buildPublishedRuntimePayload();
+          var payload = enrichPayloadWithMockData(app.buildPublishedRuntimePayload());
           var nodes = buildLiveCardModelsFromArtifacts(payload);
           syncBoardNodes(nodes);
         } catch (err) {
@@ -192,15 +198,193 @@
         }
       }
 
+      function hasPersistedBoardState() {
+        var key = NAMESPACE + ':card-store:kv:_index';
+        try {
+          return localStorage.getItem(key) !== null;
+        } catch {
+          return false;
+        }
+      }
+
+      function computePositions(holdings, quoteResult) {
+        var hMap = {};
+        (Array.isArray(holdings) ? holdings : []).forEach(function (h) {
+          if (h && typeof h.ticker === 'string') hMap[h.ticker] = h;
+        });
+
+        return (Array.isArray(quoteResult) ? quoteResult : []).map(function (q) {
+          var h = hMap[q.symbol] || { quantity: 0, cost_basis: 0 };
+          var qty = Number(h.quantity || 0);
+          var cb = Number(h.cost_basis || 0);
+          var price = Number(q.regularMarketPrice || 0);
+          var value = +(price * qty).toFixed(2);
+          var cost = +(cb * qty).toFixed(2);
+          var gain = +(value - cost).toFixed(2);
+          var gainPct = cost ? +((gain / cost) * 100).toFixed(2) : 0;
+          var chg = +(Number(q.regularMarketChange || 0) * qty).toFixed(2);
+          var chgPct = +(Number(q.regularMarketChangePercent || 0)).toFixed(2);
+          return {
+            ticker: q.symbol,
+            quantity: qty,
+            cost_basis: cb,
+            price: +price.toFixed(2),
+            value: value,
+            'gain_$': gain,
+            'gain_%': gainPct,
+            'chg_$': chg,
+            'chg_pct': chgPct,
+          };
+        });
+      }
+
+      function enrichPayloadWithMockData(basePayload) {
+        var payload = clone(basePayload || {});
+        payload.cardRuntimeById = payload.cardRuntimeById || {};
+        payload.dataObjectsByToken = payload.dataObjectsByToken || {};
+
+        if (!window.__demoMockServer || typeof window.__demoMockServer.getSnapshot !== 'function') {
+          return payload;
+        }
+
+        var snapshot = window.__demoMockServer.getSnapshot();
+        var quoteData = snapshot.quoteData || { quoteResponse: { result: [] } };
+        var analysis = snapshot.mockAnalysis || MOCK_ANALYSIS;
+
+        var portfolio = payload.cardRuntimeById['card-portfolio'] || {};
+        var holdings = portfolio.card_data && Array.isArray(portfolio.card_data.holdings)
+          ? portfolio.card_data.holdings
+          : [];
+
+        var quoteResult = (quoteData.quoteResponse && Array.isArray(quoteData.quoteResponse.result))
+          ? quoteData.quoteResponse.result
+          : [];
+
+        var prices = quoteResult.map(function (q) {
+          return {
+            ticker: q.symbol,
+            name: q.shortName,
+            price: +(Number(q.regularMarketPrice || 0)).toFixed(2),
+            change: +(Number(q.regularMarketChange || 0)).toFixed(2),
+            chg_pct: +(Number(q.regularMarketChangePercent || 0)).toFixed(2),
+          };
+        });
+
+        var normalizedQuotes = {
+          quoteResponse: {
+            result: quoteResult.map(function (q) {
+              return {
+                symbol: q.symbol,
+                shortName: q.shortName,
+                regularMarketPrice: q.regularMarketPrice,
+                regularMarketChange: q.regularMarketChange,
+                regularMarketChangePercent: q.regularMarketChangePercent,
+              };
+            }),
+            error: null,
+          },
+        };
+
+        var positions = computePositions(holdings, quoteResult);
+        var totalValue = +positions.reduce(function (sum, p) { return sum + Number(p.value || 0); }, 0).toFixed(2);
+        var gainers = positions.filter(function (p) { return Number(p.chg_pct || 0) > 0; }).length;
+        var losers = positions.filter(function (p) { return Number(p.chg_pct || 0) < 0; }).length;
+
+        payload.cardRuntimeById['card-market-prices'] = Object.assign({}, payload.cardRuntimeById['card-market-prices'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-market-prices',
+          card_data: (payload.cardRuntimeById['card-market-prices'] && payload.cardRuntimeById['card-market-prices'].card_data) || {},
+          computed_values: {
+            normalizedQuotes: normalizedQuotes,
+            prices: prices,
+          },
+          fetched_sources: {
+            quotes: quoteData,
+          },
+          requires: {
+            holdings: holdings,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-value'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-value'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-value',
+          card_data: (payload.cardRuntimeById['card-portfolio-value'] && payload.cardRuntimeById['card-portfolio-value'].card_data) || {},
+          computed_values: {
+            positions: positions,
+            totalValue: totalValue,
+            gainers: gainers,
+            losers: losers,
+            gainersLosers: gainers + ' up · ' + losers + ' down',
+          },
+          fetched_sources: {},
+          requires: {
+            holdings: holdings,
+            quotes: normalizedQuotes,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-intelligence'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-intelligence'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-intelligence',
+          card_data: (payload.cardRuntimeById['card-portfolio-intelligence'] && payload.cardRuntimeById['card-portfolio-intelligence'].card_data) || {},
+          computed_values: {
+            mix: analysis.mix,
+            pnl: analysis.pnl,
+            risks: analysis.risks,
+            action: analysis.action,
+          },
+          fetched_sources: {
+            analysis: analysis,
+          },
+          requires: {
+            positions: positions,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-risks'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-risks'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-risks',
+          card_data: (payload.cardRuntimeById['card-portfolio-risks'] && payload.cardRuntimeById['card-portfolio-risks'].card_data) || {},
+          computed_values: {},
+          fetched_sources: {},
+          requires: {
+            portfolio_risks: analysis.risks,
+          },
+        });
+
+        payload.cardRuntimeById['card-portfolio-action'] = Object.assign({}, payload.cardRuntimeById['card-portfolio-action'] || {}, {
+          schema_version: 'v1',
+          card_id: 'card-portfolio-action',
+          card_data: (payload.cardRuntimeById['card-portfolio-action'] && payload.cardRuntimeById['card-portfolio-action'].card_data) || {},
+          computed_values: {},
+          fetched_sources: {},
+          requires: {
+            portfolio_action: analysis.action,
+          },
+        });
+
+        payload.dataObjectsByToken.quotes = quoteData;
+        payload.dataObjectsByToken.analysis = analysis;
+
+        return payload;
+      }
+
       async function bootstrap() {
-        // Load card definitions from JSON files
-        var cards = await Promise.all(
-          CARD_FILES.map(function (name) {
-            return fetch('./cards/' + name).then(function (r) { return r.json(); });
-          })
-        );
+        var cards = [];
+
+        // First-run path: load card definitions from JSON files.
+        // Revisit path: rely on persisted localStorage card store.
+        if (!hasPersistedBoardState()) {
+          cards = await Promise.all(
+            CARD_FILES.map(function (name) {
+              return fetch('./cards/' + name).then(function (r) { return r.json(); });
+            })
+          );
+        }
 
         var mockServer = makeMockTaskExecutor();
+        window.__demoMockServer = mockServer;
 
         // Create the localStorage-backed runtime
         app = createBoardLiveCardsLocalStorage(NAMESPACE, {
@@ -217,7 +401,7 @@
         await app.bootstrap();
 
         // Build initial payload and render
-        var payload = app.buildPublishedRuntimePayload();
+        var payload = enrichPayloadWithMockData(app.buildPublishedRuntimePayload());
         var initialNodes = buildLiveCardModelsFromArtifacts(payload);
         initialNodes.forEach(function (n) { nodesById[n.id] = clone(n); });
 
@@ -310,8 +494,13 @@
         keysToRemove.forEach(function (k) { localStorage.removeItem(k); });
       }
 
-      document.getElementById('clearStorage').addEventListener('click', function () {
-        clearBoardStorage();
+      function resetDemoStorage() {
+        if (drainInterval) clearInterval(drainInterval);
+        localStorage.clear();
+      }
+
+      document.getElementById('resetDemo').addEventListener('click', function () {
+        resetDemoStorage();
         window.location.reload();
       });
 
