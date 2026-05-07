@@ -127,13 +127,22 @@ export function create(
   const browserTaskExecutor = opts?.taskExecutor ?? null;
   const browserChatHandler = opts?.chatHandler ?? null;
 
+  const taskExecutorWhatToRun = `::in-browser::${namespace}:task-executor`;
+  const chatHandlerWhatToRun = `::in-browser::${namespace}:chat-handler`;
+
+  // Register in-browser handlers on the adapter
+  if (browserTaskExecutor) {
+    boardAdapter.registerHandler(taskExecutorWhatToRun, browserTaskExecutor);
+  }
+  if (browserChatHandler) {
+    boardAdapter.registerHandler(chatHandlerWhatToRun, browserChatHandler);
+  }
+
   const invocationAdapter: InvocationAdapter = {
     async invoke(ref: ExecutionRef, args: Record<string, unknown>) {
-      // Route built-in refs to in-browser functions
-      if (ref.howToRun === 'built-in') {
-        if (browserTaskExecutor) return browserTaskExecutor(ref, args);
-        if (browserChatHandler) return browserChatHandler(ref, args);
-        return { dispatched: false, error: 'No in-browser handler registered for built-in ref' };
+      // Route in-browser refs through the adapter's handler registry
+      if (ref.howToRun === 'in-browser') {
+        return boardAdapter.dispatchExecution(ref, args);
       }
       // HTTP dispatch
       return boardAdapter.dispatchExecution(ref, args);
@@ -144,12 +153,12 @@ export function create(
 
   const taskExecutorRef: ExecutionRef | undefined = opts?.taskExecutorRef
     ?? (browserTaskExecutor
-      ? { meta: 'task-executor', howToRun: 'built-in' as const, whatToRun: '::built-in::browser-task-executor' }
+      ? { meta: 'task-executor', howToRun: 'in-browser' as const, whatToRun: taskExecutorWhatToRun }
       : undefined);
 
   const chatHandlerRef: ExecutionRef | undefined = opts?.chatHandlerRef
     ?? (browserChatHandler
-      ? { meta: 'chat-handler', howToRun: 'built-in' as const, whatToRun: '::built-in::browser-chat-handler' }
+      ? { meta: 'chat-handler', howToRun: 'in-browser' as const, whatToRun: chatHandlerWhatToRun }
       : undefined);
 
   // ── Create server runtime with localStorage adapters ─────────────────────
@@ -189,14 +198,16 @@ export function create(
       url: path,
       headers: { 'content-type': 'application/json' },
       on(_event: string, _listener: (...args: unknown[]) => void) { /* no-op for browser */ },
-      [Symbol.asyncIterator]() {
-        return {
+      [Symbol.asyncIterator](): AsyncIterableIterator<Uint8Array> {
+        const iter: AsyncIterableIterator<Uint8Array> = {
           async next() {
-            if (consumed) return { done: true as const, value: undefined };
+            if (consumed) return { done: true as const, value: undefined as unknown as Uint8Array };
             consumed = true;
             return { done: false as const, value: bodyBytes };
           },
+          [Symbol.asyncIterator]() { return iter; },
         };
+        return iter;
       },
     };
   }

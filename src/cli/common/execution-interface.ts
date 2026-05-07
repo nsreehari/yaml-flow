@@ -169,7 +169,7 @@ export interface ExecutionRef {
    * Transport and runtime kind — determines how whatToRun is invoked.
    * @see module JSDoc for the full list of supported values.
    */
-  howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in';
+  howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in' | 'in-browser';
 
   /**
    * Address of the artifact to run, in KindValueRef wire form (::kind::value).

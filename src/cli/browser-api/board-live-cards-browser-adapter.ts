@@ -6,9 +6,9 @@
  *
  * Constraints vs Node/FS adapter:
  *   - lock: in-memory no-op (browser is single-threaded; no cross-tab locking)
- *   - dispatchExecution: supports 'http:post' and 'http:get' only
+ *   - dispatchExecution: supports 'in-browser', 'http:post' and 'http:get'
  *   - requestProcessAccumulated: not applicable (caller drives via polling / setInterval)
- *   - selfRef: 'built-in' kind — no spawnable CLI available
+ *   - selfRef: 'in-browser' kind — routes to registered in-memory handlers
  */
 
 import type { KindValueRef, AtomicRelayLock } from '../common/storage-interface.js';
@@ -97,6 +97,15 @@ export function createInMemoryNotificationTransport(): import('../../server-runt
 //   The adapter publishes to this channel; pair with notifyRef { kind: 'in-memory-bus', value: channel }.
 // ============================================================================
 
+import type { ExecutionRef } from '../common/execution-interface.js';
+
+/**
+ * Registry of in-browser execution handlers keyed by whatToRun value.
+ * Consumers register handlers that will be invoked when the drain cycle
+ * dispatches execution with howToRun === 'in-browser'.
+ */
+export type InBrowserHandler = (ref: ExecutionRef, args: Record<string, unknown>) => Promise<{ dispatched: boolean; error?: string }>;
+
 export function createBrowserBoardPlatformAdapter(
   namespace: string,
   opts?: {
@@ -104,7 +113,7 @@ export function createBrowserBoardPlatformAdapter(
     notifyChannel?: string;
     onWarn?: (msg: string) => void;
   },
-): BoardPlatformAdapter {
+): BoardPlatformAdapter & { registerHandler(name: string, handler: InBrowserHandler): void } {
   const selfRef = opts?.callbackBaseUrl
     ? {
         meta: 'board-live-cards',
@@ -113,9 +122,12 @@ export function createBrowserBoardPlatformAdapter(
       }
     : {
         meta: 'board-live-cards',
-        howToRun: 'built-in' as const,
-        whatToRun: '::built-in::board-live-cards-browser',
+        howToRun: 'in-browser' as const,
+        whatToRun: `::in-browser::${namespace}`,
       };
+
+  // In-browser handler registry: maps whatToRun → handler function
+  const handlerRegistry = new Map<string, InBrowserHandler>();
 
   const lock = createInMemoryRelayLock();
 
@@ -174,9 +186,15 @@ export function createBrowserBoardPlatformAdapter(
         }
       }
 
+      if (ref.howToRun === 'in-browser') {
+        const handler = handlerRegistry.get(ref.whatToRun);
+        if (handler) return handler(ref, args);
+        return { dispatched: false, error: `No in-browser handler registered for: ${ref.whatToRun}` };
+      }
+
       return {
         dispatched: false,
-        error: `Browser adapter: only http:post and http:get dispatch are supported (got: ${ref.howToRun})`,
+        error: `Browser adapter: unsupported dispatch kind (got: ${ref.howToRun})`,
       };
     },
 
@@ -207,5 +225,9 @@ export function createBrowserBoardPlatformAdapter(
     // drives drain cycles via polling or setInterval.
 
     onWarn: opts?.onWarn,
+
+    registerHandler(name: string, handler: InBrowserHandler) {
+      handlerRegistry.set(name, handler);
+    },
   };
 }

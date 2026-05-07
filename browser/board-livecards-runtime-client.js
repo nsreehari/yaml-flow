@@ -150,8 +150,12 @@
 
       const engine = LiveCard.init({
         resolve: (id) => nodesById[id],
+        chartLib: (typeof Chart !== 'undefined') ? Chart : null,
         markdown: (typeof marked !== 'undefined')
           ? (text) => marked.parse(text)
+          : null,
+        sanitize: (typeof DOMPurify !== 'undefined')
+          ? (html) => DOMPurify.sanitize(html)
           : null,
         onPatchState: async (id, patch) => {
           await fetchServer(paths.patchCard(id), {
