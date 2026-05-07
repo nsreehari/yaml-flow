@@ -1517,9 +1517,11 @@ def create_multi_board_server_runtime(options: Dict[str, Any]):
 
             label = body.get("label", "").strip() if isinstance(body.get("label"), str) else bid
             entry = {"id": bid, "label": label or bid}
-            for key in ("cardsDir", "stepMachineCliPath", "taskExecutorPath", "chatHandlerPath", "inferenceAdapterPath"):
-                if isinstance(body.get(key), str):
-                    entry[key] = body[key]
+            for key, val in body.items():
+                if key in ("id", "label"):
+                    continue
+                if val is not None:
+                    entry[key] = val
             config["boards"].append(entry)
             write_boards_config(config)
             json_response(res, 200, {"ok": True, "board": entry})

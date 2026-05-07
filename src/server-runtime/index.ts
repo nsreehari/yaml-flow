@@ -1040,8 +1040,9 @@ export function createMultiBoardServerRuntime(options: MultiBoardRuntimeOptions)
 
       const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim() : id;
       const entry: Record<string, unknown> = { id, label };
-      for (const key of ['cardsDir', 'stepMachineCliPath', 'taskExecutorPath', 'chatHandlerPath', 'inferenceAdapterPath']) {
-        if (typeof body[key] === 'string') entry[key] = body[key];
+      for (const [key, val] of Object.entries(body)) {
+        if (key === 'id' || key === 'label') continue;
+        if (val !== undefined && val !== null) entry[key] = val;
       }
       config.boards.push(entry);
       writeBoardsConfig(config);
