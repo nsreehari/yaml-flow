@@ -2,7 +2,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
 const __require = createRequire(import.meta.url);
@@ -60,7 +59,7 @@ async function main() {
   const { store } = storeContext;
 
   const flow = await loadStepFlow(flowPath);
-  const handlers = buildStepHandlers(flow, flowDir, flow.handler_vars);
+  const handlers = buildStepHandlers(flow, flowDir);
 
   // Resume/start should ignore stale pause markers from previous runs.
   clearPauseRequest(storeContext);
@@ -346,28 +345,29 @@ function parseInitialData(dataArg) {
   }
 }
 
-function buildStepHandlers(flow, flowDir, handlerVars) {
+function buildStepHandlers(flow, flowDir) {
   const handlers = {};
 
   for (const [stepName, stepConfig] of Object.entries(flow.steps ?? {})) {
-    handlers[stepName] = resolveStepHandler(stepName, stepConfig, flowDir, handlerVars);
+    handlers[stepName] = resolveStepHandler(stepName, stepConfig, flowDir);
   }
 
   return handlers;
 }
 
-function resolveStepHandler(stepName, stepConfig, flowDir, handlerVars) {
+function resolveStepHandler(stepName, stepConfig, flowDir) {
   const produces = Array.isArray(stepConfig?.produces_data) ? stepConfig.produces_data : undefined;
   const inputValidations = Array.isArray(stepConfig?.input_validations) ? stepConfig.input_validations : undefined;
+  const config = stepConfig?.config ?? undefined;
   const spec = stepConfig?.handler;
 
-  if (isComputeSpec(spec)) {
-    const base = createComputeStepHandler(spec, stepName, inputValidations);
+  if (isComputeJsonataSpec(spec)) {
+    const base = createComputeJsonataHandler(spec, stepName, inputValidations, config);
     return wrapWithOutputFiltering(base, produces);
   }
 
-  if (isCliSpec(spec)) {
-    const base = createCliStepHandler(spec, flowDir, stepName, handlerVars);
+  if (isRefSpec(spec)) {
+    const base = createRefStepHandler(spec, flowDir, stepName, config);
     return wrapWithInputValidations(wrapWithOutputFiltering(base, produces), inputValidations, stepName);
   }
 
@@ -375,12 +375,12 @@ function resolveStepHandler(stepName, stepConfig, flowDir, handlerVars) {
   return wrapWithInputValidations(wrapWithOutputFiltering(createPassthroughHandler(), produces), inputValidations, stepName);
 }
 
-function isComputeSpec(spec) {
-  return !!spec && typeof spec === 'object' && Array.isArray(spec.compute) && spec.compute.length > 0;
+function isComputeJsonataSpec(spec) {
+  return !!spec && typeof spec === 'object' && spec.type === 'compute-jsonata' && Array.isArray(spec.expr) && spec.expr.length > 0;
 }
 
-function isCliSpec(spec) {
-  return !!spec && typeof spec === 'object' && typeof spec.cli === 'string' && spec.cli.trim().length > 0;
+function isRefSpec(spec) {
+  return !!spec && typeof spec === 'object' && spec.type === 'ref' && typeof spec.howToRun === 'string' && typeof spec.whatToRun === 'string';
 }
 
 function normalizeComputeStep(item) {
@@ -420,10 +420,11 @@ function wrapWithInputValidations(handler, validations, stepName) {
   };
 }
 
-function createComputeStepHandler(spec, stepName, inputValidations) {
-  const steps = spec.compute.map(normalizeComputeStep);
+function createComputeJsonataHandler(spec, stepName, inputValidations, config) {
+  const steps = spec.expr.map(normalizeComputeStep);
   return async (input) => {
     const ctx = input && typeof input === 'object' && !Array.isArray(input) ? { ...input } : {};
+    if (config) ctx.config = config;
 
     // Run input validations
     const validationFailure = runInputValidations(ctx, inputValidations, stepName);
@@ -449,34 +450,66 @@ function createComputeStepHandler(spec, stepName, inputValidations) {
   };
 }
 
-function createCliStepHandler(spec, flowDir, stepName, handlerVars) {
+function parseKindRef(whatToRun) {
+  const match = whatToRun.match(/^::([^:]+)::(.+)$/);
+  if (!match) {
+    throw new Error(`[step-machine-cli] Invalid whatToRun KindRef: "${whatToRun}". Expected ::kind::value format.`);
+  }
+  return { kind: match[1], value: match[2] };
+}
+
+function resolveRefCommand(spec, flowDir) {
+  const { kind, value } = parseKindRef(spec.whatToRun);
+  const howToRun = spec.howToRun;
+
+  if (kind === 'fs-path') {
+    const scriptPath = path.isAbsolute(value) ? value : path.resolve(flowDir, value);
+    switch (howToRun) {
+      case 'local-node': return { cmd: process.execPath, args: [scriptPath], cwd: flowDir };
+      case 'local-python': return { cmd: 'python', args: [scriptPath], cwd: flowDir };
+      case 'local-process': return { cmd: scriptPath, args: [], cwd: flowDir };
+      default: throw new Error(`[step-machine-cli] Unsupported howToRun "${howToRun}" for fs-path ref.`);
+    }
+  }
+
+  throw new Error(`[step-machine-cli] Unsupported whatToRun kind "${kind}". Only fs-path is supported for local execution.`);
+}
+
+function evaluateExprArray(exprArray, source, stepName, label) {
+  if (!exprArray || !Array.isArray(exprArray) || exprArray.length === 0) {
+    return null;
+  }
+
+  const result = {};
+  for (const item of exprArray) {
+    const { bindTo, expr } = normalizeComputeStep(item);
+    try {
+      result[bindTo] = jsonata(expr).evaluate(source);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[step-machine-cli] Step "${stepName}" ${label} "${bindTo}" failed: ${msg}`);
+    }
+  }
+  return result;
+}
+
+function createRefStepHandler(spec, flowDir, stepName, config) {
   return async (input) => {
     const stepInput = input && typeof input === 'object' && !Array.isArray(input)
       ? input
       : {};
 
-    const resolvedHandlerVars = await evaluateTransforms(
-      handlerVars,
-      stepInput,
-      stepName,
-      'handler_vars',
-    );
+    const inputCtx = config ? { ...stepInput, config } : { ...stepInput };
 
-    const inputTransforms = await evaluateTransforms(
-      spec['input-transforms'],
-      { ...stepInput, ...resolvedHandlerVars },
-      stepName,
-      'input-transforms',
-    );
+    // Evaluate input-transforms to build what the ref receives
+    const transformed = evaluateExprArray(spec['input-transforms'], inputCtx, stepName, 'input-transforms');
+    const payload = transformed ?? inputCtx;
 
-    const effectiveInput = { ...stepInput, ...resolvedHandlerVars, ...inputTransforms };
-    const command = applyCommandTemplate(spec.cli, effectiveInput, stepName);
+    const { cmd, args, cwd } = resolveRefCommand(spec, flowDir);
 
-    const payload = JSON.stringify(effectiveInput);
-    const result = spawnSync(command, {
-      cwd: flowDir,
-      shell: true,
-      input: payload,
+    const result = spawnSync(cmd, args, {
+      cwd,
+      input: JSON.stringify(payload),
       encoding: 'utf-8',
       windowsHide: true,
     });
@@ -484,142 +517,44 @@ function createCliStepHandler(spec, flowDir, stepName, handlerVars) {
     if (result.error) {
       return {
         result: 'failure',
-        data: { error: `[step-machine-cli] step "${stepName}" failed to start: ${result.error.message}` },
+        data: { error: `[step-machine-cli] step "${stepName}" ref failed to start: ${result.error.message}` },
       };
     }
 
     const stdout = result.stdout ?? '';
     const stderr = (result.stderr ?? '').trim();
-    const resultMode = String(spec['result-mode'] ?? 'json').toLowerCase();
 
     if (result.status !== 0) {
       return {
         result: 'failure',
         data: {
-          error: `[step-machine-cli] step "${stepName}" exited with status ${result.status}${stderr ? `: ${stderr}` : ''}`,
+          error: `[step-machine-cli] step "${stepName}" ref exited with status ${result.status}${stderr ? `: ${stderr}` : ''}`,
         },
-      };
-    }
-
-    if (resultMode === 'exit-code') {
-      const outputTransforms = await evaluateTransforms(
-        spec['output-transforms'],
-        {
-          ...effectiveInput,
-          result: 'success',
-          stdout,
-          stderr,
-        },
-        stepName,
-        'output-transforms',
-      );
-
-      return {
-        result: 'success',
-        data: outputTransforms,
       };
     }
 
     try {
       const parsed = parseJsonOutput(stdout);
       const normalized = normalizeHandlerResult(parsed, stepName);
-      const outputTransforms = await evaluateTransforms(
-        spec['output-transforms'],
-        {
-          ...effectiveInput,
-          result: normalized.result,
-          data: normalized.data,
-        },
-        stepName,
-        'output-transforms',
-      );
 
-      if (Object.keys(outputTransforms).length === 0) {
-        return normalized;
-      }
+      // Evaluate output-transforms against context that includes both spread data and nested data
+      const outputCtx = { ...normalized.data, data: normalized.data, result: normalized.result };
+      const outputTransformed = evaluateExprArray(spec['output-transforms'], outputCtx, stepName, 'output-transforms');
 
       return {
         result: normalized.result,
-        data: outputTransforms,
+        data: outputTransformed ?? normalized.data,
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return {
         result: 'failure',
         data: {
-          error: `[step-machine-cli] step "${stepName}" returned invalid JSON on stdout: ${msg}`,
+          error: `[step-machine-cli] step "${stepName}" ref returned invalid JSON on stdout: ${msg}`,
         },
       };
     }
   };
-}
-
-async function evaluateTransforms(transformSpec, source, stepName, label) {
-  if (transformSpec === undefined || transformSpec === null) {
-    return {};
-  }
-
-  if (!transformSpec || typeof transformSpec !== 'object' || Array.isArray(transformSpec)) {
-    throw new Error(`[step-machine-cli] Step "${stepName}" ${label} must be an object map of key -> JSONata expression.`);
-  }
-
-  const result = {};
-  for (const [key, expression] of Object.entries(transformSpec)) {
-    if (typeof expression !== 'string') {
-      // Non-string values are treated as literals for convenience.
-      result[key] = expression;
-      continue;
-    }
-
-    if (expression.trim().length === 0) {
-      throw new Error(`[step-machine-cli] Step "${stepName}" ${label}.${key} must be a non-empty string expression.`);
-    }
-
-    // handler_vars defaults to literal strings for ergonomics; use "=..." for JSONata expressions.
-    if (label === 'handler_vars' && !expression.startsWith('=')) {
-      result[key] = expression;
-      continue;
-    }
-
-    const jsonataExpression = label === 'handler_vars' && expression.startsWith('=')
-      ? expression.slice(1)
-      : expression;
-
-    // Convenience: direct key aliasing supports non-identifier keys like BOARD-DIR-NAME.
-    if (Object.prototype.hasOwnProperty.call(source, jsonataExpression)) {
-      result[key] = source[jsonataExpression];
-      continue;
-    }
-
-    try {
-      const compiled = jsonata(jsonataExpression);
-      result[key] = await compiled.evaluate(source);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`[step-machine-cli] Step "${stepName}" ${label}.${key} failed: ${msg}`);
-    }
-  }
-
-  return result;
-}
-
-function applyCommandTemplate(command, source, stepName) {
-  if (typeof command !== 'string' || command.trim().length === 0) {
-    throw new Error(`[step-machine-cli] Step "${stepName}" handler.cli must be a non-empty command string.`);
-  }
-
-  return command.replace(/%%([A-Za-z0-9_-]+)%%/g, (full, key) => {
-    if (!Object.prototype.hasOwnProperty.call(source, key)) {
-      throw new Error(`[step-machine-cli] Step "${stepName}" command placeholder ${full} has no matching input or input-transform value.`);
-    }
-
-    const value = source[key];
-    if (value === undefined || value === null) {
-      throw new Error(`[step-machine-cli] Step "${stepName}" command placeholder ${full} resolved to empty value.`);
-    }
-
-    return String(value);
-  });
 }
 
 function createPassthroughHandler() {

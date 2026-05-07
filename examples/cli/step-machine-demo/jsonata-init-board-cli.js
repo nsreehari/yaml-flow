@@ -9,13 +9,12 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => {
   try {
     const input = JSON.parse(raw || '{}');
-    const boardDirFromArg = process.argv[2] ?? '';
-    const boardDirFromInput = input.BOARD_DIR ?? '';
+    const boardDir = input.BOARD_DIR ?? '';
 
-    if (!boardDirFromArg || !boardDirFromInput || boardDirFromArg !== boardDirFromInput) {
+    if (!boardDir) {
       process.stdout.write(JSON.stringify({
         result: 'failure',
-        error: 'BOARD_DIR missing or mismatch between cli arg and stdin payload',
+        error: 'BOARD_DIR missing from input',
       }));
       return;
     }
@@ -23,7 +22,7 @@ process.stdin.on('end', () => {
     process.stdout.write(JSON.stringify({
       result: 'success',
       data: {
-        message: `initialized ${boardDirFromArg}`,
+        message: `initialized ${boardDir}`,
         ignored: 'will be filtered by produces_data',
       },
     }));

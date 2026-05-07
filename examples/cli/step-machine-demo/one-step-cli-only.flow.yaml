@@ -6,7 +6,9 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node ./step-cli-echo-y.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./step-cli-echo-y.js"
     transitions:
       success: success_state
       failure: failed_state

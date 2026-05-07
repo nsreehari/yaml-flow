@@ -355,13 +355,13 @@ terminal_states:
     expect(output.data).toEqual({ x: 7 });
   });
 
-  it('runs cli-only steps without --handlers and filters by produces_data', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-cli-only-'));
+  it('runs ref steps and filters by produces_data', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
 
     writeFile(flowPath, `
-id: cli-only-flow
+id: ref-flow
 settings:
   start_step: s1
 steps:
@@ -369,7 +369,9 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node ./echo-y.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./echo-y.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -408,7 +410,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 7, y: 17 });
   });
 
-  it('runs compute handler with input_validations', () => {
+  it('runs compute-jsonata handler with input_validations', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -424,7 +426,8 @@ steps:
       - $type(a) = "number"
       - $type(b) = "number"
     handler:
-      compute:
+      type: compute-jsonata
+      expr:
         - c = a + b
     transitions:
       success: success_state
@@ -454,19 +457,21 @@ terminal_states:
     expect(failOutput.intent).toBe('failure');
   });
 
-  it('maps non-zero CLI exit into failure transition', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-cli-exit-'));
+  it('maps non-zero ref exit into failure transition', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-exit-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'fail.js');
 
     writeFile(flowPath, `
-id: cli-exit-flow
+id: ref-exit-flow
 settings:
   start_step: s1
 steps:
   s1:
     handler:
-      cli: node ./fail.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./fail.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -493,19 +498,21 @@ process.exit(23);
     expect(output.intent).toBe('failure');
   });
 
-  it('maps invalid JSON stdout from CLI handler into failure transition', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-cli-json-'));
+  it('maps invalid JSON stdout from ref handler into failure transition', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-json-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'bad-json.js');
 
     writeFile(flowPath, `
-id: cli-json-flow
+id: ref-json-flow
 settings:
   start_step: s1
 steps:
   s1:
     handler:
-      cli: node ./bad-json.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./bad-json.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -531,13 +538,13 @@ process.stdout.write('not-json-output');
     expect(output.intent).toBe('failure');
   });
 
-  it('supports handler.cli command with quoted script path containing spaces', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-quoted-path-'));
+  it('supports ref handler with script path containing spaces', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-space-path-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'double value.js');
 
     writeFile(flowPath, `
-id: quoted-cli-path-flow
+id: space-path-flow
 settings:
   start_step: s1
 steps:
@@ -545,7 +552,9 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node "./double value.js"
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./double value.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -584,15 +593,13 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 9, y: 18 });
   });
 
-  it('supports top-level handler_vars in CLI command templating', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-handler-vars-'));
+  it('supports ref handler with input-transforms', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-transforms-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
 
     writeFile(flowPath, `
-id: handler-vars-flow
-handler_vars:
-  SCRIPT_PATH: ./echo-y.js
+id: ref-transforms-flow
 settings:
   start_step: s1
 steps:
@@ -600,11 +607,13 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node "%%SCRIPT_PATH%%"
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./echo-y.js"
       input-transforms:
-        X: x
+        - X = x
       output-transforms:
-        y: data.y
+        - y = data.y
     transitions:
       success: success_state
       failure: failed_state
@@ -642,7 +651,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 10, y: 15 });
   });
 
-  it('supports mixed compute and cli handlers with produces_data filtering', () => {
+  it('supports mixed compute-jsonata and ref handlers with produces_data filtering', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-mixed-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'double.js');
@@ -656,7 +665,8 @@ steps:
     expects_data: [a, b]
     produces_data: [c]
     handler:
-      compute:
+      type: compute-jsonata
+      expr:
         - c = a + b
     transitions:
       success: s2
@@ -665,7 +675,9 @@ steps:
     expects_data: [c]
     produces_data: [d]
     handler:
-      cli: node ./double.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./double.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -709,13 +721,13 @@ process.stdin.resume();
     expect(output.data).toEqual({ a: 3, b: 4, c: 7, d: 14 });
   });
 
-  it('supports JSONata input/output transforms and command templating for cli handlers', () => {
+  it('supports JSONata input/output transforms for ref handlers', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-jsonata-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'init-board.js');
 
     writeFile(flowPath, `
-id: jsonata-cli-flow
+id: jsonata-ref-flow
 settings:
   start_step: t0_init_board
 steps:
@@ -723,12 +735,14 @@ steps:
     expects_data: [runtime_root, board_name]
     produces_data: [board_dir, init_message]
     handler:
-      cli: node ./init-board.js "%%BOARD_DIR%%"
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./init-board.js"
       input-transforms:
-        BOARD_DIR: runtime_root & "/" & board_name
+        - BOARD_DIR = runtime_root & "/" & board_name
       output-transforms:
-        board_dir: BOARD_DIR
-        init_message: data.message
+        - board_dir = BOARD_DIR
+        - init_message = data.message
     transitions:
       success: success_state
       failure: failed_state
@@ -748,15 +762,15 @@ process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
-  const boardDirArg = process.argv[2] ?? '';
-  if (!boardDirArg || boardDirArg !== input.BOARD_DIR) {
-    process.stdout.write(JSON.stringify({ result: 'failure', error: 'board dir mismatch' }));
+  if (!input.BOARD_DIR) {
+    process.stdout.write(JSON.stringify({ result: 'failure', error: 'BOARD_DIR missing' }));
     return;
   }
 
   process.stdout.write(JSON.stringify({
     result: 'success',
     data: {
+      BOARD_DIR: input.BOARD_DIR,
       message: 'initialized-ok',
       ignored: 'should-not-be-merged',
     },
@@ -782,19 +796,21 @@ process.stdin.resume();
     });
   });
 
-  it('fails when a command template placeholder is unresolved', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-template-missing-'));
+  it('routes to failed_state when ref has invalid whatToRun kindref', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-bad-kindref-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
     writeFile(flowPath, `
-id: unresolved-template-flow
+id: bad-kindref-flow
 settings:
   start_step: s1
 steps:
   s1:
     expects_data: [x]
     handler:
-      cli: node ./does-not-matter.js "%%MISSING_KEY%%"
+      type: ref
+      howToRun: local-node
+      whatToRun: "no-kind-prefix"
     transitions:
       success: success_state
       failure: failed_state
@@ -809,13 +825,13 @@ terminal_states:
     const run = runStepMachineCli([flowPath, '--initial-data', '{"x":1}']);
 
     expect(run.error).toBeUndefined();
+    // parseKindRef throws inside handler, step machine catches and routes to failure
     expect(run.status).toBe(0);
-
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('failure');
   });
 
-  it('routes to failed_state when compute expression throws', () => {
+  it('routes to failed_state when compute-jsonata expression throws', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-fail-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -826,7 +842,8 @@ settings:
 steps:
   s1:
     handler:
-      compute:
+      type: compute-jsonata
+      expr:
         - result = $nonExistentFn()
     transitions:
       success: success_state

@@ -6,16 +6,18 @@ settings:
 
 steps:
   t0_init_board:
-    description: Build board path with JSONata and invoke CLI with command templating
+    description: Build board path with JSONata and invoke ref with transforms
     expects_data: [runtime_root, board_name]
     produces_data: [board_dir, init_message]
     handler:
-      cli: node ./jsonata-init-board-cli.js "%%BOARD_DIR%%"
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./jsonata-init-board-cli.js"
       input-transforms:
-        BOARD_DIR: runtime_root & "/" & board_name
+        - BOARD_DIR = runtime_root & "/" & board_name
       output-transforms:
-        board_dir: BOARD_DIR
-        init_message: data.message
+        - board_dir = BOARD_DIR
+        - init_message = data.message
     transitions:
       success: success_state
       failure: failed_state

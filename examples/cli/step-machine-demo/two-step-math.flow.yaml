@@ -13,7 +13,8 @@ steps:
       - $type(a) = "number"
       - $type(b) = "number"
     handler:
-      compute:
+      type: compute-jsonata
+      expr:
         - c = a + b
     transitions:
       success: step2_double
@@ -26,7 +27,8 @@ steps:
     input_validations:
       - $type(c) = "number"
     handler:
-      compute:
+      type: compute-jsonata
+      expr:
         - d = c * 2
     transitions:
       success: success_state

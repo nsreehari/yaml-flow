@@ -13,18 +13,21 @@ steps:
       - $type(a) = "number"
       - $type(b) = "number"
     handler:
-      compute:
+      type: compute-jsonata
+      expr:
         - c = a + b
     transitions:
       success: step2_double
       failure: failed_state
 
   step2_double:
-    description: CLI handler computes d = c * 2
+    description: Ref handler computes d = c * 2
     expects_data: [c]
     produces_data: [d, e]
     handler:
-      cli: node ./step2-double-cli.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./step2-double-cli.js"
     transitions:
       success: success_state
       failure: failed_state
