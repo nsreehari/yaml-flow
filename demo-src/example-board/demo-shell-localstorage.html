@@ -358,10 +358,9 @@
               var one = await fetchJsonWithCache(urls[0], headers, cacheTimeout);
               reportCompleted(cardId, bindTo, one);
             } else {
-              var many = [];
-              for (var i = 0; i < urls.length; i++) {
-                many.push(await fetchJsonWithCache(urls[i], headers, cacheTimeout));
-              }
+              var many = await Promise.all(urls.map(function (u) {
+                return fetchJsonWithCache(u, headers, cacheTimeout);
+              }));
               reportCompleted(cardId, bindTo, many);
             }
           } catch (e) {
@@ -742,17 +741,6 @@
           mode: currentMode,
           canvas: {},
         });
-
-        // Run source fetching immediately at bootstrap (don't wait for drain cycle)
-        (async function () {
-          try {
-            var context = contextByCard(app.buildPublishedRuntimePayload());
-            var cardsWithSources = INLINE_CARDS.filter(function (c) { return c.source_defs && c.source_defs.length; });
-            await sourceExecutor.run(cardsWithSources, context);
-            writeTaskCache({ completed: sourceExecutor.snapshot().completed });
-            refreshDisplay();
-          } catch (_) { /* drain cycle will retry */ }
-        })();
 
         drainInterval = setInterval(function () {
           refreshDisplay().catch(function () {});
