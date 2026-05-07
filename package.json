@@ -106,7 +106,6 @@
       "types": "./dist/cli/browser-api/card-store-browser-api.d.ts",
       "import": "./dist/cli/browser-api/card-store-browser-api.js"
     },
-    "./board-livecards-server-runtime": "./board-livecards-server-runtime.js",
     "./server-runtime": {
       "types": "./dist/server-runtime/index.d.ts",
       "import": "./dist/server-runtime/index.js"
@@ -120,7 +119,6 @@
     "board-live-cards-cli.js",
     "storage-refs.js",
     "step-machine-cli.js",
-    "board-livecards-server-runtime.js",
     "dist",
     "schema",
     "browser",

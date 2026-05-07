@@ -511,7 +511,11 @@ const server = http.createServer((req, res) => {
   }
 
   // All other /api/boards routes are handled by the platform-free runtime
-  void runtime.handleApi(req, res, url);
+  runtime.handleApi(req, res, url).then((handled) => {
+    if (!handled) {
+      jsonReply(res, 404, { error: 'Not found' });
+    }
+  });
 });
 
 server.listen(PORT, '127.0.0.1', () => {
