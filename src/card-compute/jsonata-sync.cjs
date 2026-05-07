@@ -1,4 +1,4 @@
-(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.jsonata = f()}})(function(){var define,module,exports;return (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
+(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.jsonataSync = f()}})(function(){var define,module,exports;return (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
 /**
  * © Copyright IBM Corp. 2018 All Rights Reserved
  *   Project name: JSONata
@@ -3600,6 +3600,7 @@ var jsonata = (function() {
         var resultSequence;
         var isTupleStream = false;
         var tupleBindings = undefined;
+        var traversedArray = false; // PATCH: track if any step iterated over an array
 
         // evaluate each step in turn
         for(var ii = 0; ii < expr.steps.length; ii++) {
@@ -3622,6 +3623,11 @@ var jsonata = (function() {
 
             if (!isTupleStream && (typeof resultSequence === 'undefined' || resultSequence.length === 0)) {
                 break;
+            }
+
+            // PATCH: detect array traversal from the step result
+            if (!isTupleStream && Array.isArray(resultSequence) && resultSequence._fromArrayField) {
+                traversedArray = true;
             }
 
             if(typeof step.focus === 'undefined') {
@@ -3648,6 +3654,12 @@ var jsonata = (function() {
                 resultSequence = createSequence(resultSequence);
             }
             resultSequence.keepSingleton = true;
+        }
+
+        // PATCH: Always preserve array results from path expressions that traversed
+        // through an array. Ensures predictable array output regardless of input cardinality.
+        if (traversedArray && Array.isArray(resultSequence) && resultSequence.sequence) {
+            Object.defineProperty(resultSequence, 'keepSingleton', { value: true, enumerable: false, configurable: true });
         }
 
         if (expr.hasOwnProperty('group')) {
@@ -3698,8 +3710,10 @@ var jsonata = (function() {
         }
 
         var resultSequence = createSequence();
+        var _flattenedArray = false; // PATCH: track if we flattened a real array
         if(lastStep && result.length === 1 && Array.isArray(result[0]) && !isSequence(result[0])) {
             resultSequence = result[0];
+            _flattenedArray = true;
         } else {
             // flatten the sequence
             result.forEach(function(res) {
@@ -3709,8 +3723,18 @@ var jsonata = (function() {
                 } else {
                     // res is a sequence - flatten it into the parent sequence
                     res.forEach(val => resultSequence.push(val));
+                    // PATCH: only mark as flattened array if res is a genuine data array,
+                    // not an intermediate sequence (from filter results, etc.)
+                    if (!isSequence(res)) {
+                        _flattenedArray = true;
+                    }
                 }
             });
+        }
+
+        // PATCH: Mark sequences that came from flattening array fields
+        if (_flattenedArray && Array.isArray(resultSequence)) {
+            Object.defineProperty(resultSequence, '_fromArrayField', { value: true, enumerable: false, configurable: true });
         }
 
         return resultSequence;

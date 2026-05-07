@@ -18,7 +18,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import jsonata from 'jsonata';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const jsonata = require('../../src/card-compute/jsonata-sync.cjs');
 
 import { createBoardLiveGraphRuntime as serverCreateRuntime } from '../../src/board-livegraph-runtime/index.js';
 import type { LiveCardRuntimeModel } from '../../src/board-livegraph-runtime/index.js';
@@ -36,7 +38,7 @@ let _cachedBrowserApi: BoardLiveGraphRuntimeApi | null = null;
 function loadBrowserRuntime(): BoardLiveGraphRuntimeApi {
   if (_cachedBrowserApi) return _cachedBrowserApi;
 
-  (globalThis as Record<string, unknown>).jsonata = jsonata;
+  (globalThis as Record<string, unknown>).jsonataSync = jsonata;
 
   const source = fs.readFileSync(browserBundlePath, 'utf-8');
   vm.runInThisContext(source, { filename: browserBundlePath });

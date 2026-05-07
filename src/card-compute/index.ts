@@ -25,12 +25,10 @@
  * computed_values is ephemeral — never persisted to disk.
  */
 
-import jsonata from 'jsonata';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
-// QuickJS bundles may initialize the shim binding after this module executes.
-// Fallback to the standard jsonata import so sync evaluation still works.
-const jsonataSync: typeof jsonata = (_require('./jsonata-sync.cjs') ?? jsonata) as typeof jsonata;
+const jsonata: (expr: string) => { evaluate: (data: unknown) => unknown } = _require('./jsonata-sync.cjs');
+const jsonataSync = jsonata;
 
 // ---------------------------------------------------------------------------
 // Types

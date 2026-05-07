@@ -322,7 +322,8 @@ class Jsonata:
         # expr is an array of steps
         # if the first step is a variable reference ($...), including root reference ($$),
         #   then the path is absolute rather than relative
-        if isinstance(input, list) and expr.steps[0].type != "variable":
+        input_was_array = isinstance(input, list) and expr.steps[0].type != "variable"
+        if input_was_array:
             input_sequence = input
         else:
             # if input is not an array, make it so
@@ -331,6 +332,7 @@ class Jsonata:
         result_sequence = None
         is_tuple_stream = False
         tuple_bindings = None
+        traversed_array = False  # PATCH: track if any step iterated over an array
 
         # evaluate each step in turn
         for ii, step in enumerate(expr.steps):
@@ -349,6 +351,10 @@ class Jsonata:
 
             if not is_tuple_stream and (result_sequence is None or not result_sequence):
                 break
+
+            # PATCH: detect array traversal from the step result
+            if not is_tuple_stream and isinstance(result_sequence, utils.Utils.JList) and getattr(result_sequence, '_from_array_field', False):
+                traversed_array = True
 
             if step.focus is None:
                 input_sequence = result_sequence
@@ -369,6 +375,13 @@ class Jsonata:
             # if the array is explicitly constructed in the expression and marked to promote singleton sequences to array
             if (isinstance(result_sequence, utils.Utils.JList)) and result_sequence.cons and not result_sequence.sequence:
                 result_sequence = utils.Utils.create_sequence(result_sequence)
+            result_sequence.keep_singleton = True
+
+        # PATCH: Always preserve array results from path expressions that traversed
+        # through an array. This avoids the standard JSONata behavior where
+        # `array.field` returns a scalar when the array has exactly one element.
+        # Ensures predictable array output regardless of input cardinality.
+        if traversed_array and result_sequence is not None and isinstance(result_sequence, utils.Utils.JList) and result_sequence.sequence:
             result_sequence.keep_singleton = True
 
         if expr.group is not None:
@@ -413,9 +426,11 @@ class Jsonata:
                 result.append(res)
 
         result_sequence = utils.Utils.create_sequence()
+        _flattened_array = False  # PATCH: track if we flattened a real array
         if last_step and len(result) == 1 and (isinstance(result[0], list)) and not utils.Utils.is_sequence(
                 result[0]):
             result_sequence = result[0]
+            _flattened_array = True
         else:
             # flatten the sequence
             for res in result:
@@ -425,6 +440,11 @@ class Jsonata:
                 else:
                     # res is a sequence - flatten it into the parent sequence
                     result_sequence.extend(res)
+                    _flattened_array = True
+
+        # PATCH: Mark sequences that came from flattening array fields
+        if _flattened_array and isinstance(result_sequence, utils.Utils.JList):
+            result_sequence._from_array_field = True
 
         return result_sequence
 
