@@ -686,7 +686,7 @@
         board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
           nodes: Object.values(nodesById),
           mode: currentMode,
-          canvas: { height: '72vh', overflow: 'auto' },
+          canvas: {},
         });
 
         // Run real source fetching after first paint.

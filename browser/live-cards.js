@@ -2409,20 +2409,18 @@ var LiveCard = (function () {
 
     const canvasEl = document.createElement('div');
     canvasEl.className = 'lc-canvas';
-    const canvasHeight = co.height || '600px';
-    const canvasOverflow = co.overflow || 'auto';
-    canvasEl.style.cssText = 'position:relative;overflow:' + canvasOverflow + ';width:100%;height:' + canvasHeight + ';';
+    canvasEl.style.cssText = 'position:relative;overflow:auto;width:100%;';
     const canvasInner = document.createElement('div');
     canvasInner.className = 'lc-canvas-inner';
-    canvasInner.style.cssText = 'position:absolute;top:0;left:0;transform-origin:0 0;';
+    canvasInner.style.cssText = 'position:relative;transform-origin:0 0;min-width:100%;min-height:100%;';
     canvasEl.appendChild(canvasInner);
 
     // SVG overlay for edges
     const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svgEl.setAttribute('class', 'lc-canvas-edges');
-    svgEl.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible;';
+    svgEl.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:hidden;z-index:0;';
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    defs.innerHTML = '<marker id="lc-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--bs-secondary,#6c757d)"/></marker>';
+    defs.innerHTML = '<marker id="lc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 8 5 L 0 9 z" fill="rgba(108,117,125,0.55)"/></marker>';
     svgEl.appendChild(defs);
     canvasInner.appendChild(svgEl);
 
@@ -2433,13 +2431,13 @@ var LiveCard = (function () {
       s.textContent = `
         .lc-canvas-card { position:absolute; min-width:${cvs.minWidth}px; cursor:grab; user-select:none; z-index:1; }
         .lc-canvas-card.lc-dragging { cursor:grabbing; z-index:10; box-shadow:0 8px 24px rgba(0,0,0,0.18)!important; }
-        .lc-canvas-card .card-body { overflow:auto; }
+        .lc-canvas-card .card-body { overflow:hidden; }
         .lc-canvas-card.lc-resizing { cursor:nwse-resize; z-index:10; }
         .lc-resize-handle { position:absolute; bottom:0; right:0; width:14px; height:14px; cursor:nwse-resize; z-index:2; opacity:0.4; transition:opacity .15s; }
         .lc-resize-handle:hover { opacity:1; }
         .lc-resize-handle::after { content:''; position:absolute; bottom:3px; right:3px; width:8px; height:8px; border-right:2px solid var(--bs-secondary,#6c757d); border-bottom:2px solid var(--bs-secondary,#6c757d); }
-        .lc-canvas-edges path.lc-edge-path { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; stroke-dasharray:6 4; animation:lc-edge-flow 0.6s linear infinite; }
-        .lc-canvas-edges line { stroke:var(--bs-secondary,#6c757d); stroke-width:1.5; }
+        .lc-canvas-edges path.lc-edge-path { stroke:rgba(100,140,200,0.5); stroke-width:2; fill:none; stroke-linecap:round; }
+        .lc-canvas-edges line { stroke:rgba(100,140,200,0.4); stroke-width:2; }
         @keyframes lc-edge-flow { to { stroke-dashoffset:-10; } }
         .lc-source-node { position:absolute; cursor:grab; user-select:none; z-index:1; }
         .lc-source-node.lc-dragging { cursor:grabbing; z-index:10; }
@@ -2796,8 +2794,23 @@ var LiveCard = (function () {
 
     // ---- Board mode ----
 
+    // Compute canvas inner size from card positions + padding
+    function _fitCanvasToContent() {
+      var pad = 100;
+      var maxR = 0, maxB = 0;
+      canvasInner.querySelectorAll('.lc-canvas-card,.lc-source-node').forEach(function(el) {
+        var r = el.offsetLeft + el.offsetWidth;
+        var b = el.offsetTop + el.offsetHeight;
+        if (r > maxR) maxR = r;
+        if (b > maxB) maxB = b;
+      });
+      canvasInner.style.width = (maxR + pad) + 'px';
+      canvasInner.style.height = (maxB + pad) + 'px';
+    }
+
     function _renderBoard() {
       _destroyEdges();
+      document.body.style.overflow = '';
       root.innerHTML = '';
       root.appendChild(gridEl);
       gridEl.innerHTML = '';
@@ -2881,41 +2894,7 @@ var LiveCard = (function () {
       // Build token → provider nodeId map
       var tokenMap = _buildTokenMap();
 
-      // For each consumer node, for each required token, draw edge from
-      // the provider's "provides" badge → the consumer's "requires" badge.
-      if (typeof LeaderLine !== 'undefined') {
-        nodeList.forEach(function(node) {
-          var tgtInfo = nodeMap[node.id];
-          if (!tgtInfo || !tgtInfo.colEl) return;
-          _getRequires(node).forEach(function(token) {
-            var srcId = tokenMap[token];
-            if (!srcId) return;
-            var srcInfo = nodeMap[srcId];
-            if (!srcInfo || !srcInfo.colEl) return;
-            // Find the specific gem elements for this token
-            var srcGem = srcInfo.colEl.querySelector('.lc-token-gem-provides[data-token="' + token + '"]');
-            var tgtGem = tgtInfo.colEl.querySelector('.lc-token-gem-requires[data-token="' + token + '"]');
-            var startEl = srcGem || srcInfo.colEl;
-            var endEl = tgtGem || tgtInfo.colEl;
-            try {
-              var lineOpts = {
-                color: edgeCfg.color,
-                size: edgeCfg.size,
-                endPlug: edgeCfg.endPlug,
-                startSocket: srcGem ? 'bottom' : 'right',
-                endSocket: tgtGem ? 'top' : 'left',
-              };
-              if (edgeCfg.dash) {
-                lineOpts.dash = edgeCfg.animation ? { animation: true } : true;
-              }
-              _edges.push(new LeaderLine(startEl, endEl, lineOpts));
-            } catch(e) { /* skip edge on error */ }
-          });
-        });
-        return;
-      }
-
-      // SVG fallback — connect badge-to-badge with curved paths
+      // SVG edges — rendered behind cards (z-index:0) for a clean look
       nodeList.forEach(function(node) {
         var tgtInfo = nodeMap[node.id];
         if (!tgtInfo || !tgtInfo.colEl) return;
@@ -2947,8 +2926,26 @@ var LiveCard = (function () {
             tx = tEl.offsetLeft + tEl.offsetWidth / 2;
             ty = tEl.offsetTop;
           }
-          var cpOffset = Math.min(Math.abs(ty - sy) * 0.5, 80);
-          var d = 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + (sy + cpOffset) + ', ' + tx + ' ' + (ty - cpOffset) + ', ' + tx + ' ' + ty;
+          // Route bezier curves around cards — offset control points outward
+          var dx = tx - sx;
+          var dy = ty - sy;
+          var dist = Math.sqrt(dx * dx + dy * dy);
+          var cpLen = Math.max(40, Math.min(dist * 0.4, 120));
+          // Determine if src is roughly above, below, left, or right of target
+          var absDx = Math.abs(dx);
+          var absDy = Math.abs(dy);
+          var cp1x, cp1y, cp2x, cp2y;
+          if (absDy > absDx * 0.4) {
+            // Mostly vertical — curve control points go straight down/up
+            cp1x = sx; cp1y = sy + cpLen;
+            cp2x = tx; cp2y = ty - cpLen;
+          } else {
+            // Mostly horizontal — swing control points outward to avoid overlapping cards
+            var sideSign = dx > 0 ? 1 : -1;
+            cp1x = sx + sideSign * cpLen; cp1y = sy + cpLen * 0.5;
+            cp2x = tx - sideSign * cpLen; cp2y = ty - cpLen * 0.5;
+          }
+          var d = 'M ' + sx + ' ' + sy + ' C ' + cp1x + ' ' + cp1y + ', ' + cp2x + ' ' + cp2y + ', ' + tx + ' ' + ty;
           var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           path.setAttribute('d', d);
           path.setAttribute('fill', 'none');
@@ -2999,6 +2996,7 @@ var LiveCard = (function () {
           node.card.view.layout.canvas.y = y;
         }
         engine.notify(node.id);
+        _fitCanvasToContent();
         if (_edges.length) _repositionEdges();
         else _drawEdges();
       }, { signal });
@@ -3057,6 +3055,7 @@ var LiveCard = (function () {
           node.card.view.layout.canvas.h = sh;
         }
         engine.notify(node.id);
+        _fitCanvasToContent();
         if (_edges.length) _repositionEdges();
         else _drawEdges();
       }, { signal });
@@ -3064,8 +3063,12 @@ var LiveCard = (function () {
 
     function _renderCanvas() {
       _destroyEdges();
+      document.body.style.overflow = 'hidden';
       root.innerHTML = '';
       root.appendChild(canvasEl);
+      // Fill remaining viewport height
+      var top = canvasEl.getBoundingClientRect().top;
+      canvasEl.style.height = co.height || ('calc(100vh - ' + top + 'px)');
       canvasInner.querySelectorAll('.lc-canvas-card,.lc-source-node').forEach(el => el.remove());
       svgEl.querySelectorAll('line,path').forEach(function(el) { el.remove(); });
       _initPositions();
@@ -3109,12 +3112,11 @@ var LiveCard = (function () {
 
       _updateTokenAvailability();
 
-      // Draw edges — use rAF for LeaderLine so elements are laid out first
-      if (typeof LeaderLine !== 'undefined') {
-        requestAnimationFrame(function() { _drawEdges(); });
-      } else {
+      // Fit canvas to content then draw edges
+      requestAnimationFrame(function() {
+        _fitCanvasToContent();
         _drawEdges();
-      }
+      });
 
       // Reposition LeaderLine edges on scroll
       canvasEl.addEventListener('scroll', function() { _repositionEdges(); }, { signal, passive: true });
@@ -3250,6 +3252,7 @@ var LiveCard = (function () {
 
     function destroy() {
       _destroyEdges();
+      document.body.style.overflow = '';
       ac.abort();
       engine.destroyAll();
       nodeList.length = 0;
