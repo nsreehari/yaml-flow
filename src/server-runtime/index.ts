@@ -779,11 +779,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── SSE ──────────────────────────────────────────────────────────────────
 
+  let sseEventId = 0;
+
+  function buildSseFrame(payload: unknown): string {
+    const jsonStr = JSON.stringify(payload);
+    sseEventId++;
+    return `id: ${sseEventId}\ndata: ${jsonStr}\n\n`;
+  }
+
   function broadcastToSseClients(): void {
     const payload = buildPublishedRuntimePayload();
-    const data = `data: ${JSON.stringify(payload)}\n\n`;
+    const frame = buildSseFrame(payload);
     for (const client of sseClients) {
-      try { client.write(data); } catch { sseClients.delete(client); }
+      try { client.write(frame); } catch { sseClients.delete(client); }
     }
   }
 
@@ -795,7 +803,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       'Connection': 'keep-alive',
     });
     sseClients.add(res);
-    res.write(`data: ${JSON.stringify(buildPublishedRuntimePayload())}\n\n`);
+
+    // On reconnect, Last-Event-ID tells us the client's last received id.
+    // We always send the current full snapshot (replay = latest state).
+    const payload = buildPublishedRuntimePayload();
+    const frame = buildSseFrame(payload);
+    res.write(frame);
+
     const keepAlive = setInterval(() => {
       try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
     }, 15_000);

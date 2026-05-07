@@ -260,4 +260,95 @@ describe('platform-free server runtime (Node host)', () => {
     const res = await fetch(`${API_BASE}/nonexistent`);
     expect(res.status).toBe(404);
   });
+
+  // ── SSE reconnection / replay ────────────────────────────────────────────
+
+  it('SSE frames include id: field for reconnection', async () => {
+    const controller = new AbortController();
+    const res = await fetch(`${API_BASE}/sse`, { signal: controller.signal });
+    expect(res.ok).toBe(true);
+
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+
+    // Must contain id: <number> before data:
+    expect(text).toMatch(/^id: \d+\n/);
+    expect(text).toContain('data: ');
+
+    controller.abort();
+  });
+
+  it('SSE reconnection with Last-Event-ID receives current snapshot', async () => {
+    // First connection to get an event id
+    const controller1 = new AbortController();
+    const res1 = await fetch(`${API_BASE}/sse`, { signal: controller1.signal });
+    const reader1 = res1.body!.getReader();
+    const { value: v1 } = await reader1.read();
+    const text1 = new TextDecoder().decode(v1);
+    const idMatch = text1.match(/^id: (\d+)\n/);
+    expect(idMatch).toBeTruthy();
+    const firstId = idMatch![1];
+    controller1.abort();
+
+    // Simulate reconnection with Last-Event-ID header
+    const controller2 = new AbortController();
+    const res2 = await fetch(`${API_BASE}/sse`, {
+      signal: controller2.signal,
+      headers: { 'Last-Event-ID': firstId },
+    });
+    expect(res2.ok).toBe(true);
+
+    const reader2 = res2.body!.getReader();
+    const { value: v2 } = await reader2.read();
+    const text2 = new TextDecoder().decode(v2);
+
+    // New connection gets a new (higher) event id and full payload
+    const idMatch2 = text2.match(/^id: (\d+)\n/);
+    expect(idMatch2).toBeTruthy();
+    expect(Number(idMatch2![1])).toBeGreaterThan(Number(firstId));
+
+    const jsonStr = text2.split('data: ')[1]?.split('\n')[0];
+    const payload = JSON.parse(jsonStr!);
+    expect(payload).toHaveProperty('cardDefinitions');
+
+    controller2.abort();
+  });
+
+  // ── Chat handler failure / .processing marker cleanup ────────────────────
+
+  it('cleans up .processing marker when chat-handler dispatch fails', async () => {
+    // The test uses noopInvocation which returns { dispatched: false, error: 'noop' }
+    // This should trigger the marker cleanup path in invokeChatHandler.
+    const statusRes = await fetch(`${API_BASE}/board-status`);
+    const statusData = await statusRes.json() as Record<string, unknown>;
+    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const cardId = cards[0].id as string;
+
+    // Send a chat — the noop adapter will fail dispatch, runtime should clean up marker
+    const chatRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionType: 'chat-send',
+        payload: { text: 'marker cleanup test' },
+      }),
+    });
+    expect(chatRes.ok).toBe(true);
+
+    // Give the async invocation time to settle
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Chat signal should NOT show processing (marker was cleaned up after dispatch failure)
+    const statusRes2 = await fetch(`${API_BASE}/board-status`);
+    const statusData2 = await statusRes2.json() as Record<string, unknown>;
+    const runtimeById = statusData2.cardRuntimeById as Record<string, Record<string, unknown>>;
+    const cardRuntime = runtimeById[cardId];
+    const cardData = cardRuntime?.card_data as Record<string, unknown> | undefined;
+    const chatSignal = cardData?.__chat_signal as Record<string, unknown> | undefined;
+    // processing should be false — marker was removed after failed dispatch
+    if (chatSignal) {
+      expect(chatSignal.processing).toBe(false);
+    }
+  });
 });
