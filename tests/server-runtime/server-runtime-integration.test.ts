@@ -81,14 +81,14 @@ beforeAll(async () => {
   const runtimeOptions: SingleBoardRuntimeOptions = {
     apiBasePath: '/api/board',
     boardId: 'test-board',
-    base: {
+    boards: [{
       label: 'base',
       boardAdapter,
       baseRef,
       cardStoreRef: serializeRef({ kind: 'fs-path', value: CARD_STORE_DIR }),
       outputsStoreRef: serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR }),
       cardSource: createFsCardSource(testCardsDir),
-    },
+    }],
     invocationAdapter: noopInvocation,
     logger: {
       info: () => {},

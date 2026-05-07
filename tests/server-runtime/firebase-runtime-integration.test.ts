@@ -227,14 +227,14 @@ beforeAll(async () => {
   const runtimeOptions: SingleBoardRuntimeOptions = {
     apiBasePath: '/api/board',
     boardId: 'firebase-test',
-    base: {
+    boards: [{
       label: 'base',
       boardAdapter: adapter,
       baseRef: { kind: 'firestore', value: 'boards/firebase-test' },
       cardStoreRef: '::firestore::boards/firebase-test/card-store',
       outputsStoreRef: '::firestore::boards/firebase-test/outputs',
       cardSource,
-    },
+    }],
     invocationAdapter,
     logger: {
       info: () => {},

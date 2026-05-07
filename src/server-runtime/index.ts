@@ -172,16 +172,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  const baseCtx = buildContext(options.base);
-  const gandalfCtx = options.gandalf ? buildContext(options.gandalf) : null;
-  const gandalfCardIdSet = new Set<string>();
+  const boardContexts: BoardContext[] = options.boards.map(buildContext);
+  const cardOwnerIndex = new Map<string, number>();
 
-  function isGandalfCard(cardId: string): boolean { return gandalfCardIdSet.has(cardId); }
+  function ownerIndex(cardId: string): number { return cardOwnerIndex.get(cardId) ?? 0; }
 
   // ── Artifacts stores ─────────────────────────────────────────────────────
 
   function artifactsStores(cardId: string) {
-    const ctx = isGandalfCard(cardId) ? gandalfCtx : baseCtx;
+    const ctx = boardContexts[ownerIndex(cardId)];
     return {
       files: ctx ? ctx.filesArtifacts : null,
       chats: ctx ? ctx.chatsArtifacts : null,
@@ -264,13 +263,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     ctx.initialized = true;
   }
 
-  async function upsertCardsFromSource(ctx: BoardContext, idSet: Set<string>): Promise<void> {
+  async function upsertCardsFromSource(ctx: BoardContext, ctxIndex: number): Promise<void> {
     if (!ctx) return;
     if (ctx.cardsBootstrapped) return;
     const cards = ctx.cardSource.listCards();
     for (const card of cards) {
       if (typeof card.id !== 'string') continue;
-      idSet.add(card.id as string);
+      cardOwnerIndex.set(card.id as string, ctxIndex);
       const setResult = ctx.cardStore.set({ body: card });
       if (setResult.status !== 'success') continue;
       ctx.board.upsertCard({ params: { cardId: card.id as string, restart: true } });
@@ -279,25 +278,23 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     ctx.cardsBootstrapped = true;
   }
 
-  const cardIdSet = new Set<string>();
-
   async function initBoardAndSetup(): Promise<void> {
-    await initContext(baseCtx);
-    if (gandalfCtx && gandalfCtx.taskExecutorRef) {
-      await initContext(gandalfCtx);
+    for (const ctx of boardContexts) {
+      await initContext(ctx);
     }
   }
 
   async function bootstrapBoard(): Promise<void> {
     await initBoardAndSetup();
-    await upsertCardsFromSource(baseCtx, cardIdSet);
-    if (gandalfCtx) await upsertCardsFromSource(gandalfCtx, gandalfCardIdSet);
+    for (let i = 0; i < boardContexts.length; i++) {
+      await upsertCardsFromSource(boardContexts[i], i);
+    }
   }
 
   // ── Card reads ───────────────────────────────────────────────────────────
 
   function cardContextForCard(cardId: string): BoardContext | null {
-    return isGandalfCard(cardId) ? gandalfCtx : baseCtx;
+    return boardContexts[ownerIndex(cardId)] ?? null;
   }
 
   function readCardFromStore(cardId: string): Record<string, unknown> | null {
@@ -318,40 +315,43 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       }
       return (result as any).data.cards;
     };
-    const base = fromCtx(baseCtx);
-    const side = gandalfCtx ? fromCtx(gandalfCtx) : [];
-    return [...base, ...side];
+    const all: Array<Record<string, unknown>> = [];
+    for (const ctx of boardContexts) {
+      all.push(...fromCtx(ctx));
+    }
+    return all;
   }
 
   // ── Status & runtime artifacts ───────────────────────────────────────────
 
   function readStatusSnapshot(): unknown {
-    const base = baseCtx.notification.status;
-    const side = gandalfCtx ? gandalfCtx.notification.status : null;
-    if (!base && !side) return null;
-    if (!side) return base;
-    if (!base) return side;
+    const statuses = boardContexts.map(ctx => ctx.notification.status).filter(Boolean);
+    if (statuses.length === 0) return null;
+    if (statuses.length === 1) return statuses[0];
 
-    const baseObj = base as Record<string, unknown>;
-    const sideObj = side as Record<string, unknown>;
-    const baseCards = Array.isArray(baseObj.cards) ? baseObj.cards : [];
-    const sideCards = Array.isArray(sideObj.cards) ? sideObj.cards : [];
-    const mergedCards = [...baseCards, ...sideCards];
-    const sum = (obj: unknown, k: string) => Number((obj as any)?.summary?.[k] || 0);
+    // Merge multiple board statuses into a single snapshot
+    const mergedCards: unknown[] = [];
+    const summaryKeys = ['completed', 'eligible', 'pending', 'blocked', 'unresolved', 'failed', 'in_progress', 'orphan_cards'];
+    const totals: Record<string, number> = {};
+    for (const k of summaryKeys) totals[k] = 0;
+
+    for (const status of statuses) {
+      const obj = status as Record<string, unknown>;
+      const cards = Array.isArray(obj.cards) ? obj.cards : [];
+      mergedCards.push(...cards);
+      for (const k of summaryKeys) {
+        totals[k] += Number((obj as any)?.summary?.[k] || 0);
+      }
+    }
+
+    const first = statuses[0] as Record<string, unknown>;
     return {
-      ...baseObj,
+      ...first,
       cards: mergedCards,
       summary: {
-        ...((baseObj.summary || {}) as Record<string, unknown>),
+        ...((first.summary || {}) as Record<string, unknown>),
         card_count: mergedCards.length,
-        completed: sum(base, 'completed') + sum(side, 'completed'),
-        eligible: sum(base, 'eligible') + sum(side, 'eligible'),
-        pending: sum(base, 'pending') + sum(side, 'pending'),
-        blocked: sum(base, 'blocked') + sum(side, 'blocked'),
-        unresolved: sum(base, 'unresolved') + sum(side, 'unresolved'),
-        failed: sum(base, 'failed') + sum(side, 'failed'),
-        in_progress: sum(base, 'in_progress') + sum(side, 'in_progress'),
-        orphan_cards: sum(base, 'orphan_cards') + sum(side, 'orphan_cards'),
+        ...totals,
       },
     };
   }
@@ -371,15 +371,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         };
       }
     };
-    process(baseCtx);
-    if (gandalfCtx) process(gandalfCtx);
+    for (const ctx of boardContexts) process(ctx);
     return out;
   }
 
   function readSourcePayloads(cardDef: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     if (!Array.isArray(cardDef.source_defs)) return out;
-    const ctx = isGandalfCard(cardDef.id as string) ? gandalfCtx : baseCtx;
+    const ctx = boardContexts[ownerIndex(cardDef.id as string)];
     const dataObjects = ctx ? ctx.notification.dataObjects : {};
     for (const sd of cardDef.source_defs as Array<Record<string, unknown>>) {
       if (!sd?.bindTo) continue;
@@ -391,10 +390,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   function readDataObjectsByToken(): Record<string, unknown> {
-    return {
-      ...(baseCtx.notification.dataObjects || {}),
-      ...(gandalfCtx ? gandalfCtx.notification.dataObjects : {}),
-    };
+    const merged: Record<string, unknown> = {};
+    for (const ctx of boardContexts) {
+      Object.assign(merged, ctx.notification.dataObjects || {});
+    }
+    return merged;
   }
 
   function readChatSignal(cardId: string): { count: number; latest_mtime_ms: number; processing: boolean } {

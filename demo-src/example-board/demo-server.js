@@ -309,12 +309,13 @@ const runtime = createMultiBoardServerRuntime({
 
     const baseCfg = buildBoardContextConfig('base', boardDir, cardsDir, taskExecPath, chatHandlerPath_, infAdapterPath, boardId);
 
-    let gandalfCfg;
+    const boards = [baseCfg];
     if (gandalfCardsDir_ && gandalfTaskExecPath) {
       const gandalfBoardDir = path.join(boardRoot, 'gandalf-runtime');
-      gandalfCfg = buildBoardContextConfig('gandalf', gandalfBoardDir, gandalfCardsDir_, gandalfTaskExecPath, gandalfChatPath, gandalfInfPath, boardId);
+      const gandalfCfg = buildBoardContextConfig('gandalf', gandalfBoardDir, gandalfCardsDir_, gandalfTaskExecPath, gandalfChatPath, gandalfInfPath, boardId);
       // Fix gandalf outputsStoreRef
       gandalfCfg.outputsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(boardRoot, 'gandalf-runtime-out', '.outputs') });
+      boards.push(gandalfCfg);
     }
 
     // Store host config for demo-setup (FS paths are host concerns)
@@ -323,8 +324,7 @@ const runtime = createMultiBoardServerRuntime({
     return createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
       boardId,
-      base: baseCfg,
-      gandalf: gandalfCfg,
+      boards,
       invocationAdapter,
       notificationTransport,
       logger,
