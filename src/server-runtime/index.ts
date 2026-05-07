@@ -79,8 +79,8 @@ interface BoardContext {
   label: string;
   board: ReturnType<typeof createBoardLiveCardsPublic>;
   cardStore: ReturnType<typeof createCardStorePublic>;
-  filesArtifacts: ReturnType<typeof createArtifactsStore>;
-  chatsArtifacts: ReturnType<typeof createArtifactsStore>;
+  readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
+  readonly chatsArtifacts: ReturnType<typeof createArtifactsStore>;
   cardSource: CardSourceAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
@@ -149,15 +149,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
     const cardStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
     const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
-    const filesArtifacts = createArtifactsStore(artAdapter.blobStorage('files'));
-    const chatsArtifacts = createArtifactsStore(artAdapter.blobStorage('chats'));
+
+    // Lazy artifact stores — only created on first access (saves ~5KB in bundles
+    // that never use chat/file features).
+    let _filesArtifacts: ReturnType<typeof createArtifactsStore> | null = null;
+    let _chatsArtifacts: ReturnType<typeof createArtifactsStore> | null = null;
 
     return {
       label: cfg.label,
       board,
       cardStore,
-      filesArtifacts,
-      chatsArtifacts,
+      get filesArtifacts() { return _filesArtifacts ??= createArtifactsStore(artAdapter.blobStorage('files')); },
+      get chatsArtifacts() { return _chatsArtifacts ??= createArtifactsStore(artAdapter.blobStorage('chats')); },
       cardSource: cfg.cardSource,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
