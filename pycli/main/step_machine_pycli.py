@@ -15,6 +15,12 @@ _PYCLI_ROOT = os.path.normpath(os.path.join(_HERE, ".."))
 if _PYCLI_ROOT not in sys.path:
     sys.path.insert(0, _PYCLI_ROOT)
 
+try:
+    from sub.step_machine_native_bridge import invoke_step_machine_native as _native_invoke
+    _USE_NATIVE = True
+except ImportError:
+    _USE_NATIVE = False
+
 from sub.step_machine_quickjs_bridge import QuickJsUnavailableError, invoke_step_machine_bundle
 
 DEFAULT_QUICKJS_BUNDLE = "dist/pycli/quickjs-step-machine-runtime.global.js"
@@ -290,12 +296,18 @@ def main() -> int:
         payload["pauseFilePath"] = store_context["pauseFilePath"]
 
     try:
-        result_raw = invoke_step_machine_bundle(
-            bundle_path=_resolve_bundle_path(args.bundle),
-            function_name="pycliStepMachineInvoke",
-            function_arg=payload,
-            inline_handlers=inline_handlers,
-        )
+        if _USE_NATIVE:
+            result_raw = _native_invoke(
+                payload=payload,
+                inline_handlers=inline_handlers,
+            )
+        else:
+            result_raw = invoke_step_machine_bundle(
+                bundle_path=_resolve_bundle_path(args.bundle),
+                function_name="pycliStepMachineInvoke",
+                function_arg=payload,
+                inline_handlers=inline_handlers,
+            )
     except QuickJsUnavailableError as e:
         _print_json({"status": "error", "error": str(e)})
         return 2

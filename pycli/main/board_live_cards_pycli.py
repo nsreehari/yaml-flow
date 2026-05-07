@@ -24,6 +24,12 @@ from sub.board_live_cards_adapters import (
     dispatch_execution,
     parse_execution_ref,
 )
+try:
+    from sub.board_live_cards_native_bridge import invoke_board_command_native as _native_invoke
+    _USE_NATIVE = True
+except ImportError:
+    _USE_NATIVE = False
+
 from sub.board_live_cards_quickjs_bridge import (
     QuickJsUnavailableError,
     invoke_js_bundle_function,
@@ -281,6 +287,11 @@ def _invoke_board_command(
     }
     if notify_channel:
         payload["notifyChannel"] = notify_channel
+
+    # Prefer native Python implementation; fall back to QuickJS
+    if _USE_NATIVE:
+        return _native_invoke(payload)
+
     result_raw = invoke_js_bundle_function(
         bundle_path=_resolve_bundle_path(bundle),
         function_name="pycliBoardInvoke",
