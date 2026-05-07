@@ -656,7 +656,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const args: Record<string, unknown> = {
       boardId,
       cardId: String(cardId),
-      chatDir: chatsKeyPrefix,
+      chatsKeyPrefix,
       chatProcessingMarkerKey: processingMarkerKey,
       lastChatFile,
       ...executionExtra,

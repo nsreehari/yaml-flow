@@ -158,12 +158,13 @@ function createNodeSpawnInvocationAdapter() {
       if (!scriptPath) {
         return { dispatched: false, error: `no script path in whatToRun: ${whatToRun}` };
       }
-      // Convert chatDir from blob key to absolute FS path for backward-compatible handlers
+      // Resolve chatsKeyPrefix (blob key prefix) to absolute FS chatDir for handlers
       const finalArgs = { ...args };
-      if (finalArgs.chatDir && finalArgs.chatsBlobBasePath) {
-        const cardPart = String(finalArgs.chatDir).split('/')[0];
+      if (finalArgs.chatsKeyPrefix && finalArgs.chatsBlobBasePath) {
+        const cardPart = String(finalArgs.chatsKeyPrefix).split('/')[0];
         finalArgs.chatDir = path.join(String(finalArgs.chatsBlobBasePath), cardPart);
       }
+      delete finalArgs.chatsKeyPrefix;
       delete finalArgs.chatsBlobBasePath;
       const extra = Buffer.from(JSON.stringify(finalArgs)).toString('base64');
       try {

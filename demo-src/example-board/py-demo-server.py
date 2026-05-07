@@ -203,12 +203,12 @@ def create_subprocess_invocation_adapter():
             else:
                 return {"dispatched": False, "error": f"unsupported howToRun: {how_to_run}"}
 
-            # Convert chatDir from relative blob key to absolute FS path
-            # (host concern — the platform-free runtime passes relative keys)
+            # Resolve chatsKeyPrefix (blob key prefix) to absolute FS chatDir for handlers
             final_args = dict(args)
-            if final_args.get("chatDir") and final_args.get("chatsBlobBasePath"):
-                card_part = str(final_args["chatDir"]).split("/")[0]
+            if final_args.get("chatsKeyPrefix") and final_args.get("chatsBlobBasePath"):
+                card_part = str(final_args["chatsKeyPrefix"]).split("/")[0]
                 final_args["chatDir"] = os.path.join(str(final_args["chatsBlobBasePath"]), card_part)
+            final_args.pop("chatsKeyPrefix", None)
             final_args.pop("chatsBlobBasePath", None)
 
             import base64

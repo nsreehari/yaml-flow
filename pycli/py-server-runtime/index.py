@@ -1141,7 +1141,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         args = {
             "boardId": board_id,
             "cardId": str(card_id),
-            "chatDir": chats_key_prefix,
+            "chatsKeyPrefix": chats_key_prefix,
             "chatProcessingMarkerKey": processing_marker_key,
             "lastChatFile": last_chat_file,
             **execution_extra,
