@@ -324,7 +324,6 @@ terminal_states:
   it('uses passthrough when no step handler is configured', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pass-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
 
     writeFile(flowPath, `
 id: passthrough-flow
@@ -342,16 +341,8 @@ terminal_states:
     return_artifacts: [x]
 `);
 
-    writeFile(handlersPath, `
-export default {
-  s1: async () => ({ result: 'success', data: { x: 999 } }),
-};
-`);
-
     const run = runStepMachineCli([
       flowPath,
-      '--handlers',
-      handlersPath,
       '--initial-data',
       '{"x":7}',
     ]);
@@ -361,7 +352,6 @@ export default {
 
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('success');
-    // If fallback by step-name were still active, this would be 999.
     expect(output.data).toEqual({ x: 7 });
   });
 
@@ -418,37 +408,50 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 7, y: 17 });
   });
 
-  it('fails fast when inline handler name is missing from handlers module', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-inline-missing-'));
+  it('runs compute handler with input_validations', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
 
     writeFile(flowPath, `
-id: inline-missing-flow
+id: compute-flow
 settings:
   start_step: s1
 steps:
   s1:
+    expects_data: [a, b]
+    produces_data: [c]
+    input_validations:
+      - $type(a) = "number"
+      - $type(b) = "number"
     handler:
-      inline: not_present
+      compute:
+        - c = a + b
     transitions:
       success: success_state
+      failure: failed_state
 terminal_states:
   success_state:
     return_intent: success
+    return_artifacts: [a, b, c]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
 `);
 
-    writeFile(handlersPath, `
-export default {
-  other: async () => ({ result: 'success', data: {} }),
-};
-`);
-
-    const run = runStepMachineCli([flowPath, '--handlers', handlersPath]);
-
+    // Success case
+    const run = runStepMachineCli([flowPath, '--initial-data', '{"a":5,"b":3}']);
     expect(run.error).toBeUndefined();
-    expect(run.status).toBe(1);
-    expect(run.combinedOutput).toContain('Inline handler "not_present"');
+    expect(run.status).toBe(0);
+    const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.intent).toBe('success');
+    expect(output.data).toEqual({ a: 5, b: 3, c: 8 });
+
+    // Validation failure case
+    const failRun = runStepMachineCli([flowPath, '--initial-data', '{"a":"bad","b":3}']);
+    expect(failRun.error).toBeUndefined();
+    expect(failRun.status).toBe(0);
+    const failOutput = parseLastJsonObject(failRun.stdout ?? '');
+    expect(failOutput.intent).toBe('failure');
   });
 
   it('maps non-zero CLI exit into failure transition', () => {
@@ -639,10 +642,9 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 10, y: 15 });
   });
 
-  it('supports mixed inline and cli handlers with produces_data filtering', () => {
+  it('supports mixed compute and cli handlers with produces_data filtering', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-mixed-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
     const cliScriptPath = path.join(tmpRoot, 'double.js');
 
     writeFile(flowPath, `
@@ -652,15 +654,16 @@ settings:
 steps:
   s1:
     expects_data: [a, b]
-    produces_data: [c, e]
+    produces_data: [c]
     handler:
-      inline: add_inputs
+      compute:
+        - c = a + b
     transitions:
       success: s2
       failure: failed_state
   s2:
     expects_data: [c]
-    produces_data: [d, e]
+    produces_data: [d]
     handler:
       cli: node ./double.js
     transitions:
@@ -669,23 +672,10 @@ steps:
 terminal_states:
   success_state:
     return_intent: success
-    return_artifacts: [a, b, c, d, e, noise]
+    return_artifacts: [a, b, c, d]
   failed_state:
     return_intent: failure
     return_artifacts: [error]
-`);
-
-    writeFile(handlersPath, `
-export default {
-  async add_inputs(input) {
-    const a = Number(input.a);
-    const b = Number(input.b);
-    return {
-      result: 'success',
-      data: { a, b, c: a + b, noise: 'ignore-me' },
-    };
-  },
-};
 `);
 
     writeFile(cliScriptPath, `
@@ -697,8 +687,8 @@ process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const c = Number(input.c);
   process.stdout.write(JSON.stringify({
-    status: 'success',
-    data: { d: c * 2, a: 123, noise: 'ignore-me-too' },
+    result: 'success',
+    data: { d: c * 2 },
   }));
 });
 process.stdin.resume();
@@ -706,8 +696,6 @@ process.stdin.resume();
 
     const run = runStepMachineCli([
       flowPath,
-      '--handlers',
-      handlersPath,
       '--initial-data',
       '{"a":3,"b":4}',
     ]);
@@ -719,7 +707,6 @@ process.stdin.resume();
     expect(output.intent).toBe('success');
     expect(output.stepHistory).toEqual(['s1', 's2']);
     expect(output.data).toEqual({ a: 3, b: 4, c: 7, d: 14 });
-    expect(output.data.e).toBeUndefined();
   });
 
   it('supports JSONata input/output transforms and command templating for cli handlers', () => {
@@ -828,19 +815,19 @@ terminal_states:
     expect(output.intent).toBe('failure');
   });
 
-  it('routes to failed_state when inline handler returns failure', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-inline-failure-'));
+  it('routes to failed_state when compute expression throws', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-fail-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
 
     writeFile(flowPath, `
-id: inline-failure-flow
+id: compute-failure-flow
 settings:
   start_step: s1
 steps:
   s1:
     handler:
-      inline: always_fail
+      compute:
+        - result = $nonExistentFn()
     transitions:
       success: success_state
       failure: failed_state
@@ -852,15 +839,7 @@ terminal_states:
     return_artifacts: [error]
 `);
 
-    writeFile(handlersPath, `
-export default {
-  async always_fail() {
-    return { result: 'failure', data: { error: 'inline failure' } };
-  },
-};
-`);
-
-    const run = runStepMachineCli([flowPath, '--handlers', handlersPath]);
+    const run = runStepMachineCli([flowPath]);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);

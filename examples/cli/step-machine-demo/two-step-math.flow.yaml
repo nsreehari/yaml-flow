@@ -9,6 +9,12 @@ steps:
     description: Compute c = a + b
     expects_data: [a, b]
     produces_data: [c]
+    input_validations:
+      - $type(a) = "number"
+      - $type(b) = "number"
+    handler:
+      compute:
+        - c = a + b
     transitions:
       success: step2_double
       failure: failed_state
@@ -17,6 +23,11 @@ steps:
     description: Compute d = c * 2
     expects_data: [c]
     produces_data: [d]
+    input_validations:
+      - $type(c) = "number"
+    handler:
+      compute:
+        - d = c * 2
     transitions:
       success: success_state
       failure: failed_state

@@ -6,11 +6,15 @@ settings:
 
 steps:
   step1_add:
-    description: Inline handler computes c = a + b
+    description: Compute step computes c = a + b
     expects_data: [a, b]
-    produces_data: [c, e]
+    produces_data: [c]
+    input_validations:
+      - $type(a) = "number"
+      - $type(b) = "number"
     handler:
-      inline: step1_add
+      compute:
+        - c = a + b
     transitions:
       success: step2_double
       failure: failed_state
