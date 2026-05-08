@@ -16,7 +16,6 @@ try {
 
   if (!boardDir || tasks.length === 0) {
     writeFailure('BOARD_DIR and COMPLETION_TASKS are required');
-    process.exit(0);
   }
 
   const started = Date.now();
@@ -31,11 +30,8 @@ try {
 
     if (complete) {
       writeResult({
-        result: 'success',
-        data: {
-          label,
-          completed: true,
-        },
+        label,
+        completed: true,
       });
       process.exit(0);
     }
@@ -43,14 +39,9 @@ try {
     await sleep(pollMs);
   }
 
-  writeResult({
-    result: 'timeout',
-    data: {
-      label,
-      completed: false,
-      error: `${label}: timed out waiting for completion`,
-    },
-  });
+  // Timeout — exit non-zero
+  process.stderr.write(`${label}: timed out waiting for completion`);
+  process.exit(1);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   writeFailure(message);

@@ -1,23 +1,43 @@
 id: jsonata-init-board-demo
 settings:
-  start_step: t0_init_board
+  start_step: t0_prepare
   max_total_steps: 10
   timeout_ms: 30000
 
 steps:
-  t0_init_board:
-    description: Build board path with JSONata and invoke ref with transforms
+  t0_prepare:
+    description: Build board path from runtime_root and board_name
     expects_data: [runtime_root, board_name]
-    produces_data: [board_dir, init_message]
+    produces_data: [BOARD_DIR]
+    handler:
+      type: compute-jsonata
+      expr:
+        - BOARD_DIR = runtime_root & "/" & board_name
+    transitions:
+      success: t1_init_board
+      failure: failed_state
+
+  t1_init_board:
+    description: Invoke init-board CLI with BOARD_DIR
+    expects_data: [BOARD_DIR]
+    produces_data: [board_dir, message]
     handler:
       type: ref
       howToRun: local-node
       whatToRun: "::fs-path::./jsonata-init-board-cli.js"
-      input-transforms:
-        - BOARD_DIR = runtime_root & "/" & board_name
-      output-transforms:
+    transitions:
+      success: t2_map_output
+      failure: failed_state
+
+  t2_map_output:
+    description: Map CLI output to final field names
+    expects_data: [BOARD_DIR, message]
+    produces_data: [board_dir, init_message]
+    handler:
+      type: compute-jsonata
+      expr:
         - board_dir = BOARD_DIR
-        - init_message = data.message
+        - init_message = message
     transitions:
       success: success_state
       failure: failed_state

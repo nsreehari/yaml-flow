@@ -8,7 +8,6 @@ try {
 
   if (!boardDir) {
     writeFailure('BOARD_DIR is required');
-    process.exit(0);
   }
 
   runBoardCli([
@@ -18,11 +17,8 @@ try {
     '--outputs-store-ref', `::fs-path::${boardDir}`,
   ]);
   writeResult({
-    result: 'success',
-    data: {
-      board_dir: boardDir,
-      message: `initialized ${boardDir}`,
-    },
+    board_dir: boardDir,
+    message: `initialized ${boardDir}`,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

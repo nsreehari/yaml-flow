@@ -15,7 +15,6 @@ try {
 
   if (!boardDir || expectedCardCount <= 0) {
     writeFailure('BOARD_DIR and EXPECTED_CARD_COUNT are required');
-    process.exit(0);
   }
 
   const started = Date.now();
@@ -31,12 +30,9 @@ try {
 
     if (cards.length >= expectedCardCount && completedCount >= expectedCardCount) {
       writeResult({
-        result: 'success',
-        data: {
-          completed: true,
-          card_count: cards.length,
-          completed_count: completedCount,
-        },
+        all_completed: true,
+        card_count: cards.length,
+        completed_count: completedCount,
       });
       process.exit(0);
     }
@@ -44,13 +40,9 @@ try {
     await sleep(pollMs);
   }
 
-  writeResult({
-    result: 'timeout',
-    data: {
-      completed: false,
-      error: `timed out waiting for ${expectedCardCount} cards to complete`,
-    },
-  });
+  // Timeout — exit non-zero
+  process.stderr.write(`timed out waiting for ${expectedCardCount} cards to complete`);
+  process.exit(1);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   writeFailure(message);

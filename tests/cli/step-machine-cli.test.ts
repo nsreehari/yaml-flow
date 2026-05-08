@@ -392,10 +392,7 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const x = Number(input.x);
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { y: x + 10, z: 999 },
-  }));
+  process.stdout.write(JSON.stringify({ y: x + 10, z: 999 }));
 });
 process.stdin.resume();
 `);
@@ -498,7 +495,7 @@ process.exit(23);
     expect(output.intent).toBe('failure');
   });
 
-  it('maps invalid JSON stdout from ref handler into failure transition', () => {
+  it('treats non-JSON stdout from ref handler as success with stdout fallback', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-json-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'bad-json.js');
@@ -535,7 +532,7 @@ process.stdout.write('not-json-output');
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
-    expect(output.intent).toBe('failure');
+    expect(output.intent).toBe('success');
   });
 
   it('supports ref handler with script path containing spaces', () => {
@@ -575,10 +572,7 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const x = Number(input.x);
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { y: x * 2 },
-  }));
+  process.stdout.write(JSON.stringify({ y: x * 2 }));
 });
 process.stdin.resume();
 `);
@@ -593,13 +587,13 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 9, y: 18 });
   });
 
-  it('supports ref handler with input-transforms', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-transforms-'));
+  it('supports ref handler with argsMassaging.bodyTemplate', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-body-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
 
     writeFile(flowPath, `
-id: ref-transforms-flow
+id: ref-body-flow
 settings:
   start_step: s1
 steps:
@@ -610,10 +604,8 @@ steps:
       type: ref
       howToRun: local-node
       whatToRun: "::fs-path::./echo-y.js"
-      input-transforms:
-        - X = x
-      output-transforms:
-        - y = data.y
+      argsMassaging:
+        bodyTemplate: "{ 'X': x }"
     transitions:
       success: success_state
       failure: failed_state
@@ -633,10 +625,7 @@ process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { y: Number(input.X) + 5 },
-  }));
+  process.stdout.write(JSON.stringify({ y: Number(input.X) + 5 }));
 });
 process.stdin.resume();
 `);
@@ -698,10 +687,7 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const c = Number(input.c);
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { d: c * 2 },
-  }));
+  process.stdout.write(JSON.stringify({ d: c * 2 }));
 });
 process.stdin.resume();
 `);
@@ -721,7 +707,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ a: 3, b: 4, c: 7, d: 14 });
   });
 
-  it('supports JSONata input/output transforms for ref handlers', () => {
+  it('supports argsMassaging.bodyTemplate for ref handlers', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-jsonata-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'init-board.js');
@@ -729,27 +715,24 @@ process.stdin.resume();
     writeFile(flowPath, `
 id: jsonata-ref-flow
 settings:
-  start_step: t0_init_board
+  start_step: s1
 steps:
-  t0_init_board:
+  s1:
     expects_data: [runtime_root, board_name]
-    produces_data: [board_dir, init_message]
+    produces_data: [board_dir, message]
     handler:
       type: ref
       howToRun: local-node
       whatToRun: "::fs-path::./init-board.js"
-      input-transforms:
-        - BOARD_DIR = runtime_root & "/" & board_name
-      output-transforms:
-        - board_dir = BOARD_DIR
-        - init_message = data.message
+      argsMassaging:
+        bodyTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
     transitions:
       success: success_state
       failure: failed_state
 terminal_states:
   success_state:
     return_intent: success
-    return_artifacts: [board_dir, init_message, ignored]
+    return_artifacts: [board_dir, message]
   failed_state:
     return_intent: failure
     return_artifacts: [error]
@@ -763,17 +746,14 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   if (!input.BOARD_DIR) {
-    process.stdout.write(JSON.stringify({ result: 'failure', error: 'BOARD_DIR missing' }));
+    process.stderr.write('BOARD_DIR missing');
+    process.exit(1);
     return;
   }
 
   process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: {
-      BOARD_DIR: input.BOARD_DIR,
-      message: 'initialized-ok',
-      ignored: 'should-not-be-merged',
-    },
+    board_dir: input.BOARD_DIR,
+    message: 'initialized-ok',
   }));
 });
 process.stdin.resume();
@@ -792,7 +772,7 @@ process.stdin.resume();
     expect(output.intent).toBe('success');
     expect(output.data).toEqual({
       board_dir: '/tmp/runtime/board-a',
-      init_message: 'initialized-ok',
+      message: 'initialized-ok',
     });
   });
 

@@ -106,5 +106,6 @@ export function writeResult(payload) {
 }
 
 export function writeFailure(message) {
-  writeResult({ result: 'failure', error: message });
+  process.stderr.write(message);
+  process.exit(1);
 }

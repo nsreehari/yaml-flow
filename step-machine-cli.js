@@ -475,21 +475,32 @@ function resolveRefCommand(spec, flowDir) {
   throw new Error(`[step-machine-cli] Unsupported whatToRun kind "${kind}". Only fs-path is supported for local execution.`);
 }
 
-function evaluateExprArray(exprArray, source, stepName, label) {
-  if (!exprArray || !Array.isArray(exprArray) || exprArray.length === 0) {
-    return null;
+function resolveArgsMassaging(argsMassaging, context, stepName) {
+  if (!argsMassaging || typeof argsMassaging !== 'object') return {};
+  const result = {};
+
+  if (Array.isArray(argsMassaging.cmdTemplate)) {
+    const resolved = [];
+    for (const expr of argsMassaging.cmdTemplate) {
+      try {
+        resolved.push(String(jsonata(expr).evaluate(context)));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`[step-machine-cli] Step "${stepName}" argsMassaging.cmdTemplate failed on "${expr}": ${msg}`);
+      }
+    }
+    result.cmdArgs = resolved;
   }
 
-  const result = {};
-  for (const item of exprArray) {
-    const { bindTo, expr } = normalizeComputeStep(item);
+  if (typeof argsMassaging.bodyTemplate === 'string') {
     try {
-      result[bindTo] = jsonata(expr).evaluate(source);
+      result.body = jsonata(argsMassaging.bodyTemplate).evaluate(context);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`[step-machine-cli] Step "${stepName}" ${label} "${bindTo}" failed: ${msg}`);
+      throw new Error(`[step-machine-cli] Step "${stepName}" argsMassaging.bodyTemplate failed: ${msg}`);
     }
   }
+
   return result;
 }
 
@@ -499,17 +510,22 @@ function createRefStepHandler(spec, flowDir, stepName, config) {
       ? input
       : {};
 
-    const inputCtx = config ? { ...stepInput, config } : { ...stepInput };
-
-    // Evaluate input-transforms to build what the ref receives
-    const transformed = evaluateExprArray(spec['input-transforms'], inputCtx, stepName, 'input-transforms');
-    const payload = transformed ?? inputCtx;
+    const ctx = config ? { ...stepInput, config } : { ...stepInput };
+    const massaged = resolveArgsMassaging(spec.argsMassaging, ctx, stepName);
 
     const { cmd, args, cwd } = resolveRefCommand(spec, flowDir);
 
+    // cmdTemplate args are appended to the spawn argv
+    if (massaged.cmdArgs) {
+      args.push(...massaged.cmdArgs);
+    }
+
+    // If bodyTemplate produced a body, use it; otherwise send full context
+    const payload = JSON.stringify(massaged.body ?? ctx);
+
     const result = spawnSync(cmd, args, {
       cwd,
-      input: JSON.stringify(payload),
+      input: payload,
       encoding: 'utf-8',
       windowsHide: true,
     });
@@ -533,26 +549,18 @@ function createRefStepHandler(spec, flowDir, stepName, config) {
       };
     }
 
+    // Transport succeeded (exit 0) — wrap stdout as data unconditionally.
+    // The engine determines success/failure from the transport signal (exit code),
+    // NOT from parsing a protocol out of the response body.
     try {
       const parsed = parseJsonOutput(stdout);
-      const normalized = normalizeHandlerResult(parsed, stepName);
-
-      // Evaluate output-transforms against context that includes both spread data and nested data
-      const outputCtx = { ...normalized.data, data: normalized.data, result: normalized.result };
-      const outputTransformed = evaluateExprArray(spec['output-transforms'], outputCtx, stepName, 'output-transforms');
-
-      return {
-        result: normalized.result,
-        data: outputTransformed ?? normalized.data,
-      };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      return {
-        result: 'failure',
-        data: {
-          error: `[step-machine-cli] step "${stepName}" ref returned invalid JSON on stdout: ${msg}`,
-        },
-      };
+      const data = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : { stdout: parsed };
+      return { result: 'success', data };
+    } catch {
+      // stdout wasn't JSON — still success (exit 0), pass raw stdout
+      return { result: 'success', data: { stdout: stdout.trim() } };
     }
   };
 }
@@ -603,20 +611,21 @@ function normalizeHandlerResult(raw, stepName) {
   }
 
   const result = raw.result ?? raw.status;
-  if (typeof result !== 'string' || result.trim().length === 0) {
-    throw new Error(`[step-machine-cli] Step "${stepName}" result must include a non-empty "result" (or "status") string.`);
+
+  // If script returned {result, data} protocol — use it
+  if (typeof result === 'string' && result.trim().length > 0) {
+    const data = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+      ? raw.data
+      : {};
+    const error = typeof raw.error === 'string' ? raw.error : undefined;
+    if (error && !('error' in data)) {
+      data.error = error;
+    }
+    return { result, data };
   }
 
-  const data = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
-    ? raw.data
-    : {};
-
-  const error = typeof raw.error === 'string' ? raw.error : undefined;
-  if (error && !('error' in data)) {
-    data.error = error;
-  }
-
-  return { result, data };
+  // Script returned arbitrary JSON without result/status — treat entire object as data
+  return { result: 'success', data: { ...raw } };
 }
 
 function filterProducedData(data, produces) {

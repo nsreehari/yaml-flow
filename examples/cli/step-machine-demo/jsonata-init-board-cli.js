@@ -12,23 +12,19 @@ process.stdin.on('end', () => {
     const boardDir = input.BOARD_DIR ?? '';
 
     if (!boardDir) {
-      process.stdout.write(JSON.stringify({
-        result: 'failure',
-        error: 'BOARD_DIR missing from input',
-      }));
+      process.stderr.write('BOARD_DIR missing from input');
+      process.exit(1);
       return;
     }
 
     process.stdout.write(JSON.stringify({
-      result: 'success',
-      data: {
-        message: `initialized ${boardDir}`,
-        ignored: 'will be filtered by produces_data',
-      },
+      message: `initialized ${boardDir}`,
+      ignored: 'will be filtered by produces_data',
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stdout.write(JSON.stringify({ result: 'failure', error: message }));
+    process.stderr.write(message);
+    process.exit(1);
   }
 });
 

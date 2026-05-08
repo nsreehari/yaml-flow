@@ -10,18 +10,14 @@ try {
 
   if (!boardDirInput) {
     writeFailure('BOARD_DIR is required');
-    process.exit(0);
   }
 
   const boardDir = path.resolve(boardDirInput);
   fs.rmSync(boardDir, { recursive: true, force: true });
 
   writeResult({
-    result: 'success',
-    data: {
-      board_dir: boardDir,
-      reset: true,
-    },
+    board_dir: boardDir,
+    reset: true,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
