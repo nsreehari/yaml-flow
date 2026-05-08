@@ -1,17 +1,19 @@
 // live-cards.js — LiveCards v3: Node-based Board/Canvas engine
 //
 // Schema: Each node has { id } required; all else optional.
-//   id, meta, card_data, requires, provides, source_defs, compute, view
-//   Nodes with view render as cards; nodes with source_defs but no view render as source pills in canvas.
-//   compute[] — ordered array of { bindTo, expr } JSONata steps → writes to node.computed_values (ephemeral)
-//   source_defs[] — open objects: only bindTo + outputFile matter to the engine; all other fields are
-//               passed verbatim to the board's task-executor (--in JSON). Users define their own
-//               shape (kind, url, mailbox, channel, model, ...) per executor.
-//   requires[] — upstream node IDs; engine subscribes automatically
+//   id, meta, card_data, requires, provides, view
+//   Nodes with view render as cards; nodes with no view but with source_defs declared on the
+//   underlying card definition render as source pills in canvas mode (source_defs are runtime-only;
+//   they are not interpreted here).
+//   requires[] — upstream provider tokens; engine subscribes automatically
 //   provides[] — [{ bindTo, src }] explicit downstream token bindings
+//   computed_values — derived values produced by the runtime; rendered as-is, never recomputed here
+//
+// Rendering contract: this module renders derived state only. View bind paths resolve to one of
+//   card_data | requires | computed_values | runtime_state. Raw fetched-source payloads stay in the
+//   runtime and never reach the Board.
 //
 // Uses Bootstrap 5 for layout/forms, optional Chart.js for charts.
-// Uses CardCompute (card-compute.js) for declarative compute expressions.
 //
 // API:
 //   const engine = LiveCard.init({ resolve, onPatch, onPatchState, onRefresh, onAction, getChatMessages, markdown, sanitize, chartLib });
@@ -24,8 +26,15 @@
 //   engine.appendChatMessage(nodeId, role, text)
 //   engine.registerRenderer(name, fn)
 //
-//   const board = LiveCard.Board(engine, el, { nodes, positions?, mode, canvas })
-//   board.setMode('board'|'canvas'), board.autoLayout(), board.add(node), board.remove(id)
+//   Reactive board (preferred): state in, view out. No destructive re-renders.
+//   const board = LiveCard.Board(engine, el, { initialState, getNodeIds, selectNode, mode?, canvas? });
+//   board.setState(nextState)          — diff vs prev; per-node updates only
+//   board.destroy()
+//
+//   Imperative core (advanced): direct node-list manipulation.
+//   const core = LiveCard.BoardCore(engine, el, { nodes, positions?, mode, canvas });
+//   core.add(node), core.remove(id), core.reorder(ids), core.updateNode(id, model)
+//   core.setMode('board'|'canvas'), core.setDevMode(flag), core.autoLayout(), core.clear(), core.destroy()
 
 // eslint-disable-next-line no-unused-vars
 var LiveCard = (function () {
@@ -273,11 +282,6 @@ var LiveCard = (function () {
     function _getCleanup(id) {
       if (!_cleanup[id]) _cleanup[id] = { ac: new AbortController(), timers: [], charts: [], unsubs: [] };
       return _cleanup[id];
-    }
-
-    function _runCompute() {
-      // Runtime payload is authoritative; UI never recomputes derived values.
-      return Promise.resolve();
     }
 
     function _ensureChatModal() {
@@ -767,11 +771,9 @@ var LiveCard = (function () {
       const ns = {
         card: node && node.card ? node.card : {},
         card_data: node && node.card_data ? node.card_data : {},
-        fetched_sources: node && node.fetched_sources ? node.fetched_sources : {},
         requires: node && node.requires ? node.requires : {},
         computed_values: node && node.computed_values ? node.computed_values : {},
         runtime_state: node && node.runtime_state ? node.runtime_state : {},
-        data_objects: node && node.data_objects ? node.data_objects : {},
       };
 
       if (!Object.prototype.hasOwnProperty.call(ns, root)) return undefined;
@@ -1961,11 +1963,11 @@ var LiveCard = (function () {
     //
     // Usage:
     //   { "kind": "ref",
-    //     "data": { "bind": "fetched_sources.rebalance.proposed_trades",
+    //     "data": { "bind": "computed_values.proposed_trades",
     //               "viewBind": "card_data.display_mode",
     //               "fallbackKind": "table" } }
     //
-    // viewBind can point to any namespace: card_data, fetched_sources, requires, computed_values.
+    // viewBind can point to any namespace: card_data, requires, computed_values, runtime_state.
     // If the resolved view object contains a "bind" sub-path, that overrides data.bind.
     const _REF_KIND_WHITELIST = new Set([
       'table','editable-table','chart','metric','list','badge',
@@ -2180,7 +2182,7 @@ var LiveCard = (function () {
       if (node.card_data && node.card_data.status === 'error' && node.card_data.error) {
         resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.card_data.error)}</pre>`;
       } else {
-        _runCompute(node).then(function () { _renderElements(node, resultEl); });
+        _renderElements(node, resultEl);
       }
 
       // ---- Wire refresh ----
@@ -2275,7 +2277,7 @@ var LiveCard = (function () {
       if (node.card_data.status === 'error' && node.card_data.error) {
         info.resultEl.innerHTML = `<div class="text-danger small fw-semibold">Refresh failed</div><pre class="text-muted small mt-1" style="white-space:pre-wrap">${_esc(node.card_data.error)}</pre>`;
       } else {
-        _runCompute(node).then(function () { _renderElements(node, info.resultEl); });
+        _renderElements(node, info.resultEl);
       }
     }
 
@@ -2354,10 +2356,11 @@ var LiveCard = (function () {
   }
 
   // ===========================================================================
-  // Board — grid (board) and DAG (canvas) modes
+  // BoardCore — imperative grid (board) and DAG (canvas) modes.
+  // Most callers should use Board (reactive wrapper) instead.
   // ===========================================================================
 
-  function Board(engine, containerEl, opts) {
+  function BoardCore(engine, containerEl, opts) {
     opts = opts || {};
     const mode = { current: opts.mode || 'board' };
     const devMode = { current: opts.devMode || false };
@@ -2543,32 +2546,9 @@ var LiveCard = (function () {
 
       const cardSection = document.createElement('div');
       cardSection.className = 'mb-4';
-      cardSection.innerHTML = '<h6 class="fw-semibold mb-2">Card Object (Editable)</h6>';
-
-      const editableCardObject = JSON.parse(JSON.stringify((node && node.card) ? node.card : {}));
-
-      const editor = document.createElement('textarea');
-      editor.className = 'form-control form-control-sm font-monospace';
-      editor.rows = 16;
-      editor.style.whiteSpace = 'pre';
-      editor.value = JSON.stringify(editableCardObject, null, 2);
-
-      const editorHint = document.createElement('div');
-      editorHint.className = 'small text-muted mt-2';
-      editorHint.textContent = 'Edit JSON and click Submit to apply updates to this card.';
-
-      const editorError = document.createElement('div');
-      editorError.className = 'small text-danger mt-1 d-none';
-
-      const submitBtn = document.createElement('button');
-      submitBtn.type = 'button';
-      submitBtn.className = 'btn btn-primary btn-sm mb-2';
-      submitBtn.textContent = 'Submit';
-
-      cardSection.appendChild(submitBtn);
-      cardSection.appendChild(editor);
-      cardSection.appendChild(editorHint);
-      cardSection.appendChild(editorError);
+      cardSection.innerHTML = '<h6 class="fw-semibold mb-2">Card Definition (Read-only)</h6>';
+      const cardDef = (node && node.card) ? node.card : {};
+      cardSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(cardDef, null, 2))}</pre>`;
       body.appendChild(cardSection);
 
       const computedSection = document.createElement('div');
@@ -2577,13 +2557,6 @@ var LiveCard = (function () {
       const computedValues = node.computed_values || {};
       computedSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(computedValues, null, 2))}</pre>`;
       body.appendChild(computedSection);
-
-      const sourcesSection = document.createElement('div');
-      sourcesSection.className = 'mb-4';
-      sourcesSection.innerHTML = '<h6 class="fw-semibold mb-2">Fetched Sources (Read-only)</h6>';
-      const sourcesData = node.fetched_sources || {};
-      sourcesSection.innerHTML += `<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${_esc(JSON.stringify(sourcesData, null, 2))}</pre>`;
-      body.appendChild(sourcesSection);
 
       const requiresSection = document.createElement('div');
       requiresSection.className = 'mb-4';
@@ -2606,43 +2579,6 @@ var LiveCard = (function () {
       closeBtn.className = 'btn btn-secondary';
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', closeModal);
-
-      submitBtn.addEventListener('click', function () {
-        editorError.classList.add('d-none');
-        editorError.textContent = '';
-        try {
-          const parsed = JSON.parse(editor.value);
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw new Error('Card Object must be a JSON object.');
-          }
-          if (parsed.id && parsed.id !== node.id) {
-            throw new Error('Changing card id is not supported in the inspector.');
-          }
-
-          const fixedId = node.id;
-          const preservedRuntime = {
-            card_data: node.card_data,
-            fetched_sources: node.fetched_sources,
-            requires: node.requires,
-            computed_values: node.computed_values,
-            runtime_state: node.runtime_state,
-            data_objects: node.data_objects,
-          };
-          node.card = parsed;
-          node.id = fixedId;
-          Object.assign(node, preservedRuntime);
-
-          engine.notify(node.id, { inspector: 'card-object-updated' });
-          _render();
-
-          submitBtn.textContent = '✓ Saved';
-          setTimeout(function () { submitBtn.textContent = 'Submit'; }, 1200);
-          closeModal();
-        } catch (err) {
-          editorError.textContent = 'Invalid JSON: ' + String((err && err.message) || err);
-          editorError.classList.remove('d-none');
-        }
-      });
 
       footer.appendChild(closeBtn);
       content.appendChild(header);
@@ -2849,13 +2785,13 @@ var LiveCard = (function () {
      */
     function _updateTokenAvailability() {
       var tokenMap = _buildTokenMap();
-      // Determine which nodes "have data" (non-empty card_data or fetched_sources, or status=fresh/completed)
+      // A node "has data" when card_data or computed_values is non-empty, or status is fresh/completed.
       var nodeHasData = {};
       nodeList.forEach(function(node) {
         var cd = node.card_data || (node.card && node.card.card_data);
-        var fs = node.fetched_sources;
+        var cv = node.computed_values;
         var status = cd && cd.status;
-        var hasOutput = (cd && Object.keys(cd).length > 0) || (fs && Object.keys(fs).length > 0);
+        var hasOutput = (cd && Object.keys(cd).length > 0) || (cv && Object.keys(cv).length > 0);
         nodeHasData[node.id] = hasOutput || status === 'fresh' || status === 'completed';
       });
 
@@ -3228,7 +3164,41 @@ var LiveCard = (function () {
       _render();
     }
 
-    function refresh() { _render(); }
+    /**
+     * Per-node update: replace runtime fields on the existing node object in place
+     * and re-render only that node's body. Outer wrapper is rebuilt to pick up
+     * status/badges, but the surrounding column element is reused so layout is stable.
+     * Editable element state is preserved via journal overlays keyed by nodeId:bindPath.
+     */
+    function updateNode(id, model) {
+      const entry = nodeMap[id];
+      if (!entry) throw new Error('updateNode: unknown node id ' + id);
+      const node = entry.node;
+      if (model && typeof model === 'object') {
+        if (model.card !== undefined) node.card = model.card;
+        if (model.card_data !== undefined) node.card_data = model.card_data;
+        if (model.requires !== undefined) node.requires = model.requires;
+        if (model.computed_values !== undefined) node.computed_values = model.computed_values;
+        if (model.runtime_state !== undefined) node.runtime_state = model.runtime_state;
+      }
+      engine.destroy(id);
+      if (mode.current === 'board') {
+        const colEl = entry.colEl;
+        colEl.innerHTML = '';
+        const built = _buildCardWrapper(node);
+        colEl.appendChild(built.wrap);
+        nodeMap[id] = { node, colEl, bodyEl: built.body };
+        engine.render(node, built.body, { showChat });
+      } else {
+        const el = entry.colEl;
+        el.innerHTML = '';
+        const built = _buildCardWrapper(node);
+        while (built.wrap.firstChild) el.appendChild(built.wrap.firstChild);
+        nodeMap[id] = { node, colEl: el, bodyEl: built.body };
+        engine.render(node, built.body, { showChat: false });
+      }
+      _updateTokenAvailability();
+    }
 
     function clear() {
       _destroyEdges();
@@ -3271,7 +3241,7 @@ var LiveCard = (function () {
       add,
       remove,
       reorder,
-      refresh,
+      updateNode,
       clear,
       setMode,
       setDevMode,
@@ -3285,8 +3255,119 @@ var LiveCard = (function () {
   }
 
   // ===========================================================================
+  // Board — reactive host. State in, view out. No destructive re-renders.
+  // ===========================================================================
+
+  function Board(engine, containerEl, opts) {
+    opts = opts || {};
+    const initialState = opts.initialState;
+    const getNodeIds = opts.getNodeIds;
+    const selectNode = opts.selectNode;
+    if (typeof getNodeIds !== 'function' || typeof selectNode !== 'function') {
+      throw new Error('LiveCard.Board requires getNodeIds and selectNode functions');
+    }
+
+    let state = initialState;
+    const prevModelsById = {};
+    const prevFingerprintsById = {};
+
+    function _stableStringify(v) {
+      if (v == null || typeof v !== 'object') return JSON.stringify(v);
+      if (Array.isArray(v)) return '[' + v.map(_stableStringify).join(',') + ']';
+      const keys = Object.keys(v).sort();
+      return '{' + keys.map(k => JSON.stringify(k) + ':' + _stableStringify(v[k])).join(',') + '}';
+    }
+
+    function _modelFingerprint(model) {
+      if (!model || typeof model !== 'object') return 'null';
+      return _stableStringify({
+        card: model.card,
+        card_data: model.card_data,
+        requires: model.requires,
+        computed_values: model.computed_values,
+        runtime_state: model.runtime_state,
+      });
+    }
+
+    const initialIds = getNodeIds(state);
+    const initialNodes = initialIds.map(id => {
+      const m = selectNode(state, id);
+      prevModelsById[id] = m;
+      prevFingerprintsById[id] = _modelFingerprint(m);
+      return m;
+    });
+
+    const coreOpts = {};
+    Object.keys(opts).forEach(k => {
+      if (k === 'initialState' || k === 'getNodeIds' || k === 'selectNode' || k === 'nodes') return;
+      coreOpts[k] = opts[k];
+    });
+    coreOpts.nodes = initialNodes;
+
+    const core = BoardCore(engine, containerEl, coreOpts);
+
+    function _changed(prevFingerprint, nextFingerprint) {
+      return prevFingerprint !== nextFingerprint;
+    }
+
+    function setState(nextStateOrUpdater) {
+      const nextState = (typeof nextStateOrUpdater === 'function')
+        ? nextStateOrUpdater(state)
+        : nextStateOrUpdater;
+      if (nextState === undefined) return;
+
+      state = nextState;
+      const nextIds = getNodeIds(state);
+      const nextSet = new Set(nextIds);
+
+      // Removals
+      Object.keys(prevModelsById).forEach(id => {
+        if (!nextSet.has(id)) {
+          core.remove(id);
+          delete prevModelsById[id];
+          delete prevFingerprintsById[id];
+        }
+      });
+
+      // Additions and per-node updates
+      nextIds.forEach(id => {
+        const next = selectNode(state, id);
+        const prev = prevModelsById[id];
+        const nextFingerprint = _modelFingerprint(next);
+        const prevFingerprint = prevFingerprintsById[id];
+        if (!prev) {
+          core.add(next);
+        } else if (_changed(prevFingerprint, nextFingerprint)) {
+          core.updateNode(id, next);
+        }
+        prevModelsById[id] = next;
+        prevFingerprintsById[id] = nextFingerprint;
+      });
+
+      // Reorder if id sequence differs
+      const currentOrder = core.nodes.map(n => n.id);
+      const orderDiffers = nextIds.length !== currentOrder.length
+        || nextIds.some((id, i) => id !== currentOrder[i]);
+      if (orderDiffers) core.reorder(nextIds);
+    }
+
+    function destroy() {
+      Object.keys(prevModelsById).forEach(k => delete prevModelsById[k]);
+      Object.keys(prevFingerprintsById).forEach(k => delete prevFingerprintsById[k]);
+      core.destroy();
+    }
+
+    return {
+      setState,
+      destroy,
+      core,
+      get state() { return state; },
+    };
+  }
+
+  // ===========================================================================
   // Module export
   // ===========================================================================
 
-  return { init, Board };
+  return { init, Board, BoardCore };
 })();
