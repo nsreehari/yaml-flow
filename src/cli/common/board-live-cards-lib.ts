@@ -938,8 +938,6 @@ export function createCardHandlerFn(
         if (!card) return 'task-initiate-failure';
 
         const cardId = card.id as string;
-        // Notify on fresh evaluations only (not source-fetch callbacks).
-        if (!input.update) notifyCardFn?.(cardId, card);
         const cardState = (card.card_data ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
         const requiredSources = allSources.filter(s => s.optionalForCompletionGating !== true);
@@ -967,6 +965,12 @@ export function createCardHandlerFn(
         if (lastExecCount !== currentExecutionCount) {
           state._lastExecutionCount = currentExecutionCount; dirty = true;
         }
+
+        // Notify only on init or explicit restart — not on upstream-driven
+        // re-runs (status='completed') or source-fetch callbacks (status='running').
+        // The handler is invoked synchronously before task-started has applied,
+        // so a fresh init/restart is observable as taskState.status === 'not-started'.
+        if (input.taskState?.status === 'not-started') notifyCardFn?.(cardId, card);
 
         if (input.update) {
           const u = input.update;
