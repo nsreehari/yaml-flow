@@ -62,24 +62,21 @@ export type HandlerSpec = ComputeJsonataSpec | RefSpec;
 // ============================================================================
 
 /**
- * Single invocation boundary. Implementations:
- *   - Node spawn:     spawnSync(node|python|process, args, { input: stdin })
- *   - HTTP:           fetch(url, { method, body })
- *   - Azure Function: HTTP POST with platform-specific auth
+ * Single invocation boundary. The framework calls this for every ref step;
+ * the adapter (Node spawn / HTTP / Azure Function / etc.) decides how to
+ * actually invoke the ref and normalizes the outcome to {result, data, error?}.
  *
- * Adapter responsibilities:
- *   1. Apply ref.argsMassaging (cmdTemplate / urlTemplate / bodyTemplate)
- *   2. Perform the transport
- *   3. Normalize transport outcome (exit code / status code / etc.) into
- *      `{ result, data, error? }`
- *   4. Pass through the response payload as `data` (object preferred; raw
- *      stdout/blob/etc. as the adapter sees fit)
+ * `args` is the flat flow context for the step. The adapter is responsible
+ * for honoring `ref.argsMassaging` (cmdTemplate / urlTemplate / bodyTemplate)
+ * before performing the transport.
+ *
+ * May return synchronously (sync transports) or as a Promise (async transports).
+ * The framework awaits regardless.
  */
-export type InvokeFn = (
+export type InvokeRefFn = (
   ref: ExecutionRef,
-  input: Record<string, unknown>,
-  context: { stepName: string },
-) => Promise<NormalizedHandlerResult>;
+  args: Record<string, unknown>,
+) => NormalizedHandlerResult | Promise<NormalizedHandlerResult>;
 
 // ============================================================================
 // StepHandler — the engine-facing handler signature

@@ -5,11 +5,10 @@
  *
  * Usage:
  *   import { buildStepHandlersForFlow } from 'step-machine-public';
- *   import { createNodeSpawnInvoker } from 'step-machine-public-node-adapter';
+ *   import { invokeRefSync } from '../cli/node/execution-adapter.js';
  *
- *   const handlers = buildStepHandlersForFlow(flow, {
- *     invoke: createNodeSpawnInvoker({ flowDir }),
- *   });
+ *   const invoke = (ref, args) => invokeRefSync(ref, args, { cliDir: flowDir });
+ *   const handlers = buildStepHandlersForFlow(flow, { invoke });
  *   const machine = createStepMachine(flow, handlers, { store });
  *   await machine.run(initialData);
  */
@@ -37,9 +36,6 @@ export {
   runInputValidations,
 } from './result-utils.js';
 
-export { resolveArgsMassaging } from './args-massaging.js';
-export type { MassagedArgs } from './args-massaging.js';
-
 export { jsonata } from './jsonata-loader.js';
 export type { JsonataExpression } from './jsonata-loader.js';
 
@@ -47,7 +43,7 @@ export type {
   ComputeJsonataSpec,
   RefSpec,
   HandlerSpec,
-  InvokeFn,
+  InvokeRefFn,
   NormalizedHandlerResult,
   StepHandler,
   StepConfigForFactory,

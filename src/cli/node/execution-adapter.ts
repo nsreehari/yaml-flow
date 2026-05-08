@@ -262,6 +262,124 @@ export function buildLocalBaseSpec(
 }
 
 // ============================================================================
+// invokeRefSync — synchronous request/reply for ref-based invocations
+// ============================================================================
+
+import { resolveArgsMassaging } from '../common/args-massaging.js';
+import { createNodeCommandExecutor } from './process-runner.js';
+
+/** Normalized envelope returned by invokeRefSync. */
+export interface InvokeRefResult {
+  /** Outcome key — drives transitions in the step machine ('success' | 'failure' | custom). */
+  result: string;
+  /** Response payload as a record (always object-shaped; raw stdout wrapped under `stdout` if not JSON object). */
+  data: Record<string, unknown>;
+  /** Optional human-readable error detail. */
+  error?: string;
+}
+
+export interface InvokeRefSyncOptions {
+  /** Directory used to resolve `built-in` refs (defaults to ref's cwd / process cwd). */
+  cliDir?: string;
+  /** Working directory for the spawned child (default: process cwd). */
+  cwd?: string;
+  /** Timeout in milliseconds (default: 30_000). */
+  timeoutMs?: number;
+  /** Label used in error messages (default: 'invokeRefSync'). */
+  label?: string;
+}
+
+function _parseStdoutAsJson(stdout: string): unknown {
+  const trimmed = stdout.trim();
+  if (!trimmed) throw new Error('empty stdout');
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const lines = trimmed.split(/\r?\n/).filter(Boolean);
+    const last = lines[lines.length - 1];
+    return JSON.parse(last);
+  }
+}
+
+/**
+ * Invoke an ExecutionRef synchronously with a request/reply contract.
+ *
+ * Used by:
+ *   - step-machine ref steps (each step's handler dispatches through here)
+ *   - any utility that needs sync request/reply against an ExecutionRef
+ *
+ * Behavior:
+ *   1. Resolve `ref.argsMassaging` against `args` to get cmdArgs / body.
+ *   2. Build the local base spec (node/python/process + script path).
+ *   3. Spawn synchronously with `JSON.stringify(body ?? args)` on stdin.
+ *   4. Map exit code into envelope:
+ *        exit 0 → { result: 'success', data: parsed-stdout-or-{stdout: raw} }
+ *        non-0  → { result: 'failure', data: { error: stderr-or-exit-detail } }
+ *
+ * The framework (engine) never inspects payload shape; it only routes on `result`.
+ */
+export function invokeRefSync(
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeRefSyncOptions,
+): InvokeRefResult {
+  const label = options?.label ?? 'invokeRefSync';
+  const cliDir = options?.cliDir ?? options?.cwd ?? process.cwd();
+
+  let massaged;
+  try {
+    massaged = resolveArgsMassaging(ref.argsMassaging, args, label);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { result: 'failure', data: { error: msg } };
+  }
+
+  let baseSpec;
+  try {
+    baseSpec = buildLocalBaseSpec(ref, cliDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { result: 'failure', data: { error: `[${label}] ref resolution failed: ${msg}` } };
+  }
+
+  const argv = [...baseSpec.baseArgs, ...(massaged.cmdArgs ?? [])];
+  const stdinPayload = JSON.stringify(massaged.body ?? args);
+  const executor = createNodeCommandExecutor();
+
+  let stdout: string;
+  try {
+    stdout = executor.executeSync(baseSpec.command, argv, {
+      timeout: options?.timeoutMs ?? 30_000,
+      encoding: 'utf-8',
+      cwd: options?.cwd,
+      input: stdinPayload,
+    });
+  } catch (err) {
+    // execFileSync throws on non-zero exit / spawn error / timeout.
+    const e = err as NodeJS.ErrnoException & { stderr?: Buffer | string; status?: number | null };
+    const stderr = (e.stderr ? String(e.stderr) : '').trim();
+    const status = typeof e.status === 'number' ? e.status : 'unknown';
+    const detail = stderr || e.message;
+    return {
+      result: 'failure',
+      data: { error: `[${label}] ref exited with status ${status}${detail ? `: ${detail}` : ''}` },
+    };
+  }
+
+  // Transport succeeded (exit 0). Wrap stdout as data unconditionally.
+  try {
+    const parsed = _parseStdoutAsJson(stdout);
+    const data: Record<string, unknown> =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { stdout: parsed };
+    return { result: 'success', data };
+  } catch {
+    return { result: 'success', data: { stdout: stdout.trim() } };
+  }
+}
+
+// ============================================================================
 // createExecutionAdapter — factory
 // ============================================================================
 

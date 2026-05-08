@@ -70,6 +70,8 @@ export interface ExecOptions {
   encoding?: string;
   cwd?: string;
   env?: Record<string, string | undefined>;
+  /** Optional stdin payload string written to the child process. */
+  input?: string;
 }
 
 // ============================================================================

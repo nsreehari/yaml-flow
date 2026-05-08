@@ -154,7 +154,7 @@ function _needsWindowsShell(cmd: string): boolean {
  * Run a command synchronously and return stdout as a string.
  * Uses execFileSync — no ambient shell. Safe on all platforms.
  */
-export function runSync(spec: CommandSpec, options?: { encoding?: BufferEncoding }): string {
+export function runSync(spec: CommandSpec, options?: { encoding?: BufferEncoding; input?: string }): string {
   const { command, args = [], cwd, env, timeoutMs } = spec;
   const output = execFileSync(command, args, {
     shell: _needsWindowsShell(command),
@@ -163,6 +163,7 @@ export function runSync(spec: CommandSpec, options?: { encoding?: BufferEncoding
     cwd,
     windowsHide: true,
     env: env ? { ...process.env, ...env } : undefined,
+    input: options?.input,
   });
   return output as string;
 }
@@ -398,7 +399,7 @@ export function createNodeCommandExecutor(): CommandExecutor {
     executeSync(cmd: string, args: string[], options?: ExecOptions): string {
       return runSync(
         { command: cmd, args, cwd: options?.cwd, timeoutMs: options?.timeout, env: options?.env as Record<string, string> | undefined },
-        { encoding: options?.encoding },
+        { encoding: options?.encoding as BufferEncoding | undefined, input: options?.input },
       );
     },
     executeAsync(cmd: string, args: string[], callback: (err: Error | null, stdout: string, stderr: string) => void): void {

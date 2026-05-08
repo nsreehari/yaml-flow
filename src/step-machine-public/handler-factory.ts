@@ -19,7 +19,7 @@ import { wrapWithInputValidations, wrapWithOutputFiltering } from './result-util
 import type {
   ComputeJsonataSpec,
   HandlerSpec,
-  InvokeFn,
+  InvokeRefFn,
   NormalizedHandlerResult,
   RefSpec,
   StepConfigForFactory,
@@ -111,7 +111,7 @@ export function createComputeJsonataHandler(
 export function createRefStepHandler(
   spec: RefSpec,
   stepName: string,
-  invoke: InvokeFn,
+  invoke: InvokeRefFn,
   config?: Record<string, unknown>,
 ): StepHandler {
   // The handler spec itself is a superset of ExecutionRef. Strip the discriminator
@@ -127,7 +127,7 @@ export function createRefStepHandler(
     if (config) stepInput.config = config;
 
     try {
-      return await invoke(ref, stepInput, { stepName });
+      return await invoke(ref, stepInput);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -157,7 +157,7 @@ export function createPassthroughHandler(): StepHandler {
 // ============================================================================
 
 export interface ResolveStepHandlerOptions {
-  invoke: InvokeFn;
+  invoke: InvokeRefFn;
 }
 
 export function resolveStepHandler(
@@ -194,7 +194,7 @@ export function resolveStepHandler(
 // ============================================================================
 
 export interface BuildStepHandlersOptions {
-  invoke: InvokeFn;
+  invoke: InvokeRefFn;
 }
 
 export function buildStepHandlersForFlow(

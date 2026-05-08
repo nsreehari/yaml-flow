@@ -1,23 +1,23 @@
 /**
- * step-machine-public — args massaging
+ * cli/common/args-massaging — JSONata-based mapping from logical args to
+ * transport-specific shape.
  *
- * Pure JSONata-based mapping from logical args (the flow's flat context)
- * into a transport-specific shape. Lives here because:
+ * `argsMassaging` is a property of `ExecutionRef`, so honoring it is the job
+ * of every adapter (Node spawn, HTTP, Azure Function, etc.). This helper is
+ * the shared pure-JSONata implementation reused by all adapters.
  *
- *   - It is platform-free (only depends on jsonata).
- *   - Multiple adapters (Node spawn, HTTP, Azure Function) reuse it.
- *
- * Adapters call this helper as the first step inside `invoke(ref, input)`,
- * then perform their transport using `cmdArgs` / `body` / `url`.
+ * Adapters call this as the first step inside their `invokeRefSync` /
+ * `dispatchExecution` implementation, then perform their transport using
+ * `cmdArgs` / `body` / `url`.
  */
 
 import { jsonata } from './jsonata-loader.js';
-import type { ArgsMassaging } from '../cli/common/execution-interface.js';
+import type { ArgsMassaging } from './execution-interface.js';
 
 export interface MassagedArgs {
   /** Resolved argv tail for local transports. */
   cmdArgs?: string[];
-  /** Resolved request body object for http transports. */
+  /** Resolved request body for http transports (or stdin payload for local). */
   body?: unknown;
   /** Resolved final URL string for http transports. */
   url?: string;
@@ -26,13 +26,13 @@ export interface MassagedArgs {
 /**
  * Evaluate `argsMassaging` against the supplied context.
  *
- * Throws with a step-name-tagged message if any expression fails — adapters
+ * Throws with a label-tagged message if any expression fails. Adapters
  * should catch and convert to a normalized failure result.
  */
 export function resolveArgsMassaging(
   argsMassaging: ArgsMassaging | undefined,
   context: Record<string, unknown>,
-  stepName: string,
+  label: string,
 ): MassagedArgs {
   if (!argsMassaging || typeof argsMassaging !== 'object') return {};
 
@@ -46,7 +46,7 @@ export function resolveArgsMassaging(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(
-          `[step-machine-public] Step "${stepName}" argsMassaging.cmdTemplate failed on "${expr}": ${msg}`,
+          `[${label}] argsMassaging.cmdTemplate failed on "${expr}": ${msg}`,
         );
       }
     }
@@ -59,7 +59,7 @@ export function resolveArgsMassaging(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `[step-machine-public] Step "${stepName}" argsMassaging.bodyTemplate failed: ${msg}`,
+        `[${label}] argsMassaging.bodyTemplate failed: ${msg}`,
       );
     }
   }
@@ -70,7 +70,7 @@ export function resolveArgsMassaging(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `[step-machine-public] Step "${stepName}" argsMassaging.urlTemplate failed: ${msg}`,
+        `[${label}] argsMassaging.urlTemplate failed: ${msg}`,
       );
     }
   }

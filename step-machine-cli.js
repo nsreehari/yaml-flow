@@ -5,7 +5,7 @@ import * as path from 'node:path';
 
 const { loadStepFlow, createStepMachine, MemoryStore, FileStore } = await import('./dist/index.js');
 const { buildStepHandlersForFlow } = await import('./dist/step-machine-public/index.js');
-const { createNodeSpawnInvoker } = await import('./dist/step-machine-node-adapter/index.js');
+const { invokeRefSync } = await import('./dist/cli/node/execution-adapter.js');
 const PAUSE_FILE_NAME = '.pause';
 
 async function main() {
@@ -344,7 +344,7 @@ function parseInitialData(dataArg) {
 }
 
 function buildStepHandlers(flow, flowDir) {
-  const invoke = createNodeSpawnInvoker({ flowDir });
+  const invoke = (ref, args) => invokeRefSync(ref, args, { cliDir: flowDir, cwd: flowDir });
   return buildStepHandlersForFlow(flow, { invoke });
 }
 
