@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PYCLI_ROOT = os.path.normpath(os.path.join(_HERE, ".."))
@@ -48,36 +47,6 @@ def _load_flow(flow_path: str) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"[step-machine-pycli] Flow root must be an object: {flow_path}")
     return value
-
-
-def _load_inline_handlers(module_path: str | None) -> Dict[str, Callable[..., Any]]:
-    if not module_path:
-        return {}
-
-    resolved = _resolve_input_path(module_path)
-    spec = importlib.util.spec_from_file_location("step_machine_pycli_handlers", resolved)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"[step-machine-pycli] Failed to load handlers module: {resolved}")
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    candidate = getattr(module, "handlers", None)
-    if candidate is None:
-        candidate = getattr(module, "__dict__", {})
-
-    if not isinstance(candidate, dict):
-        raise RuntimeError("[step-machine-pycli] Handlers module must provide a dict map (e.g. `handlers = {...}`)")
-
-    handlers: Dict[str, Callable[..., Any]] = {}
-    for name, fn in candidate.items():
-        if not isinstance(name, str):
-            continue
-        if not callable(fn):
-            continue
-        handlers[name] = fn
-
-    return handlers
 
 
 def _parse_initial_data(data_arg: str | None) -> Optional[Dict[str, Any]]:
@@ -211,7 +180,6 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Python-native step-machine CLI.",
     )
     parser.add_argument("flow", nargs="?", help="Path to step flow file (.yaml/.json)")
-    parser.add_argument("--handlers", help="Python handlers module path (supports inline handler names)")
     parser.add_argument("--initial-data", help="Initial data JSON object string")
     parser.add_argument("--store", default="memory", choices=["memory", "file"], help="Store backend")
     parser.add_argument("--store-dir", help="Directory for file store")
@@ -225,8 +193,8 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if (args.pause or args.status) and (args.handlers or args.initial_data or args.resume or args.flow):
-        raise ValueError("[step-machine-pycli] --pause and --status are store-level operations. Do not provide flow, handlers, data, or --resume.")
+    if (args.pause or args.status) and (args.initial_data or args.resume or args.flow):
+        raise ValueError("[step-machine-pycli] --pause and --status are store-level operations. Do not provide flow, data, or --resume.")
 
     if args.resume and args.initial_data:
         raise ValueError("[step-machine-pycli] --initial-data cannot be combined with --resume.")
@@ -252,7 +220,6 @@ def main() -> int:
     flow = _load_flow(flow_path)
     flow_dir = str(Path(flow_path).parent)
     initial_data = _parse_initial_data(args.initial_data)
-    inline_handlers = _load_inline_handlers(args.handlers)
 
     run_id_to_resume: Optional[str] = None
     if args.resume:
@@ -268,8 +235,6 @@ def main() -> int:
         "flow": flow,
         "flowDir": flow_dir,
         "store": store_context["store"],
-        "inlineHandlerNames": sorted(inline_handlers.keys()),
-        "handlerVars": flow.get("handler_vars", {}),
     }
     if run_id_to_resume:
         payload["runId"] = run_id_to_resume
@@ -279,10 +244,7 @@ def main() -> int:
         payload["pauseFilePath"] = store_context["pauseFilePath"]
 
     try:
-        result = invoke_step_machine_native(
-            payload=payload,
-            inline_handlers=inline_handlers,
-        )
+        result = invoke_step_machine_native(payload=payload)
     except Exception as e:
         _print_json({"status": "error", "error": str(e)})
         return 2

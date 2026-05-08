@@ -140,27 +140,85 @@ def t7():
 
 test("StepMachine retry", t7)
 
-# ===== Test 8: Native bridge end-to-end =====
+# ===== Test 8: Native bridge end-to-end (declarative compute-jsonata) =====
 def t8():
     from sub.step_machine_native_bridge import invoke_step_machine_native
     flow = {
         'id': 'bridge-test', 'settings': {'start_step': 's1', 'max_total_steps': 10},
         'steps': {
-            's1': {'handler': {'inline': 'h1'}, 'transitions': {'success': 's2'}},
-            's2': {'handler': {'inline': 'h2'}, 'transitions': {'success': 'done'}},
+            's1': {
+                'handler': {'type': 'compute-jsonata', 'expr': ['x = 1']},
+                'produces_data': ['x'],
+                'transitions': {'success': 's2'},
+            },
+            's2': {
+                'handler': {'type': 'compute-jsonata', 'expr': ['y = x + 1']},
+                'produces_data': ['y'],
+                'transitions': {'success': 'done'},
+            },
         },
         'terminal_states': {'done': {'return_intent': 'completed', 'return_artifacts': ['x', 'y']}},
     }
     result = invoke_step_machine_native(
-        payload={'mode': 'run', 'flow': flow, 'flowDir': '.', 'store': {'type': 'memory'}, 'inlineHandlerNames': ['h1', 'h2'], 'handlerVars': {}},
-        inline_handlers={
-            'h1': lambda inp, ctx: {'result': 'success', 'data': {'x': 1}},
-            'h2': lambda inp, ctx: {'result': 'success', 'data': {'y': 2}},
-        },
+        payload={'mode': 'run', 'flow': flow, 'flowDir': '.', 'store': {'type': 'memory'}},
     )
-    assert result['status'] == 'completed', f"status={result['status']}"
+    assert result['status'] == 'completed', f"status={result['status']}, error={result.get('error')}"
+    assert result['data'].get('x') == 1, f"x={result['data'].get('x')}"
+    assert result['data'].get('y') == 2, f"y={result['data'].get('y')}"
 
-test("Native step machine bridge", t8)
+test("Native step machine bridge (declarative)", t8)
+
+# ===== Test 9: Declarative handler factory (compute-jsonata) =====
+def t9():
+    from pylib.step_machine_public import build_step_handlers_for_flow, is_compute_jsonata_spec, is_ref_spec
+    assert is_compute_jsonata_spec({'type': 'compute-jsonata', 'expr': ['a = 1']})
+    assert not is_compute_jsonata_spec({'type': 'compute-jsonata', 'expr': []})
+    assert is_ref_spec({'type': 'ref', 'howToRun': 'local-node', 'whatToRun': '::fs-path::/x.js'})
+    assert not is_ref_spec({'type': 'ref', 'howToRun': 'local-node'})
+
+    flow = {
+        'steps': {
+            'a': {'handler': {'type': 'compute-jsonata', 'expr': ['v = 7']}, 'produces_data': ['v']},
+        },
+    }
+    def fail_invoke(ref, args):
+        raise AssertionError("ref invoke should not be called for compute-jsonata")
+    handlers = build_step_handlers_for_flow(flow, fail_invoke)
+    out = handlers['a']({}, {'stepName': 'a'})
+    assert out['result'] == 'success', f"out={out}"
+    assert out['data'] == {'v': 7}, f"out.data={out['data']}"
+
+test("Declarative handler factory (compute-jsonata)", t9)
+
+# ===== Test 10: Ref handler dispatches via invoke =====
+def t10():
+    from pylib.step_machine_public import build_step_handlers_for_flow
+    captured = {}
+    def fake_invoke(ref, args):
+        captured['ref'] = ref
+        captured['args'] = args
+        return {'result': 'success', 'data': {'echo': args.get('msg')}}
+
+    flow = {
+        'steps': {
+            'r': {
+                'handler': {
+                    'type': 'ref',
+                    'howToRun': 'local-node',
+                    'whatToRun': '::fs-path::/dummy.js',
+                },
+                'produces_data': ['echo'],
+            },
+        },
+    }
+    handlers = build_step_handlers_for_flow(flow, fake_invoke)
+    out = handlers['r']({'msg': 'hi'}, {'stepName': 'r'})
+    assert out['result'] == 'success'
+    assert out['data'] == {'echo': 'hi'}
+    assert captured['ref'].get('howToRun') == 'local-node'
+    assert 'type' not in captured['ref'], "ref discriminator must be stripped"
+
+test("Declarative ref handler dispatches via invoke", t10)
 
 print(f"\n{'='*40}")
 print(f"Results: {passed} passed, {failed} failed")
