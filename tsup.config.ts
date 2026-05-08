@@ -23,6 +23,8 @@ export default defineConfig({
   entry: {
     'index': 'src/index.ts',
     'step-machine/index': 'src/step-machine/index.ts',
+    'step-machine-public/index': 'src/step-machine-public/index.ts',
+    'step-machine-node-adapter/index': 'src/step-machine-node-adapter/index.ts',
     'event-graph/index': 'src/event-graph/index.ts',
     'stores/index': 'src/stores/index.ts',
     'stores/memory': 'src/stores/memory.ts',
