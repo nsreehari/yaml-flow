@@ -110,6 +110,11 @@ function makeNotificationState(): NotificationState {
 function appendNotification(state: NotificationState, event: unknown): void {
   if (!event || typeof event !== 'object') return;
   const e = event as Record<string, unknown>;
+  // Unpack notification-batch so individual items update ctx.notification.*
+  if (e.kind === 'notification-batch' && Array.isArray(e.notifications)) {
+    for (const n of e.notifications) appendNotification(state, n);
+    return;
+  }
   if (e.kind === 'status') state.status = e.status;
   if (e.kind === 'computed_values' && e.cardId) state.computedValues[e.cardId as string] = e.values;
   if (e.kind === 'data_object' && e.key) state.dataObjects[e.key as string] = e.payload;
@@ -274,7 +279,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     for (const card of cards) {
       if (typeof card.id !== 'string') continue;
       cardOwnerIndex.set(card.id as string, ctxIndex);
-      ctx.board.upsertCard({ params: { cardId: card.id as string, restart: true } });
+      ctx.board.upsertCard({ params: { cardId: card.id as string } });
     }
     await ctx.board.processAccumulatedEvents({});
     ctx.cardsBootstrapped = true;
@@ -829,6 +834,36 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
       if (method === 'GET' && (p === `${apiBasePath}/bootstrap-cards` || p === `${apiBasePath}/bootstrap`)) {
         await bootstrapBoard();
+        // Fire a catch-up notification batch using the board public API so that
+        // ctx.notification.* is populated before the caller reads getState().
+        // This covers page-refresh where the drain cycle produces no output because
+        // the graph is already in completed state.
+        for (const ctx of boardContexts) {
+          if (!ctx.boardAdapter.publishBoardChangeNotifications) continue;
+          const notifications: Array<{ kind: string; [k: string]: unknown }> = [];
+          // 1. Status
+          const statusResult = ctx.board.status({});
+          if (statusResult.status === 'success' && statusResult.data != null) {
+            notifications.push({ kind: 'status', status: statusResult.data });
+          }
+          // 2. All data objects
+          const dataResult = ctx.board.getAllOutputsDataObjects({});
+          if (dataResult.status === 'success' && dataResult.data != null) {
+            for (const [token, payload] of Object.entries(dataResult.data as Record<string, unknown>)) {
+              if (token) notifications.push({ kind: 'data_object', key: token, payload });
+            }
+          }
+          // 3. All computed values
+          const cvResult = ctx.board.getAllOutputsComputedValues({});
+          if (cvResult.status === 'success' && cvResult.data != null) {
+            for (const [cardId, values] of Object.entries(cvResult.data as Record<string, unknown>)) {
+              if (cardId) notifications.push({ kind: 'computed_values', cardId, values });
+            }
+          }
+          if (notifications.length > 0) {
+            ctx.boardAdapter.publishBoardChangeNotifications(notifications as import('../cli/common/board-live-cards-public.js').BoardChangeNotification[]);
+          }
+        }
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }
