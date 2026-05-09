@@ -73,6 +73,18 @@ function normalizeComputeStep(item: string | { bindTo: string; expr: string }): 
   throw new Error(`[step-machine-public] Invalid compute step: ${JSON.stringify(item)}`);
 }
 
+/** Mutate nested dict via dot-path key. */
+function deepSet(obj: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = path.split('.');
+  let cur: Record<string, unknown> = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    if (cur[k] == null || typeof cur[k] !== 'object') cur[k] = {};
+    cur = cur[k] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
 export function createComputeJsonataHandler(
   spec: ComputeJsonataSpec,
   stepName: string,
@@ -80,27 +92,62 @@ export function createComputeJsonataHandler(
 ): StepHandler {
   const steps = spec.expr.map(normalizeComputeStep);
   return async (input) => {
-    const ctx: Record<string, unknown> =
+    const expects_data: Record<string, unknown> =
       input && typeof input === 'object' && !Array.isArray(input)
         ? { ...input }
         : {};
-    if (config) ctx.config = config;
 
-    const computed: Record<string, unknown> = {};
+    // `data` accumulates computed outputs; it is placed in ctx by reference
+    // so subsequent expressions can read `data.x` after earlier steps set it.
+    const data: Record<string, unknown> = {};
+
+    // Context shape:
+    //   expects_data — named namespace for declared step inputs (from flow state)
+    //   data         — accumulating output namespace (required, mutated by reference)
+    //   config       — optional step-level config
+    const ctx: Record<string, unknown> = {
+      expects_data,
+      data,                 // same reference — mutations visible in later steps
+      ...(config ? { config } : {}),
+    };
+
+    let transitionResult: string | undefined;
+    let transitionError: string | undefined;
+
     for (const step of steps) {
       try {
-        const evalCtx = { ...ctx, ...computed };
-        computed[step.bindTo] = jsonata(step.expr).evaluate(evalCtx);
+        const val = jsonata(step.expr).evaluate(ctx);
+
+        if (step.bindTo === 'result') {
+          // Transition outcome
+          transitionResult = val != null ? String(val) : 'success';
+        } else if (step.bindTo === 'error') {
+          // Transition error detail
+          transitionError = val != null ? String(val) : undefined;
+        } else if (step.bindTo.startsWith('data.')) {
+          // Namespaced output — mutates the shared data reference
+          deepSet(data, step.bindTo.slice('data.'.length), val);
+        } else {
+          return {
+            result: 'failure',
+            data: {},
+            error: `[${stepName}] invalid bindTo "${step.bindTo}": must be "result", "error", or start with "data."`,
+          };
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           result: 'failure',
-          data: { error: `[${stepName}] compute "${step.bindTo}" failed: ${msg}` },
+          data: {},
+          error: `[${stepName}] compute "${step.bindTo}" failed: ${msg}`,
         };
       }
     }
 
-    return { result: 'success', data: computed };
+    const finalResult = transitionResult ?? 'success';
+    return transitionError
+      ? { result: finalResult, data, error: transitionError }
+      : { result: finalResult, data };
   };
 }
 

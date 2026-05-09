@@ -113,13 +113,15 @@ class CardCompute:
         sources_data = opts.get("sourcesData") or node.get("_sourcesData") or {}
         node["_sourcesData"] = sources_data
 
-        vars_ = opts.get("vars") or {}
+        _requires = node.get("requires") or {}
+        _computed_values = node["computed_values"]
         ctx = {
-            **vars_,
             "card_data": node["card_data"],
-            "requires": node.get("requires") or {},
+            "requires": _requires,
+            "expects_data": _requires,             # alias: same reference as requires
             "fetched_sources": sources_data,
-            "computed_values": node["computed_values"],
+            "data": _computed_values,              # alias: same reference as computed_values
+            "computed_values": _computed_values,
         }
 
         errors: list[dict] = []
@@ -132,6 +134,7 @@ class CardCompute:
                 val = _jsonata_evaluate(expr, ctx)
                 deep_set(node["computed_values"], bind_to, val)
                 ctx["computed_values"] = node["computed_values"]
+                # ctx["data"] is the same reference as node["computed_values"] — already in sync
             except Exception as ex:
                 errors.append({"bindTo": bind_to, "error": str(ex)})
 
@@ -139,6 +142,13 @@ class CardCompute:
         if errors:
             out["errors"] = errors
         return out
+
+    @staticmethod
+    def eval_expr(expr: str, ctx: dict) -> Any:
+        """
+        Evaluate a single JSONata expression against an arbitrary context dict.
+        """
+        return _jsonata_evaluate(expr, ctx)
 
     @staticmethod
     def run(node: dict, options: dict | None = None) -> dict:

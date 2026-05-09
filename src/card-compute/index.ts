@@ -52,14 +52,6 @@ export interface ComputeSource {
 export interface RunOptions {
   /** Pre-loaded source results map (keyed by bindTo). Use in browser or when caller loads files. */
   sourcesData?: Record<string, unknown>;
-  /**
-   * Extra top-level variables spread into the JSONata evaluation context.
-   * Used by callers (e.g. step-machine) that want to expose flat inputs
-   * directly without nesting them under `requires`.
-   * Spread BEFORE the structural keys, so `card_data`/`requires`/etc. cannot
-   * be shadowed by a colliding var.
-   */
-  vars?: Record<string, unknown>;
 }
 
 /** A single compute step: bindTo names the computed_values key; expr is a JSONata expression. */
@@ -126,13 +118,14 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
   node.computed_values = {};
   node._sourcesData = options?.sourcesData ?? {};
 
-  // Context passed to JSONata. Vars are spread first so structural keys
-  // (card_data, requires, fetched_sources, computed_values) cannot be clobbered.
+  // Context passed to JSONata. Structural keys take precedence over any user data.
+  const _requires = node.requires ?? {};
   const ctx: Record<string, unknown> = {
-    ...(options?.vars ?? {}),
     card_data: node.card_data,
-    requires: node.requires ?? {},
+    requires: _requires,
+    expects_data: _requires,              // alias: same reference as requires
     fetched_sources: node._sourcesData,
+    data: node.computed_values,           // alias: same reference as computed_values
     computed_values: node.computed_values,
   };
 
@@ -141,6 +134,7 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
       const val = await jsonata(step.expr).evaluate(ctx);
       deepSet(node.computed_values, step.bindTo, val);
       ctx.computed_values = node.computed_values; // subsequent steps see earlier results
+      // ctx.data is the same reference as node.computed_values — already in sync
     } catch (err) {
       console.error(`CardCompute.run error on "${node.id ?? '?'}.${step.bindTo}":`, err);
     }
@@ -170,11 +164,13 @@ function runSync(
   node.computed_values = {};
   node._sourcesData = options?.sourcesData ?? {};
 
+  const _requires2 = node.requires ?? {};
   const ctx: Record<string, unknown> = {
-    ...(options?.vars ?? {}),
     card_data: node.card_data,
-    requires: node.requires ?? {},
+    requires: _requires2,
+    expects_data: _requires2,             // alias: same reference as requires
     fetched_sources: node._sourcesData,
+    data: node.computed_values,           // alias: same reference as computed_values
     computed_values: node.computed_values,
   };
 
@@ -184,6 +180,7 @@ function runSync(
       const val = jsonataSync(step.expr).evaluate(ctx);
       deepSet(node.computed_values, step.bindTo, val);
       ctx.computed_values = node.computed_values;
+      // ctx.data is the same reference as node.computed_values — already in sync
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push({ bindTo: step.bindTo, error: msg });

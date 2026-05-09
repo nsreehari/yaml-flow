@@ -93,24 +93,16 @@ def run_input_validations(
     if not validations:
         return None
     for expr in validations:
-        r = CardCompute.run_sync(
-            {
-                "id": step_name,
-                "card_data": {},
-                "requires": input_data,
-                "compute": [{"bindTo": "_v", "expr": expr}],
-            },
-            {"vars": input_data},
-        )
-        errors = r.get("errors") or []
-        if errors:
+        try:
+            val = CardCompute.eval_expr(expr, input_data)
+        except Exception as ex:
             return {
                 "result": "failure",
                 "data": {
-                    "error": f'[{step_name}] input validation error on "{expr}": {errors[0]["error"]}',
+                    "error": f'[{step_name}] input validation error on "{expr}": {ex}',
                 },
             }
-        if not (r["node"].get("computed_values") or {}).get("_v"):
+        if not val:
             return {
                 "result": "failure",
                 "data": {"error": f"[{step_name}] input validation failed: {expr}"},

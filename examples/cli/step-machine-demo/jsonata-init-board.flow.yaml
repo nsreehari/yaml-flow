@@ -12,7 +12,7 @@ steps:
     handler:
       type: compute-jsonata
       expr:
-        - BOARD_DIR = runtime_root & "/" & board_name
+        - data.BOARD_DIR = expects_data.runtime_root & "/" & expects_data.board_name
     transitions:
       success: t1_init_board
       failure: failed_state
@@ -36,8 +36,8 @@ steps:
     handler:
       type: compute-jsonata
       expr:
-        - board_dir = BOARD_DIR
-        - init_message = message
+        - data.board_dir = expects_data.BOARD_DIR
+        - data.init_message = expects_data.message
     transitions:
       success: success_state
       failure: failed_state
