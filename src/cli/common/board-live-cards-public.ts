@@ -513,16 +513,12 @@ export function createBoardLiveCardsPublic(
     const writeDataObjectsFn = (data: Record<string, unknown>): void => {
       DX.push(data);
     };
-    const notifyCardFn = (cardId: string, card: LiveCard): void => {
-      NX.set(cardId, card);
-    };
-
     // Wire output-store notifications for this drain cycle.
     // (notifications are batched and flushed at the end of the drain cycle)
 
     const rg = createReactiveGraph(live, {
       handlers: {
-        'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn, writeComputedValuesFn, writeDataObjectsFn, notifyCardFn),
+        'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn, writeComputedValuesFn, writeDataObjectsFn),
       },
     });
 
@@ -530,6 +526,13 @@ export function createBoardLiveCardsPublic(
     while (TX.length > 0) {
       const pending = TX;
       TX = [];
+      // Populate NX for task-restart events before pushing to the reactive graph.
+      for (const ev of pending) {
+        if (ev.type === 'task-restart') {
+          const card = cardHandlerAdapters.cardStore.readCard(ev.taskName as string);
+          if (card) NX.set(ev.taskName as string, card as LiveCard);
+        }
+      }
       rg.pushAll(pending);
       await rg.waitForHandlers();
     }
@@ -566,10 +569,7 @@ export function createBoardLiveCardsPublic(
         if (key) batch.push({ kind: 'data_object', key, payload });
       }
     }
-    // card_refreshed notifications suppressed: fires too broadly on every card-handler cycle,
-    // not just on genuine card-data changes. TODO: re-implement as a card-store-level diff
-    // notification so it only fires when the persisted card record actually changes.
-    // for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
+    for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
     if (statusObj !== undefined) batch.push({ kind: 'status', status: statusObj });
     flushBoardChangeNotifications(batch);
 

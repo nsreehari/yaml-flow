@@ -930,7 +930,6 @@ export function createCardHandlerFn(
   _taskFailedFn: (taskName: string, error: string) => void,
   writeComputedValuesFn?: (cardId: string, values: Record<string, unknown>) => void,
   writeDataObjectsFn?: (data: Record<string, unknown>) => void,
-  notifyCardFn?: (cardId: string, card: LiveCard) => void,
 ): TaskHandlerFn {
   return async (input) => {
         const pendingRequests: ExecutionRequestEntry[] = [];
@@ -966,11 +965,6 @@ export function createCardHandlerFn(
           state._lastExecutionCount = currentExecutionCount; dirty = true;
         }
 
-        // Notify only on init or explicit restart — not on upstream-driven
-        // re-runs (status='completed') or source-fetch callbacks (status='running').
-        // The handler is invoked synchronously before task-started has applied,
-        // so a fresh init/restart is observable as taskState.status === 'not-started'.
-        if (input.taskState?.status === 'not-started') notifyCardFn?.(cardId, card);
 
         if (input.update) {
           const u = input.update;
