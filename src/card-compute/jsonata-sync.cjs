@@ -2839,6 +2839,10 @@ const functions = (() => {
         }
 
         var result = createSequence();
+        // PATCH: $map must always return an array (never collapse to scalar),
+        // even when the input has exactly 1 item. keepSingleton prevents the
+        // length===1 → result[0] collapse in evaluate().
+        result.keepSingleton = true;
         // do the map - iterate over the arrays, and invoke func
         for (var i = 0; i < arr.length; i++) {
             var func_args = hofFuncArgs(func, arr[i], i, arr);
