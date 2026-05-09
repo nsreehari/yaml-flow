@@ -22,6 +22,8 @@ from pylib.cli.storage_interface import parse_ref, serialize_ref
 from pylib.cli.board_live_cards_public import create_board_live_cards_public
 from pylib.card_compute import CardCompute
 from sub.board_live_cards_adapters import (
+    PythonCommandExecutor,
+    ExecutionRef,
     ExecutionRef,
     FileAtomicRelayLock,
     FsBlobStorage,
@@ -150,6 +152,59 @@ class NativeBoardPlatformAdapter:
         result = CardCompute.validate_live_card_definition(card)
         return {'ok': result['ok'], 'errors': result['errors']}
 
+    def invoke_executor_sync(self, ref: dict, subcommand: str, args: list, opts: dict | None = None) -> str:
+        """Synchronously invoke a task executor subcommand; returns stdout string."""
+        how = ref.get("howToRun", "")
+        what = ref.get("whatToRun", "")
+        timeout = (opts or {}).get("timeout", 30_000)
+        if what.startswith("::"):
+            parsed = parse_ref(what)
+            target = parsed["value"]
+        else:
+            target = what
+        executor = PythonCommandExecutor()
+        call_args = [subcommand, *args]
+        if how == "local-node":
+            import shutil as _shutil
+            node = _shutil.which("node")
+            if not node:
+                raise RuntimeError("invoke_executor_sync: node not found on PATH")
+            return executor.execute_sync(node, [target, *call_args], timeout=timeout)
+        if how in ("local-python",):
+            return executor.execute_sync(sys.executable, [target, *call_args], timeout=timeout)
+        if how == "local-process":
+            return executor.execute_sync(target, call_args, timeout=timeout)
+        raise RuntimeError(f"invoke_executor_sync: unsupported howToRun={how!r}")
+
+    def make_temp_file_path(self, label: str, ext: str = "") -> str:
+        """Return a temp file path inside the board's .tmp directory."""
+        import uuid as _uuid
+        tmp_dir = os.path.join(self._scope, ".tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        uid = _uuid.uuid4().hex[:8]
+        return os.path.join(tmp_dir, f"{label}-{uid}{ext}")
+
+    @property
+    def absolute_blob(self):
+        """Adapter for absolute-path blob I/O (used by probe/describe operations)."""
+        class _AbsoluteBlob:
+            def read(self, path: str) -> str | None:
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        return f.read()
+                except FileNotFoundError:
+                    return None
+            def write(self, path: str, content: str) -> None:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            def remove(self, path: str) -> None:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+        return _AbsoluteBlob()
+
     def publish_board_change_notifications(self, notifications):
         pass  # no-op for now
 
@@ -261,6 +316,9 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
         "sourceDataFetchFailure": board.source_data_fetch_failure,
         "validateCard": board.validate_card,
         "validateTmpCard": board.validate_tmp_card,
+        "probeSource": board.probe_source,
+        "probeTmpSource": board.probe_tmp_source,
+        "describeTaskExecutorCapabilities": board.describe_task_executor_capabilities,
     }
 
     fn = method_map.get(command)

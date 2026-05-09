@@ -718,4 +718,106 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             except Exception as e:
                 return _err(e)
 
+        def _run_source_probe(self, src: dict, mock_projections: dict, out_ref: str | None) -> dict:
+            """Port of runSourceProbe — invoke the task executor for a source fetch probe."""
+            te_ref = config_store().read_task_executor_ref()
+            if not te_ref:
+                return _fail("No task-executor registered for this board")
+
+            bind_to = src.get("bindTo", "source") if isinstance(src.get("bindTo"), str) else "source"
+            in_file = adapter.make_temp_file_path(f"probe-in-{bind_to}")
+            out_file = adapter.make_temp_file_path(f"probe-out-{bind_to}")
+            err_file = adapter.make_temp_file_path(f"probe-err-{bind_to}", ".txt")
+
+            in_payload = {
+                **src,
+                "boardDir": base_ref["value"],
+                "_projections": mock_projections,
+            }
+            in_ref_str = serialize_ref({"kind": "fs-path", "value": in_file})
+            out_ref_str = serialize_ref({"kind": "fs-path", "value": out_file})
+            err_ref_str = serialize_ref({"kind": "fs-path", "value": err_file})
+
+            adapter.absolute_blob.write(in_file, json.dumps(in_payload, indent=2))
+
+            result_text = None
+            try:
+                adapter.invoke_executor_sync(
+                    te_ref,
+                    "run-source-fetch",
+                    ["--in-ref", in_ref_str, "--out-ref", out_ref_str, "--err-ref", err_ref_str],
+                    {"timeout": src.get("timeout", 30_000)},
+                )
+                result_text = adapter.absolute_blob.read(out_file)
+                if result_text is None:
+                    return _fail("Executor produced no output file")
+            except Exception as ex:
+                err_msg = (adapter.absolute_blob.read(err_file) or "").strip() or str(ex)
+                return _fail(f"Probe failed: {err_msg}")
+            finally:
+                try: adapter.absolute_blob.remove(in_file)
+                except Exception: pass
+                try: adapter.absolute_blob.remove(err_file)
+                except Exception: pass
+
+            if out_ref:
+                parsed = parse_ref(out_ref)
+                adapter.absolute_blob.write(parsed["value"], result_text)
+            else:
+                try: adapter.absolute_blob.remove(out_file)
+                except Exception: pass
+
+            return _ok({"bindTo": bind_to, "resultSizeBytes": len(result_text)})
+
+        def probe_source(self, input_data: dict | None = None) -> dict:
+            """Port of probeSource — probe a named source_def of a card."""
+            try:
+                params = (input_data or {}).get("params", {})
+                card_id = params.get("cardId")
+                source_idx = params.get("sourceIdx")
+                out_ref = params.get("outRef")
+                if not card_id:
+                    return _fail("probeSource requires params.cardId")
+                if source_idx is None:
+                    return _fail("probeSource requires params.sourceIdx")
+                source_idx = int(source_idx)
+                b = (input_data or {}).get("body") or {}
+                mock_projections = b.get("mock-projections", {})
+                card = card_store().read_card(card_id)
+                if not card:
+                    return _fail(f'Card "{card_id}" not found')
+                source_defs = card.get("source_defs") or []
+                if source_idx < 0 or source_idx >= len(source_defs):
+                    return _fail(f"sourceIdx {source_idx} out of range (card has {len(source_defs)} source(s))")
+                return self._run_source_probe(source_defs[source_idx], mock_projections, out_ref)
+            except Exception as e:
+                return _err(e)
+
+        def probe_tmp_source(self, input_data: dict | None = None) -> dict:
+            """Port of probeTmpSource — probe a source_def supplied directly in the body."""
+            try:
+                params = (input_data or {}).get("params", {})
+                out_ref = params.get("outRef")
+                b = (input_data or {}).get("body")
+                if not b:
+                    return _fail('probeTmpSource requires body with "source-def" and "mock-projections"')
+                source_def = b.get("source-def")
+                mock_projections = b.get("mock-projections", {})
+                if not source_def:
+                    return _fail('probeTmpSource body requires "source-def"')
+                return self._run_source_probe(source_def, mock_projections, out_ref)
+            except Exception as e:
+                return _err(e)
+
+        def describe_task_executor_capabilities(self, input_data: dict | None = None) -> dict:
+            """Port of describeTaskExecutorCapabilities — query the executor's capability manifest."""
+            try:
+                te_ref = config_store().read_task_executor_ref()
+                if not te_ref:
+                    return _fail("No task-executor registered for this board")
+                stdout = adapter.invoke_executor_sync(te_ref, "describe-capabilities", [], {"timeout": 10_000})
+                return _ok(json.loads(stdout.strip()))
+            except Exception as e:
+                return _err(e)
+
     return _BoardLiveCardsPublic()

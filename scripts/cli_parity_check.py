@@ -465,6 +465,77 @@ def run_board_live_cards_parity(repo_root: Path, node: str, py_for_board: str) -
         )
         _assert_validate_cmd_parity("board validate-tmp-card (invalid)", n, p)
 
+        # get-card-store-ref
+        n = _run(_node_board_cmd(repo_root, node, ["get-card-store-ref", "--base-ref", n_board_ref]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["get-card-store-ref", "--base-ref", p_board_ref]), cwd=repo_root)
+        _assert_cmd_parity_replaced("board get-card-store-ref", n, p, left_replacements=n_rep, right_replacements=p_rep)
+
+        # get-outputs-store-ref
+        n = _run(_node_board_cmd(repo_root, node, ["get-outputs-store-ref", "--base-ref", n_board_ref]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["get-outputs-store-ref", "--base-ref", p_board_ref]), cwd=repo_root)
+        _assert_cmd_parity_replaced("board get-outputs-store-ref", n, p, left_replacements=n_rep, right_replacements=p_rep)
+
+        # get-outputs --type computed-values --all
+        n = _run(
+            _node_board_cmd(repo_root, node, ["get-outputs", "--base-ref", n_board_ref, "--type", "computed-values", "--all"]),
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["get-outputs", "--base-ref", p_board_ref, "--type", "computed-values", "--all"]),
+            cwd=repo_root,
+        )
+        _assert_cmd_parity("board get-outputs --type computed-values --all", n, p)
+
+        # process-accumulated-events
+        n = _run(_node_board_cmd(repo_root, node, ["process-accumulated-events", "--base-ref", n_board_ref]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["process-accumulated-events", "--base-ref", p_board_ref]), cwd=repo_root)
+        _assert_cmd_parity("board process-accumulated-events", n, p)
+
+        # upsert-card --all
+        n = _run(_node_board_cmd(repo_root, node, ["upsert-card", "--base-ref", n_board_ref, "--all"]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["upsert-card", "--base-ref", p_board_ref, "--all"]), cwd=repo_root)
+        _assert_cmd_parity_replaced("board upsert-card --all", n, p, left_replacements=n_rep, right_replacements=p_rep)
+
+        # remove-card
+        n = _run(_node_board_cmd(repo_root, node, ["remove-card", "--base-ref", n_board_ref, "--id", "portfolio-form"]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["remove-card", "--base-ref", p_board_ref, "--id", "portfolio-form"]), cwd=repo_root)
+        _assert_cmd_parity("board remove-card", n, p)
+
+        # retrigger (card was just removed — tests the not-found error path)
+        n = _run(_node_board_cmd(repo_root, node, ["retrigger", "--base-ref", n_board_ref, "--id", "portfolio-form"]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["retrigger", "--base-ref", p_board_ref, "--id", "portfolio-form"]), cwd=repo_root)
+        _assert_cmd_parity("board retrigger (not found)", n, p)
+
+        # describe-task-executor-capabilities (no executor registered — error path)
+        n = _run(_node_board_cmd(repo_root, node, ["describe-task-executor-capabilities", "--base-ref", n_board_ref]), cwd=repo_root)
+        p = _run(_py_board_cmd(repo_root, py_for_board, ["describe-task-executor-capabilities", "--base-ref", p_board_ref]), cwd=repo_root)
+        _assert_cmd_parity("board describe-task-executor-capabilities (no executor)", n, p)
+
+        # probe-source (card not found — error path)
+        n = _run(
+            _node_board_cmd(repo_root, node, ["probe-source", "--base-ref", n_board_ref, "--card-id", "does-not-exist", "--source-idx", "0"]),
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["probe-source", "--base-ref", p_board_ref, "--card-id", "does-not-exist", "--source-idx", "0"]),
+            cwd=repo_root,
+        )
+        _assert_cmd_parity("board probe-source (card not found)", n, p)
+
+        # probe-tmp-source (missing source-def — error path)
+        bad_probe_body = json.dumps({"mock-projections": {}})
+        n = _run(
+            _node_board_cmd(repo_root, node, ["probe-tmp-source", "--out-ref", f"::fs-path::{n_board}/probe-out.json"]),
+            stdin_text=bad_probe_body,
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["probe-tmp-source", "--out-ref", f"::fs-path::{p_board}/probe-out.json"]),
+            stdin_text=bad_probe_body,
+            cwd=repo_root,
+        )
+        _assert_cmd_parity("board probe-tmp-source (missing source-def)", n, p)
+
 
 def run_portfolio_tracker_dual_mode_parity(repo_root: Path, py_for_board: str) -> None:
     tracker = repo_root / "examples" / "browser" / "boards" / "portfolio-tracker" / "portfolio-tracker.py"

@@ -272,6 +272,8 @@ def _board_handler(command: str):
                 "error",
                 "card_store_ref",
                 "outputs_store_ref",
+                "source_idx",
+                "out_ref",
             ):
                 if hasattr(args, field):
                     val = getattr(args, field)
@@ -280,6 +282,8 @@ def _board_handler(command: str):
                             "card_id": "cardId",
                             "card_store_ref": "cardStoreRef",
                             "outputs_store_ref": "outputsStoreRef",
+                            "source_idx": "sourceIdx",
+                            "out_ref": "outRef",
                         }.get(field, field)
                         params[params_name] = val
 
@@ -307,7 +311,7 @@ def _board_handler(command: str):
             _print_json(result)
 
             status = result.get("status")
-            return 0 if status == "success" else 2
+            return 0 if status in ("success", "fail") else 2
         except Exception as e:
             _print_json({"status": "error", "error": str(e)})
             return 2
