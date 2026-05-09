@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from ..card_compute import CardCompute
 from .result_utils import (
-    _jsonata_evaluate,  # type: ignore[attr-defined]
     wrap_with_input_validations,
     wrap_with_output_filtering,
 )
@@ -69,23 +69,34 @@ def create_compute_jsonata_handler(
     steps = [_normalize_compute_step(item) for item in spec["expr"]]
 
     def handler(input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        ctx: Dict[str, Any] = (
+        step_input: Dict[str, Any] = (
             dict(input_data) if isinstance(input_data, dict) else {}
         )
-        if config is not None:
-            ctx["config"] = config
 
-        computed: Dict[str, Any] = {}
-        for step in steps:
-            try:
-                eval_ctx = {**ctx, **computed}
-                computed[step["bindTo"]] = _jsonata_evaluate(step["expr"], eval_ctx)
-            except Exception as ex:
-                return {
-                    "result": "failure",
-                    "data": {"error": f'[{step_name}] compute "{step["bindTo"]}" failed: {ex}'},
-                }
-        return {"result": "success", "data": computed}
+        # Delegate to CardCompute. Step input is exposed both as top-level vars
+        # (so bare `name` works) and as `requires` (so explicit `requires.name`
+        # also works). Step `config` lives under `card_data`.
+        result = CardCompute.run_sync(
+            {
+                "id": step_name,
+                "card_data": config or {},
+                "requires": step_input,
+                "compute": steps,
+            },
+            {"vars": step_input},
+        )
+
+        errors = result.get("errors") or []
+        if errors:
+            first = errors[0]
+            return {
+                "result": "failure",
+                "data": {
+                    "error": f'[{step_name}] compute "{first["bindTo"]}" failed: {first["error"]}',
+                },
+            }
+
+        return {"result": "success", "data": result["node"].get("computed_values") or {}}
 
     return handler
 

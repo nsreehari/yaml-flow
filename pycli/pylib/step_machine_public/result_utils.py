@@ -12,25 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
-# Ensure vendored packages are importable
-try:
-    from ..vendor import __path__ as _vendor_path  # noqa: F401
-except ImportError:
-    pass
-
-try:
-    from jsonata import Jsonata as _Jsonata
-    _JSONATA_AVAILABLE = True
-except Exception:
-    _JSONATA_AVAILABLE = False
-
-
-def _jsonata_evaluate(expr: str, context: Any) -> Any:
-    if not _JSONATA_AVAILABLE:
-        raise RuntimeError(
-            "[step-machine-public] jsonata package not installed."
-        )
-    return _Jsonata(expr).evaluate(context)
+from ..card_compute import CardCompute
 
 
 # ============================================================================
@@ -111,17 +93,27 @@ def run_input_validations(
     if not validations:
         return None
     for expr in validations:
-        try:
-            ok = _jsonata_evaluate(expr, input_data)
-            if not ok:
-                return {
-                    "result": "failure",
-                    "data": {"error": f"[{step_name}] input validation failed: {expr}"},
-                }
-        except Exception as ex:
+        r = CardCompute.run_sync(
+            {
+                "id": step_name,
+                "card_data": {},
+                "requires": input_data,
+                "compute": [{"bindTo": "_v", "expr": expr}],
+            },
+            {"vars": input_data},
+        )
+        errors = r.get("errors") or []
+        if errors:
             return {
                 "result": "failure",
-                "data": {"error": f"[{step_name}] input validation error on \"{expr}\": {ex}"},
+                "data": {
+                    "error": f'[{step_name}] input validation error on "{expr}": {errors[0]["error"]}',
+                },
+            }
+        if not (r["node"].get("computed_values") or {}).get("_v"):
+            return {
+                "result": "failure",
+                "data": {"error": f"[{step_name}] input validation failed: {expr}"},
             }
     return None
 

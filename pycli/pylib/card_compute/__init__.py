@@ -87,11 +87,19 @@ class CardCompute:
         Run all compute steps on a node synchronously.
 
         Each step's expr is evaluated against:
-            { card_data, requires, fetched_sources, computed_values }
+            { ...vars, card_data, requires, fetched_sources, computed_values }
 
         Results are written to node["computed_values"][bindTo].
 
-        Returns {"ok": True, "node": node}
+        options:
+            sourcesData : pre-loaded source results (keyed by bindTo)
+            vars        : extra top-level variables spread into the eval ctx
+                          (used by callers like step-machine that want flat
+                          inputs visible without nesting under requires).
+                          Spread BEFORE structural keys so they cannot shadow
+                          card_data / requires / fetched_sources / computed_values.
+
+        Returns {"ok": True, "node": node, "errors"?: [{bindTo, error}, ...]}.
         """
         compute = node.get("compute")
         if not compute:
@@ -101,16 +109,20 @@ class CardCompute:
             node["card_data"] = {}
 
         node["computed_values"] = {}
-        sources_data = (options or {}).get("sourcesData") or node.get("_sourcesData") or {}
+        opts = options or {}
+        sources_data = opts.get("sourcesData") or node.get("_sourcesData") or {}
         node["_sourcesData"] = sources_data
 
+        vars_ = opts.get("vars") or {}
         ctx = {
+            **vars_,
             "card_data": node["card_data"],
             "requires": node.get("requires") or {},
             "fetched_sources": sources_data,
             "computed_values": node["computed_values"],
         }
 
+        errors: list[dict] = []
         for step in compute:
             bind_to = step.get("bindTo", "")
             expr = step.get("expr", "")
@@ -120,10 +132,13 @@ class CardCompute:
                 val = _jsonata_evaluate(expr, ctx)
                 deep_set(node["computed_values"], bind_to, val)
                 ctx["computed_values"] = node["computed_values"]
-            except Exception:
-                pass  # swallow evaluation errors like TS version
+            except Exception as ex:
+                errors.append({"bindTo": bind_to, "error": str(ex)})
 
-        return {"ok": True, "node": node}
+        out: dict = {"ok": True, "node": node}
+        if errors:
+            out["errors"] = errors
+        return out
 
     @staticmethod
     def run(node: dict, options: dict | None = None) -> dict:

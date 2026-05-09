@@ -52,6 +52,14 @@ export interface ComputeSource {
 export interface RunOptions {
   /** Pre-loaded source results map (keyed by bindTo). Use in browser or when caller loads files. */
   sourcesData?: Record<string, unknown>;
+  /**
+   * Extra top-level variables spread into the JSONata evaluation context.
+   * Used by callers (e.g. step-machine) that want to expose flat inputs
+   * directly without nesting them under `requires`.
+   * Spread BEFORE the structural keys, so `card_data`/`requires`/etc. cannot
+   * be shadowed by a colliding var.
+   */
+  vars?: Record<string, unknown>;
 }
 
 /** A single compute step: bindTo names the computed_values key; expr is a JSONata expression. */
@@ -118,8 +126,10 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
   node.computed_values = {};
   node._sourcesData = options?.sourcesData ?? {};
 
-  // Context passed to JSONata
+  // Context passed to JSONata. Vars are spread first so structural keys
+  // (card_data, requires, fetched_sources, computed_values) cannot be clobbered.
   const ctx: Record<string, unknown> = {
+    ...(options?.vars ?? {}),
     card_data: node.card_data,
     requires: node.requires ?? {},
     fetched_sources: node._sourcesData,
@@ -151,38 +161,50 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
  *          `{ ok: false, node }` is currently never returned but reserved
  *          for future use if an expression requires true async evaluation.
  */
-function runSync(node: ComputeNode, options?: RunOptions): { ok: boolean; node: ComputeNode } {
+function runSync(
+  node: ComputeNode,
+  options?: RunOptions,
+): { ok: boolean; node: ComputeNode; errors?: Array<{ bindTo: string; error: string }> } {
   if (!node?.compute?.length) return { ok: true, node };
   if (!node.card_data) node.card_data = {};
   node.computed_values = {};
   node._sourcesData = options?.sourcesData ?? {};
 
   const ctx: Record<string, unknown> = {
+    ...(options?.vars ?? {}),
     card_data: node.card_data,
     requires: node.requires ?? {},
     fetched_sources: node._sourcesData,
     computed_values: node.computed_values,
   };
 
+  const errors: Array<{ bindTo: string; error: string }> = [];
   for (const step of node.compute) {
     try {
       const val = jsonataSync(step.expr).evaluate(ctx);
       deepSet(node.computed_values, step.bindTo, val);
       ctx.computed_values = node.computed_values;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push({ bindTo: step.bindTo, error: msg });
       console.error(`CardCompute.runSync error on "${node.id ?? '?'}.${step.bindTo}":`, err);
     }
   }
 
-  return { ok: true, node };
+  return errors.length > 0 ? { ok: true, node, errors } : { ok: true, node };
 }
 
 /**
  * Evaluate a single JSONata expression against a node's context.
  * Context is { card_data, requires, fetched_sources, computed_values }.
  */
-async function evalExpr(expr: string, node: ComputeNode): Promise<unknown> {
+async function evalExpr(
+  expr: string,
+  node: ComputeNode,
+  vars?: Record<string, unknown>,
+): Promise<unknown> {
   const ctx: Record<string, unknown> = {
+    ...(vars ?? {}),
     card_data: node.card_data ?? {},
     requires: node.requires ?? {},
     fetched_sources: node._sourcesData ?? {},
