@@ -340,3 +340,27 @@ export function create(
 
 // Re-export payload selectors so consumers don't need to load board-livegraph-engine separately.
 export { selectLiveCardModel, selectAllLiveCardModels } from '../board-livegraph-runtime/index.js';
+
+// Re-export board-state reducer with selectLiveCardModel pre-bound so shells
+// don't need to pass it explicitly.
+import {
+  buildBoardState as _buildBoardState,
+  applyNotification as _applyNotification,
+} from '../cli/common/board-state-reducer.js';
+export type { BoardState, CardModel } from '../cli/common/board-state-reducer.js';
+import { selectLiveCardModel as _selectLiveCardModel } from '../board-livegraph-runtime/index.js';
+
+export function buildBoardState(
+  payload: unknown,
+  prevState: import('../cli/common/board-state-reducer.js').BoardState | null,
+): import('../cli/common/board-state-reducer.js').BoardState {
+  return _buildBoardState(payload, prevState, _selectLiveCardModel as Parameters<typeof _buildBoardState>[2]);
+}
+
+export function applyNotification(
+  prevState: import('../cli/common/board-state-reducer.js').BoardState,
+  notifications: Array<{ kind: string; [key: string]: unknown }>,
+  getFullPayload: () => unknown,
+): import('../cli/common/board-state-reducer.js').BoardState {
+  return _applyNotification(prevState, notifications, _selectLiveCardModel as Parameters<typeof _applyNotification>[2], getFullPayload);
+}

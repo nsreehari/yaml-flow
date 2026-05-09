@@ -40,8 +40,8 @@ const CDN_BASE = `https://cdn.jsdelivr.net/npm/yaml-flow@${_pkg.version}`;
 const REPLACEMENTS = [
   // local browser bundles → CDN
   {
-    from: 'src="../../browser/card-compute.js"',
-    to:   `src="${CDN_BASE}/browser/card-compute.js"`,
+    from: 'src="../../browser/compute-jsonata.js"',
+    to:   `src="${CDN_BASE}/browser/compute-jsonata.js"`,
   },
   {
     from: 'src="../../browser/live-cards.js"',

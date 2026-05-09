@@ -114,11 +114,26 @@ const sharedBrowserOptions = {
 };
 
 export default defineConfig([
+  // ── compute-jsonata — vendored jsonata-sync, sets globalThis.jsonataSync ─────────────
+  // Load this before board-livecards-localstorage.js. No other globals exposed.
+  {
+    ...sharedBrowserOptions,
+    entry: { 'compute-jsonata': 'src/card-compute/browser-jsonata-entry.ts' },
+    globalName: 'ComputeJsonata',
+    esbuildPlugins: [browserStubPlugin],
+  },
   // ── board-livecards-localstorage — full board engine + localStorage adapter + selectors ─
   {
     ...sharedBrowserOptions,
     entry: { 'board-livecards-localstorage': 'src/board-livecards-localstorage-runtime/index.ts' },
     globalName: 'BoardLiveCardsLocalStorage',
+    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
+  },
+  // ── board-livecards-runtime-client — SSE/HTTP thin client for server runtime mode ─────
+  {
+    ...sharedBrowserOptions,
+    entry: { 'board-livecards-runtime-client': 'src/board-livecards-server-runtime-client/index.ts' },
+    globalName: 'BoardLiveCardsRuntimeClient',
     esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
   },
 ]);

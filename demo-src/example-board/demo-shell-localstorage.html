@@ -6,12 +6,11 @@
   <title>Example Board Demo (LocalStorage Runtime)</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-  <script src="../../src/card-compute/jsonata-sync.cjs"></script>
+  <script src="../../browser/compute-jsonata.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"></script>
-  <script src="../../browser/card-compute.js"></script>
   <script src="../../browser/live-cards.js"></script>
   <script src="../../browser/board-livecards-localstorage.js"></script>
 </head>
@@ -57,11 +56,11 @@
     (function () {
       'use strict';
 
-      var selectLiveCardModel = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.selectLiveCardModel;
-      var selectAllLiveCardModels = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.selectAllLiveCardModels;
+      var buildBoardState = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.buildBoardState;
+      var applyNotification = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.applyNotification;
       var createBoardLiveCardsLocalStorage = window.BoardLiveCardsLocalStorage && window.BoardLiveCardsLocalStorage.create;
 
-      if (!selectLiveCardModel || !selectAllLiveCardModels || !createBoardLiveCardsLocalStorage) {
+      if (!buildBoardState || !applyNotification || !createBoardLiveCardsLocalStorage) {
         document.getElementById('boardRoot').innerHTML =
           '<div class="alert alert-danger">Required scripts not loaded. Run <code>npm run build:browser</code> first.</div>';
         return;
@@ -514,170 +513,6 @@
       }
 
       
-
-      function stableEq(prev, next) {
-        if (prev === next) return prev;
-        try { if (JSON.stringify(prev) === JSON.stringify(next)) return prev; } catch (_) {}
-        return next;
-      }
-
-      function buildBoardState(payload, prevState) {
-        var cardDefs = (payload && Array.isArray(payload.cardDefinitions)) ? payload.cardDefinitions : [];
-        var cardIds = cardDefs.map(function (c) { return c.id; });
-        var modelsById = {};
-        var prevModels = (prevState && prevState.modelsById) || {};
-        for (var i = 0; i < cardIds.length; i++) {
-          var id = cardIds[i];
-          var fresh = selectLiveCardModel(payload, id);
-          var prev = prevModels[id];
-          if (!prev) { modelsById[id] = fresh; continue; }
-          var stab = {
-            id: fresh.id,
-            card: stableEq(prev.card, fresh.card),
-            card_data: stableEq(prev.card_data, fresh.card_data),
-            requires: stableEq(prev.requires, fresh.requires),
-            computed_values: stableEq(prev.computed_values, fresh.computed_values),
-            runtime_state: stableEq(prev.runtime_state, fresh.runtime_state),
-          };
-          if (stab.card === prev.card && stab.card_data === prev.card_data
-            && stab.requires === prev.requires && stab.computed_values === prev.computed_values
-            && stab.runtime_state === prev.runtime_state) {
-            modelsById[id] = prev;
-          } else {
-            modelsById[id] = stab;
-          }
-        }
-        return { payload: payload, cardIds: cardIds, modelsById: modelsById };
-      }
-
-      function deepEqJson(a, b) {
-        if (a === b) return true;
-        try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
-      }
-
-      function taskStatusToCardStatus(taskStatus) {
-        return (taskStatus === 'running' || taskStatus === 'in-progress')
-          ? 'loading'
-          : (taskStatus === 'failed' ? 'error' : 'fresh');
-      }
-
-      // Shell-side reducer. Mutates per-notification kind without re-reading
-      // app.getState(). Skips updates when the new slice is structurally equal
-      // to the prior slice so card model refs remain stable on no-op events.
-      function applyNotification(prevState, notifications) {
-        if (!prevState || !Array.isArray(notifications) || notifications.length === 0) return prevState;
-
-        var modelsById = prevState.modelsById;
-        var cardIds = prevState.cardIds;
-        var cloned = false;
-        var changed = false;
-
-        // token -> [cardId, ...] map built from current models' requires keys.
-        var consumersByToken = {};
-        for (var i = 0; i < cardIds.length; i++) {
-          var m = modelsById[cardIds[i]];
-          var reqs = m && m.requires;
-          if (reqs && typeof reqs === 'object') {
-            var keys = Object.keys(reqs);
-            for (var k = 0; k < keys.length; k++) {
-              var t = keys[k];
-              (consumersByToken[t] = consumersByToken[t] || []).push(cardIds[i]);
-            }
-          }
-        }
-
-        function ensureClone() {
-          if (!cloned) { modelsById = Object.assign({}, modelsById); cloned = true; }
-        }
-
-        for (var n = 0; n < notifications.length; n++) {
-          var note = notifications[n];
-          if (!note || !note.kind) continue;
-
-          if (note.kind === 'computed_values') {
-            var prev = modelsById[note.cardId];
-            if (!prev) continue;
-            var nextValues = note.values || {};
-            if (deepEqJson(prev.computed_values, nextValues)) continue;
-            ensureClone();
-            modelsById[note.cardId] = Object.assign({}, prev, { computed_values: nextValues });
-            changed = true;
-          } else if (note.kind === 'data_object') {
-            var consumers = consumersByToken[note.key] || [];
-            for (var c = 0; c < consumers.length; c++) {
-              var cid = consumers[c];
-              var prevC = modelsById[cid];
-              if (!prevC) continue;
-              var prevReqs = prevC.requires || {};
-              if (deepEqJson(prevReqs[note.key], note.payload)) continue;
-              ensureClone();
-              var nextReqs = Object.assign({}, prevReqs);
-              nextReqs[note.key] = note.payload;
-              modelsById[cid] = Object.assign({}, prevC, { requires: nextReqs });
-              changed = true;
-            }
-          } else if (note.kind === 'card_refreshed') {
-            // Init/restart only (per runtime contract). Re-derive that card's
-            // full model from the current payload.
-            var fresh = selectLiveCardModel(app.getState(), note.cardId);
-            if (!fresh) continue;
-            var existing = modelsById[note.cardId];
-            if (existing
-              && deepEqJson(existing.card, fresh.card)
-              && deepEqJson(existing.card_data, fresh.card_data)
-              && deepEqJson(existing.requires, fresh.requires)
-              && deepEqJson(existing.computed_values, fresh.computed_values)
-              && deepEqJson(existing.runtime_state, fresh.runtime_state)) {
-              continue;
-            }
-            ensureClone();
-            modelsById[note.cardId] = fresh;
-            if (cardIds.indexOf(note.cardId) === -1) cardIds = cardIds.concat([note.cardId]);
-            changed = true;
-          } else if (note.kind === 'status') {
-            var statusCards = note.status && Array.isArray(note.status.cards) ? note.status.cards : [];
-            for (var sc = 0; sc < statusCards.length; sc++) {
-              var statusCard = statusCards[sc];
-              var sid = statusCard && statusCard.name;
-              if (!sid || !modelsById[sid]) continue;
-
-              var prevS = modelsById[sid];
-              var nextCardStatus = taskStatusToCardStatus(statusCard.status);
-              var nextCardData = Object.assign({}, prevS.card_data || {}, {
-                status: nextCardStatus,
-                lastRun: statusCard.runtime && statusCard.runtime.last_transition_at
-                  ? statusCard.runtime.last_transition_at
-                  : null,
-              });
-              if (statusCard.error && statusCard.error.message) nextCardData.error = statusCard.error.message;
-              else delete nextCardData.error;
-
-              var nextRuntimeState = {
-                task_status: statusCard.status || null,
-                card_status: nextCardStatus,
-                runtime: statusCard.runtime ? clone(statusCard.runtime) : {},
-                error: statusCard.error ? clone(statusCard.error) : null,
-                blocked_by: Array.isArray(statusCard.blocked_by) ? clone(statusCard.blocked_by) : [],
-                requires_missing: Array.isArray(statusCard.requires_missing) ? clone(statusCard.requires_missing) : [],
-              };
-
-              if (deepEqJson(prevS.card_data, nextCardData) && deepEqJson(prevS.runtime_state, nextRuntimeState)) {
-                continue;
-              }
-              ensureClone();
-              modelsById[sid] = Object.assign({}, prevS, {
-                card_data: nextCardData,
-                runtime_state: nextRuntimeState,
-              });
-              changed = true;
-            }
-          }
-        }
-
-        if (!changed) return prevState;
-        return { payload: prevState.payload, cardIds: cardIds, modelsById: modelsById };
-      }
-
       async function bootstrap() {
         var initCards = hasPersistedBoardState() ? [] : clone(INLINE_CARDS);
 
@@ -816,7 +651,9 @@
               console.log('[notifications]', event.notifications);
             }
             if (board) board.setState(function (prev) {
-              var next = applyNotification(prev, event.notifications);
+              var next = applyNotification(prev, event.notifications, function () {
+                return app.getState();
+              });
               stateRef.current = next;
               return next;
             });

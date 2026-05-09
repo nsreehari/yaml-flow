@@ -1,0 +1,226 @@
+/**
+ * board-state-reducer — shared reactive state helpers for browser board shells.
+ *
+ * Used by both:
+ *   - board-livecards-localstorage-runtime (in-browser full engine)
+ *   - board-livecards-server-runtime-client (SSE/HTTP thin client)
+ *
+ * Pure functions; no side effects; no DOM/localStorage/fetch dependencies.
+ */
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface CardModel {
+  id: string;
+  card: unknown;
+  card_data: unknown;
+  requires: unknown;
+  computed_values: unknown;
+  runtime_state: unknown;
+}
+
+export interface BoardState {
+  payload: unknown;
+  cardIds: string[];
+  modelsById: Record<string, CardModel>;
+}
+
+export type SelectLiveCardModelFn = (payload: unknown, cardId: string) => CardModel;
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function clone<T>(x: T): T {
+  return JSON.parse(JSON.stringify(x)) as T;
+}
+
+function stableEq<T>(prev: T, next: T): T {
+  if (prev === next) return prev;
+  try {
+    if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+  } catch (_) { /* ignore */ }
+  return next;
+}
+
+function deepEqJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
+}
+
+function taskStatusToCardStatus(taskStatus: string | null | undefined): string {
+  if (taskStatus === 'running' || taskStatus === 'in-progress') return 'loading';
+  if (taskStatus === 'failed') return 'error';
+  return 'fresh';
+}
+
+// ============================================================================
+// buildBoardState — full rebuild from a runtime payload snapshot
+// ============================================================================
+
+export function buildBoardState(
+  payload: unknown,
+  prevState: BoardState | null,
+  selectLiveCardModel: SelectLiveCardModelFn,
+): BoardState {
+  const p = payload as { cardDefinitions?: Array<{ id: string }> } | null;
+  const cardDefs = (p && Array.isArray(p.cardDefinitions)) ? p.cardDefinitions : [];
+  const cardIds = cardDefs.map((c) => c.id);
+  const prevModels = (prevState && prevState.modelsById) || {};
+  const modelsById: Record<string, CardModel> = {};
+
+  for (const id of cardIds) {
+    const fresh = selectLiveCardModel(payload, id);
+    const prev = prevModels[id];
+    if (!prev) {
+      modelsById[id] = fresh;
+      continue;
+    }
+    const stab: CardModel = {
+      id: fresh.id,
+      card:            stableEq(prev.card,            fresh.card),
+      card_data:       stableEq(prev.card_data,       fresh.card_data),
+      requires:        stableEq(prev.requires,        fresh.requires),
+      computed_values: stableEq(prev.computed_values, fresh.computed_values),
+      runtime_state:   stableEq(prev.runtime_state,   fresh.runtime_state),
+    };
+    modelsById[id] = (
+      stab.card            === prev.card &&
+      stab.card_data       === prev.card_data &&
+      stab.requires        === prev.requires &&
+      stab.computed_values === prev.computed_values &&
+      stab.runtime_state   === prev.runtime_state
+    ) ? prev : stab;
+  }
+
+  return { payload, cardIds, modelsById };
+}
+
+// ============================================================================
+// applyNotification — incremental state reducer
+// ============================================================================
+
+export function applyNotification(
+  prevState: BoardState,
+  notifications: Array<{ kind: string; [key: string]: unknown }>,
+  selectLiveCardModel: SelectLiveCardModelFn,
+  getFullPayload: () => unknown,
+): BoardState {
+  if (!prevState || !Array.isArray(notifications) || notifications.length === 0) return prevState;
+
+  let modelsById = prevState.modelsById;
+  let cardIds = prevState.cardIds;
+  let cloned = false;
+  let changed = false;
+
+  // Build token → [cardId, ...] map from current requires keys
+  const consumersByToken: Record<string, string[]> = {};
+  for (const cid of cardIds) {
+    const m = modelsById[cid];
+    const reqs = m && m.requires;
+    if (reqs && typeof reqs === 'object') {
+      for (const t of Object.keys(reqs as object)) {
+        (consumersByToken[t] = consumersByToken[t] || []).push(cid);
+      }
+    }
+  }
+
+  function ensureClone() {
+    if (!cloned) { modelsById = { ...modelsById }; cloned = true; }
+  }
+
+  for (const note of notifications) {
+    if (!note || !note.kind) continue;
+
+    if (note.kind === 'computed_values') {
+      const cardId = note.cardId as string;
+      const prev = modelsById[cardId];
+      if (!prev) continue;
+      const nextValues = (note.values || {}) as unknown;
+      if (deepEqJson(prev.computed_values, nextValues)) continue;
+      ensureClone();
+      modelsById[cardId] = { ...prev, computed_values: nextValues };
+      changed = true;
+
+    } else if (note.kind === 'data_object') {
+      const key = note.key as string;
+      const notePayload = note.payload;
+      const consumers = consumersByToken[key] || [];
+      for (const cid of consumers) {
+        const prevC = modelsById[cid];
+        if (!prevC) continue;
+        const prevReqs = (prevC.requires || {}) as Record<string, unknown>;
+        if (deepEqJson(prevReqs[key], notePayload)) continue;
+        ensureClone();
+        modelsById[cid] = { ...prevC, requires: { ...prevReqs, [key]: notePayload } };
+        changed = true;
+      }
+
+    } else if (note.kind === 'card_refreshed') {
+      const cardId = note.cardId as string;
+      let fresh: CardModel | null = null;
+      try {
+        const fp = getFullPayload();
+        if (fp) fresh = selectLiveCardModel(fp, cardId);
+      } catch (_) { /* ignore */ }
+      if (!fresh) continue;
+      const existing = modelsById[cardId];
+      if (existing &&
+        deepEqJson(existing.card,            fresh.card) &&
+        deepEqJson(existing.card_data,       fresh.card_data) &&
+        deepEqJson(existing.requires,        fresh.requires) &&
+        deepEqJson(existing.computed_values, fresh.computed_values) &&
+        deepEqJson(existing.runtime_state,   fresh.runtime_state)) {
+        continue;
+      }
+      ensureClone();
+      modelsById[cardId] = fresh;
+      if (!cardIds.includes(cardId)) cardIds = [...cardIds, cardId];
+      changed = true;
+
+    } else if (note.kind === 'status') {
+      const statusCards = (note.status as { cards?: Array<{
+        name?: string;
+        status?: string;
+        runtime?: { last_transition_at?: string | null };
+        error?: { message?: string } | null;
+        blocked_by?: string[];
+        requires_missing?: string[];
+      }> })?.cards ?? [];
+
+      for (const statusCard of statusCards) {
+        const sid = statusCard?.name;
+        if (!sid || !modelsById[sid]) continue;
+        const prevS = modelsById[sid];
+        const nextCardStatus = taskStatusToCardStatus(statusCard.status);
+        const nextCardData = {
+          ...(prevS.card_data as object || {}),
+          status: nextCardStatus,
+          lastRun: statusCard.runtime?.last_transition_at ?? null,
+          ...(statusCard.error?.message ? { error: statusCard.error.message } : {}),
+        };
+        // Remove error key if no error
+        if (!statusCard.error?.message) {
+          delete (nextCardData as { error?: string }).error;
+        }
+        const nextRuntimeState = {
+          task_status:      statusCard.status ?? null,
+          card_status:      nextCardStatus,
+          runtime:          statusCard.runtime ? clone(statusCard.runtime) : {},
+          error:            statusCard.error   ? clone(statusCard.error)   : null,
+          blocked_by:       Array.isArray(statusCard.blocked_by)       ? clone(statusCard.blocked_by)       : [],
+          requires_missing: Array.isArray(statusCard.requires_missing)  ? clone(statusCard.requires_missing) : [],
+        };
+        if (deepEqJson(prevS.card_data, nextCardData) && deepEqJson(prevS.runtime_state, nextRuntimeState)) continue;
+        ensureClone();
+        modelsById[sid] = { ...prevS, card_data: nextCardData, runtime_state: nextRuntimeState };
+        changed = true;
+      }
+    }
+  }
+
+  if (!changed) return prevState;
+  return { payload: prevState.payload, cardIds, modelsById };
+}

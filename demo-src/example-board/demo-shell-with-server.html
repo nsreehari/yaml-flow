@@ -15,14 +15,11 @@
     .lc-result ul, .lc-result ol { font-size: 0.8rem; margin: 0 0 0.25rem; padding-left: 1.2rem; }
     .lc-result li { margin-bottom: 0.15rem; }
   </style>
-  <script src="../../src/card-compute/jsonata-sync.cjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"></script>
-  <script src="../../browser/card-compute.js"></script>
   <script src="../../browser/live-cards.js"></script>
-  <script src="../../browser/board-livecards-localstorage.js"></script>
   <script src="../../browser/board-livecards-runtime-client.js"></script>
 </head>
 <body class="bg-light">
@@ -71,7 +68,12 @@
 
   <script>
     (function () {
-      const { selectAllLiveCardModels } = window.BoardLiveCardsLocalStorage || {};
+      const createBoardRuntimeClient = window.BoardLiveCardsRuntimeClient && window.BoardLiveCardsRuntimeClient.createBoardRuntimeClient;
+      if (!createBoardRuntimeClient) {
+        document.getElementById('boardRoot').innerHTML =
+          '<div class="alert alert-danger">board-livecards-runtime-client.js not loaded. Run <code>npm run build:browser</code> first.</div>';
+        throw new Error('BoardLiveCardsRuntimeClient not loaded');
+      }
       let currentMode = 'canvas';
       let bootstrapCompleted = false;
       let activeBoardId = 'default';
@@ -138,10 +140,9 @@
         throw new Error(`Unable to reach example-board demo server. Tried: ${failures.join(' | ')}. ${tip}`);
       }
 
-      runtimeClient = window.ReusableBoardRuntimeClient.createBoardRuntimeClient({
+      runtimeClient = createBoardRuntimeClient({
         fetchServer,
         boardPaths,
-        selectAllLiveCardModels,
         getServerOrigin: function () { return activeServerOrigin; },
         initialMode: currentMode,
         canvas: { height: '72vh', overflow: 'auto' },
