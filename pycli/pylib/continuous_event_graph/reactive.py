@@ -8,9 +8,9 @@ Pattern:
   2. Push an event (or inject tokens)
   3. The graph drives itself: drain journal -> applyEvents -> schedule -> dispatch -> repeat
 
-Dispatch is synchronous (matching the QuickJS bridge pattern).
-No daemon, no polling. Each handler callback appends to the journal,
-which triggers a drain cycle that may dispatch the next wave.
+Dispatch is synchronous. No daemon, no polling. Each handler callback
+appends to the journal, which triggers a drain cycle that may dispatch
+the next wave.
 
 Port of src/continuous-event-graph/reactive.ts
 """
@@ -111,8 +111,7 @@ def _now_iso() -> str:
 
 class ReactiveGraph:
     """
-    Push-based, self-sustaining execution wrapper.
-    Synchronous handlers — matching QuickJS bridge pattern.
+    Push-based, self-sustaining execution wrapper with synchronous handlers.
     """
 
     def __init__(

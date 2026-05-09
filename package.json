@@ -127,11 +127,10 @@
   "scripts": {
     "build": "tsup",
     "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
-    "build:quickjs": "tsup --config tsup.quickjs.config.ts",
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
-    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s build:quickjs && npm run -s test:run && npm run -s check:bundle-budget && npm run -s check:browser-bundle",
-    "standalone": "npm run -s test:cli-parity && npm run -s build && npm run -s build:quickjs && node scripts/build-standalone.mjs",
+    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s test:run && npm run -s check:bundle-budget && npm run -s check:browser-bundle",
+    "standalone": "npm run -s test:cli-parity && npm run -s build && node scripts/build-standalone.mjs",
     "pycli:install": "python -m pip install -r pycli/requirements.txt",
     "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r pycli/requirements.txt",
     "pycli:install:py312": "py -3.12 -m pip install -r pycli/requirements.txt",
@@ -140,15 +139,15 @@
     "dev": "tsup --watch",
     "test": "npm run build:example && vitest",
     "test:run": "npm run build:example && vitest run",
-    "test:cli-parity": "npm run -s build:quickjs && python scripts/cli_parity_check.py",
-    "test:cli-parity:full": "npm run -s build:quickjs && python scripts/cli_parity_check.py --include-portfolio",
-    "test:e2e": "npm run -s build:quickjs && .\\.venv312\\Scripts\\python.exe examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
+    "test:cli-parity": "python scripts/cli_parity_check.py",
+    "test:cli-parity:full": "python scripts/cli_parity_check.py --include-portfolio",
+    "test:e2e": "python examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
     "test:example-board": "vitest run tests/examples/example-board.test.ts",
     "check:example-board": "npm run test:example-board && npm run validate:cards -- \"examples/example-board/cards/*.json\"",
     "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run build:browser && npm run build:quickjs && npm run check:bundle-budget && npm run check:browser-bundle"
+    "prepublishOnly": "npm run build && npm run build:browser && npm run check:bundle-budget && npm run check:browser-bundle"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

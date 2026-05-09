@@ -477,7 +477,7 @@ describe('demo-server file upload + card list + download', () => {
     expect(chatText).toContain(`file uploaded: ${originalName} as ${uploaded.stored_name}`);
   }, 30000);
 
-  it('publishes runtime payload with fetched_sources, computed_values, card_data, and requires', async () => {
+  it('publishes runtime payload with computed_values and card_data', async () => {
     const payload = await getBootstrapPayload();
     const cardRuntimeById = payload.cardRuntimeById as Record<string, Record<string, unknown>> | undefined;
     expect(cardRuntimeById && typeof cardRuntimeById === 'object').toBe(true);
@@ -486,11 +486,10 @@ describe('demo-server file upload + card list + download', () => {
     expect(sourceCard).toBeTruthy();
     expect(typeof sourceCard?.card_data).toBe('object');
     expect(typeof sourceCard?.computed_values).toBe('object');
-    expect(typeof sourceCard?.fetched_sources).toBe('object');
 
     const dependentCard = cardRuntimeById?.['card-portfolio-value'];
     expect(dependentCard).toBeTruthy();
-    expect(typeof dependentCard?.requires).toBe('object');
+    expect(typeof dependentCard?.card_data).toBe('object');
   }, 30000);
 
   it('streams SSE payload updates after runtime mutation', async () => {

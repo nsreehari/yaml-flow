@@ -488,9 +488,6 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             for data in dx:
                 out.write_data_objects(data)
 
-            # Flush card runtime overlay → real store
-            # (In current Python port, we use real stores directly — no overlay yet)
-
             try:
                 status_obj = build_board_status_object(board_path, final_live)
                 out.write_status_snapshot(status_obj)

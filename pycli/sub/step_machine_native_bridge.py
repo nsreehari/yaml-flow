@@ -33,7 +33,7 @@ from pylib.stores.memory import MemoryStore
 
 
 class _FileStore:
-    """File-based store matching the QuickJS HostFileStore pattern."""
+    """File-based persistent store for step machine state."""
 
     def __init__(self, directory: str):
         self._dir = directory

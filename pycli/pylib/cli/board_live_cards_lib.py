@@ -642,7 +642,11 @@ def create_card_handler_fn(
             return "task-initiate-failure"
 
         card_id = card.get("id", handler_input["nodeId"])
-        if not handler_input.get("update") and notify_card_fn:
+
+        # Notify only on init or explicit restart — not on upstream-driven
+        # re-runs (status='completed') or source-fetch callbacks (status='running').
+        # A fresh init/restart is observable as taskState.status == 'not-started'.
+        if notify_card_fn and (handler_input.get("taskState") or {}).get("status") == "not-started":
             notify_card_fn(card_id, card)
 
         card_state = card.get("card_data") or {}

@@ -6,8 +6,8 @@
  *  - createBoardLiveGraphRuntime is exported from the IIFE bundle
  *  - A card executes end-to-end (source_defs → compute → provides)
  *  - getNodes() returns nodes with the correct shape:
- *      { id, fetched_sources, computed_values, requires, card_data, runtime_state }
- *  - fetched_sources, computed_values and requires are populated correctly
+ *      { id, card, card_data, requires, computed_values, runtime_state }
+ *  - computed_values and requires are populated correctly
  *
  * If this test fails it means the browser bundle is out of date with the TS source
  * and `npm run build:browser` must be re-run.
@@ -147,7 +147,7 @@ describe('board-livegraph-runtime browser/TS parity', () => {
 
       // Shape: required top-level keys must be present
       const requiredKeys: (keyof LiveCardRuntimeModel)[] = [
-        'id', 'card', 'card_data', 'fetched_sources', 'requires', 'computed_values', 'runtime_state',
+        'id', 'card', 'card_data', 'requires', 'computed_values', 'runtime_state',
       ];
       for (const key of requiredKeys) {
         expect(browserNode, `browser node "${serverNode.id}" missing key "${key}"`).toHaveProperty(key);
@@ -155,20 +155,19 @@ describe('board-livegraph-runtime browser/TS parity', () => {
 
       // computed_values must match
       expect(browserNode.computed_values).toEqual(serverNode.computed_values);
-
-      // fetched_sources must match
-      expect(browserNode.fetched_sources).toEqual(serverNode.fetched_sources);
     }
   });
 
-  it('src-card fetched_sources.raw is populated from taskExecutor', async () => {
+  it('src-card provides.orders token is populated in the dependent card requires', async () => {
     const { createBoardLiveGraphRuntime: browserCreate } = loadBrowserRuntime();
 
     const nodes = await getNodeSnapshot(browserCreate, CARDS, mockExecutor);
-    const srcNode = nodes.find((n) => n.id === 'src-card');
+    const computeNode = nodes.find((n) => n.id === 'compute-card');
 
-    expect(srcNode).toBeDefined();
-    expect(srcNode!.fetched_sources).toEqual({ raw: ORDER_DATA });
+    expect(computeNode).toBeDefined();
+    // The orders token should have been resolved and provided to compute-card
+    expect(computeNode!.requires).toHaveProperty('orders');
+    expect(computeNode!.requires['orders']).toEqual(ORDER_DATA);
   });
 
   it('compute-card computed_values are derived from requires.orders', async () => {

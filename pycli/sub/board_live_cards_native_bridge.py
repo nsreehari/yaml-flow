@@ -1,17 +1,10 @@
 """
 board_live_cards_native_bridge.py
 
-Drop-in replacement for board_live_cards_quickjs_bridge.py.
-Instead of executing a JS bundle via QuickJS, this module calls
-the Python-native port of the board-live-cards-public module directly.
+Calls the Python-native port of the board-live-cards-public module directly.
 
-Same function signature as invoke_js_bundle_function:
+Function signature:
   invoke_board_command_native(payload) -> dict result
-
-The pycli entrypoint can switch from QuickJS to native by replacing:
-  from sub.board_live_cards_quickjs_bridge import invoke_js_bundle_function
-with:
-  from sub.board_live_cards_native_bridge import invoke_board_command_native
 """
 from __future__ import annotations
 
@@ -42,10 +35,8 @@ from sub.board_live_cards_adapters import (
 
 class NativeBoardPlatformAdapter:
     """
-    Implements the BoardPlatformAdapter protocol using the existing
-    Python fs-based adapters (FsKvStorage, FsBlobStorage, etc.).
-
-    This is the Python equivalent of the QuickJS host_call adapter.
+    Implements the BoardPlatformAdapter protocol using Python fs-based
+    adapters (FsKvStorage, FsBlobStorage, etc.).
     """
 
     def __init__(self, base_ref: Dict[str, str], notify_channel: Optional[str] = None):
@@ -224,9 +215,9 @@ def _make_lock_adapter(lock_path: str):
 
 def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Drop-in replacement for the QuickJS invoke path.
+    Invoke a board command natively via the Python port.
 
-    Accepts the same BoardInvokePayload shape:
+    Accepts the BoardInvokePayload shape:
       {
         "baseRef": "::fs-path::/some/path",
         "command": "init" | "status" | "upsertCard" | ...,
