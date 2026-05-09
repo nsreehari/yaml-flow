@@ -95,6 +95,35 @@
  */
 
 // ============================================================================
+// OutputTransforms
+// ============================================================================
+
+/**
+ * Optional JSONata-based transforms applied to the raw invoke result.
+ * Context for all expressions: `{ output: { result, data, error? } }`.
+ * All fields are optional.
+ */
+export interface OutputTransforms {
+  /**
+   * JSONata expression that produces the transition name string.
+   * @example "output.code = 200 ? 'success' : 'failure'"
+   */
+  resultExpr?: string;
+
+  /**
+   * JSONata expression that produces the data object.
+   * @example "{ 'value': output.body.value }"
+   */
+  dataTemplate?: string;
+
+  /**
+   * JSONata expression that produces the error string, or $undefined() to clear it.
+   * @example "output.code != 200 ? output.error_message : $undefined()"
+   */
+  errorExpr?: string;
+}
+
+// ============================================================================
 // ArgsMassaging
 // ============================================================================
 
@@ -184,6 +213,23 @@ export interface ExecutionRef {
    * When omitted, the adapter applies its default protocol for the howToRun kind.
    */
   argsMassaging?: ArgsMassaging;
+
+  /**
+   * Optional JSONata-based transforms applied to the raw invoke result
+   * before it reaches the step-machine engine.
+   *
+   * Context for all expressions: `{ output: { result, data, error? } }`
+   * where `output` is the raw { result, data, error? } returned by invokeRefSync.
+   *
+   * All fields are optional — only defined ones override the raw value.
+   *
+   * @example
+   * outputTransforms:
+   *   resultExpr:   "output.code = 200 ? 'success' : 'failure'"
+   *   dataTemplate: "{ 'value': output.body.value }"
+   *   errorExpr:    "output.code != 200 ? output.error_message : $undefined()"
+   */
+  outputTransforms?: OutputTransforms;
 
   /**
    * Opaque executor-specific configuration.

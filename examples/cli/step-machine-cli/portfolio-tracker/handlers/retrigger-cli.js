@@ -9,17 +9,13 @@ try {
 
   if (!boardDir || !task) {
     writeFailure('BOARD_DIR and TASK are required');
-    process.exit(0);
   }
 
   runBoardCli(['retrigger', '--base-ref', `::fs-path::${boardDir}`, '--id', task]);
 
   writeResult({
-    result: 'success',
-    data: {
-      task,
-      retriggered: true,
-    },
+    task,
+    retriggered: true,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

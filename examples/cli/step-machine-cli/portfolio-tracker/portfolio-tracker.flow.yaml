@@ -10,11 +10,11 @@ steps:
     expects_data: [runtime_root, board_name]
     produces_data: [board_dir]
     handler:
-      cli: node ./handlers/reset-board-dir-cli.js
-      input-transforms:
-        BOARD_DIR: runtime_root & "/" & board_name
-      output-transforms:
-        board_dir: data.board_dir
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./handlers/reset-board-dir-cli.js"
+      argsMassaging:
+        bodyTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
     transitions:
       success: t0_init_board
     failure_transitions:
@@ -25,11 +25,11 @@ steps:
     expects_data: [board_dir]
     produces_data: [board_dir]
     handler:
-      cli: node ./handlers/init-board-cli.js
-      input-transforms:
-        BOARD_DIR: board_dir
-      output-transforms:
-        board_dir: data.board_dir
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./handlers/init-board-cli.js"
+      argsMassaging:
+        bodyTemplate: "{ 'BOARD_DIR': board_dir }"
     transitions:
       success: t1_add_cards
     failure_transitions:
@@ -40,12 +40,11 @@ steps:
     expects_data: [board_dir, cards]
     produces_data: [cards_added]
     handler:
-      cli: node ./handlers/add-cards-cli.js
-      input-transforms:
-        BOARD_DIR: board_dir
-        CARDS: cards
-      output-transforms:
-        cards_added: data.count
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./handlers/add-cards-cli.js"
+      argsMassaging:
+        bodyTemplate: "{ 'BOARD_DIR': board_dir, 'CARDS': cards }"
     transitions:
       success: t2_poll_status
     failure_transitions:
@@ -56,14 +55,11 @@ steps:
     expects_data: [board_dir, expected_card_count]
     produces_data: [all_completed]
     handler:
-      cli: node ./handlers/poll-status-cli.js
-      input-transforms:
-        BOARD_DIR: board_dir
-        EXPECTED_CARD_COUNT: expected_card_count
-        TIMEOUT_MS: "30000"
-        POLL_MS: "500"
-      output-transforms:
-        all_completed: data.completed
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./handlers/poll-status-cli.js"
+      argsMassaging:
+        bodyTemplate: "{ 'BOARD_DIR': board_dir, 'EXPECTED_CARD_COUNT': expected_card_count, 'TIMEOUT_MS': '30000', 'POLL_MS': '500' }"
     transitions:
       success: success_state
     failure_transitions:

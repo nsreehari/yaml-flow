@@ -13,26 +13,20 @@ process.stdin.on('end', () => {
     const c = Number(input.c);
 
     if (!Number.isFinite(c)) {
-      process.stdout.write(JSON.stringify({
-        result: 'failure',
-        error: 'step2_double requires numeric c',
-      }));
-      process.exit(0);
+      process.stderr.write('step2_double requires numeric c');
+      process.exit(1);
       return;
     }
 
     const d = c * 2;
     process.stdout.write(JSON.stringify({
-      status: 'success',
-      data: {
-        a: 123,
-        d,
-      },
+      a: 123,
+      d,
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stdout.write(JSON.stringify({ result: 'failure', error: message }));
-    process.exit(0);
+    process.stderr.write(message);
+    process.exit(1);
   }
 });
 

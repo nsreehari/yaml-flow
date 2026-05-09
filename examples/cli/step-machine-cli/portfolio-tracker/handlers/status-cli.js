@@ -8,16 +8,12 @@ try {
 
   if (!boardDir) {
     writeFailure('BOARD_DIR is required');
-    process.exit(0);
   }
 
   const status = runBoardCli(['status', '--base-ref', `::fs-path::${boardDir}`], { capture: true });
 
   writeResult({
-    result: 'success',
-    data: {
-      status,
-    },
+    status,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

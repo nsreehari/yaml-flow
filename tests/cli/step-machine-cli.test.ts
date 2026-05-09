@@ -324,7 +324,6 @@ terminal_states:
   it('uses passthrough when no step handler is configured', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pass-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
 
     writeFile(flowPath, `
 id: passthrough-flow
@@ -342,16 +341,8 @@ terminal_states:
     return_artifacts: [x]
 `);
 
-    writeFile(handlersPath, `
-export default {
-  s1: async () => ({ result: 'success', data: { x: 999 } }),
-};
-`);
-
     const run = runStepMachineCli([
       flowPath,
-      '--handlers',
-      handlersPath,
       '--initial-data',
       '{"x":7}',
     ]);
@@ -361,17 +352,16 @@ export default {
 
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('success');
-    // If fallback by step-name were still active, this would be 999.
     expect(output.data).toEqual({ x: 7 });
   });
 
-  it('runs cli-only steps without --handlers and filters by produces_data', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-cli-only-'));
+  it('runs ref steps and filters by produces_data', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
 
     writeFile(flowPath, `
-id: cli-only-flow
+id: ref-flow
 settings:
   start_step: s1
 steps:
@@ -379,7 +369,9 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node ./echo-y.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./echo-y.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -400,10 +392,7 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const x = Number(input.x);
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { y: x + 10, z: 999 },
-  }));
+  process.stdout.write(JSON.stringify({ y: x + 10, z: 999 }));
 });
 process.stdin.resume();
 `);
@@ -418,52 +407,69 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 7, y: 17 });
   });
 
-  it('fails fast when inline handler name is missing from handlers module', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-inline-missing-'));
+  it('runs compute-jsonata handler with input_validations', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
 
     writeFile(flowPath, `
-id: inline-missing-flow
+id: compute-flow
 settings:
   start_step: s1
 steps:
   s1:
+    expects_data: [a, b]
+    produces_data: [c]
+    input_validations:
+      - $type(a) = "number"
+      - $type(b) = "number"
     handler:
-      inline: not_present
+      type: compute-jsonata
+      expr:
+        - data.c = expects_data.a + expects_data.b
+        - result = "success"
     transitions:
       success: success_state
+      failure: failed_state
 terminal_states:
   success_state:
     return_intent: success
+    return_artifacts: [a, b, c]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
 `);
 
-    writeFile(handlersPath, `
-export default {
-  other: async () => ({ result: 'success', data: {} }),
-};
-`);
-
-    const run = runStepMachineCli([flowPath, '--handlers', handlersPath]);
-
+    // Success case
+    const run = runStepMachineCli([flowPath, '--initial-data', '{"a":5,"b":3}']);
     expect(run.error).toBeUndefined();
-    expect(run.status).toBe(1);
-    expect(run.combinedOutput).toContain('Inline handler "not_present"');
+    expect(run.status).toBe(0);
+    const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.intent).toBe('success');
+    expect(output.data).toEqual({ a: 5, b: 3, c: 8 });
+
+    // Validation failure case
+    const failRun = runStepMachineCli([flowPath, '--initial-data', '{"a":"bad","b":3}']);
+    expect(failRun.error).toBeUndefined();
+    expect(failRun.status).toBe(0);
+    const failOutput = parseLastJsonObject(failRun.stdout ?? '');
+    expect(failOutput.intent).toBe('failure');
   });
 
-  it('maps non-zero CLI exit into failure transition', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-cli-exit-'));
+  it('maps non-zero ref exit into failure transition', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-exit-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'fail.js');
 
     writeFile(flowPath, `
-id: cli-exit-flow
+id: ref-exit-flow
 settings:
   start_step: s1
 steps:
   s1:
     handler:
-      cli: node ./fail.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./fail.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -490,19 +496,21 @@ process.exit(23);
     expect(output.intent).toBe('failure');
   });
 
-  it('maps invalid JSON stdout from CLI handler into failure transition', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-cli-json-'));
+  it('treats non-JSON stdout from ref handler as success with stdout fallback', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-json-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'bad-json.js');
 
     writeFile(flowPath, `
-id: cli-json-flow
+id: ref-json-flow
 settings:
   start_step: s1
 steps:
   s1:
     handler:
-      cli: node ./bad-json.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./bad-json.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -525,16 +533,16 @@ process.stdout.write('not-json-output');
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
-    expect(output.intent).toBe('failure');
+    expect(output.intent).toBe('success');
   });
 
-  it('supports handler.cli command with quoted script path containing spaces', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-quoted-path-'));
+  it('supports ref handler with script path containing spaces', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-space-path-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'double value.js');
 
     writeFile(flowPath, `
-id: quoted-cli-path-flow
+id: space-path-flow
 settings:
   start_step: s1
 steps:
@@ -542,7 +550,9 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node "./double value.js"
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./double value.js"
     transitions:
       success: success_state
       failure: failed_state
@@ -563,10 +573,7 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const x = Number(input.x);
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { y: x * 2 },
-  }));
+  process.stdout.write(JSON.stringify({ y: x * 2 }));
 });
 process.stdin.resume();
 `);
@@ -581,15 +588,13 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 9, y: 18 });
   });
 
-  it('supports top-level handler_vars in CLI command templating', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-handler-vars-'));
+  it('supports ref handler with argsMassaging.bodyTemplate', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-body-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
 
     writeFile(flowPath, `
-id: handler-vars-flow
-handler_vars:
-  SCRIPT_PATH: ./echo-y.js
+id: ref-body-flow
 settings:
   start_step: s1
 steps:
@@ -597,11 +602,11 @@ steps:
     expects_data: [x]
     produces_data: [y]
     handler:
-      cli: node "%%SCRIPT_PATH%%"
-      input-transforms:
-        X: x
-      output-transforms:
-        y: data.y
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./echo-y.js"
+      argsMassaging:
+        bodyTemplate: "{ 'X': x }"
     transitions:
       success: success_state
       failure: failed_state
@@ -621,10 +626,7 @@ process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
-  process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: { y: Number(input.X) + 5 },
-  }));
+  process.stdout.write(JSON.stringify({ y: Number(input.X) + 5 }));
 });
 process.stdin.resume();
 `);
@@ -639,10 +641,9 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 10, y: 15 });
   });
 
-  it('supports mixed inline and cli handlers with produces_data filtering', () => {
+  it('supports mixed compute-jsonata and ref handlers with produces_data filtering', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-mixed-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
     const cliScriptPath = path.join(tmpRoot, 'double.js');
 
     writeFile(flowPath, `
@@ -652,40 +653,32 @@ settings:
 steps:
   s1:
     expects_data: [a, b]
-    produces_data: [c, e]
+    produces_data: [c]
     handler:
-      inline: add_inputs
+      type: compute-jsonata
+      expr:
+        - data.c = expects_data.a + expects_data.b
+        - result = "success"
     transitions:
       success: s2
       failure: failed_state
   s2:
     expects_data: [c]
-    produces_data: [d, e]
+    produces_data: [d]
     handler:
-      cli: node ./double.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./double.js"
     transitions:
       success: success_state
       failure: failed_state
 terminal_states:
   success_state:
     return_intent: success
-    return_artifacts: [a, b, c, d, e, noise]
+    return_artifacts: [a, b, c, d]
   failed_state:
     return_intent: failure
     return_artifacts: [error]
-`);
-
-    writeFile(handlersPath, `
-export default {
-  async add_inputs(input) {
-    const a = Number(input.a);
-    const b = Number(input.b);
-    return {
-      result: 'success',
-      data: { a, b, c: a + b, noise: 'ignore-me' },
-    };
-  },
-};
 `);
 
     writeFile(cliScriptPath, `
@@ -696,18 +689,13 @@ process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
   const c = Number(input.c);
-  process.stdout.write(JSON.stringify({
-    status: 'success',
-    data: { d: c * 2, a: 123, noise: 'ignore-me-too' },
-  }));
+  process.stdout.write(JSON.stringify({ d: c * 2 }));
 });
 process.stdin.resume();
 `);
 
     const run = runStepMachineCli([
       flowPath,
-      '--handlers',
-      handlersPath,
       '--initial-data',
       '{"a":3,"b":4}',
     ]);
@@ -719,36 +707,34 @@ process.stdin.resume();
     expect(output.intent).toBe('success');
     expect(output.stepHistory).toEqual(['s1', 's2']);
     expect(output.data).toEqual({ a: 3, b: 4, c: 7, d: 14 });
-    expect(output.data.e).toBeUndefined();
   });
 
-  it('supports JSONata input/output transforms and command templating for cli handlers', () => {
+  it('supports argsMassaging.bodyTemplate for ref handlers', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-jsonata-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'init-board.js');
 
     writeFile(flowPath, `
-id: jsonata-cli-flow
+id: jsonata-ref-flow
 settings:
-  start_step: t0_init_board
+  start_step: s1
 steps:
-  t0_init_board:
+  s1:
     expects_data: [runtime_root, board_name]
-    produces_data: [board_dir, init_message]
+    produces_data: [board_dir, message]
     handler:
-      cli: node ./init-board.js "%%BOARD_DIR%%"
-      input-transforms:
-        BOARD_DIR: runtime_root & "/" & board_name
-      output-transforms:
-        board_dir: BOARD_DIR
-        init_message: data.message
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./init-board.js"
+      argsMassaging:
+        bodyTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
     transitions:
       success: success_state
       failure: failed_state
 terminal_states:
   success_state:
     return_intent: success
-    return_artifacts: [board_dir, init_message, ignored]
+    return_artifacts: [board_dir, message]
   failed_state:
     return_intent: failure
     return_artifacts: [error]
@@ -761,18 +747,15 @@ process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
   const input = JSON.parse(raw || '{}');
-  const boardDirArg = process.argv[2] ?? '';
-  if (!boardDirArg || boardDirArg !== input.BOARD_DIR) {
-    process.stdout.write(JSON.stringify({ result: 'failure', error: 'board dir mismatch' }));
+  if (!input.BOARD_DIR) {
+    process.stderr.write('BOARD_DIR missing');
+    process.exit(1);
     return;
   }
 
   process.stdout.write(JSON.stringify({
-    result: 'success',
-    data: {
-      message: 'initialized-ok',
-      ignored: 'should-not-be-merged',
-    },
+    board_dir: input.BOARD_DIR,
+    message: 'initialized-ok',
   }));
 });
 process.stdin.resume();
@@ -791,23 +774,25 @@ process.stdin.resume();
     expect(output.intent).toBe('success');
     expect(output.data).toEqual({
       board_dir: '/tmp/runtime/board-a',
-      init_message: 'initialized-ok',
+      message: 'initialized-ok',
     });
   });
 
-  it('fails when a command template placeholder is unresolved', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-template-missing-'));
+  it('routes to failed_state when ref has invalid whatToRun kindref', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-bad-kindref-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
     writeFile(flowPath, `
-id: unresolved-template-flow
+id: bad-kindref-flow
 settings:
   start_step: s1
 steps:
   s1:
     expects_data: [x]
     handler:
-      cli: node ./does-not-matter.js "%%MISSING_KEY%%"
+      type: ref
+      howToRun: local-node
+      whatToRun: "no-kind-prefix"
     transitions:
       success: success_state
       failure: failed_state
@@ -822,25 +807,26 @@ terminal_states:
     const run = runStepMachineCli([flowPath, '--initial-data', '{"x":1}']);
 
     expect(run.error).toBeUndefined();
+    // parseKindRef throws inside handler, step machine catches and routes to failure
     expect(run.status).toBe(0);
-
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('failure');
   });
 
-  it('routes to failed_state when inline handler returns failure', () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-inline-failure-'));
+  it('routes to failed_state when compute-jsonata expression throws', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-fail-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
-    const handlersPath = path.join(tmpRoot, 'handlers.js');
 
     writeFile(flowPath, `
-id: inline-failure-flow
+id: compute-failure-flow
 settings:
   start_step: s1
 steps:
   s1:
     handler:
-      inline: always_fail
+      type: compute-jsonata
+      expr:
+        - result = $nonExistentFn()
     transitions:
       success: success_state
       failure: failed_state
@@ -852,15 +838,7 @@ terminal_states:
     return_artifacts: [error]
 `);
 
-    writeFile(handlersPath, `
-export default {
-  async always_fail() {
-    return { result: 'failure', data: { error: 'inline failure' } };
-  },
-};
-`);
-
-    const run = runStepMachineCli([flowPath, '--handlers', handlersPath]);
+    const run = runStepMachineCli([flowPath]);
 
     expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
@@ -897,4 +875,239 @@ export default {
     expect(output.data.cards_added).toBe(3);
     expect(output.data.all_completed).toBe(true);
   }, 120_000);
+
+  // ===========================================================================
+  // compute-jsonata: case/switch patterns
+  // ===========================================================================
+
+  it('compute-jsonata: object-lookup switch routes to correct transition', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-switch-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+
+    writeFile(flowPath, `
+id: switch-flow
+settings:
+  start_step: classify
+steps:
+  classify:
+    description: Route based on risk_level via object-lookup switch
+    expects_data: [risk_level]
+    produces_data: [label]
+    handler:
+      type: compute-jsonata
+      expr:
+        - 'data.label = $lookup({"low": "routine", "medium": "review", "high": "escalate"}, expects_data.risk_level)'
+        - 'result = data.label != null ? data.label : "unknown"'
+    transitions:
+      routine:   low_track
+      review:    mid_track
+      escalate:  high_track
+      unknown:   failed_state
+  low_track:
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.outcome = "approved"
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+  mid_track:
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.outcome = "pending"
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+  high_track:
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.outcome = "blocked"
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [risk_level, label, outcome]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
+`);
+
+    const cases: Array<[string, string, string, string]> = [
+      ['low',    'routine',  'approved', 'low_track'],
+      ['medium', 'review',   'pending',  'mid_track'],
+      ['high',   'escalate', 'blocked',  'high_track'],
+    ];
+
+    for (const [risk, label, outcome, track] of cases) {
+      const run = runStepMachineCli([flowPath, '--initial-data', JSON.stringify({ risk_level: risk })]);
+      expect(run.error).toBeUndefined();
+      const out = parseLastJsonObject(run.stdout ?? '');
+      expect(out.intent).toBe('success');
+      expect(out.data.label).toBe(label);
+      expect(out.data.outcome).toBe(outcome);
+      expect(out.stepHistory).toContain(track);
+    }
+
+    // Unknown value falls through to unknown -> failed_state
+    const unknownRun = runStepMachineCli([flowPath, '--initial-data', '{"risk_level":"critical"}']);
+    const unknownOut = parseLastJsonObject(unknownRun.stdout ?? '');
+    expect(unknownOut.intent).toBe('failure');
+  });
+
+  it('compute-jsonata: chained ternary grading with local binding', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-grade-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+
+    writeFile(flowPath, `
+id: grade-flow
+settings:
+  start_step: score_step
+steps:
+  score_step:
+    description: Grade a numeric score using local binding and chained ternary
+    expects_data: [score]
+    produces_data: [grade, band]
+    input_validations:
+      - $type(score) = "number"
+      - score >= 0 and score <= 100
+    handler:
+      type: compute-jsonata
+      expr:
+        - 'data.grade = ($s := expects_data.score; $s >= 90 ? "A" : $s >= 80 ? "B" : $s >= 70 ? "C" : $s >= 60 ? "D" : "F")'
+        - 'data.band = ($s := expects_data.score; $s >= 90 ? "distinction" : $s >= 60 ? "pass" : "fail")'
+        - 'result = data.grade = "F" ? "failing" : "passing"'
+    transitions:
+      passing: success_state
+      failing: remediation_state
+      failure: failed_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [score, grade, band]
+  remediation_state:
+    return_intent: failure
+    return_artifacts: [score, grade, band]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
+`);
+
+    // A — distinction
+    const runA = runStepMachineCli([flowPath, '--initial-data', '{"score":95}']);
+    const outA = parseLastJsonObject(runA.stdout ?? '');
+    expect(outA.intent).toBe('success');
+    expect(outA.data).toEqual({ score: 95, grade: 'A', band: 'distinction' });
+
+    // B — pass
+    const runB = runStepMachineCli([flowPath, '--initial-data', '{"score":82}']);
+    const outB = parseLastJsonObject(runB.stdout ?? '');
+    expect(outB.intent).toBe('success');
+    expect(outB.data).toEqual({ score: 82, grade: 'B', band: 'pass' });
+
+    // F — routes to remediation (failure intent but not an error)
+    const runF = runStepMachineCli([flowPath, '--initial-data', '{"score":45}']);
+    const outF = parseLastJsonObject(runF.stdout ?? '');
+    expect(outF.intent).toBe('failure');
+    expect(outF.data.grade).toBe('F');
+    expect(outF.data.band).toBe('fail');
+
+    // input_validation: out-of-range score
+    const runBad = runStepMachineCli([flowPath, '--initial-data', '{"score":150}']);
+    const outBad = parseLastJsonObject(runBad.stdout ?? '');
+    expect(outBad.intent).toBe('failure');
+  });
+
+  // ─── outputTransforms ──────────────────────────────────────────────────────
+
+  it('outputTransforms: reshapes raw ref output with resultExpr and dataTemplate (success)', () => {
+    // Script echoes a raw payload. outputTransforms reshapes it via JSONata.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-out-xform-ok-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+    const scriptPath = path.join(tmpRoot, 'script.js');
+
+    writeFile(flowPath, `
+id: output-transforms-ok
+settings:
+  start_step: step1
+steps:
+  step1:
+    handler:
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./script.js"
+      outputTransforms:
+        resultExpr: "output.data.code = 200 ? 'success' : 'failure'"
+        dataTemplate: "{ 'value': output.data.payload.value }"
+    transitions:
+      success: done_state
+      failure: failed_state
+terminal_states:
+  done_state:
+    return_intent: success
+    return_artifacts: [value]
+  failed_state:
+    return_intent: failure
+    return_artifacts: []
+`);
+
+    writeFile(scriptPath, `
+process.stdout.write(JSON.stringify({ code: 200, payload: { value: 42 } }));
+process.exit(0);
+`);
+
+    const run = runStepMachineCli([flowPath]);
+    const out = parseLastJsonObject(run.stdout ?? '');
+    expect(out.intent).toBe('success');
+    expect(out.data.value).toBe(42);
+    expect(out.data.code).toBeUndefined(); // dataTemplate replaced the whole data object
+  });
+
+  it('outputTransforms: errorExpr populates error field and routes to failure', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-out-xform-err-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+    const scriptPath = path.join(tmpRoot, 'script.js');
+
+    writeFile(flowPath, `
+id: output-transforms-err
+settings:
+  start_step: step1
+steps:
+  step1:
+    handler:
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./script.js"
+      outputTransforms:
+        resultExpr: "output.data.code = 200 ? 'success' : 'failure'"
+        errorExpr: "output.data.code != 200 ? output.data.error_message"
+        dataTemplate: "{ 'code': output.data.code }"
+    transitions:
+      success: done_state
+      failure: failed_state
+terminal_states:
+  done_state:
+    return_intent: success
+    return_artifacts: []
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
+`);
+
+    writeFile(scriptPath, `
+process.stdout.write(JSON.stringify({ code: 500, error_message: "boom" }));
+process.exit(0);
+`);
+
+    const run = runStepMachineCli([flowPath]);
+    const out = parseLastJsonObject(run.stdout ?? '');
+    expect(out.intent).toBe('failure');
+    expect(out.data.error).toBe('boom');
+  });
 });

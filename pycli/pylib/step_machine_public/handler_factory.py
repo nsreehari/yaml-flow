@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
-from ..card_compute import CardCompute
+from ..card_compute import CardCompute, deep_set
 from .result_utils import (
     wrap_with_input_validations,
     wrap_with_output_filtering,
@@ -69,34 +69,62 @@ def create_compute_jsonata_handler(
     steps = [_normalize_compute_step(item) for item in spec["expr"]]
 
     def handler(input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        step_input: Dict[str, Any] = (
+        expects_data: Dict[str, Any] = (
             dict(input_data) if isinstance(input_data, dict) else {}
         )
 
-        # Delegate to CardCompute. Step input is exposed both as top-level vars
-        # (so bare `name` works) and as `requires` (so explicit `requires.name`
-        # also works). Step `config` lives under `card_data`.
-        result = CardCompute.run_sync(
-            {
-                "id": step_name,
-                "card_data": config or {},
-                "requires": step_input,
-                "compute": steps,
-            },
-            {"vars": step_input},
-        )
+        # `data` accumulates computed outputs by reference so subsequent
+        # expressions can read `data.x` after earlier steps set it.
+        data: Dict[str, Any] = {}
 
-        errors = result.get("errors") or []
-        if errors:
-            first = errors[0]
+        # Context shape:
+        #   expects_data — named namespace for declared step inputs (from flow state)
+        #   data         — accumulating output namespace (mutated by reference)
+        #   config       — optional step-level config
+        ctx: Dict[str, Any] = {"expects_data": expects_data, "data": data}
+        if config is not None:
+            ctx["config"] = config
+
+        transition_result: Optional[str] = None
+        transition_error: Optional[str] = None
+
+        for step in steps:
+            try:
+                val = CardCompute.eval_expr(step["expr"], ctx)
+                if step["bindTo"] == "result":
+                    transition_result = str(val) if val is not None else "success"
+                elif step["bindTo"] == "error":
+                    transition_error = str(val) if val is not None else None
+                elif step["bindTo"].startswith("data."):
+                    deep_set(data, step["bindTo"][len("data."):], val)
+                else:
+                    return {
+                        "result": "failure",
+                        "data": {},
+                        "error": (
+                            f'[{step_name}] invalid bindTo "{step["bindTo"]}": '
+                            'must be "result", "error", or start with "data."'
+                        ),
+                    }
+            except Exception as ex:
+                return {
+                    "result": "failure",
+                    "data": {},
+                    "error": f'[{step_name}] compute "{step["bindTo"]}" failed: {ex}',
+                }
+
+        if transition_result is None:
             return {
                 "result": "failure",
-                "data": {
-                    "error": f'[{step_name}] compute "{first["bindTo"]}" failed: {first["error"]}',
-                },
+                "data": {},
+                "error": (
+                    f'[{step_name}] compute-jsonata: no "result" binding declared '
+                    '— add \'- result = "success"\' to expr'
+                ),
             }
-
-        return {"result": "success", "data": result["node"].get("computed_values") or {}}
+        if transition_error is not None:
+            return {"result": transition_result, "data": data, "error": transition_error}
+        return {"result": transition_result, "data": data}
 
     return handler
 
@@ -121,12 +149,19 @@ def create_ref_step_handler(
         if config is not None:
             step_input["config"] = config
         try:
-            return invoke(ref, step_input)
+            raw = invoke(ref, step_input)
         except Exception as ex:
             return {
                 "result": "failure",
                 "data": {"error": f'[step-machine-public] step "{step_name}" invoke threw: {ex}'},
             }
+        output_transforms = spec.get("outputTransforms")
+        if not output_transforms:
+            return raw
+        try:
+            return resolve_output_transforms(output_transforms, raw, step_name)
+        except Exception as ex:
+            return {"result": "failure", "data": {}, "error": str(ex)}
 
     return handler
 

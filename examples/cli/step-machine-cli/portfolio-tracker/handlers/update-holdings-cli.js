@@ -12,7 +12,6 @@ try {
 
   if (!boardDir || !cardsDir || !Array.isArray(holdings)) {
     writeFailure('BOARD_DIR, CARDS_DIR and HOLDINGS array are required');
-    process.exit(0);
   }
 
   const cardPath = path.join(cardsDir, 'portfolio-form.json');
@@ -30,11 +29,8 @@ try {
   runBoardCli(['upsert-card', '--base-ref', baseRef, '--card-id', card.id, '--restart']);
 
   writeResult({
-    result: 'success',
-    data: {
-      saved: true,
-      holdings_count: holdings.length,
-    },
+    saved: true,
+    holdings_count: holdings.length,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

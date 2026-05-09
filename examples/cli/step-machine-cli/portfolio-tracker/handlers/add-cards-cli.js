@@ -9,7 +9,6 @@ try {
 
   if (!boardDir || cards.length === 0) {
     writeFailure('BOARD_DIR and CARDS (array) are required');
-    process.exit(0);
   }
 
   const baseRef = `::fs-path::${boardDir}`;
@@ -24,11 +23,8 @@ try {
   runBoardCli(['upsert-card', '--base-ref', baseRef, '--all']);
 
   writeResult({
-    result: 'success',
-    data: {
-      board_dir: boardDir,
-      count: cards.length,
-    },
+    board_dir: boardDir,
+    cards_added: cards.length,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

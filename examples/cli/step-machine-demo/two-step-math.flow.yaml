@@ -4,19 +4,81 @@ settings:
   max_total_steps: 10
   timeout_ms: 10000
 
+# Demonstrates three compute-jsonata techniques:
+#   1. Basic arithmetic with data.* output and explicit result=
+#   2. Chained ternary with local $var binding ($c :=) — range classification and conditional routing
+#   3. $lookup object-switch — route result directly from a map (see switch test in step-machine-cli.test.ts)
+# NOTE: expr items containing ': ' or '{key: value}' must be single-quoted in YAML.
+
 steps:
   step1_add:
     description: Compute c = a + b
     expects_data: [a, b]
     produces_data: [c]
+    input_validations:
+      - $type(a) = "number"
+      - $type(b) = "number"
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.c = expects_data.a + expects_data.b
+        - result = "success"
     transitions:
-      success: step2_double
+      success: step2_classify
       failure: failed_state
 
-  step2_double:
-    description: Compute d = c * 2
+  step2_classify:
+    description: |
+      Classify c using an object-lookup switch.
+      Routes to low_track / mid_track / high_track based on magnitude.
+    expects_data: [c]
+    produces_data: [band]
+    handler:
+      type: compute-jsonata
+      expr:
+        - 'data.band = ($c := expects_data.c; $c < 10 ? "low" : $c < 100 ? "mid" : "high")'
+        - result = data.band
+    transitions:
+      low:  low_track
+      mid:  mid_track
+      high: high_track
+      failure: failed_state
+
+  low_track:
+    description: Small result — multiply by 3
     expects_data: [c]
     produces_data: [d]
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.d = expects_data.c * 3
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+
+  mid_track:
+    description: Medium result — multiply by 2
+    expects_data: [c]
+    produces_data: [d]
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.d = expects_data.c * 2
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+
+  high_track:
+    description: Large result — keep as-is (already big enough)
+    expects_data: [c]
+    produces_data: [d]
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.d = expects_data.c
+        - result = "success"
     transitions:
       success: success_state
       failure: failed_state
@@ -24,7 +86,7 @@ steps:
 terminal_states:
   success_state:
     return_intent: success
-    return_artifacts: [a, b, c, d]
+    return_artifacts: [a, b, c, band, d]
 
   failed_state:
     return_intent: failure

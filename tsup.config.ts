@@ -23,6 +23,7 @@ export default defineConfig({
   entry: {
     'index': 'src/index.ts',
     'step-machine/index': 'src/step-machine/index.ts',
+    'step-machine-public/index': 'src/step-machine-public/index.ts',
     'event-graph/index': 'src/event-graph/index.ts',
     'stores/index': 'src/stores/index.ts',
     'stores/memory': 'src/stores/memory.ts',
@@ -35,6 +36,7 @@ export default defineConfig({
     'card-compute/index': 'src/card-compute/index.ts',
     'cli/node/board-live-cards-cli': 'src/cli/node/board-live-cards-cli.ts',
     'cli/node/fs-board-adapter': 'src/cli/node/fs-board-adapter.ts',
+    'cli/node/execution-adapter': 'src/cli/node/execution-adapter.ts',
     'cli/node/card-store-cli': 'src/cli/node/card-store-cli.ts',
     'cli/node/artifacts-store-cli': 'src/cli/node/artifacts-store-cli.ts',
     'cli/node/source-cli-task-executor': 'src/cli/node/source-cli-task-executor.ts',

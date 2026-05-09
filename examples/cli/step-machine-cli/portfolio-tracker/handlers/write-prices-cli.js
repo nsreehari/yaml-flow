@@ -12,7 +12,6 @@ try {
 
   if (!boardDirInput || !prices || typeof prices !== 'object' || Array.isArray(prices)) {
     writeFailure('BOARD_DIR and PRICES object are required');
-    process.exit(0);
   }
 
   const boardDir = path.resolve(boardDirInput);
@@ -23,11 +22,8 @@ try {
   fs.writeFileSync(tmpFile, payload, 'utf-8');
 
   writeResult({
-    result: 'success',
-    data: {
-      wrote: true,
-      tmp_file: tmpFile,
-    },
+    wrote: true,
+    tmp_file: tmpFile,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

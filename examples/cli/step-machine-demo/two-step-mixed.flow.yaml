@@ -6,21 +6,29 @@ settings:
 
 steps:
   step1_add:
-    description: Inline handler computes c = a + b
+    description: Compute step computes c = a + b
     expects_data: [a, b]
-    produces_data: [c, e]
+    produces_data: [c]
+    input_validations:
+      - $type(a) = "number"
+      - $type(b) = "number"
     handler:
-      inline: step1_add
+      type: compute-jsonata
+      expr:
+        - data.c = expects_data.a + expects_data.b
+        - result = "success"
     transitions:
       success: step2_double
       failure: failed_state
 
   step2_double:
-    description: CLI handler computes d = c * 2
+    description: Ref handler computes d = c * 2
     expects_data: [c]
     produces_data: [d, e]
     handler:
-      cli: node ./step2-double-cli.js
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./step2-double-cli.js"
     transitions:
       success: success_state
       failure: failed_state
