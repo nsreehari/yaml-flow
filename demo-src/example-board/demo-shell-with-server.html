@@ -20,7 +20,7 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leader-line/leader-line.min.js"></script>
   <script src="../../browser/live-cards.js"></script>
-  <script src="../../browser/board-livecards-runtime-client.js"></script>
+  <script src="../../browser/board-livecards-client.js"></script>
 </head>
 <body class="bg-light">
   <div class="container-fluid py-3">
@@ -68,11 +68,12 @@
 
   <script>
     (function () {
-      const createBoardRuntimeClient = window.BoardLiveCardsRuntimeClient && window.BoardLiveCardsRuntimeClient.createBoardRuntimeClient;
-      if (!createBoardRuntimeClient) {
+      const createBoardRuntimeClient = window.BoardLiveCardsClient && window.BoardLiveCardsClient.createBoardRuntimeClient;
+      const defaultBoardPaths = window.BoardLiveCardsClient && window.BoardLiveCardsClient.defaultBoardPaths;
+      if (!createBoardRuntimeClient || !defaultBoardPaths) {
         document.getElementById('boardRoot').innerHTML =
-          '<div class="alert alert-danger">board-livecards-runtime-client.js not loaded. Run <code>npm run build:browser</code> first.</div>';
-        throw new Error('BoardLiveCardsRuntimeClient not loaded');
+          '<div class="alert alert-danger">board-livecards-client.js not loaded. Run <code>npm run build:browser</code> first.</div>';
+        throw new Error('BoardLiveCardsClient not loaded');
       }
       let currentMode = 'canvas';
       let bootstrapCompleted = false;
@@ -80,19 +81,12 @@
       let runtimeClient = null;
 
       function boardPaths(boardId) {
-        const b = encodeURIComponent(boardId || activeBoardId || 'default');
-        const base = `/api/boards/${b}`;
-        return {
+        const bid = boardId || activeBoardId || 'default';
+        const base = `/api/boards/${encodeURIComponent(bid)}`;
+        return Object.assign(defaultBoardPaths(bid), {
           demoSetup: `${base}/demo-setup`,
-          initBoard: `${base}/init-board`,
-          bootstrapCards: `${base}/bootstrap-cards`,
-          bootstrap: `${base}/bootstrap`,
-          stream: `${base}/sse`,
-          patchCard: function (id) { return `${base}/cards/${encodeURIComponent(id)}`; },
-          cardAction: function (id) { return `${base}/cards/${encodeURIComponent(id)}/actions`; },
-          cardFile: function (id) { return `${base}/cards/${encodeURIComponent(id)}/files`; },
-          cardChats: function (id) { return `${base}/cards/${encodeURIComponent(id)}/chats`; },
-        };
+          bootstrap:  `${base}/bootstrap`,
+        });
       }
 
       function localServerOrigins() {

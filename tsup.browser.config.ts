@@ -129,11 +129,11 @@ export default defineConfig([
     globalName: 'BoardLiveCardsLocalStorage',
     esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
   },
-  // ── board-livecards-runtime-client — SSE/HTTP thin client for server runtime mode ─────
+  // ── board-livecards-client — platform-free state + SSE/HTTP server transport ──────────
   {
     ...sharedBrowserOptions,
-    entry: { 'board-livecards-runtime-client': 'src/board-livecards-server-runtime-client/index.ts' },
-    globalName: 'BoardLiveCardsRuntimeClient',
+    entry: { 'board-livecards-client': 'src/board-livecards-client/index.ts' },
+    globalName: 'BoardLiveCardsClient',
     esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
   },
 ]);

@@ -1,24 +1,40 @@
 /**
- * board-livecards-server-runtime-client — browser IIFE bundle entry point.
+ * board-livecards-client — browser IIFE bundle.
  *
- * TypeScript port of the hand-authored browser/board-livecards-runtime-client.js.
- * Bundles selectLiveCardModel/selectAllLiveCardModels and board-state-reducer internally;
- * consumers need no separate board-livegraph-engine.js script.
+ * Two layers in one bundle:
+ *   1. Platform-free state: buildBoardState, applyNotification, selectLiveCardModel,
+ *      selectAllLiveCardModels — usable with any transport (Firebase, WebSocket, SSE, etc.)
+ *   2. SSE/HTTP transport: createBoardRuntimeClient — for yaml-flow server runtime.
  *
- * Usage:
- *   <script src="board-livecards-runtime-client.js"></script>
+ * Usage (SSE/HTTP mode):
+ *   <script src="board-livecards-client.js"></script>
  *   <script>
- *     const client = BoardLiveCardsRuntimeClient.createBoardRuntimeClient({
- *       fetchServer, boardPaths, getServerOrigin,
+ *     const client = BoardLiveCardsClient.createBoardRuntimeClient({
+ *       fetchServer, boardPaths: BoardLiveCardsClient.defaultBoardPaths, getServerOrigin,
  *     });
  *     await client.bootstrapBoard({ boardId: 'default', rootElement: el });
  *   </script>
  *
- * Global: window.BoardLiveCardsRuntimeClient
+ * Usage (custom transport — e.g. Firebase):
+ *   <script src="board-livecards-client.js"></script>
+ *   <script>
+ *     const { buildBoardState, applyNotification, selectLiveCardModel } = BoardLiveCardsClient;
+ *     // apply your own transport; drive UI state with these primitives.
+ *   </script>
+ *
+ * Global: window.BoardLiveCardsClient
  */
 
 import { selectLiveCardModel, selectAllLiveCardModels } from '../board-livegraph-runtime/index.js';
-import { buildBoardState, applyNotification, type BoardState } from '../cli/common/board-state-reducer.js';
+import { buildBoardState, applyNotification, type BoardState, type CardModel } from '../cli/common/board-state-reducer.js';
+
+// ============================================================================
+// Platform-free state exports
+// Re-exported so consumers using any transport (Firebase, WS, SSE) can drive
+// the LiveCard UI without loading the full localstorage bundle.
+// ============================================================================
+export { buildBoardState, applyNotification, selectLiveCardModel, selectAllLiveCardModels };
+export type { BoardState, CardModel };
 
 // ============================================================================
 // Public types
@@ -53,6 +69,34 @@ export interface BootstrapBoardParams {
   taskExecutorPath?: string;
   mode?: string;
   rootElement: HTMLElement;
+}
+
+/**
+ * Build the standard BoardPaths for a yaml-flow server runtime board.
+ *
+ * Covers only the paths owned by the server runtime (SSE, patch, action, files, chats,
+ * init-board, bootstrap-cards). Demo-server-specific endpoints (demo-setup, board registry
+ * CRUD) are not included — add those in the consumer if needed.
+ *
+ * @example
+ * const client = createBoardRuntimeClient({
+ *   fetchServer,
+ *   boardPaths: defaultBoardPaths,
+ *   getServerOrigin: () => activeOrigin,
+ * });
+ */
+export function defaultBoardPaths(boardId: string): BoardPaths {
+  const b = encodeURIComponent(boardId || 'default');
+  const base = `/api/boards/${b}`;
+  return {
+    initBoard:      `${base}/init-board`,
+    bootstrapCards: `${base}/bootstrap-cards`,
+    stream:         `${base}/sse`,
+    patchCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
+    cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
+    cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
+    cardChats:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats`,
+  };
 }
 
 export interface BoardRuntimeClient {

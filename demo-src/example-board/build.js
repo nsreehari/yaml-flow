@@ -53,8 +53,8 @@ const REPLACEMENTS = [
   },
   // local runtime client script → CDN
   {
-    from: 'src="../../browser/board-livecards-runtime-client.js"',
-    to:   `src="${CDN_BASE}/browser/board-livecards-runtime-client.js"`,
+    from: 'src="../../browser/board-livecards-client.js"',
+    to:   `src="${CDN_BASE}/browser/board-livecards-client.js"`,
   },
 ];
 
