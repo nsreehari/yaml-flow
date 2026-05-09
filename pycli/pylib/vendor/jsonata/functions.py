@@ -1629,7 +1629,12 @@ class Functions:
 
         result = (res for res in (Functions.func_apply(func, Functions.hof_func_args(func, arg, i, arr))
                                   for i, arg in enumerate(arr)) if res is not None)
-        return utils.Utils.create_sequence_from_iter(result)
+        # PATCH: $map must always return an array (never collapse to scalar),
+        # even when the input has exactly 1 item. keep_singleton prevents the
+        # length==1 → result[0] collapse in evaluate().
+        seq = utils.Utils.create_sequence_from_iter(result)
+        seq.keep_singleton = True
+        return seq
 
     #
     # Create a map from an array of arguments
