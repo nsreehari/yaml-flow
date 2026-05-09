@@ -52,7 +52,7 @@ interface InMemoryBus {
 
 const _busRegistry = new Map<string, InMemoryBus>();
 
-function getInMemoryNotificationBus(channel: string): InMemoryBus {
+export function getInMemoryNotificationBus(channel: string): InMemoryBus {
   let bus = _busRegistry.get(channel);
   if (!bus) {
     const listeners = new Set<(event: unknown) => void>();
@@ -81,7 +81,14 @@ export function createInMemoryNotificationTransport(): import('../../server-runt
         return () => {};
       }
       const bus = getInMemoryNotificationBus(ref.value);
-      return bus.subscribe(onEvent);
+      return bus.subscribe((event) => {
+        const e = event as { kind?: string; notifications?: unknown[] };
+        if (e && e.kind === 'notification-batch' && Array.isArray(e.notifications)) {
+          for (const n of e.notifications) onEvent(n);
+          return;
+        }
+        onEvent(event);
+      });
     },
   };
 }
@@ -231,7 +238,7 @@ export function createBrowserBoardPlatformAdapter(
     publishBoardChangeNotifications(notifications) {
       if (!opts?.notifyChannel || notifications.length === 0) return;
       const bus = getInMemoryNotificationBus(opts.notifyChannel);
-      for (const n of notifications) bus.publish(n);
+      bus.publish({ kind: 'notification-batch', notifications });
     },
 
     // requestProcessAccumulated is intentionally absent — the browser caller

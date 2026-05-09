@@ -50,7 +50,6 @@ export interface LiveCardRuntimeModel {
   id: string;
   card: LiveCard;
   card_data: Record<string, unknown>;
-  fetched_sources: Record<string, unknown>;
   requires: Record<string, unknown>;
   computed_values: Record<string, unknown>;
   runtime_state: Record<string, unknown>;
@@ -400,7 +399,6 @@ export function createBoardLiveGraphRuntime(
         id: cardId,
         card: deepClone(baseCard),
         card_data: cardDataForView,
-        fetched_sources: data && typeof data.fetched_sources === 'object' ? deepClone(data.fetched_sources as Record<string, unknown>) : {},
         requires: data && typeof data.requires === 'object' ? deepClone(data.requires as Record<string, unknown>) : {},
         computed_values: data && typeof data.computed_values === 'object' ? deepClone(data.computed_values as Record<string, unknown>) : {},
         runtime_state: runtimeState ? deepClone(runtimeState as unknown as Record<string, unknown>) : {},
@@ -478,8 +476,6 @@ export interface CardRuntimeArtifact {
   card_id?: string;
   card_data?: Record<string, unknown>;
   computed_values?: Record<string, unknown>;
-  fetched_sources?: Record<string, unknown>;
-  requires?: Record<string, unknown>;
 }
 
 export interface BoardRuntimeArtifactsPayload {
@@ -522,81 +518,90 @@ function normalizeCardRuntimeArtifact(cardId: string, artifact: CardRuntimeArtif
       ? structuredClone(safe.card_data) : {},
     computed_values: safe.computed_values && typeof safe.computed_values === 'object' && !Array.isArray(safe.computed_values)
       ? structuredClone(safe.computed_values) : {},
-    fetched_sources: safe.fetched_sources && typeof safe.fetched_sources === 'object' && !Array.isArray(safe.fetched_sources)
-      ? structuredClone(safe.fetched_sources) : {},
-    requires: safe.requires && typeof safe.requires === 'object' && !Array.isArray(safe.requires)
-      ? structuredClone(safe.requires) : {},
   };
 }
 
 /**
- * Converts a server bootstrap payload (cardDefinitions + cardRuntimeById + statusSnapshot)
- * into an array of LiveCardRuntimeModel ready for rendering.
+ * Selects a single per-card render model from a runtime state payload.
+ * Pure: same input → same output. Used by reactive Board to recompute
+ * only the slice for one card.
  */
-export function buildLiveCardModelsFromArtifacts(payload: BoardRuntimeArtifactsPayload): LiveCardRuntimeModel[] {
+export function selectLiveCardModel(
+  payload: BoardRuntimeArtifactsPayload,
+  cardId: string,
+): LiveCardRuntimeModel {
   if (!payload || typeof payload !== 'object') throw new Error('payload must be an object');
+  if (!cardId) throw new Error('cardId is required');
+
   const cardDefinitions = Array.isArray(payload.cardDefinitions) ? payload.cardDefinitions : [];
+  const cardDefinition = cardDefinitions.find((c) => (c as { id?: string }).id === cardId);
+  if (!cardDefinition) throw new Error(`cardDefinitions has no entry with id ${cardId}`);
+
   const statusSnapshot = payload.statusSnapshot && typeof payload.statusSnapshot === 'object' ? payload.statusSnapshot : {};
   const cardRuntimeById = payload.cardRuntimeById && typeof payload.cardRuntimeById === 'object' ? payload.cardRuntimeById : {};
   const dataObjectsByToken = payload.dataObjectsByToken && typeof payload.dataObjectsByToken === 'object' ? payload.dataObjectsByToken : {};
-  const statusCards = Array.isArray((statusSnapshot as { cards?: unknown[] }).cards) ? (statusSnapshot as { cards: Array<{ name: string; status?: string; error?: { message?: string } | null; runtime?: { last_transition_at?: string | null }; blocked_by?: string[]; requires_missing?: string[] }> }).cards : [];
-  const statusById = new Map(statusCards.map((c) => [c.name, c]));
+  const statusCards = Array.isArray((statusSnapshot as { cards?: unknown[] }).cards)
+    ? (statusSnapshot as { cards: Array<{ name: string; status?: string; error?: { message?: string } | null; runtime?: { last_transition_at?: string | null }; blocked_by?: string[]; requires_missing?: string[] }> }).cards
+    : [];
+  const statusCard = statusCards.find((c) => c.name === cardId);
 
-  return cardDefinitions.map((cardDefinition) => {
-    const card = structuredClone(cardDefinition) as LiveCard & Record<string, unknown>;
-    const cardId = card.id;
-    if (!cardId) throw new Error('cardDefinitions entry missing id');
+  const card = structuredClone(cardDefinition) as LiveCard & Record<string, unknown>;
+  const runtimeArtifact = normalizeCardRuntimeArtifact(cardId, cardRuntimeById[cardId]);
 
-    const statusCard = statusById.get(cardId);
-    const runtimeArtifact = normalizeCardRuntimeArtifact(cardId, cardRuntimeById[cardId]);
+  const baseCardData = card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data)
+    ? card.card_data as Record<string, unknown> : {};
 
-    const baseCardData = card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data)
-      ? card.card_data as Record<string, unknown> : {};
+  const card_data: Record<string, unknown> = {
+    ...baseCardData,
+    ...(runtimeArtifact.card_data || {}),
+    status: taskStatusToCardStatus(statusCard?.status),
+    lastRun: (statusCard?.runtime?.last_transition_at) ?? null,
+  };
+  if (statusCard?.error?.message) card_data['error'] = statusCard.error.message;
 
-    const card_data: Record<string, unknown> = {
-      ...baseCardData,
-      ...(runtimeArtifact.card_data || {}),
-      status: taskStatusToCardStatus(statusCard?.status),
-      lastRun: (statusCard?.runtime?.last_transition_at) ?? null,
-    };
-    if (statusCard?.error?.message) card_data['error'] = statusCard.error.message;
-
-    const runtime_state: Record<string, unknown> = statusCard
-      ? {
-          task_status: statusCard.status ?? null,
-          card_status: taskStatusToCardStatus(statusCard.status),
-          runtime: structuredClone(statusCard.runtime ?? {}),
-          error: statusCard.error ? structuredClone(statusCard.error) : null,
-          blocked_by: Array.isArray(statusCard.blocked_by) ? structuredClone(statusCard.blocked_by) : [],
-          requires_missing: Array.isArray(statusCard.requires_missing) ? structuredClone(statusCard.requires_missing) : [],
-        }
-      : {
-          task_status: null,
-          card_status: card_data['status'] ?? 'fresh',
-          runtime: { last_transition_at: card_data['lastRun'] ?? null },
-          error: card_data['error'] ? { message: card_data['error'] } : null,
-          blocked_by: [],
-          requires_missing: [],
-        };
-
-    const requiresTokens = Array.isArray((card as { requires?: unknown }).requires) ? (card as { requires: string[] }).requires : [];
-    const requires: Record<string, unknown> = {};
-    for (const token of requiresTokens) {
-      if (Object.prototype.hasOwnProperty.call(dataObjectsByToken, token)) {
-        requires[token] = structuredClone((dataObjectsByToken as Record<string, unknown>)[token]);
+  const runtime_state: Record<string, unknown> = statusCard
+    ? {
+        task_status: statusCard.status ?? null,
+        card_status: taskStatusToCardStatus(statusCard.status),
+        runtime: structuredClone(statusCard.runtime ?? {}),
+        error: statusCard.error ? structuredClone(statusCard.error) : null,
+        blocked_by: Array.isArray(statusCard.blocked_by) ? structuredClone(statusCard.blocked_by) : [],
+        requires_missing: Array.isArray(statusCard.requires_missing) ? structuredClone(statusCard.requires_missing) : [],
       }
-    }
+    : {
+        task_status: null,
+        card_status: card_data['status'] ?? 'fresh',
+        runtime: { last_transition_at: card_data['lastRun'] ?? null },
+        error: card_data['error'] ? { message: card_data['error'] } : null,
+        blocked_by: [],
+        requires_missing: [],
+      };
 
-    return {
-      id: cardId,
-      card: card as LiveCard,
-      card_data,
-      fetched_sources: runtimeArtifact.fetched_sources,
-      requires,
-      computed_values: runtimeArtifact.computed_values,
-      runtime_state,
-    };
-  });
+  const requiresTokens = Array.isArray((card as { requires?: unknown }).requires) ? (card as { requires: string[] }).requires : [];
+  const requires: Record<string, unknown> = {};
+  for (const token of requiresTokens) {
+    if (Object.prototype.hasOwnProperty.call(dataObjectsByToken, token)) {
+      requires[token] = structuredClone((dataObjectsByToken as Record<string, unknown>)[token]);
+    }
+  }
+
+  return {
+    id: cardId,
+    card: card as LiveCard,
+    card_data,
+    requires,
+    computed_values: runtimeArtifact.computed_values,
+    runtime_state,
+  };
+}
+
+/**
+ * Build per-card render models for every card in the payload.
+ */
+export function selectAllLiveCardModels(payload: BoardRuntimeArtifactsPayload): LiveCardRuntimeModel[] {
+  if (!payload || typeof payload !== 'object') throw new Error('payload must be an object');
+  const cardDefinitions = Array.isArray(payload.cardDefinitions) ? payload.cardDefinitions : [];
+  return cardDefinitions.map((c) => selectLiveCardModel(payload, (c as { id: string }).id));
 }
 
 export interface BuildBrowserArtifactsOptions {
@@ -608,8 +613,8 @@ export interface BuildBrowserArtifactsOptions {
 
 /**
  * Converts browser-runtime state (LiveCardRuntimeModel[] + LiveGraph) back into
- * the server-payload format expected by buildLiveCardModelsFromArtifacts.
- * Used by the browser-only shell to keep the same rendering path as the server shell.
+ * the runtime payload shape consumed by selectLiveCardModel / selectAllLiveCardModels.
+ * Used by the browser-only shell to keep the same selector path as the server shell.
  */
 export function buildBrowserArtifactsFromRuntime({
   boardPath,
@@ -632,8 +637,6 @@ export function buildBrowserArtifactsFromRuntime({
       card_id: model.id,
       card_data: structuredClone(model.card_data ?? {}),
       computed_values: structuredClone(model.computed_values ?? {}),
-      fetched_sources: structuredClone(model.fetched_sources ?? {}),
-      requires: structuredClone(model.requires ?? {}),
     };
   }
 

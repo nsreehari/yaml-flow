@@ -13,8 +13,8 @@
  *       taskExecutor: async (ref, args) => { ... },
  *     });
  *     await app.bootstrap();
- *     const payload = app.buildPublishedRuntimePayload();
- *     // → feed to LiveCard.Board via buildLiveCardModelsFromArtifacts
+ *     const payload = app.getState();
+ *     // → feed to LiveCard.Board via BoardLiveGraph.selectAllLiveCardModels
  *   </script>
  *
  * Global: window.BoardLiveCardsLocalStorage
@@ -22,7 +22,7 @@
 
 import { createSingleBoardServerRuntime } from '../server-runtime/index.js';
 import type { SingleBoardRuntime, ExecutionRef, InvocationAdapter } from '../server-runtime/types.js';
-import { createBrowserBoardPlatformAdapter, createInMemoryNotificationTransport } from '../cli/browser-api/board-live-cards-browser-adapter.js';
+import { createBrowserBoardPlatformAdapter, createInMemoryNotificationTransport, getInMemoryNotificationBus } from '../cli/browser-api/board-live-cards-browser-adapter.js';
 import { parseRef, serializeRef } from '../cli/common/storage-interface.js';
 
 // ============================================================================
@@ -59,6 +59,16 @@ export interface CreateOptions {
 
   /** Optional warning handler. */
   onWarn?: (msg: string) => void;
+
+  /**
+   * Called whenever board state changes.
+   * Receives the notification batch produced by the latest drain cycle.
+   * Consumers call getState() to read the current payload (no payload
+   * rebuild happens here — it is the consumer's choice when to materialize).
+   */
+  onBoardChange?: (event: {
+    notifications: Array<{ kind: string; [key: string]: unknown }>;
+  }) => void;
 }
 
 /**
@@ -70,17 +80,17 @@ export interface BrowserBoardRuntime {
   bootstrap(): Promise<void>;
 
   /**
-   * Build the full runtime payload (cardDefinitions, statusSnapshot,
+   * Read the latest published runtime payload (cardDefinitions, statusSnapshot,
    * cardRuntimeById, dataObjectsByToken). Feed this to
-   * BoardLiveGraph.buildLiveCardModelsFromArtifacts() for rendering.
+   * BoardLiveGraph.selectAllLiveCardModels() / selectLiveCardModel() for rendering.
    */
-  buildPublishedRuntimePayload(): unknown;
+  getState(): unknown;
 
-  /** Patch a card's data (same semantics as PATCH /cards/:id). */
-  patchCard(cardId: string, patch: Record<string, unknown>): void;
+  /** Patch a card's data (same semantics as PATCH /cards/:id). Resolves after drain completes. */
+  patchCard(cardId: string, patch: Record<string, unknown>): Promise<void>;
 
-  /** Apply a card action (chat-send, action, file-upload). */
-  applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): void;
+  /** Apply a card action (chat-send, action, file-upload). Resolves after drain completes. */
+  applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): Promise<void>;
 
   /** Read chat records for a card. */
   readChatRecords(cardId: string): Array<Record<string, unknown>>;
@@ -209,6 +219,19 @@ export function create(
     }
   }
 
+  // ── Subscribe to board change notifications (batched, SSE-like) ─────────
+
+  if (opts?.onBoardChange) {
+    const bus = getInMemoryNotificationBus(notifyChannel);
+    bus.subscribe((event) => {
+      const e = event as { kind?: string; notifications?: Array<{ kind: string; [key: string]: unknown }> };
+      if (!e || e.kind !== 'notification-batch' || !Array.isArray(e.notifications) || e.notifications.length === 0) {
+        return;
+      }
+      opts.onBoardChange?.({ notifications: e.notifications });
+    });
+  }
+
   // ── Expose direct-call methods via handleRuntimeApi with synthetic req/res
 
   function makeSyntheticRequest(method: string, path: string, body?: unknown): import('../server-runtime/types.js').RuntimeRequest {
@@ -262,22 +285,22 @@ export function create(
       await serverRuntime.handleRuntimeApi(req, res, new URL(`http://localhost${apiBase}/bootstrap`));
     },
 
-    buildPublishedRuntimePayload() {
+    getState() {
       return serverRuntime.buildPublishedRuntimePayload();
     },
 
-    patchCard(cardId: string, patch: Record<string, unknown>) {
+    async patchCard(cardId: string, patch: Record<string, unknown>) {
       const path = `${apiBase}/cards/${encodeURIComponent(cardId)}`;
       const req = makeSyntheticRequest('PATCH', path, patch);
       const { res } = makeSyntheticResponse();
-      void serverRuntime.handleRuntimeApi(req, res, new URL(`http://localhost${path}`));
+      await serverRuntime.handleRuntimeApi(req, res, new URL(`http://localhost${path}`));
     },
 
-    applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null) {
+    async applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null) {
       const path = `${apiBase}/cards/${encodeURIComponent(cardId)}/actions`;
       const req = makeSyntheticRequest('POST', path, { actionType, payload });
       const { res } = makeSyntheticResponse();
-      void serverRuntime.handleRuntimeApi(req, res, new URL(`http://localhost${path}`));
+      await serverRuntime.handleRuntimeApi(req, res, new URL(`http://localhost${path}`));
     },
 
     readChatRecords(cardId: string): Array<Record<string, unknown>> {

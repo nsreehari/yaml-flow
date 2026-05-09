@@ -111,7 +111,7 @@ describe('createBoardLiveGraphRuntime', () => {
     runtime.dispose();
   });
 
-  it('keeps fetched_sources, computed_values, card_data, and requires in runtime nodes', async () => {
+  it('keeps computed_values, card_data, and requires in runtime nodes', async () => {
     const cards: LiveCard[] = [
       {
         id: 'orders-source',
@@ -146,7 +146,6 @@ describe('createBoardLiveGraphRuntime', () => {
     const sourceNode = runtime.getNodes().find((n) => n.id === 'orders-source');
     const summaryNode = runtime.getNodes().find((n) => n.id === 'orders-summary');
 
-    expect(Array.isArray(sourceNode?.fetched_sources?.raw)).toBe(true);
     expect(sourceNode?.computed_values?.orderCount).toBe(2);
     expect(sourceNode?.card_data?.note).toBe('seed');
 

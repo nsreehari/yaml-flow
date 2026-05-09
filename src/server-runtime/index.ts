@@ -23,7 +23,7 @@ import {
 } from '../cli/common/board-live-cards-public.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
-import { createCardStore, createFetchedSourcesStore } from '../cli/common/board-live-cards-lib.js';
+import { createCardStore } from '../cli/common/board-live-cards-lib.js';
 
 import {
   createArtifactsStore,
@@ -327,7 +327,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // ── Status & runtime artifacts ───────────────────────────────────────────
 
   function readStatusSnapshot(): unknown {
-    const statuses = boardContexts.map(ctx => ctx.notification.status).filter(Boolean);
+    const statuses = boardContexts.map((ctx) => {
+      try {
+        const kv = ctx.boardAdapter.kvStorageForRef(ctx.outputsStoreRef);
+        const persisted = kv.read('status');
+        if (persisted !== null && persisted !== undefined) return persisted;
+      } catch {
+        // Fall back to notification memory if direct KV read fails.
+      }
+      return ctx.notification.status;
+    }).filter(Boolean);
     if (statuses.length === 0) return null;
     if (statuses.length === 1) return statuses[0];
 
@@ -368,32 +377,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           card_id: cardId,
           card_data: card?.card_data ?? {},
           computed_values: values ?? {},
-          fetched_sources: {},
-          requires: {},
         };
       }
     };
     for (const ctx of boardContexts) process(ctx);
-    return out;
-  }
-
-  function readSourcePayloads(cardDef: Record<string, unknown>): Record<string, unknown> {
-    const out: Record<string, unknown> = {};
-    if (!Array.isArray(cardDef.source_defs)) return out;
-    const cardId = cardDef.id as string;
-    const ctx = boardContexts[ownerIndex(cardId)];
-    if (!ctx) return out;
-    const sourcesStore = createFetchedSourcesStore(
-      ctx.boardAdapter.blobStorage('sources'),
-      (ref) => ctx.boardAdapter.resolveBlob(ref),
-    );
-    for (const sd of cardDef.source_defs as Array<Record<string, unknown>>) {
-      if (!sd?.bindTo || !sd?.outputFile) continue;
-      const content = sourcesStore.readSourceData(cardId, sd.outputFile as string);
-      if (content !== null) {
-        out[sd.bindTo as string] = content;
-      }
-    }
     return out;
   }
 
@@ -422,7 +409,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (!cardDef?.id) continue;
       const id = cardDef.id as string;
       const raw = (rawArtifacts[id] || {}) as Record<string, unknown>;
-      const sources = readSourcePayloads(cardDef);
       const chatSignal = readChatSignal(id);
       const cardData: Record<string, unknown> = {
         ...((raw.card_data && typeof raw.card_data === 'object' ? raw.card_data
@@ -435,8 +421,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         card_id: raw.card_id || id,
         card_data: cardData,
         computed_values: raw.computed_values && typeof raw.computed_values === 'object' ? raw.computed_values : {},
-        fetched_sources: sources,
-        requires: raw.requires && typeof raw.requires === 'object' ? raw.requires : {},
       };
     }
 
