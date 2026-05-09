@@ -222,7 +222,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (!notificationTransport || !ctx.notifyRef) return;
     const teardown = await notificationTransport.subscribe(ctx.notifyRef, (event) => {
       appendNotification(ctx.notification, event);
-      broadcastToSseClients();
+      // Broadcast incremental notifications to SSE clients so shells can use
+      // applyNotification instead of re-deriving the full payload each time.
+      const notifications = (event as Record<string, unknown>).kind === 'notification-batch'
+        ? (event as Record<string, unknown[]>).notifications as unknown[]
+        : [event];
+      broadcastNotificationBatchToSseClients(notifications);
     });
     ctx.notificationTeardown = teardown;
   }
@@ -793,6 +798,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
   }
 
+  function broadcastNotificationBatchToSseClients(notifications: unknown[]): void {
+    if (!notifications || notifications.length === 0) return;
+    const frame = buildSseFrame({ kind: 'notification-batch', notifications });
+    for (const client of sseClients) {
+      try { client.write(frame); } catch { sseClients.delete(client); }
+    }
+  }
+
   function handleSse(req: RuntimeRequest, res: RuntimeResponse): void {
     res.writeHead(200, {
       ...corsHeaders,
@@ -885,7 +898,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const cardId = decodeURIComponent(cardMatch[1]);
         const body = await readJsonBody(req);
         patchCard(cardId, body);
-        broadcastToSseClients();
+        // No immediate broadcast — patchCard triggers an async drain that will
+        // produce card_refreshed + other notifications via the transport subscription.
         json(res, 200, { ok: true });
         return true;
       }
@@ -896,7 +910,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const cardId = decodeURIComponent(cardActionMatch[1]);
         const body = await readJsonBody(req);
         applyCardAction(cardId, body?.actionType as string, body?.payload as Record<string, unknown> | null);
-        broadcastToSseClients();
         json(res, 200, { ok: true });
         return true;
       }
@@ -936,7 +949,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           });
           writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
         }
-        broadcastToSseClients();
         json(res, 200, { ok: true, file });
         return true;
       }
