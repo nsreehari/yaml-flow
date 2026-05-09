@@ -30,6 +30,8 @@ import type {
 import type { BoardPlatformAdapter } from '../../src/cli/common/board-live-cards-public.js';
 import type { KVStorage, BlobStorage, AtomicRelayLock, KindValueRef } from '../../src/cli/common/storage-interface.js';
 import type { ExecutionRef } from '../../src/cli/common/execution-interface.js';
+import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
+import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 
 // ============================================================================
 // In-memory adapters — same interfaces as the Firestore cached adapters
@@ -243,6 +245,26 @@ beforeAll(async () => {
     },
     serverUrl: functionUrl,
   };
+
+  // Preload cards into the persisted card store used by runtime bootstrap.
+  const preloadKv = adapter.kvStorageForRef(runtimeOptions.boards[0].cardStoreRef);
+  const preloadStore = createCardStorePublic(createCardStore({
+    readIndex: () => preloadKv.read('_index'),
+    writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+    readCard: (id: string) => preloadKv.read(id),
+    writeCard: (id: string, card: unknown) => {
+      preloadKv.write(id, card);
+      return id;
+    },
+    cardExists: (id: string) => preloadKv.read(id) !== null,
+    defaultCardKey: (id: string) => id,
+  } as any));
+  for (const card of SAMPLE_CARDS) {
+    const setResult = preloadStore.set({ body: card });
+    if (setResult.status !== 'success') {
+      throw new Error(`failed to preload card: ${setResult.error || 'unknown error'}`);
+    }
+  }
 
   const runtime = createSingleBoardServerRuntime(runtimeOptions);
 

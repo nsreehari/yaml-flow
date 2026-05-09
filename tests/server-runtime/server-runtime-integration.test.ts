@@ -24,6 +24,8 @@ import type {
   CardSourceAdapter,
   InvocationAdapter,
 } from '../../src/server-runtime/types.js';
+import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
+import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 
 // ── Import FS adapters (Node-specific) ─────────────────────────────────────
 import { createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
@@ -97,6 +99,27 @@ beforeAll(async () => {
     },
     serverUrl: `http://127.0.0.1:${TEST_PORT}`,
   };
+
+  // Preload cards into the persisted card store used by runtime bootstrap.
+  const preloadKv = boardAdapter.kvStorageForRef(runtimeOptions.boards[0].cardStoreRef);
+  const preloadStore = createCardStorePublic(createCardStore({
+    readIndex: () => preloadKv.read('_index'),
+    writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+    readCard: (id: string) => preloadKv.read(id),
+    writeCard: (id: string, card: unknown) => {
+      preloadKv.write(id, card);
+      return id;
+    },
+    cardExists: (id: string) => preloadKv.read(id) !== null,
+    defaultCardKey: (id: string) => id,
+  } as any));
+  const sourceCards = createFsCardSource(testCardsDir).listCards();
+  for (const card of sourceCards) {
+    const setResult = preloadStore.set({ body: card });
+    if (setResult.status !== 'success') {
+      throw new Error(`failed to preload card: ${setResult.error || 'unknown error'}`);
+    }
+  }
 
   const runtime = createSingleBoardServerRuntime(runtimeOptions);
 
