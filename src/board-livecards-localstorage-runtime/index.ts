@@ -209,14 +209,16 @@ export function create(
     },
   });
 
-  // ── Host concern (Part A): seed card store only if empty ─────────────────
+  // ── Host concern (Part A): always write fresh card definitions ───────────
+  // Card definitions (provides/requires/compute/source_defs) must always
+  // reflect the current code. An old localStorage session may have stale
+  // definitions that lack provides bindings, causing upstream token routing
+  // to break. Always overwrite so the graph config is built from current defs.
+  // Runtime state (computed values, snapshots) is stored in separate keys and
+  // is not affected by this write.
 
   if (cards.length) {
-    const existing = serverRuntime.cardStore.get({});
-    const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
-    if (isEmpty) {
-      serverRuntime.cardStore.set({ body: cards });
-    }
+    serverRuntime.cardStore.set({ body: cards });
   }
 
   // ── Subscribe to board change notifications (batched, SSE-like) ─────────

@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-05-09T05:27:47.493Z",
+  "generatedAt": "2026-05-09T11:21:00.719Z",
   "algorithm": "sha256",
   "files": {
     "browser/board-livegraph-engine.js": {
-      "sha256": "sha256-09ECioSvck1VH1AE0Hy/6RAHQt0uTT5467ELzcTJS90=",
-      "bytes": 31013
+      "sha256": "sha256-ZlT5dLb8N/4DbB8ZFKHMM9KyoY6j+D88t/9nsO3eyeA=",
+      "bytes": 31053
     }
   }
 }

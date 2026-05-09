@@ -578,10 +578,19 @@ export function selectLiveCardModel(
       };
 
   const requiresTokens = Array.isArray((card as { requires?: unknown }).requires) ? (card as { requires: string[] }).requires : [];
+  // Include ALL data objects in the state, not just the statically declared requires tokens.
+  // This handles dynamic requires, runtime token additions, and cards whose declared requires
+  // may not reflect what data is currently available. The board's stable-ref diff handles
+  // no-op cases where a card doesn't actually use a given token.
   const requires: Record<string, unknown> = {};
+  for (const [token, value] of Object.entries(dataObjectsByToken as Record<string, unknown>)) {
+    requires[token] = structuredClone(value);
+  }
+  // Also seed declared tokens not yet present in dataObjectsByToken as null,
+  // so the applyNotification consumer map is always fully wired from init.
   for (const token of requiresTokens) {
-    if (Object.prototype.hasOwnProperty.call(dataObjectsByToken, token)) {
-      requires[token] = structuredClone((dataObjectsByToken as Record<string, unknown>)[token]);
+    if (!Object.prototype.hasOwnProperty.call(requires, token)) {
+      requires[token] = null;
     }
   }
 

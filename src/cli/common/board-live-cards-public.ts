@@ -566,7 +566,10 @@ export function createBoardLiveCardsPublic(
         if (key) batch.push({ kind: 'data_object', key, payload });
       }
     }
-    for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
+    // card_refreshed notifications suppressed: fires too broadly on every card-handler cycle,
+    // not just on genuine card-data changes. TODO: re-implement as a card-store-level diff
+    // notification so it only fires when the persisted card record actually changes.
+    // for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
     if (statusObj !== undefined) batch.push({ kind: 'status', status: statusObj });
     flushBoardChangeNotifications(batch);
 
