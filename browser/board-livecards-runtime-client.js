@@ -19,14 +19,14 @@
 
     const fetchServer = options.fetchServer;
     const boardPaths = options.boardPaths;
-    const buildLiveCardModelsFromArtifacts = options.buildLiveCardModelsFromArtifacts
-      || (typeof window !== 'undefined' && window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts);
+    const selectAllLiveCardModels = options.selectAllLiveCardModels
+      || (typeof window !== 'undefined' && window.BoardLiveGraph && window.BoardLiveGraph.selectAllLiveCardModels);
     const getServerOrigin = options.getServerOrigin;
 
     if (typeof fetchServer !== 'function') throw new Error('options.fetchServer is required');
     if (typeof boardPaths !== 'function') throw new Error('options.boardPaths is required');
-    if (typeof buildLiveCardModelsFromArtifacts !== 'function') {
-      throw new Error('options.buildLiveCardModelsFromArtifacts is required (or load board-livegraph-engine.js first)');
+    if (typeof selectAllLiveCardModels !== 'function') {
+      throw new Error('options.selectAllLiveCardModels is required (or load board-livegraph-engine.js first)');
     }
     if (typeof getServerOrigin !== 'function') throw new Error('options.getServerOrigin is required');
 
@@ -142,7 +142,7 @@
       }
 
       const payload = await bootstrapCardsRes.json();
-      const cards = buildLiveCardModelsFromArtifacts(payload);
+      const cards = selectAllLiveCardModels(payload);
       if (!Array.isArray(cards)) throw new Error('Server payload missing published runtime artifacts');
 
       nodesById = {};
@@ -208,7 +208,7 @@
       sse.onmessage = function (evt) {
         try {
           const update = JSON.parse(evt.data || '{}');
-          syncBoardNodes(buildLiveCardModelsFromArtifacts(update));
+          syncBoardNodes(selectAllLiveCardModels(update));
           if (board && board.engine && typeof board.engine.onServerSseEvent === 'function') {
             board.engine.onServerSseEvent();
           } else if (board && board.engine && typeof board.engine.refreshOpenChatModal === 'function') {
@@ -233,18 +233,26 @@
 
     function setMode(mode) {
       currentMode = String(mode || 'board');
-      if (board) board.setMode(currentMode);
+      if (board && board.core && typeof board.core.setMode === 'function') {
+        board.core.setMode(currentMode);
+      }
     }
 
     function autoLayout() {
       if (!board) return;
-      board.setMode('canvas');
       currentMode = 'canvas';
-      board.autoLayout();
+      if (board.core && typeof board.core.setMode === 'function') {
+        board.core.setMode('canvas');
+      }
+      if (board.core && typeof board.core.autoLayout === 'function') {
+        board.core.autoLayout();
+      }
     }
 
     function setDevMode(enabled) {
-      if (board) board.setDevMode(Boolean(enabled));
+      if (board && board.core && typeof board.core.setDevMode === 'function') {
+        board.core.setDevMode(Boolean(enabled));
+      }
     }
 
     function getCurrentMode() {
