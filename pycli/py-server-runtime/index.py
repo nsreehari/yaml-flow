@@ -695,7 +695,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
             def hooked_publish(notifications):
                 for n in notifications:
                     _append_notification(ctx_ref["notification"], n)
-                broadcast_to_sse_clients()
+                broadcast_notification_batch_to_sse_clients(notifications)
                 if orig_fn:
                     orig_fn(notifications)
             return hooked_publish
@@ -743,10 +743,16 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
             return
         if not notification_transport or not ctx.get("notify_ref"):
             return
-        teardown = notification_transport.subscribe(ctx["notify_ref"], lambda event: (
-            _append_notification(ctx["notification"], event),
-            broadcast_to_sse_clients(),
-        ))
+
+        def _handle_transport_event(event):
+            _append_notification(ctx["notification"], event)
+            if isinstance(event, dict) and event.get("kind") == "notification-batch" and isinstance(event.get("notifications"), list):
+                notifications = event["notifications"]
+            else:
+                notifications = [event]
+            broadcast_notification_batch_to_sse_clients(notifications)
+
+        teardown = notification_transport.subscribe(ctx["notify_ref"], _handle_transport_event)
         ctx["notification_teardown"] = teardown
 
     # ── Init & bootstrap ─────────────────────────────────────────────────────
@@ -1269,6 +1275,18 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                 dead.add(client)
         sse_clients.difference_update(dead)
 
+    def broadcast_notification_batch_to_sse_clients(notifications):
+        if not notifications:
+            return
+        frame = build_sse_frame({"kind": "notification-batch", "notifications": notifications})
+        dead = set()
+        for client in sse_clients:
+            try:
+                client.write(frame)
+            except Exception:
+                dead.add(client)
+        sse_clients.difference_update(dead)
+
     def handle_sse(req, res):
         res.write_head(200, {
             **cors_headers,
@@ -1343,7 +1361,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                 card_id = unquote(card_match.group(1))
                 body = json.loads(req.read_body().decode("utf-8") or "{}")
                 patch_card(card_id, body)
-                broadcast_to_sse_clients()
                 json_response(res, 200, {"ok": True})
                 return True
 
@@ -1354,7 +1371,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                 card_id = unquote(card_action_match.group(1))
                 body = json.loads(req.read_body().decode("utf-8") or "{}")
                 apply_card_action(card_id, body.get("actionType", ""), body.get("payload"))
-                broadcast_to_sse_clients()
                 json_response(res, 200, {"ok": True})
                 return True
 
@@ -1398,7 +1414,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                         return card
                     update_card_local_only(card_id, _in_chat_updater)
                     write_chat_record(card_id, "system", f"file uploaded: {file['name']} as {file['stored_name']}", [])
-                broadcast_to_sse_clients()
                 json_response(res, 200, {"ok": True, "file": file})
                 return True
 
