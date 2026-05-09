@@ -14,9 +14,12 @@
       }
     }
   ],
+  "compute": [
+    { "bindTo": "identity", "expr": "fetched_sources.identity" }
+  ],
   "view": {
     "elements": [
-      { "kind": "markdown", "data": { "bind": "fetched_sources.identity" } }
+      { "kind": "markdown", "data": { "bind": "computed_values.identity" } }
     ],
     "layout": {
       "board": { "col": 4, "order": 10 },

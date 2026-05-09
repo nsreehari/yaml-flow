@@ -197,7 +197,7 @@
         document.getElementById('boardDesc').textContent = '';
 
         // Demo-setup is a host-level concern; call it explicitly before bootstrapping.
-        const setupRes = await fetch(boardPaths(bid).demoSetup);
+        const setupRes = await fetchServer(boardPaths(bid).demoSetup);
         if (!setupRes.ok) throw new Error(`demo-setup failed (${setupRes.status})`);
 
         await runtimeClient.bootstrapBoard({

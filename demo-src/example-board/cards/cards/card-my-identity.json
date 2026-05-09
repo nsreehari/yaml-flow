@@ -17,12 +17,15 @@
       }
     }
   ],
+  "compute": [
+    { "bindTo": "identity", "expr": "fetched_sources.identity" }
+  ],
   "view": {
     "elements": [
       {
         "kind": "markdown",
         "data": {
-          "bind": "fetched_sources.identity"
+          "bind": "computed_values.identity"
         }
       }
     ],

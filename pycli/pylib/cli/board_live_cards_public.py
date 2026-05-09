@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .storage_interface import serialize_ref, parse_ref
+from ..card_compute import CardCompute
 from .board_live_cards_lib import (
     create_card_store,
     create_journal_store,
@@ -672,6 +673,48 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 })
                 self.process_accumulated_events()
                 return _ok()
+            except Exception as e:
+                return _err(e)
+
+        def _validate_card_object(self, card_id: str, card: dict) -> dict:
+            """Port of validateCardObject — structural + runtime expression validation."""
+            result = CardCompute.validate_live_card_definition(card)
+            return _ok({"cardId": card_id, "isValid": result["ok"], "issues": result["errors"]})
+
+        def validate_card(self, input_data: dict | None = None) -> dict:
+            """Port of validateCard — validate one or all cards in the board store."""
+            try:
+                params = (input_data or {}).get("params", {})
+                card_id = params.get("cardId") or params.get("id")
+                all_cards = params.get("all")
+                if not card_id and not all_cards:
+                    return _fail("validateCard requires --card-id <id> or --all")
+                ids = [c["id"] for c in card_store().read_all_cards()] if all_cards else [card_id]
+                results = []
+                for cid in ids:
+                    card = card_store().read_card(cid)
+                    if not card:
+                        results.append({"cardId": cid, "isValid": False, "issues": [f'Card "{cid}" not found']})
+                        continue
+                    r = self._validate_card_object(cid, card)
+                    if r.get("status") != "success":
+                        return r
+                    results.append(r["data"])
+                return _ok(results)
+            except Exception as e:
+                return _err(e)
+
+        def validate_tmp_card(self, input_data: dict | None = None) -> dict:
+            """Port of validateTmpCard — validate a card passed directly in the body."""
+            try:
+                body = (input_data or {}).get("body")
+                if not body or not isinstance(body, dict):
+                    return _fail("validateTmpCard requires card JSON object in body")
+                card = body.get("card-content", body)
+                if not isinstance(card, dict):
+                    return _fail("validateTmpCard requires card JSON object in body")
+                card_id = card.get("id", "(unknown)")
+                return self._validate_card_object(card_id, card)
             except Exception as e:
                 return _err(e)
 

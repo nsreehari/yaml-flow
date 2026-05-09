@@ -20,6 +20,7 @@ if _PYCLI_ROOT not in sys.path:
 
 from pylib.cli.storage_interface import parse_ref, serialize_ref
 from pylib.cli.board_live_cards_public import create_board_live_cards_public
+from pylib.card_compute import CardCompute
 from sub.board_live_cards_adapters import (
     ExecutionRef,
     FileAtomicRelayLock,
@@ -145,6 +146,10 @@ class NativeBoardPlatformAdapter:
             cmd_args.extend(["--notify-channel", self._notify_channel])
         PythonCommandExecutor().spawn_detached(sys.executable, cmd_args, cwd=self._scope)
 
+    def validate_schema(self, card: dict) -> dict:
+        result = CardCompute.validate_live_card_definition(card)
+        return {'ok': result['ok'], 'errors': result['errors']}
+
     def publish_board_change_notifications(self, notifications):
         pass  # no-op for now
 
@@ -254,6 +259,8 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
         "taskProgress": board.task_progress,
         "sourceDataFetched": board.source_data_fetched,
         "sourceDataFetchFailure": board.source_data_fetch_failure,
+        "validateCard": board.validate_card,
+        "validateTmpCard": board.validate_tmp_card,
     }
 
     fn = method_map.get(command)

@@ -89,6 +89,36 @@ def _normalize_stream_with_replacements(text: str, replacements: List[Tuple[str,
     return _normalize_obj(_parse_json_or_text(replaced))
 
 
+def _normalize_validate_result(text: str) -> Any:
+    """Normalize a validate-card/validate-tmp-card response for structural comparison.
+
+    TS uses AJV (JSON Pointer–style paths); Python uses hand-written messages.
+    We compare isValid + whether issues is empty — not exact wording.
+    """
+    obj = _parse_json_or_text(text.strip())
+    if not isinstance(obj, dict):
+        return obj
+
+    def _norm_item(item: Any) -> Any:
+        if not isinstance(item, dict) or "issues" not in item:
+            return item
+        issues = item["issues"]
+        return {**item, "issues": "<has-issues>" if issues else []}
+
+    data = obj.get("data")
+    if isinstance(data, list):
+        return {**obj, "data": [_norm_item(i) for i in data]}
+    if isinstance(data, dict):
+        return {**obj, "data": _norm_item(data)}
+    return obj
+
+
+def _assert_validate_cmd_parity(label: str, left: CmdResult, right: CmdResult) -> None:
+    _assert_equal(f"{label} exit code", left.code, right.code)
+    _assert_equal(f"{label} stdout", _normalize_validate_result(left.stdout), _normalize_validate_result(right.stdout))
+    _assert_equal(f"{label} stderr", _normalize_stream(left.stderr), _normalize_stream(right.stderr))
+
+
 def _snapshot_dir(root: Path) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     if not root.exists():
@@ -374,7 +404,66 @@ def run_board_live_cards_parity(repo_root: Path, node: str, py_for_board: str) -
         p = _run(_py_board_cmd(repo_root, py_for_board, ["status", "--base-ref", p_board_ref]), cwd=repo_root)
         _assert_cmd_parity_replaced("board status after upsert", n, p, left_replacements=n_rep, right_replacements=p_rep)
 
-        # Phase-1 board parity focuses on public command behavior (exit/stdout/stderr).
+        # validate-card --card-id
+        n = _run(
+            _node_board_cmd(repo_root, node, ["validate-card", "--base-ref", n_board_ref, "--card-id", "portfolio-form"]),
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["validate-card", "--base-ref", p_board_ref, "--card-id", "portfolio-form"]),
+            cwd=repo_root,
+        )
+        _assert_validate_cmd_parity("board validate-card --card-id", n, p)
+
+        # validate-card --all
+        n = _run(
+            _node_board_cmd(repo_root, node, ["validate-card", "--base-ref", n_board_ref, "--all"]),
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["validate-card", "--base-ref", p_board_ref, "--all"]),
+            cwd=repo_root,
+        )
+        _assert_validate_cmd_parity("board validate-card --all", n, p)
+
+        # validate-card --card-id not found
+        n = _run(
+            _node_board_cmd(repo_root, node, ["validate-card", "--base-ref", n_board_ref, "--card-id", "does-not-exist"]),
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["validate-card", "--base-ref", p_board_ref, "--card-id", "does-not-exist"]),
+            cwd=repo_root,
+        )
+        _assert_validate_cmd_parity("board validate-card --card-id not found", n, p)
+
+        # validate-tmp-card (valid card via stdin)
+        tmp_card_payload = json.dumps({"card-content": json.loads(card_payload)})
+        n = _run(
+            _node_board_cmd(repo_root, node, ["validate-tmp-card"]),
+            stdin_text=tmp_card_payload,
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["validate-tmp-card"]),
+            stdin_text=tmp_card_payload,
+            cwd=repo_root,
+        )
+        _assert_validate_cmd_parity("board validate-tmp-card (valid)", n, p)
+
+        # validate-tmp-card (invalid card via stdin — bad kind, missing card_data)
+        invalid_card_payload = json.dumps({"card-content": {"id": "bad-card", "card_data": {}, "view": {"elements": [{"kind": "not-a-real-kind"}]}}})
+        n = _run(
+            _node_board_cmd(repo_root, node, ["validate-tmp-card"]),
+            stdin_text=invalid_card_payload,
+            cwd=repo_root,
+        )
+        p = _run(
+            _py_board_cmd(repo_root, py_for_board, ["validate-tmp-card"]),
+            stdin_text=invalid_card_payload,
+            cwd=repo_root,
+        )
+        _assert_validate_cmd_parity("board validate-tmp-card (invalid)", n, p)
 
 
 def run_portfolio_tracker_dual_mode_parity(repo_root: Path, py_for_board: str) -> None:

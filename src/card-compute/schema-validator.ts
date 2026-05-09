@@ -93,7 +93,7 @@ function walkViewPathReferences(
   if (typeof value === 'string') {
     const rootNamespace = parseRootPathNamespace(value);
     if (!rootNamespace) return;
-    if (!new Set<KnownNamespace>(['card_data', 'requires', 'fetched_sources', 'computed_values']).has(rootNamespace)) {
+    if (!new Set<KnownNamespace>(['card_data', 'requires', 'computed_values']).has(rootNamespace)) {
       errors.push(`${path}: disallowed namespace "${rootNamespace}" in view reference`);
     }
     return;

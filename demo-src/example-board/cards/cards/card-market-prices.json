@@ -29,7 +29,7 @@
   "compute": [
     {
       "bindTo": "normalizedQuotes",
-      "expr": "{ \"quoteResponse\": { \"result\": $map(fetched_sources.quotes, function($r) { $r.chart.result[0].meta.{ \"symbol\": symbol, \"shortName\": longName, \"regularMarketPrice\": regularMarketPrice, \"regularMarketChange\": regularMarketChange, \"regularMarketChangePercent\": regularMarketChangePercent } }), \"error\": null } }"
+      "expr": "{ \"quoteResponse\": { \"result\": $map(fetched_sources.quotes, function($r) { ($m := $r.chart.result[0].meta; $prev := $m.chartPreviousClose; $chg := $m.regularMarketPrice - $prev; { \"symbol\": $m.symbol, \"shortName\": $m.shortName ? $m.shortName : $m.longName, \"regularMarketPrice\": $m.regularMarketPrice, \"regularMarketChange\": $chg, \"regularMarketChangePercent\": $chg / $prev * 100 }) }), \"error\": null } }"
     },
     {
       "bindTo": "prices",

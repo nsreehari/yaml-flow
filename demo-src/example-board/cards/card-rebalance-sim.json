@@ -26,14 +26,18 @@
   "provides": [
     { "bindTo": "proposed_trades", "ref": "fetched_sources.rebalance.proposed_trades" }
   ],
+  "compute": [
+    { "bindTo": "proposed_trades", "expr": "fetched_sources.rebalance.proposed_trades" },
+    { "bindTo": "_view", "expr": "fetched_sources.rebalance._view" }
+  ],
   "view": {
     "elements": [
       {
         "kind": "ref",
         "label": "Proposed Trades",
         "data": {
-          "bind": "fetched_sources.rebalance.proposed_trades",
-          "viewBind": "fetched_sources.rebalance._view",
+          "bind": "computed_values.proposed_trades",
+          "viewBind": "computed_values._view",
           "fallbackKind": "editable-table",
           "writeTo": "card_data.proposed_trades",
           "columns": ["ticker", "direction", "current_qty", "change", "proposed_qty", "price", "trade_value", "reason"],

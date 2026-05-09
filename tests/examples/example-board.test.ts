@@ -63,6 +63,15 @@ const POSITIONS_SEED = [
 // Mock fetched_sources injected as node._sourcesData for cards that have external
 // source_defs (copilot / chartApi / http) which are not executed in unit tests.
 const CARD_SOURCE_MOCKS: Record<string, Record<string, unknown>> = {
+  'card-my-identity': {
+    identity: 'John Doe',
+  },
+  'card-rebalance-sim': {
+    rebalance: {
+      proposed_trades: [{ ticker: 'AAPL', direction: 'reduce', current_qty: 15, change: 5, proposed_qty: 10, price: 210.50, trade_value: 1052.50, reason: 'overweight' }],
+      _view: { kind: 'editable-table', data: { writeTo: 'card_data.proposed_trades', columns: ['ticker', 'direction', 'current_qty', 'change', 'proposed_qty', 'price', 'trade_value', 'reason'] } },
+    },
+  },
   'card-market-prices': {
     quotes: RAW_CHART_QUOTES_SEED,
   },

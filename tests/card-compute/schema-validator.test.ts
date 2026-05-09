@@ -320,19 +320,32 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.errors.some(e => e.includes('/compute/0/expr') && e.includes('disallowed namespace "source_defs"'))).toBe(true);
   });
 
-  it('accepts view references to fetched_sources/requires/card_data/computed_values', () => {
+  it('accepts view references to requires/card_data/computed_values', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'ok-view-projections',
       card_data: {},
       view: {
         elements: [
           { kind: 'metric', visible: 'requires.orders', data: { bind: 'computed_values.total', writeTo: 'card_data.note' } },
-          { kind: 'table', data: { bind: 'fetched_sources.raw' } },
+          { kind: 'table', data: { bind: 'requires.upstream' } },
         ],
       },
     });
 
     expect(r.ok).toBe(true);
+  });
+
+  it('rejects view references using fetched_sources namespace', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-view-fetched-sources',
+      card_data: {},
+      view: {
+        elements: [{ kind: 'table', data: { bind: 'fetched_sources.raw' } }],
+      },
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/view/elements/0/data/bind') && e.includes('disallowed namespace "fetched_sources"'))).toBe(true);
   });
 
   it('rejects view references using legacy source_defs namespace', () => {
