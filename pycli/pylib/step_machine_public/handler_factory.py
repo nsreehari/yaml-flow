@@ -149,12 +149,19 @@ def create_ref_step_handler(
         if config is not None:
             step_input["config"] = config
         try:
-            return invoke(ref, step_input)
+            raw = invoke(ref, step_input)
         except Exception as ex:
             return {
                 "result": "failure",
                 "data": {"error": f'[step-machine-public] step "{step_name}" invoke threw: {ex}'},
             }
+        output_transforms = spec.get("outputTransforms")
+        if not output_transforms:
+            return raw
+        try:
+            return resolve_output_transforms(output_transforms, raw, step_name)
+        except Exception as ex:
+            return {"result": "failure", "data": {}, "error": str(ex)}
 
     return handler
 

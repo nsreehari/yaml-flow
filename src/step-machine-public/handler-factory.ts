@@ -16,6 +16,7 @@
 
 import { jsonata } from './jsonata-loader.js';
 import { wrapWithInputValidations, wrapWithOutputFiltering } from './result-utils.js';
+import { resolveOutputTransforms } from '../cli/common/args-massaging.js';
 import type {
   ComputeJsonataSpec,
   HandlerSpec,
@@ -180,7 +181,14 @@ export function createRefStepHandler(
     if (config) stepInput.config = config;
 
     try {
-      return await invoke(ref, stepInput);
+      const raw = await invoke(ref, stepInput);
+      if (!spec.outputTransforms) return raw;
+      try {
+        return resolveOutputTransforms(spec.outputTransforms, raw, stepName);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { result: 'failure', data: {}, error: msg };
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {

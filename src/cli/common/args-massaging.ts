@@ -12,7 +12,8 @@
  */
 
 import { jsonata } from './jsonata-loader.js';
-import type { ArgsMassaging } from './execution-interface.js';
+import type { ArgsMassaging, OutputTransforms } from './execution-interface.js';
+import type { NormalizedHandlerResult } from '../../step-machine-public/types.js';
 
 export interface MassagedArgs {
   /** Resolved argv tail for local transports. */
@@ -76,4 +77,67 @@ export function resolveArgsMassaging(
   }
 
   return out;
+}
+
+/**
+ * Apply `outputTransforms` to a raw invoke result.
+ *
+ * Context for all expressions: `{ output }` where `output` is the raw
+ * { result, data, error? } envelope from invokeRefSync.
+ *
+ * Returns a new NormalizedHandlerResult with overrides applied.
+ * Throws with a label-tagged message if any expression fails.
+ */
+export function resolveOutputTransforms(
+  transforms: OutputTransforms | undefined,
+  raw: NormalizedHandlerResult,
+  label: string,
+): NormalizedHandlerResult {
+  if (!transforms || typeof transforms !== 'object') return raw;
+
+  const ctx = { output: raw };
+  let result = raw.result;
+  let data = raw.data;
+  let error = raw.error;
+
+  if (typeof transforms.resultExpr === 'string') {
+    try {
+      const val = jsonata(transforms.resultExpr).evaluate(ctx);
+      if (typeof val !== 'string' || !val.trim()) {
+        throw new Error(`resultExpr did not produce a non-empty string (got ${JSON.stringify(val)})`);
+      }
+      result = val;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[${label}] outputTransforms.resultExpr failed: ${msg}`);
+    }
+  }
+
+  if (typeof transforms.dataTemplate === 'string') {
+    try {
+      const val = jsonata(transforms.dataTemplate).evaluate(ctx);
+      if (!val || typeof val !== 'object' || Array.isArray(val)) {
+        throw new Error(`dataTemplate did not produce an object (got ${JSON.stringify(val)})`);
+      }
+      data = val as Record<string, unknown>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[${label}] outputTransforms.dataTemplate failed: ${msg}`);
+    }
+  }
+
+  if (typeof transforms.errorExpr === 'string') {
+    try {
+      const val = jsonata(transforms.errorExpr).evaluate(ctx);
+      // $undefined() evaluates to undefined — clears the error field
+      error = val != null ? String(val) : undefined;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[${label}] outputTransforms.errorExpr failed: ${msg}`);
+    }
+  }
+
+  return error !== undefined
+    ? { result, data, error }
+    : { result, data };
 }

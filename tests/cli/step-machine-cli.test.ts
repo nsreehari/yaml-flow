@@ -1023,4 +1023,91 @@ terminal_states:
     const outBad = parseLastJsonObject(runBad.stdout ?? '');
     expect(outBad.intent).toBe('failure');
   });
+
+  // ─── outputTransforms ──────────────────────────────────────────────────────
+
+  it('outputTransforms: reshapes raw ref output with resultExpr and dataTemplate (success)', () => {
+    // Script echoes a raw payload. outputTransforms reshapes it via JSONata.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-out-xform-ok-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+    const scriptPath = path.join(tmpRoot, 'script.js');
+
+    writeFile(flowPath, `
+id: output-transforms-ok
+settings:
+  start_step: step1
+steps:
+  step1:
+    handler:
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./script.js"
+      outputTransforms:
+        resultExpr: "output.data.code = 200 ? 'success' : 'failure'"
+        dataTemplate: "{ 'value': output.data.payload.value }"
+    transitions:
+      success: done_state
+      failure: failed_state
+terminal_states:
+  done_state:
+    return_intent: success
+    return_artifacts: [value]
+  failed_state:
+    return_intent: failure
+    return_artifacts: []
+`);
+
+    writeFile(scriptPath, `
+process.stdout.write(JSON.stringify({ code: 200, payload: { value: 42 } }));
+process.exit(0);
+`);
+
+    const run = runStepMachineCli([flowPath]);
+    const out = parseLastJsonObject(run.stdout ?? '');
+    expect(out.intent).toBe('success');
+    expect(out.data.value).toBe(42);
+    expect(out.data.code).toBeUndefined(); // dataTemplate replaced the whole data object
+  });
+
+  it('outputTransforms: errorExpr populates error field and routes to failure', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-out-xform-err-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+    const scriptPath = path.join(tmpRoot, 'script.js');
+
+    writeFile(flowPath, `
+id: output-transforms-err
+settings:
+  start_step: step1
+steps:
+  step1:
+    handler:
+      type: ref
+      howToRun: local-node
+      whatToRun: "::fs-path::./script.js"
+      outputTransforms:
+        resultExpr: "output.data.code = 200 ? 'success' : 'failure'"
+        errorExpr: "output.data.code != 200 ? output.data.error_message"
+        dataTemplate: "{ 'code': output.data.code }"
+    transitions:
+      success: done_state
+      failure: failed_state
+terminal_states:
+  done_state:
+    return_intent: success
+    return_artifacts: []
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
+`);
+
+    writeFile(scriptPath, `
+process.stdout.write(JSON.stringify({ code: 500, error_message: "boom" }));
+process.exit(0);
+`);
+
+    const run = runStepMachineCli([flowPath]);
+    const out = parseLastJsonObject(run.stdout ?? '');
+    expect(out.intent).toBe('failure');
+    expect(out.data.error).toBe('boom');
+  });
 });
