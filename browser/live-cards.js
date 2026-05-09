@@ -239,6 +239,30 @@ var LiveCard = (function () {
     const _formState = {};  // stateKey → { baseValues, journal }
     const _notesState = {}; // stateKey → { baseContent, journal|null }
     const _todoState = {};  // stateKey → { currentState, pending } for todo dirty tracking
+
+    /**
+     * Overlay a "Saving…" spinner over `el` while a patch is in-flight.
+     * The overlay is removed automatically on the next SSE re-render because
+     * every editable renderer does `el.innerHTML = …` on refresh.
+     */
+    function _showSavingOverlay(el) {
+      // Ensure the container is a positioned ancestor so the overlay can fill it.
+      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+      const overlay = document.createElement('div');
+      overlay.className = 'lc-saving-overlay';
+      overlay.setAttribute('aria-live', 'polite');
+      overlay.style.cssText = [
+        'position:absolute', 'inset:0',
+        'background:rgba(255,255,255,0.78)',
+        'display:flex', 'align-items:center', 'justify-content:center',
+        'gap:0.5rem', 'z-index:20', 'border-radius:inherit',
+        'pointer-events:all',   // blocks all clicks on underlying inputs
+      ].join(';');
+      overlay.innerHTML =
+        '<span class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></span>' +
+        '<span class="text-primary fw-medium small">Saving…</span>';
+      el.appendChild(overlay);
+    }
     const _renderers = {}; // kind → fn
     const _nodeEls = {};   // nodeId → { container, resultEl, uid }
     const _chatModal = {
@@ -1183,6 +1207,7 @@ var LiveCard = (function () {
         const nextValues = getEffectiveValues();
         cfg.onPatchState(node.id, { fieldValues: nextValues });
         btn.textContent = 'Saving...';
+        _showSavingOverlay(el);
       }, { signal });
 
       discardBtn.addEventListener('click', () => {
@@ -1261,6 +1286,7 @@ var LiveCard = (function () {
         const nextValue = textarea.value;
         cfg.onPatchState(node.id, { notes: nextValue });
         saveBtn.textContent = 'Saving...';
+        _showSavingOverlay(el);
       }, { signal });
 
       discardBtn.addEventListener('click', () => {
@@ -1345,6 +1371,7 @@ var LiveCard = (function () {
         cfg.onPatchState(node.id, { fieldValues: rows });
         const saveBtn = el.querySelector('.lc-et-save');
         if (saveBtn) saveBtn.textContent = 'Saving...';
+        _showSavingOverlay(el);
       }
 
       function commitDiscard() {
