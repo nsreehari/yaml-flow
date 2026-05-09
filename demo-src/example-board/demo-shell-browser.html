@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Example Board Demo (Browser Runtime)</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <script src="../../src/card-compute/jsonata-sync.cjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -68,9 +69,10 @@
 
       // Get exports from board-livegraph-engine
       const LocalStorageService = (window.BoardLiveGraph && window.BoardLiveGraph.LocalStorageService);
-      const buildLiveCardModelsFromArtifacts = (window.BoardLiveGraph && window.BoardLiveGraph.buildLiveCardModelsFromArtifacts);
+      const selectLiveCardModel = (window.BoardLiveGraph && window.BoardLiveGraph.selectLiveCardModel);
+      const selectAllLiveCardModels = (window.BoardLiveGraph && window.BoardLiveGraph.selectAllLiveCardModels);
       const buildBrowserArtifactsFromRuntime = (window.BoardLiveGraph && window.BoardLiveGraph.buildBrowserArtifactsFromRuntime);
-      if (!LocalStorageService || !buildLiveCardModelsFromArtifacts || !buildBrowserArtifactsFromRuntime) {
+      if (!LocalStorageService || !selectLiveCardModel || !selectAllLiveCardModels || !buildBrowserArtifactsFromRuntime) {
         failInit('board-livegraph-engine.js not loaded. Run "npm run build:browser" first.');
         return;
       }
@@ -345,12 +347,7 @@
         return cards.every((card) => {
           const artifact = cardRuntimeById[card.id];
           if (!artifact || typeof artifact !== 'object') return false;
-          if (card.source_defs && card.source_defs.length > 0) {
-            if (!(artifact.fetched_sources && typeof artifact.fetched_sources === 'object' && !Array.isArray(artifact.fetched_sources))) return false;
-          }
-          if (card.requires && card.requires.length > 0) {
-            if (!(artifact.requires && typeof artifact.requires === 'object' && !Array.isArray(artifact.requires))) return false;
-          }
+          if (!(artifact.computed_values && typeof artifact.computed_values === 'object' && !Array.isArray(artifact.computed_values))) return false;
           return true;
         });
       }
@@ -394,16 +391,45 @@
         };
       }
 
-      function replaceNodeInPlace(target, source) {
-        Object.keys(target).forEach(k => delete target[k]);
-        Object.assign(target, clone(source));
-      }
-
       let board = null;
+      let boardState = null;
       let runtime = null;
       let runtimeUnsub = null;
       let currentMode = 'canvas';
-      const nodesById = {};
+
+      function stableEq(prev, next) {
+        if (prev === next) return prev;
+        try { if (JSON.stringify(prev) === JSON.stringify(next)) return prev; } catch (_) {}
+        return next;
+      }
+
+      function buildBoardState(payload, prevState) {
+        const cardDefs = (payload && Array.isArray(payload.cardDefinitions)) ? payload.cardDefinitions : [];
+        const cardIds = cardDefs.map(c => c.id);
+        const modelsById = {};
+        const prevModels = (prevState && prevState.modelsById) || {};
+        for (const id of cardIds) {
+          const fresh = selectLiveCardModel(payload, id);
+          const prev = prevModels[id];
+          if (!prev) { modelsById[id] = fresh; continue; }
+          const stab = {
+            id: fresh.id,
+            card: stableEq(prev.card, fresh.card),
+            card_data: stableEq(prev.card_data, fresh.card_data),
+            requires: stableEq(prev.requires, fresh.requires),
+            computed_values: stableEq(prev.computed_values, fresh.computed_values),
+            runtime_state: stableEq(prev.runtime_state, fresh.runtime_state),
+          };
+          if (stab.card === prev.card && stab.card_data === prev.card_data
+            && stab.requires === prev.requires && stab.computed_values === prev.computed_values
+            && stab.runtime_state === prev.runtime_state) {
+            modelsById[id] = prev;
+          } else {
+            modelsById[id] = stab;
+          }
+        }
+        return { payload, cardIds, modelsById };
+      }
 
       function setDebugPanelVisibility(isDevModeOn) {
         const details = document.getElementById('debugPanelDetails');
@@ -425,7 +451,7 @@
       }
 
       async function handleActionInBrowserRuntime(id, actionType, payload) {
-        const node = nodesById[id];
+        const node = boardState && boardState.modelsById[id];
         if (!node) return;
         const now = nowIso();
 
@@ -469,26 +495,9 @@
         }
       }
 
-      function syncBoardNodes(nextNodes) {
-        const existingIds = new Set(board ? board.nodes.map(n => n.id) : []);
-        const nextById = Object.fromEntries(nextNodes.map(n => [n.id, n]));
-
-        if (board) {
-          for (const id of existingIds) {
-            if (!nextById[id]) board.remove(id);
-          }
-        }
-
-        for (const nextNode of nextNodes) {
-          const existing = nodesById[nextNode.id];
-          if (existing) replaceNodeInPlace(existing, nextNode);
-          else {
-            nodesById[nextNode.id] = clone(nextNode);
-            if (board) board.add(nodesById[nextNode.id]);
-          }
-        }
-
-        if (board) board.refresh();
+      function syncBoardState(artifacts) {
+        boardState = buildBoardState(artifacts, boardState);
+        if (board) board.setState(boardState);
       }
 
       async function bootstrap() {
@@ -542,11 +551,10 @@
               graphState: runtime.getState(),
             });
 
-        const initialNodes = buildLiveCardModelsFromArtifacts(initialArtifacts);
-        for (const n of initialNodes) nodesById[n.id] = clone(n);
+        boardState = buildBoardState(initialArtifacts, null);
 
         const engine = LiveCard.init({
-          resolve: (id) => nodesById[id],
+          resolve: (id) => boardState.modelsById[id],
           chartLib: (typeof Chart !== 'undefined') ? Chart : null,
           markdown: (typeof marked !== 'undefined') ? (text) => marked.parse(text) : null,
           sanitize: (typeof DOMPurify !== 'undefined') ? (html) => DOMPurify.sanitize(html) : null,
@@ -593,7 +601,9 @@
         });
 
         board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
-          nodes: Object.values(nodesById),
+          initialState: boardState,
+          getNodeIds: (s) => s.cardIds,
+          selectNode: (s, id) => s.modelsById[id],
           mode: currentMode,
           canvas: { height: '72vh', overflow: 'auto' },
         });
@@ -612,7 +622,7 @@
           }
           LocalStorageService.writeStatusSnapshot(artifacts.statusSnapshot);
 
-          syncBoardNodes(buildLiveCardModelsFromArtifacts(artifacts));
+          syncBoardState(artifacts);
           renderDebugPanel(runtimeState, artifacts);
         });
 
@@ -637,19 +647,19 @@
 
         document.getElementById('modeBoard').addEventListener('click', function () {
           currentMode = 'board';
-          if (board) board.setMode('board');
+          if (board) board.core.setMode('board');
         });
 
         document.getElementById('modeCanvas').addEventListener('click', function () {
           currentMode = 'canvas';
-          if (board) board.setMode('canvas');
+          if (board) board.core.setMode('canvas');
         });
 
         document.getElementById('autoLayout').addEventListener('click', function () {
           if (board) {
-            board.setMode('canvas');
+            board.core.setMode('canvas');
             currentMode = 'canvas';
-            board.autoLayout();
+            board.core.autoLayout();
           }
         });
 
@@ -658,7 +668,7 @@
         });
 
         document.getElementById('devModeToggle').addEventListener('change', function () {
-          if (board) board.setDevMode(this.checked);
+          if (board) board.core.setDevMode(this.checked);
           setDebugPanelVisibility(this.checked);
         });
 
