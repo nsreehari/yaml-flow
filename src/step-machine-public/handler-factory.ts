@@ -144,10 +144,16 @@ export function createComputeJsonataHandler(
       }
     }
 
-    const finalResult = transitionResult ?? 'success';
+    if (transitionResult === undefined) {
+      return {
+        result: 'failure',
+        data: {},
+        error: `[${stepName}] compute-jsonata: no "result" binding declared — add '- result = "success"' to expr`,
+      };
+    }
     return transitionError
-      ? { result: finalResult, data, error: transitionError }
-      : { result: finalResult, data };
+      ? { result: transitionResult, data, error: transitionError }
+      : { result: transitionResult, data };
   };
 }
 

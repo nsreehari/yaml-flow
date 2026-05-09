@@ -113,10 +113,18 @@ def create_compute_jsonata_handler(
                     "error": f'[{step_name}] compute "{step["bindTo"]}" failed: {ex}',
                 }
 
-        final_result = transition_result if transition_result is not None else "success"
+        if transition_result is None:
+            return {
+                "result": "failure",
+                "data": {},
+                "error": (
+                    f'[{step_name}] compute-jsonata: no "result" binding declared '
+                    '— add \'- result = "success"\' to expr'
+                ),
+            }
         if transition_error is not None:
-            return {"result": final_result, "data": data, "error": transition_error}
-        return {"result": final_result, "data": data}
+            return {"result": transition_result, "data": data, "error": transition_error}
+        return {"result": transition_result, "data": data}
 
     return handler
 

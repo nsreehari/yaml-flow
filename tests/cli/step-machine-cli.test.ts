@@ -426,6 +426,7 @@ steps:
       type: compute-jsonata
       expr:
         - data.c = expects_data.a + expects_data.b
+        - result = "success"
     transitions:
       success: success_state
       failure: failed_state
@@ -657,6 +658,7 @@ steps:
       type: compute-jsonata
       expr:
         - data.c = expects_data.a + expects_data.b
+        - result = "success"
     transitions:
       success: s2
       failure: failed_state
