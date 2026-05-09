@@ -1650,7 +1650,10 @@ class Functions:
 
         result = (arg for i, arg in enumerate(arr) if Functions.to_boolean(
             Functions.func_apply(func, Functions.hof_func_args(func, arg, i, arr))))
-        return utils.Utils.create_sequence_from_iter(result)
+        # PATCH: $filter must always return an array (never scalar)
+        seq = utils.Utils.create_sequence_from_iter(result)
+        seq.keep_singleton = True
+        return seq
 
     #
     # Given an array, find the single element matching a specified condition
@@ -1751,7 +1754,8 @@ class Functions:
             result = utils.Utils.create_sequence_from_iter(arg.keys())
         else:
             result = utils.Utils.create_sequence()
-
+        # PATCH: $keys must always return an array (never scalar)
+        result.keep_singleton = True
         return result
 
     # here: append, lookup
@@ -1773,6 +1777,8 @@ class Functions:
     @staticmethod
     def spread(arg: Optional[Any]) -> Optional[Any]:
         result = utils.Utils.create_sequence()
+        # PATCH: $spread must always return an array (never scalar)
+        result.keep_singleton = True
 
         if isinstance(arg, list):
             # spread all of the items in the array
@@ -1832,7 +1838,10 @@ class Functions:
 
         result = (res for res in (Functions.func_apply(func, Functions.hof_func_args(func, value, key, obj))
                                   for key, value in obj.items()) if res is not None)
-        return utils.Utils.create_sequence_from_iter(result)
+        # PATCH: $each must always return an array (never scalar)
+        seq = utils.Utils.create_sequence_from_iter(result)
+        seq.keep_singleton = True
+        return seq
 
     #
     #

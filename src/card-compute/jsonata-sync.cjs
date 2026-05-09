@@ -2869,6 +2869,8 @@ const functions = (() => {
         }
 
         var result = createSequence();
+        // PATCH: $filter must always return an array (never scalar)
+        result.keepSingleton = true;
 
         for (var i = 0; i < arr.length; i++) {
             var entry = arr[i];
@@ -3026,6 +3028,8 @@ const functions = (() => {
         } else if (arg !== null && typeof arg === 'object' && !isFunction(arg)) {
             Object.keys(arg).forEach(key => result.push(key));
         }
+        // PATCH: $keys must always return an array (never scalar)
+        result.keepSingleton = true;
         return result;
     }
 
@@ -3100,6 +3104,8 @@ const functions = (() => {
      */
     function spread(arg) {
         var result = createSequence();
+        // PATCH: $spread must always return an array (never scalar)
+        result.keepSingleton = true;
 
         if (Array.isArray(arg)) {
             // spread all of the items in the array
@@ -3172,6 +3178,8 @@ const functions = (() => {
      */
     function each(obj, func) {
         var result = createSequence();
+        // PATCH: $each must always return an array (never scalar)
+        result.keepSingleton = true;
 
         for (var key in obj) {
             var func_args = hofFuncArgs(func, obj[key], key, obj);
