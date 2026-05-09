@@ -337,3 +337,6 @@ export function create(
     },
   };
 }
+
+// Re-export payload selectors so consumers don't need to load board-livegraph-engine separately.
+export { selectLiveCardModel, selectAllLiveCardModels } from '../board-livegraph-runtime/index.js';

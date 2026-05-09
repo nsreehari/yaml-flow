@@ -1,16 +1,13 @@
 /**
- * Browser IIFE bundle for board-livegraph-engine.
+ * Browser IIFE bundles for yaml-flow.
  *
- * Output: browser/board-livegraph-engine.js
- * Global: window.BoardLiveGraph
+ * Outputs: browser/board-livecards-localstorage.js
+ * Global:  window.BoardLiveCardsLocalStorage
  *
- * External users need only two script tags:
- *   <script src="../../src/card-compute/jsonata-sync.cjs"></script>
- *   <script src="browser/board-livegraph-engine.js"></script>
+ * Exports: create(), selectLiveCardModel(), selectAllLiveCardModels()
  *
- * jsonataSync is kept external (window.jsonataSync must be loaded first, same as card-compute.js).
- * All Node-only modules (ajv, ajv-formats, child_process, proper-lockfile, yaml, etc.)
- * are stubbed out — they are dead code in the browser execution path.
+ * jsonataSync is kept external (window.jsonataSync must be loaded first).
+ * All Node-only modules are stubbed out — dead code in the browser execution path.
  */
 import { defineConfig } from 'tsup';
 import type { Plugin } from 'esbuild';
@@ -117,14 +114,7 @@ const sharedBrowserOptions = {
 };
 
 export default defineConfig([
-  // ── board-livegraph-engine (existing) ─────────────────────────────────────
-  {
-    ...sharedBrowserOptions,
-    entry: { 'board-livegraph-engine': 'src/board-livegraph-runtime/index.ts' },
-    globalName: 'BoardLiveGraph',
-    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
-  },
-  // ── board-livecards-localstorage (new — public API + localStorage adapter) ─
+  // ── board-livecards-localstorage — full board engine + localStorage adapter + selectors ─
   {
     ...sharedBrowserOptions,
     entry: { 'board-livecards-localstorage': 'src/board-livecards-localstorage-runtime/index.ts' },

@@ -7,7 +7,6 @@
  *
  * Transformations applied:
  *   HTML  ../../browser/<file>.js  →  https://cdn.jsdelivr.net/npm/yaml-flow/browser/<file>.js
- *   HTML  ../../browser/board-livecards-runtime-client.js  →  CDN URL above
  *
  * Files included in output (top-level; directories are included wholesale):
  *   agent-instructions.md
@@ -17,7 +16,7 @@
  *   demo-server.js
  *   demo-server-config.json
  *   demo-shell.html
- *   demo-shell-browser.html
+ *   demo-shell-localstorage.html
  *   demo-shell-with-server.html
  *   demo-task-executor.js
  *   scripts/
@@ -49,8 +48,8 @@ const REPLACEMENTS = [
     to:   `src="${CDN_BASE}/browser/live-cards.js"`,
   },
   {
-    from: 'src="../../browser/board-livegraph-engine.js"',
-    to:   `src="${CDN_BASE}/browser/board-livegraph-engine.js"`,
+    from: 'src="../../browser/board-livecards-localstorage.js"',
+    to:   `src="${CDN_BASE}/browser/board-livecards-localstorage.js"`,
   },
   // local runtime client script → CDN
   {
@@ -69,7 +68,7 @@ const INCLUDE = new Set([
   'demo-server.js',
   'demo-server-config.json',
   'demo-shell.html',
-  'demo-shell-browser.html',
+  'demo-shell-localstorage.html',
   'demo-shell-with-server.html',
   'demo-task-executor.js',
   'scripts',
