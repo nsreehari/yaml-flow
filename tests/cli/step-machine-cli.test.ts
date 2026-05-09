@@ -875,4 +875,152 @@ terminal_states:
     expect(output.data.cards_added).toBe(3);
     expect(output.data.all_completed).toBe(true);
   }, 120_000);
+
+  // ===========================================================================
+  // compute-jsonata: case/switch patterns
+  // ===========================================================================
+
+  it('compute-jsonata: object-lookup switch routes to correct transition', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-switch-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+
+    writeFile(flowPath, `
+id: switch-flow
+settings:
+  start_step: classify
+steps:
+  classify:
+    description: Route based on risk_level via object-lookup switch
+    expects_data: [risk_level]
+    produces_data: [label]
+    handler:
+      type: compute-jsonata
+      expr:
+        - 'data.label = $lookup({"low": "routine", "medium": "review", "high": "escalate"}, expects_data.risk_level)'
+        - 'result = data.label != null ? data.label : "unknown"'
+    transitions:
+      routine:   low_track
+      review:    mid_track
+      escalate:  high_track
+      unknown:   failed_state
+  low_track:
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.outcome = "approved"
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+  mid_track:
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.outcome = "pending"
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+  high_track:
+    handler:
+      type: compute-jsonata
+      expr:
+        - data.outcome = "blocked"
+        - result = "success"
+    transitions:
+      success: success_state
+      failure: failed_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [risk_level, label, outcome]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
+`);
+
+    const cases: Array<[string, string, string, string]> = [
+      ['low',    'routine',  'approved', 'low_track'],
+      ['medium', 'review',   'pending',  'mid_track'],
+      ['high',   'escalate', 'blocked',  'high_track'],
+    ];
+
+    for (const [risk, label, outcome, track] of cases) {
+      const run = runStepMachineCli([flowPath, '--initial-data', JSON.stringify({ risk_level: risk })]);
+      expect(run.error).toBeUndefined();
+      const out = parseLastJsonObject(run.stdout ?? '');
+      expect(out.intent).toBe('success');
+      expect(out.data.label).toBe(label);
+      expect(out.data.outcome).toBe(outcome);
+      expect(out.stepHistory).toContain(track);
+    }
+
+    // Unknown value falls through to unknown -> failed_state
+    const unknownRun = runStepMachineCli([flowPath, '--initial-data', '{"risk_level":"critical"}']);
+    const unknownOut = parseLastJsonObject(unknownRun.stdout ?? '');
+    expect(unknownOut.intent).toBe('failure');
+  });
+
+  it('compute-jsonata: chained ternary grading with local binding', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-grade-'));
+    const flowPath = path.join(tmpRoot, 'flow.yaml');
+
+    writeFile(flowPath, `
+id: grade-flow
+settings:
+  start_step: score_step
+steps:
+  score_step:
+    description: Grade a numeric score using local binding and chained ternary
+    expects_data: [score]
+    produces_data: [grade, band]
+    input_validations:
+      - $type(score) = "number"
+      - score >= 0 and score <= 100
+    handler:
+      type: compute-jsonata
+      expr:
+        - 'data.grade = ($s := expects_data.score; $s >= 90 ? "A" : $s >= 80 ? "B" : $s >= 70 ? "C" : $s >= 60 ? "D" : "F")'
+        - 'data.band = ($s := expects_data.score; $s >= 90 ? "distinction" : $s >= 60 ? "pass" : "fail")'
+        - 'result = data.grade = "F" ? "failing" : "passing"'
+    transitions:
+      passing: success_state
+      failing: remediation_state
+      failure: failed_state
+terminal_states:
+  success_state:
+    return_intent: success
+    return_artifacts: [score, grade, band]
+  remediation_state:
+    return_intent: failure
+    return_artifacts: [score, grade, band]
+  failed_state:
+    return_intent: failure
+    return_artifacts: [error]
+`);
+
+    // A — distinction
+    const runA = runStepMachineCli([flowPath, '--initial-data', '{"score":95}']);
+    const outA = parseLastJsonObject(runA.stdout ?? '');
+    expect(outA.intent).toBe('success');
+    expect(outA.data).toEqual({ score: 95, grade: 'A', band: 'distinction' });
+
+    // B — pass
+    const runB = runStepMachineCli([flowPath, '--initial-data', '{"score":82}']);
+    const outB = parseLastJsonObject(runB.stdout ?? '');
+    expect(outB.intent).toBe('success');
+    expect(outB.data).toEqual({ score: 82, grade: 'B', band: 'pass' });
+
+    // F — routes to remediation (failure intent but not an error)
+    const runF = runStepMachineCli([flowPath, '--initial-data', '{"score":45}']);
+    const outF = parseLastJsonObject(runF.stdout ?? '');
+    expect(outF.intent).toBe('failure');
+    expect(outF.data.grade).toBe('F');
+    expect(outF.data.band).toBe('fail');
+
+    // input_validation: out-of-range score
+    const runBad = runStepMachineCli([flowPath, '--initial-data', '{"score":150}']);
+    const outBad = parseLastJsonObject(runBad.stdout ?? '');
+    expect(outBad.intent).toBe('failure');
+  });
 });
