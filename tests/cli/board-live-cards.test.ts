@@ -356,8 +356,6 @@ describe('board-live-cards CLI', () => {
     expect(validateBoardStatusArtifact(status), schemaErrors(validateBoardStatusArtifact)).toBe(true);
   });
 
-  it.skip('cli init with --runtime-out (feature removed from CLI)', () => { /* no-op */ });
-
   it('cli init --base-ref <ref> twice is idempotent', async () => {
     const dir = path.join(freshDir(), 'myboard');
 
@@ -820,35 +818,6 @@ describe('cli validate-card', () => {
     expect(data.cardId).toBe('(unknown)');
   });
 
-  it.skip('validates multiple cards via --card-glob (feature removed from CLI)', () => {
-    // --card-glob was removed from the CLI; use the public API to validate cards individually
-  });
-});
-
-// ============================================================================
-// CLI upsert-card (atomic glob behavior)
-// ============================================================================
-
-describe('cli upsert-card atomicity', () => {
-  let tmpDir: string;
-
-  function freshDir() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upsert-atomic-test-'));
-    return tmpDir;
-  }
-
-  afterEach(() => {
-    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it.skip('does not partially apply glob upsert when one file violates id->path mapping (--card-glob removed)', () => {
-    // The --card-glob flag was removed from the CLI.
-    // Use the public API (updateInCardStore + upsertCard) to add cards individually.
-  });
-
-  it.skip('fails atomically when glob contains duplicate ids across different files (--card-glob removed)', () => {
-    // The --card-glob flag was removed from the CLI.
-  });
 });
 
 // ============================================================================
