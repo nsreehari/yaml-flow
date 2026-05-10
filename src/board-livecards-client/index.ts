@@ -42,7 +42,6 @@ export type { BoardState, CardModel };
 
 export interface BoardPaths {
   initBoard: string;
-  bootstrapCards: string;
   stream: string;
   patchCard: (id: string) => string;
   cardAction: (id: string) => string;
@@ -75,7 +74,7 @@ export interface BootstrapBoardParams {
  * Build the standard BoardPaths for a yaml-flow server runtime board.
  *
  * Covers only the paths owned by the server runtime (SSE, patch, action, files, chats,
- * init-board, bootstrap-cards). Demo-server-specific endpoints (demo-setup, board registry
+ * init-board). Demo-server-specific endpoints (demo-setup, board registry
  * CRUD) are not included — add those in the consumer if needed.
  *
  * @example
@@ -89,9 +88,8 @@ export function defaultBoardPaths(boardId: string): BoardPaths {
   const b = encodeURIComponent(boardId || 'default');
   const base = `/api/boards/${b}`;
   return {
-    initBoard:      `${base}/init-board`,
-    bootstrapCards: `${base}/bootstrap-cards`,
-    stream:         `${base}/sse`,
+    initBoard: `${base}/init-board`,
+    stream:    `${base}/sse`,
     patchCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
     cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
     cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
@@ -213,14 +211,42 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
     const initBoardRes = await fetchServer(initBoardPath);
     if (!initBoardRes.ok) throw new Error(`Server init-board failed (${initBoardRes.status}).`);
 
-    const bootstrapCardsRes = await fetchServer(paths.bootstrapCards);
-    if (!bootstrapCardsRes.ok) throw new Error(`Server bootstrap-cards failed (${bootstrapCardsRes.status}).`);
+    const origin = getServerOrigin();
+    if (!origin) throw new Error('Server origin not resolved before SSE start');
 
-    const payload = await bootstrapCardsRes.json() as unknown;
-    if (!selectAllLiveCardModels(payload)) throw new Error('Server payload missing published runtime artifacts');
+    // Open SSE first and wait for the initial full-payload frame.
+    // The /sse endpoint calls bootstrapBoard() server-side, publishes the
+    // persisted state snapshot via the notification channel, then sends the
+    // full runtime payload as the first SSE frame.
+    const initialPayload = await new Promise<unknown>((resolve, reject) => {
+      const sseConn = new EventSource(`${origin}${paths.stream}`);
+      sse = sseConn;
+      let gotInitialPayload = false;
+      const timeout = setTimeout(() => {
+        if (!gotInitialPayload) reject(new Error('SSE initial payload timeout (15s)'));
+      }, 15_000);
+      sseConn.onmessage = (evt) => {
+        try {
+          const update = JSON.parse(evt.data || '{}');
+          if (!gotInitialPayload && (update?.cardDefinitions || selectAllLiveCardModels(update))) {
+            gotInitialPayload = true;
+            clearTimeout(timeout);
+            resolve(update);
+          }
+        } catch { /* wait for valid frame */ }
+      };
+      sseConn.onerror = () => {
+        if (!gotInitialPayload) {
+          clearTimeout(timeout);
+          reject(new Error('SSE connection failed during bootstrap'));
+        }
+      };
+    });
+
+    if (!selectAllLiveCardModels(initialPayload)) throw new Error('SSE payload missing published runtime artifacts');
 
     // Build initial reactive state using bundled selectLiveCardModel
-    stateRef.current = buildBoardState(payload, null, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
+    stateRef.current = buildBoardState(initialPayload, null, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
 
     const LiveCard = (globalThis as unknown as { LiveCard?: { init: (opts: unknown) => unknown; Board: (engine: unknown, el: HTMLElement, opts: unknown) => typeof board } }).LiveCard;
     if (!LiveCard) throw new Error('LiveCard global not loaded — include live-cards.js before this script');
@@ -278,11 +304,8 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
     });
     currentMode = mode;
 
-    const origin = getServerOrigin();
-    if (!origin) throw new Error('Server origin not resolved before SSE start');
-
-    sse = new EventSource(`${origin}${paths.stream}`);
-    sse.onmessage = (evt) => {
+    // Wire up the ongoing SSE message handler on the already-open connection.
+    sse!.onmessage = (evt) => {
       try {
         const update = JSON.parse(evt.data || '{}') as {
           kind?: string;

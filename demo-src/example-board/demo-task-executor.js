@@ -176,7 +176,7 @@ function curlFetchJson(url, method, headers) {
     args.push('-H', `${k}: ${v}`);
   }
   args.push(url);
-  const raw = execFileSync(bin, args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const raw = execFileSync(bin, args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, windowsHide: true });
   return JSON.parse(raw);
 }
 
@@ -249,6 +249,7 @@ function runCopilotViaWrapper(prompt, sourceDef, wrapperOutFile, sessionDir, cwd
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true,
     });
   } finally {
     try { fs.unlinkSync(promptFile); } catch {}
@@ -434,6 +435,7 @@ function runSourceFetchSubcommand(argv) {
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
           maxBuffer: 10 * 1024 * 1024,
+          windowsHide: true,
           ...(copilotCwd ? { cwd: copilotCwd } : {}),
         });
       } catch (err) {
@@ -473,6 +475,7 @@ function runSourceFetchSubcommand(argv) {
         encoding: 'utf-8',
         stdio: ['inherit', 'pipe', 'pipe'],
         maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
         env: {
           ...process.env,
           WORKIQ_QUERY: query,

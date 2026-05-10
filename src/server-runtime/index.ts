@@ -274,7 +274,34 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     ctx.initialized = true;
   }
 
-  async function upsertCardsFromSource(ctx: BoardContext, ctxIndex: number): Promise<void> {
+  function publishPersistedStateSnapshot(ctx: BoardContext): void {
+    if (!ctx.boardAdapter.publishBoardChangeNotifications) return;
+    const notifications: Array<{ kind: string; [k: string]: unknown }> = [];
+    // 1. Status
+    const statusResult = ctx.board.status({});
+    if (statusResult.status === 'success' && statusResult.data != null) {
+      notifications.push({ kind: 'status', status: statusResult.data });
+    }
+    // 2. All data objects
+    const dataResult = ctx.board.getAllOutputsDataObjects({});
+    if (dataResult.status === 'success' && dataResult.data != null) {
+      for (const [token, payload] of Object.entries(dataResult.data as Record<string, unknown>)) {
+        if (token) notifications.push({ kind: 'data_object', key: token, payload });
+      }
+    }
+    // 3. All computed values
+    const cvResult = ctx.board.getAllOutputsComputedValues({});
+    if (cvResult.status === 'success' && cvResult.data != null) {
+      for (const [cardId, values] of Object.entries(cvResult.data as Record<string, unknown>)) {
+        if (cardId) notifications.push({ kind: 'computed_values', cardId, values });
+      }
+    }
+    if (notifications.length > 0) {
+      ctx.boardAdapter.publishBoardChangeNotifications(notifications as import('../cli/common/board-live-cards-public.js').BoardChangeNotification[]);
+    }
+  }
+
+  function upsertCardsFromSource(ctx: BoardContext, ctxIndex: number): void {
     if (!ctx) return;
     if (ctx.cardsBootstrapped) return;
     const result = ctx.cardStore.get({});
@@ -286,7 +313,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardOwnerIndex.set(card.id as string, ctxIndex);
       ctx.board.upsertCard({ params: { cardId: card.id as string } });
     }
-    await ctx.board.processAccumulatedEvents({});
     ctx.cardsBootstrapped = true;
   }
 
@@ -299,7 +325,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   async function bootstrapBoard(): Promise<void> {
     await initBoardAndSetup();
     for (let i = 0; i < boardContexts.length; i++) {
-      await upsertCardsFromSource(boardContexts[i], i);
+      // Publish persisted state snapshot first — gives clients the last-known
+      // state immediately via SSE before any async drain completes.
+      publishPersistedStateSnapshot(boardContexts[i]);
+      upsertCardsFromSource(boardContexts[i], i);
     }
   }
 
@@ -790,14 +819,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return `id: ${sseEventId}\ndata: ${jsonStr}\n\n`;
   }
 
-  function broadcastToSseClients(): void {
-    const payload = buildPublishedRuntimePayload();
-    const frame = buildSseFrame(payload);
-    for (const client of sseClients) {
-      try { client.write(frame); } catch { sseClients.delete(client); }
-    }
-  }
-
   function broadcastNotificationBatchToSseClients(notifications: unknown[]): void {
     if (!notifications || notifications.length === 0) return;
     const frame = buildSseFrame({ kind: 'notification-batch', notifications });
@@ -841,42 +862,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     try {
       if (method === 'GET' && p === `${apiBasePath}/init-board`) {
         await initBoardAndSetup();
-        json(res, 200, buildPublishedRuntimePayload());
-        return true;
-      }
-
-      if (method === 'GET' && (p === `${apiBasePath}/bootstrap-cards` || p === `${apiBasePath}/bootstrap`)) {
-        await bootstrapBoard();
-        // Fire a catch-up notification batch using the board public API so that
-        // ctx.notification.* is populated before the caller reads getState().
-        // This covers page-refresh where the drain cycle produces no output because
-        // the graph is already in completed state.
-        for (const ctx of boardContexts) {
-          if (!ctx.boardAdapter.publishBoardChangeNotifications) continue;
-          const notifications: Array<{ kind: string; [k: string]: unknown }> = [];
-          // 1. Status
-          const statusResult = ctx.board.status({});
-          if (statusResult.status === 'success' && statusResult.data != null) {
-            notifications.push({ kind: 'status', status: statusResult.data });
-          }
-          // 2. All data objects
-          const dataResult = ctx.board.getAllOutputsDataObjects({});
-          if (dataResult.status === 'success' && dataResult.data != null) {
-            for (const [token, payload] of Object.entries(dataResult.data as Record<string, unknown>)) {
-              if (token) notifications.push({ kind: 'data_object', key: token, payload });
-            }
-          }
-          // 3. All computed values
-          const cvResult = ctx.board.getAllOutputsComputedValues({});
-          if (cvResult.status === 'success' && cvResult.data != null) {
-            for (const [cardId, values] of Object.entries(cvResult.data as Record<string, unknown>)) {
-              if (cardId) notifications.push({ kind: 'computed_values', cardId, values });
-            }
-          }
-          if (notifications.length > 0) {
-            ctx.boardAdapter.publishBoardChangeNotifications(notifications as import('../cli/common/board-live-cards-public.js').BoardChangeNotification[]);
-          }
-        }
         json(res, 200, buildPublishedRuntimePayload());
         return true;
       }

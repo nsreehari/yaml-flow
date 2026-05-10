@@ -71,6 +71,7 @@
       var board = null;
       var stateRef = { current: null }; // read accessor for resolve(); board.setState owns the state
       var app = null;
+      var pendingNotifications = []; // buffer for notifications arriving before board is ready
 
       function clone(x) { return JSON.parse(JSON.stringify(x)); }
       function nowIso() { return new Date().toISOString(); }
@@ -647,10 +648,15 @@
           onWarn: function (msg) { console.warn('[localstorage-runtime]', msg); },
           onBoardChange: function (event) {
             if (!event || !Array.isArray(event.notifications) || event.notifications.length === 0) return;
-            if (board && board.core && board.core.devMode) {
+            if (!board) {
+              // Board not yet created — buffer for replay after initialization.
+              pendingNotifications.push.apply(pendingNotifications, event.notifications);
+              return;
+            }
+            if (board.core && board.core.devMode) {
               console.log('[notifications]', event.notifications);
             }
-            if (board) board.setState(function (prev) {
+            board.setState(function (prev) {
               var next = applyNotification(prev, event.notifications, function () {
                 return app.getState();
               });
@@ -666,7 +672,14 @@
 
         await app.bootstrap();
 
-        stateRef.current = buildBoardState(app.getState(), null);
+        // Build initial state: apply any notifications buffered during bootstrap
+        // (the persisted-state snapshot from publishPersistedStateSnapshot), then
+        // fall back to a direct getState() read for fresh starts where no snapshot
+        // was published.
+        stateRef.current = pendingNotifications.length > 0
+          ? applyNotification(buildBoardState(null, null), pendingNotifications, function () { return app.getState(); })
+          : buildBoardState(app.getState(), null);
+        pendingNotifications = [];
 
         var engine = LiveCard.init({
           resolve: function (id) { return stateRef.current && stateRef.current.modelsById[id]; },

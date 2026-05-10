@@ -44,3 +44,4 @@ standalone/
 pydist/
 
 metafile-iife.json
+demo-src/example-board/.server-meta/

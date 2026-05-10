@@ -792,6 +792,28 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
 
         ctx["initialized"] = True
 
+    def publish_persisted_state_snapshot(ctx: Dict[str, Any]) -> None:
+        adapter = ctx["board_adapter"]
+        publish_fn = getattr(adapter, "publish_board_change_notifications", None)
+        if not callable(publish_fn):
+            return
+        notifications: List[Dict[str, Any]] = []
+        status_result = ctx["board"].status({})
+        if status_result.get("status") == "success" and status_result.get("data") is not None:
+            notifications.append({"kind": "status", "status": status_result["data"]})
+        data_result = ctx["board"].get_all_outputs_data_objects({})
+        if data_result.get("status") == "success" and data_result.get("data") is not None:
+            for token, payload in (data_result["data"] or {}).items():
+                if token:
+                    notifications.append({"kind": "data_object", "key": token, "payload": payload})
+        cv_result = ctx["board"].get_all_outputs_computed_values({})
+        if cv_result.get("status") == "success" and cv_result.get("data") is not None:
+            for card_id_key, values in (cv_result["data"] or {}).items():
+                if card_id_key:
+                    notifications.append({"kind": "computed_values", "cardId": card_id_key, "values": values})
+        if notifications:
+            publish_fn(notifications)
+
     def upsert_cards_from_source(ctx: Dict[str, Any], ctx_index: int) -> None:
         if not ctx or ctx.get("cards_bootstrapped"):
             return
@@ -803,7 +825,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                 continue
             card_owner_index[card["id"]] = ctx_index
             ctx["board"].upsert_card({"params": {"cardId": card["id"]}})
-        ctx["board"].process_accumulated_events({})
         ctx["cards_bootstrapped"] = True
 
     def init_board_and_setup() -> None:
@@ -813,6 +834,9 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
     def bootstrap_board() -> None:
         init_board_and_setup()
         for i, ctx in enumerate(board_contexts):
+            # Publish persisted state snapshot first — gives clients the last-known
+            # state immediately via SSE before any async drain completes.
+            publish_persisted_state_snapshot(ctx)
             upsert_cards_from_source(ctx, i)
 
     # ── Card reads ───────────────────────────────────────────────────────────
@@ -1264,17 +1288,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         sse_event_id[0] += 1
         return f"id: {sse_event_id[0]}\ndata: {json_str}\n\n"
 
-    def broadcast_to_sse_clients():
-        payload = build_published_runtime_payload()
-        frame = build_sse_frame(payload)
-        dead = set()
-        for client in sse_clients:
-            try:
-                client.write(frame)
-            except Exception:
-                dead.add(client)
-        sse_clients.difference_update(dead)
-
     def broadcast_notification_batch_to_sse_clients(notifications):
         if not notifications:
             return
@@ -1309,37 +1322,6 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         try:
             if method == "GET" and p == f"{api_base_path}/init-board":
                 init_board_and_setup()
-                json_response(res, 200, build_published_runtime_payload())
-                return True
-
-            if method == "GET" and p in (f"{api_base_path}/bootstrap-cards", f"{api_base_path}/bootstrap"):
-                bootstrap_board()
-                # Fire a catch-up notification batch using the board public API so
-                # that ctx["notification"] is populated before the caller reads
-                # build_published_runtime_payload(). This covers the page-refresh
-                # case where the graph is already completed and the drain cycle
-                # produces no new notifications.
-                for ctx in board_contexts:
-                    adapter = ctx["board_adapter"]
-                    publish_fn = getattr(adapter, "publish_board_change_notifications", None)
-                    if not callable(publish_fn):
-                        continue
-                    notifications: List[Dict[str, Any]] = []
-                    status_result = ctx["board"].status({})
-                    if status_result.get("status") == "success" and status_result.get("data") is not None:
-                        notifications.append({"kind": "status", "status": status_result["data"]})
-                    data_result = ctx["board"].get_all_outputs_data_objects({})
-                    if data_result.get("status") == "success" and data_result.get("data") is not None:
-                        for token, payload in (data_result["data"] or {}).items():
-                            if token:
-                                notifications.append({"kind": "data_object", "key": token, "payload": payload})
-                    cv_result = ctx["board"].get_all_outputs_computed_values({})
-                    if cv_result.get("status") == "success" and cv_result.get("data") is not None:
-                        for card_id_key, values in (cv_result["data"] or {}).items():
-                            if card_id_key:
-                                notifications.append({"kind": "computed_values", "cardId": card_id_key, "values": values})
-                    if notifications:
-                        publish_fn(notifications)
                 json_response(res, 200, build_published_runtime_payload())
                 return True
 
