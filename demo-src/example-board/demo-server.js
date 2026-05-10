@@ -266,9 +266,11 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
   const baseRef = parseRef(`::fs-path::${boardDir}`);
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, __dirname, {
-    suppressSpawn: true,
     notifyChannel,
   });
+  // In the server context the drain loop is driven in-process; suppress the
+  // detached CLI spawn that the FS adapter would otherwise fire as a continuation.
+  boardAdapter.requestProcessAccumulated = () => {};
   // Separate artifacts adapter rooted at cardsDir (preserves old FS layout where
   // chats/files live under cardsDir rather than boardDir)
   const artifactsRef = parseRef(`::fs-path::${cardsDir}`);

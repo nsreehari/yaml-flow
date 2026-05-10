@@ -479,7 +479,16 @@ function runSourceFetchSubcommand(argv) {
           ...(extra.serverUrl ? { WORKIQ_SERVER_URL: extra.serverUrl } : {}),
         },
       });
-      return; // wrapper wrote directly to out file
+      // wrapper wrote directly to outRef.value — report completion to board
+      if (callback) {
+        try {
+          reportComplete(callback, outRef);
+        } catch (err) {
+          console.error(`[demo-task-executor] reportComplete failed: ${String(err && err.message || err)}`);
+          process.exit(1);
+        }
+      }
+      return;
     } catch (err) {
       failRef(`workiq invocation failed: ${String(err && err.message || err)}`, callback);
     }
