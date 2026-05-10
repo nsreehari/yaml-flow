@@ -32,6 +32,7 @@ import type { KVStorage, BlobStorage, AtomicRelayLock, KindValueRef } from '../.
 import type { ExecutionRef } from '../../src/cli/common/execution-interface.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
+import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
 
 // ============================================================================
 // In-memory adapters — same interfaces as the Firestore cached adapters
@@ -138,24 +139,15 @@ function createFirebaseLikePlatformAdapter(functionUrl: string): BoardPlatformAd
   const selfRef: ExecutionRef = {
     meta: 'board-live-cards',
     howToRun: 'http:post' as const,
-    whatToRun: `::http-url::${functionUrl}`,
+    whatToRun: serializeRef({ kind: 'http-url', value: functionUrl }),
   };
 
   return {
     kvStorage: (ns) => getKv(ns),
     kvStorageForRef(ref: string) {
-      // Firebase-only: only accept ::firestore:: refs
-      if (ref.startsWith('::')) {
-        const inner = ref.slice(2);
-        const idx = inner.indexOf('::');
-        if (idx !== -1) {
-          const kind = inner.slice(0, idx);
-          const value = inner.slice(idx + 2);
-          if (kind === 'firestore') return getKv(`_ref/${value}`);
-          throw new Error(`Unsupported ref kind "${kind}" on Firebase. Use ::firestore:: refs.`);
-        }
-      }
-      return getKv(`_ref/${ref}`);
+      const parsed = parseRef(ref);
+      if (parsed.kind === 'firestore') return getKv(`_ref/${parsed.value}`);
+      throw new Error(`Unsupported ref kind "${parsed.kind}" on Firebase. Use firestore refs.`);
     },
     blobStorage: (ns) => getBlob(ns),
     journalAdapter: () => journal,
@@ -233,8 +225,8 @@ beforeAll(async () => {
       label: 'base',
       boardAdapter: adapter,
       baseRef: { kind: 'firestore', value: 'boards/firebase-test' },
-      cardStoreRef: '::firestore::boards/firebase-test/card-store',
-      outputsStoreRef: '::firestore::boards/firebase-test/outputs',
+      cardStoreRef: serializeRef({ kind: 'firestore', value: 'boards/firebase-test/card-store' }),
+      outputsStoreRef: serializeRef({ kind: 'firestore', value: 'boards/firebase-test/outputs' }),
       cardSource,
     }],
     invocationAdapter,
@@ -304,8 +296,8 @@ afterAll(async () => {
 // ============================================================================
 
 describe('platform-free server runtime (Firebase-like host)', () => {
-  it('bootstraps cards from in-memory card source', async () => {
-    const res = await fetch(`${API_BASE}/bootstrap-cards`);
+  it('returns card definitions from in-memory card source', async () => {
+    const res = await fetch(`${API_BASE}/board-status`);
     expect(res.ok).toBe(true);
     const data = await res.json() as Record<string, unknown>;
     const cards = data.cardDefinitions as Array<Record<string, unknown>>;
@@ -392,25 +384,24 @@ describe('platform-free server runtime (Firebase-like host)', () => {
     controller.abort();
   });
 
-  it('rejects ::fs-path:: refs on Firebase adapter', () => {
+  it('rejects fs-path refs on Firebase adapter', () => {
     const adapter = createFirebaseLikePlatformAdapter('http://localhost');
-    expect(() => adapter.kvStorageForRef('::fs-path::/tmp/test')).toThrow(/Unsupported ref kind.*fs-path/);
+    expect(() => adapter.kvStorageForRef(serializeRef({ kind: 'fs-path', value: '/tmp/test' }))).toThrow(/Unsupported ref kind.*fs-path/);
   });
 
   it('rejects local-node execution refs on Firebase', async () => {
     const adapter = createFirebaseLikePlatformAdapter('http://localhost');
     const result = await adapter.dispatchExecution(
-      { howToRun: 'local-node', whatToRun: '::fs-path::/tmp/test.js' } as ExecutionRef,
+      { howToRun: 'local-node', whatToRun: serializeRef({ kind: 'fs-path', value: '/tmp/test.js' }) } as ExecutionRef,
       {},
     );
     expect(result.dispatched).toBe(false);
     expect(result.error).toContain('Unsupported howToRun');
   });
 
-  it('only accepts ::firestore:: refs for kvStorageForRef', () => {
+  it('only accepts firestore refs for kvStorageForRef', () => {
     const adapter = createFirebaseLikePlatformAdapter('http://localhost');
-    // Should work with ::firestore:: refs
-    const kv = adapter.kvStorageForRef('::firestore::boards/test/card-store');
+    const kv = adapter.kvStorageForRef(serializeRef({ kind: 'firestore', value: 'boards/test/card-store' }));
     expect(kv).toBeTruthy();
     kv.write('testKey', 'testValue');
     expect(kv.read('testKey')).toBe('testValue');

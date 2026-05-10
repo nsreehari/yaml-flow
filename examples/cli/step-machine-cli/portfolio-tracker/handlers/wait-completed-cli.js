@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readStdinJson, runBoardCli, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, toFsRef, writeFailure, writeResult } from './_board-cli.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,7 +21,7 @@ try {
   const started = Date.now();
 
   while (Date.now() - started < timeoutMs) {
-    const statusJson = runBoardCli(['status', '--base-ref', `::fs-path::${boardDir}`], { capture: true });
+    const statusJson = runBoardCli(['status', '--base-ref', toFsRef(boardDir)], { capture: true });
     let cards = [];
     try {
       cards = JSON.parse(statusJson)?.data?.cards ?? [];

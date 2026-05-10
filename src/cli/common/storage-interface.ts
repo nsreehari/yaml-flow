@@ -73,7 +73,7 @@ export interface BlobStorage {
 // KindValueRef — backend-neutral typed reference
 //
 // A ref describes WHERE content lives without carrying the bytes.
-// Serialized on the CLI wire as: ::kind::value
+// Serialized on the CLI wire as: b64:<base64url({"kind":"...","value":"..."})>
 //   kind = 'fs-path': value is an absolute file path
 // Additional kinds (e.g. 'cosmos') are added in public-storage-adapter.ts as new backends are supported.
 // ============================================================================
@@ -83,18 +83,60 @@ export interface KindValueRef {
   readonly value: string;
 }
 
-/** Serialize a KindValueRef to the wire format: ::kind::value */
-export function serializeRef(ref: KindValueRef): string {
-  return `::${ref.kind}::${ref.value}`;
+const REF_PREFIX = 'b64:';
+
+function toBase64Url(raw: string): string {
+  const utf8 = new TextEncoder().encode(raw);
+  const buf = (globalThis as { Buffer?: { from(data: Uint8Array): { toString(enc: string): string } } }).Buffer;
+  let base64: string;
+  if (buf) {
+    base64 = buf.from(utf8).toString('base64');
+  } else if (typeof btoa === 'function') {
+    let binary = '';
+    for (const byte of utf8) binary += String.fromCharCode(byte);
+    base64 = btoa(binary);
+  } else {
+    throw new Error('No base64 encoder available in this runtime');
+  }
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-/** Parse a wire-format ref string (::kind::value) into a KindValueRef. */
+function fromBase64Url(input: string): string {
+  const base64 = input.replace(/-/g, '+').replace(/_/g, '/')
+    + '='.repeat((4 - (input.length % 4)) % 4);
+  const buf = (globalThis as { Buffer?: { from(data: string, enc: string): { toString(enc: string): string } } }).Buffer;
+  if (buf) return buf.from(base64, 'base64').toString('utf8');
+  if (typeof atob === 'function') {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+  throw new Error('No base64 decoder available in this runtime');
+}
+
+/** Serialize a KindValueRef to the wire format: b64:<base64url(json)> */
+export function serializeRef(ref: KindValueRef): string {
+  return `${REF_PREFIX}${toBase64Url(JSON.stringify(ref))}`;
+}
+
+/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef. */
 export function parseRef(s: string): KindValueRef {
-  if (!s.startsWith('::')) throw new Error(`Invalid ref format (expected ::kind::value): ${s}`);
-  const inner = s.slice(2);
-  const idx = inner.indexOf('::');
-  if (idx === -1) throw new Error(`Invalid ref format (expected ::kind::value): ${s}`);
-  return { kind: inner.slice(0, idx), value: inner.slice(idx + 2) };
+  if (!s.startsWith(REF_PREFIX)) throw new Error(`Invalid ref format (expected ${REF_PREFIX}<base64url(json)>): ${s}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fromBase64Url(s.slice(REF_PREFIX.length)));
+  } catch {
+    throw new Error(`Invalid ref format (malformed base64url/json): ${s}`);
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`Invalid ref format (expected object payload): ${s}`);
+  }
+  const candidate = parsed as { kind?: unknown; value?: unknown };
+  if (typeof candidate.kind !== 'string' || typeof candidate.value !== 'string') {
+    throw new Error(`Invalid ref format (payload must contain string kind/value): ${s}`);
+  }
+  return { kind: candidate.kind, value: candidate.value };
 }
 
 // ============================================================================

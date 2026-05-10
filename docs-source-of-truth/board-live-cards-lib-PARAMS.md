@@ -79,7 +79,7 @@ taskProgress(input: CommandInput): CommandResult
 
 ```ts
 sourceDataFetched(input: CommandInput): CommandResult
-  params: { token, ref }   // ref is a ::kind::value string
+  params: { token, ref }   // ref is a b64:<base64url(json)> string
 
 sourceDataFetchFailure(input: CommandInput): CommandResult
   params: { token, reason? }

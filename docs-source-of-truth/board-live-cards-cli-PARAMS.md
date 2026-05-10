@@ -36,7 +36,7 @@ type CommandInput = {
 
 All other commands have no body.
 
-> **Note**: `<ref>` below is a `::kind::value` string, e.g. `::fs-path::/boards/myboard`.
+> **Note**: `<ref>` below is a `b64:<base64url(json)>` string, e.g. `::fs-path::/boards/myboard`.
 
 ---
 
@@ -54,10 +54,10 @@ status --base-ref <ref>
   → data: BoardStatus JSON
 
 get-card-store-ref --base-ref <ref>
-  → data: { "storeRef": "<::kind::value>" }
+  → data: { "storeRef": "<b64:<base64url(json)>>" }
 
 get-outputs-store-ref --base-ref <ref>
-  → data: { "storeRef": "<::kind::value>" }
+  → data: { "storeRef": "<b64:<base64url(json)>>" }
 
 get-outputs --base-ref <ref> --type <data-object|computed-values> --key <key>
   params: { type, key }

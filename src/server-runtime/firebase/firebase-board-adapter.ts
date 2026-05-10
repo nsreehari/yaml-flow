@@ -25,6 +25,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import type { BoardPlatformAdapter } from '../../cli/common/board-live-cards-public.js';
 import type { KindValueRef } from '../../cli/common/storage-interface.js';
 import type { ExecutionRef } from '../../cli/common/execution-interface.js';
+import { parseRef, serializeRef } from '../../cli/common/storage-interface.js';
 import {
   createCachedFirestoreKvStorage,
   createCachedFirestoreBlobStorage,
@@ -122,17 +123,12 @@ export function createFirebaseBoardPlatformAdapter(
 
   // kvStorageForRef: Firebase only supports ::firestore:: kind refs
   function kvStorageForRef(ref: string): ReturnType<typeof createCachedFirestoreKvStorage> {
-    if (ref.startsWith('::')) {
-      const inner = ref.slice(2);
-      const idx = inner.indexOf('::');
-      if (idx !== -1) {
-        const kind = inner.slice(0, idx);
-        const value = inner.slice(idx + 2);
-        if (kind === 'firestore') {
-          return getKv(`_ref/${value}`);
-        }
-        throw new Error(`Unsupported ref kind "${kind}" on Firebase. Use ::firestore:: refs.`);
+    if (ref.startsWith('b64:')) {
+      const parsed = parseRef(ref);
+      if (parsed.kind === 'firestore') {
+        return getKv(`_ref/${parsed.value}`);
       }
+      throw new Error(`Unsupported ref kind "${parsed.kind}" on Firebase. Use firestore refs.`);
     }
     // Plain string ref — treat as Firestore namespace
     const safeName = ref.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-60);
@@ -142,7 +138,7 @@ export function createFirebaseBoardPlatformAdapter(
   const selfRef: ExecutionRef = {
     meta: 'board-live-cards',
     howToRun: 'http:post' as const,
-    whatToRun: `::http-url::${functionUrl}`,
+    whatToRun: serializeRef({ kind: 'http-url', value: functionUrl }),
   };
 
   function computeHash(value: unknown): string {
@@ -173,11 +169,7 @@ export function createFirebaseBoardPlatformAdapter(
     if (howToRun === 'http:post' || howToRun === 'http:get') {
       const urlRef = ref.whatToRun;
       let url = urlRef;
-      if (urlRef.startsWith('::')) {
-        const inner = urlRef.slice(2);
-        const idx = inner.indexOf('::');
-        if (idx !== -1) url = inner.slice(idx + 2);
-      }
+      if (urlRef.startsWith('b64:')) url = parseRef(urlRef).value;
 
       try {
         const method = howToRun === 'http:get' ? 'GET' : 'POST';

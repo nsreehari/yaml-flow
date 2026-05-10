@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { readStdinJson, runBoardCli, runCardStoreCliWithInput, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, runCardStoreCliWithInput, toFsRef, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
@@ -21,7 +21,7 @@ try {
   card.card_data.holdings = holdings;
   fs.writeFileSync(cardPath, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
 
-  const baseRef = `::fs-path::${boardDir}`;
+  const baseRef = toFsRef(boardDir);
   runCardStoreCliWithInput(
     ['set', '--store-ref', baseRef],
     JSON.stringify(card),

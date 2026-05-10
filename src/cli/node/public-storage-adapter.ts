@@ -5,9 +5,9 @@
  * Zero dependencies on the rest of yaml-flow.
  *
  * Provides:
- *   - KindValueRef      wire format: ::kind::value
- *   - parseRef()        parse a ::kind::value string
- *   - serializeRef()    produce a ::kind::value string
+ *   - KindValueRef      wire format: b64:<base64url(json)>
+ *   - parseRef()        parse a b64:<base64url(json)> string
+ *   - serializeRef()    produce a b64:<base64url(json)> string
  *   - BlobStorage       read/write interface
  *   - blobStorageForRef resolve a ref to its BlobStorage backend
  *   - ExecutionRef      portable invocation descriptor (inlined, stays standalone)
@@ -43,18 +43,30 @@ export interface KindValueRef {
   readonly value: string;
 }
 
-/** Parse a wire-format ref string (::kind::value) into a KindValueRef. */
+/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef. */
 export function parseRef(s: string): KindValueRef {
-  if (!s.startsWith('::')) throw new Error(`Invalid ref format (expected ::kind::value): ${s}`);
-  const inner = s.slice(2);
-  const idx = inner.indexOf('::');
-  if (idx === -1) throw new Error(`Invalid ref format (expected ::kind::value): ${s}`);
-  return { kind: inner.slice(0, idx), value: inner.slice(idx + 2) };
+  if (!s.startsWith('b64:')) throw new Error(`Invalid ref format (expected b64:<base64url(json)>): ${s}`);
+  const payload = s.slice(4);
+  const padded = payload.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (payload.length % 4)) % 4);
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+  } catch {
+    throw new Error(`Invalid ref format (malformed base64url/json): ${s}`);
+  }
+  if (!decoded || typeof decoded !== 'object') {
+    throw new Error(`Invalid ref format (expected object payload): ${s}`);
+  }
+  const candidate = decoded as { kind?: unknown; value?: unknown };
+  if (typeof candidate.kind !== 'string' || typeof candidate.value !== 'string') {
+    throw new Error(`Invalid ref format (payload must contain string kind/value): ${s}`);
+  }
+  return { kind: candidate.kind, value: candidate.value };
 }
 
-/** Serialize a KindValueRef to the wire format: ::kind::value */
+/** Serialize a KindValueRef to the wire format: b64:<base64url(json)> */
 export function serializeRef(ref: KindValueRef): string {
-  return `::${ref.kind}::${ref.value}`;
+  return `b64:${Buffer.from(JSON.stringify(ref), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')}`;
 }
 
 // ============================================================================
@@ -118,7 +130,7 @@ export interface ExecutionRef {
   meta?: string;
   /** Transport / runtime kind. */
   howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in';
-  /** Address of the target in ::kind::value wire form (e.g. ::fs-path::/path/to/cli.js). */
+  /** Address of the target in b64:<base64url(json)> wire form. */
   whatToRun: string;
   /** Opaque executor config stored with the ref. */
   extra?: Record<string, unknown>;
@@ -137,8 +149,8 @@ export interface TaskCallback {
 }
 
 /**
- * Extract the path/url value from a whatToRun ::kind::value wire string.
- * Falls back to the raw string if it isn’t in ::kind::value form.
+ * Extract the path/url value from a whatToRun b64:<base64url(json)> wire string.
+ * Falls back to the raw string if it isn’t in b64:<base64url(json)> form.
  */
 function _parseWhatToRun(whatToRun: string): string {
   try { return parseRef(whatToRun).value; } catch { return whatToRun; }

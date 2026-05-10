@@ -43,9 +43,9 @@ Created under `os.tmpdir()/experiment/` at T0a:
 **CLI contract** (identical to `portfolio-tracker-task-executor.cjs`):
 ```
 node portfolio-tracker-fetch-prices.js run-source-fetch \
-  --in-ref <::kind::value> \
-  --out-ref <::kind::value> \
-  --err-ref <::kind::value>
+  --in-ref <b64:<base64url(json)>> \
+  --out-ref <b64:<base64url(json)>> \
+  --err-ref <b64:<base64url(json)>>
 ```
 
 **Imports from `yaml-flow/storage-refs`:** `parseRef`, `blobStorageForRef`, `reportComplete`, `reportFailed`

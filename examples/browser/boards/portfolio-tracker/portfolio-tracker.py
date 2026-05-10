@@ -7,6 +7,7 @@ fallbacks or defaults.
 """
 
 import copy
+import base64
 import json
 import os
 import shutil
@@ -15,6 +16,11 @@ import sys
 import tempfile
 import time
 import argparse
+
+
+def serialize_ref(ref: dict[str, str]) -> str:
+    payload = json.dumps({"kind": ref.get("kind", ""), "value": ref.get("value", "")}, separators=(",", ":")).encode("utf-8")
+    return "b64:" + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
 _CLI_PARSER = argparse.ArgumentParser()
@@ -70,9 +76,9 @@ CARDSTORE_DIR   = os.path.join(_TMP_BASE, 'cardstore')
 BOARDRUNTIME_DIR = os.path.join(_TMP_BASE, 'boardruntime')
 OUTPUTS_DIR     = os.path.join(_TMP_BASE, 'outputs')
 
-CARDSTORE_REF    = f'::fs-path::{CARDSTORE_DIR}'
-BOARDRUNTIME_REF = f'::fs-path::{BOARDRUNTIME_DIR}'
-OUTPUTS_REF      = f'::fs-path::{OUTPUTS_DIR}'
+CARDSTORE_REF    = serialize_ref({'kind': 'fs-path', 'value': CARDSTORE_DIR})
+BOARDRUNTIME_REF = serialize_ref({'kind': 'fs-path', 'value': BOARDRUNTIME_DIR})
+OUTPUTS_REF      = serialize_ref({'kind': 'fs-path', 'value': OUTPUTS_DIR})
 
 # ── Inline card definitions ────────────────────────────────────────────────────
 CARD_PORTFOLIO_FORM = {
@@ -224,7 +230,7 @@ _task_executor_body = json.dumps({
     'task-executor-ref': {
         'meta': 'task-executor',
         'howToRun': 'local-python',
-        'whatToRun': f'::fs-path::{FETCH_PRICES_PY}',
+            'whatToRun': serialize_ref({'kind': 'fs-path', 'value': FETCH_PRICES_PY}),
     }
 })
 run_board_with_input(

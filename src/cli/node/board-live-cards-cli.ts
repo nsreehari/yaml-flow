@@ -127,8 +127,8 @@ export async function cli(argv: string[]): Promise<void> {
 
   switch (cmd) {
     case 'init': {
-      const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value> --outputs-store-ref <::kind::value>');
-      const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', 'init --base-ref <ref> --card-store-ref <::kind::value> --outputs-store-ref <::kind::value>');
+      const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
+      const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
       const body = await readStdinBody();
       printResult(board().init({ params: { cardStoreRef, outputsStoreRef }, body }));
       return;

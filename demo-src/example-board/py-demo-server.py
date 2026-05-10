@@ -85,13 +85,19 @@ def resolve_kind_ref_from_config(config_value) -> Optional[str]:
     if not isinstance(config_value, str) or not config_value.strip():
         return None
     trimmed = config_value.strip()
-    if not trimmed.startswith("::fs-path::"):
+    if not trimmed.startswith("b64:"):
         return trimmed
-    raw_path = trimmed[len("::fs-path::"):].strip()
-    if not raw_path:
-        return None
-    resolved = raw_path if os.path.isabs(raw_path) else os.path.normpath(os.path.join(__file_dir, raw_path))
-    return f"::fs-path::{resolved}"
+    try:
+        parsed = parse_ref(trimmed)
+        if parsed.get("kind") != "fs-path":
+            return trimmed
+        raw_path = str(parsed.get("value") or "").strip()
+        if not raw_path:
+            return None
+        resolved = raw_path if os.path.isabs(raw_path) else os.path.normpath(os.path.join(__file_dir, raw_path))
+        return serialize_ref({"kind": "fs-path", "value": resolved})
+    except Exception:
+        return trimmed
 
 
 server_config = load_server_config()
@@ -180,7 +186,7 @@ def make_execution_ref(script_path: Optional[str], meta: str) -> Optional[Dict[s
         how_to_run = "local-node"
     else:
         how_to_run = "local-process"
-    return {"howToRun": how_to_run, "whatToRun": f"::fs-path::{resolved}", "meta": meta}
+    return {"howToRun": how_to_run, "whatToRun": serialize_ref({"kind": "fs-path", "value": resolved}), "meta": meta}
 
 
 def create_subprocess_invocation_adapter():
@@ -190,7 +196,14 @@ def create_subprocess_invocation_adapter():
         def invoke(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
             how_to_run = ref.get("howToRun", "")
             what_to_run = str(ref.get("whatToRun") or "")
-            script_path = what_to_run[len("::fs-path::"):] if what_to_run.startswith("::fs-path::") else ""
+            if what_to_run.startswith("b64:"):
+                try:
+                    parsed = parse_ref(what_to_run)
+                    script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
+                except Exception:
+                    script_path = ""
+            else:
+                script_path = what_to_run
 
             if not script_path:
                 return {"dispatched": False, "error": f"no script path in whatToRun: {what_to_run}"}
@@ -234,7 +247,14 @@ def create_subprocess_invocation_adapter():
         def describe(self, ref: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             how_to_run = ref.get("howToRun", "")
             what_to_run = str(ref.get("whatToRun") or "")
-            script_path = what_to_run[len("::fs-path::"):] if what_to_run.startswith("::fs-path::") else ""
+            if what_to_run.startswith("b64:"):
+                try:
+                    parsed = parse_ref(what_to_run)
+                    script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
+                except Exception:
+                    script_path = ""
+            else:
+                script_path = what_to_run
             if not script_path:
                 return None
 
@@ -292,7 +312,7 @@ def create_fs_board_platform_adapter(base_ref: Dict[str, str], notify_channel: O
             return {
                 "meta": "board-live-cards",
                 "howToRun": "local-python",
-                "whatToRun": f"::fs-path::{board_pycli}",
+                "whatToRun": serialize_ref({"kind": "fs-path", "value": board_pycli}),
             }
 
         def dispatch_execution(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
@@ -312,9 +332,9 @@ def create_fs_board_platform_adapter(base_ref: Dict[str, str], notify_channel: O
                 json.dump(args, f, indent=2)
             return dispatch_execution(exec_ref, {
                 "subcommand": "run-source-fetch",
-                "inRef": f"::fs-path::{in_file}",
-                "outRef": f"::fs-path::{out_file}",
-                "errRef": f"::fs-path::{err_file}",
+                "inRef": serialize_ref({"kind": "fs-path", "value": in_file}),
+                "outRef": serialize_ref({"kind": "fs-path", "value": out_file}),
+                "errRef": serialize_ref({"kind": "fs-path", "value": err_file}),
             }, cwd=scope, detached=True)
 
         def resolve_blob(self, ref: Dict[str, str]) -> str:
@@ -429,7 +449,7 @@ def _make_lock(lock_path: str):
 # Server meta store
 # ============================================================================
 
-server_meta_ref = os.environ.get("DEMO_SERVER_META_STORE_REF") or configured_server_meta_store_ref or f"::fs-path::{setup_dir}"
+server_meta_ref = os.environ.get("DEMO_SERVER_META_STORE_REF") or configured_server_meta_store_ref or serialize_ref({"kind": "fs-path", "value": setup_dir})
 server_meta_parsed = parse_ref(server_meta_ref)
 server_meta_adapter = create_fs_board_platform_adapter(server_meta_parsed)
 server_meta_store = _create_artifacts_store(server_meta_adapter.blob_storage("server-meta"))
@@ -454,11 +474,11 @@ def build_board_context_config(label, board_dir, cards_dir, task_exec_path, chat
     os.makedirs(board_dir, exist_ok=True)
 
     notify_channel = f"yaml-flow-py-server-{label}-{board_id_}-{os.getpid()}"
-    base_ref = parse_ref(f"::fs-path::{board_dir}")
+    base_ref = parse_ref(serialize_ref({"kind": "fs-path", "value": board_dir}))
     board_adapter = create_fs_board_platform_adapter(base_ref, notify_channel)
 
     # Separate artifacts adapter rooted at cardsDir
-    artifacts_ref = parse_ref(f"::fs-path::{cards_dir}")
+    artifacts_ref = parse_ref(serialize_ref({"kind": "fs-path", "value": cards_dir}))
     artifacts_adapter = create_fs_board_platform_adapter(artifacts_ref)
 
     card_store_ref = serialize_ref({"kind": "fs-path", "value": os.path.join(cards_dir, "cards")})

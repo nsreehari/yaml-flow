@@ -169,8 +169,8 @@ export interface BoardPlatformAdapter {
   /**
    * Self-identity ExecutionRef — how to invoke THIS board instance.
    * Embedded in source callback tokens so executors know where to report back.
-   *   Node/FS:  { howToRun: 'local-node', whatToRun: '::fs-path::/path/to/cli.js' }
-   *   Azure Fn: { howToRun: 'http:post',  whatToRun: '::http-url::https://…/api/board' }
+  *   Node/FS:  { howToRun: 'local-node', whatToRun: 'b64:<base64url({"kind":"fs-path","value":"/path/to/cli.js"})>' }
+  *   Azure Fn: { howToRun: 'http:post',  whatToRun: 'b64:<base64url({"kind":"http-url","value":"https://…/api/board"})>' }
    */
   selfRef: ExecutionRef;
 
@@ -351,7 +351,7 @@ export function createBoardLiveCardsPublic(
 
   function makeCardAdapter(): CardStorageAdapter {
     const storeRef = configStore().readCardStoreRef();
-    if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <::kind::value>`);
+    if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <b64-ref>`);
     const kv = adapter.kvStorageForRef(storeRef);
     return {
       readIndex(): CardIndex | null { return kv.read('_index') as CardIndex | null; },
@@ -389,7 +389,7 @@ export function createBoardLiveCardsPublic(
   const cardStore = () => createCardStore(makeCardAdapter(), warn);
   const outputStore = () => {
     const ref = configStore().readOutputsStoreRef();
-    if (!ref) throw new Error(`Board at ${baseRef.value} has no outputs store configured. Run: init --outputs-store-ref <::kind::value>`);
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no outputs store configured. Run: init --outputs-store-ref <b64-ref>`);
     return createPublishedOutputsStore(adapter.kvStorageForRef(ref));
   };
 
@@ -574,7 +574,7 @@ export function createBoardLiveCardsPublic(
     flushBoardChangeNotifications(batch);
 
     const executorRef = configStore().readTaskExecutorRef()
-      ?? { howToRun: 'built-in' as const, whatToRun: '::built-in::source-cli-task-executor' };
+      ?? { howToRun: 'built-in' as const, whatToRun: serializeRef({ kind: 'built-in', value: 'source-cli-task-executor' }) };
 
     executionRequestStore.dispatchEntriesForJournalId(newCursor, (entry) => {
       if (entry.taskKind !== 'source-fetch') {
@@ -951,7 +951,7 @@ export function createBoardLiveCardsNonCorePublic(
   const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
   function makeCardAdapterNC(): CardStorageAdapter {
     const storeRef = configStore().readCardStoreRef();
-    if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <::kind::value>`);
+    if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <b64-ref>`);
     const kv = adapter.kvStorageForRef(storeRef);
     return {
       readIndex(): CardIndex | null { return kv.read('_index') as CardIndex | null; },

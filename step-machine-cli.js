@@ -2,6 +2,27 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const srcCli = path.join(__dirname, 'src', 'cli', 'node', 'step-machine-cli.ts');
+const tsxCli = path.join(__dirname, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+
+if (fs.existsSync(srcCli)) {
+  const result = spawnSync(process.execPath, [tsxCli, srcCli, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    shell: false,
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    console.error(`[step-machine-cli] Failed to launch dev fallback: ${result.error.message}`);
+    process.exit(1);
+  }
+
+  process.exit(result.status ?? 0);
+}
 
 const { loadStepFlow, createStepMachine, MemoryStore, FileStore } = await import('./dist/index.js');
 const { buildStepHandlersForFlow } = await import('./dist/step-machine-public/index.js');
@@ -343,8 +364,26 @@ function parseInitialData(dataArg) {
   }
 }
 
+function normalizeExecutionRef(ref) {
+  if (!ref || typeof ref !== 'object') return ref;
+  if (typeof ref.whatToRun !== 'string' || !ref.whatToRun.startsWith('b64:')) return ref;
+
+  try {
+    const payload = ref.whatToRun.slice(4);
+    const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+    const json = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const decoded = JSON.parse(json);
+    if (!decoded || typeof decoded !== 'object' || typeof decoded.value !== 'string') {
+      return ref;
+    }
+    return { ...ref, whatToRun: decoded.value };
+  } catch {
+    return ref;
+  }
+}
+
 function buildStepHandlers(flow, flowDir) {
-  const invoke = (ref, args) => invokeRefSync(ref, args, { cliDir: flowDir, cwd: flowDir });
+  const invoke = (ref, args) => invokeRefSync(normalizeExecutionRef(ref), args, { cliDir: flowDir, cwd: flowDir });
   return buildStepHandlersForFlow(flow, { invoke });
 }
 

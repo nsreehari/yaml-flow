@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readStdinJson, runBoardCli, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, toFsRef, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
@@ -12,9 +12,9 @@ try {
 
   runBoardCli([
     'init',
-    '--base-ref', `::fs-path::${boardDir}`,
-    '--card-store-ref', `::fs-path::${boardDir}`,
-    '--outputs-store-ref', `::fs-path::${boardDir}`,
+    '--base-ref', toFsRef(boardDir),
+    '--card-store-ref', toFsRef(boardDir),
+    '--outputs-store-ref', toFsRef(boardDir),
   ]);
   writeResult({
     board_dir: boardDir,

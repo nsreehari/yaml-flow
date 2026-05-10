@@ -19,12 +19,13 @@ import type { BoardLiveCard } from '../../src/cli/common/board-live-cards-lib.js
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
 import { restore } from '../../src/continuous-event-graph/index.js';
+import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 
 
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
-const cardStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.cards');
-const outputsStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.output');
+const cardStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.cards') });
+const outputsStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.output') });
 const ticks = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const cliDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));

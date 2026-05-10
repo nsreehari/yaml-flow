@@ -15,7 +15,7 @@
  *
  *  ExecutionRef — self-contained, serializable JSON descriptor for one invocation target.
  *    • howToRun    — transport / runtime kind (discriminator)
- *    • whatToRun   — address of the artifact (KindValueRef wire form: ::kind::value)
+ *    • whatToRun   — address of the artifact (KindValueRef wire form: b64:<base64url(json)>)
  *    • argsMassaging — optional JSONata expressions that map logical args → physical call shape
  *    • meta        — optional human-readable label (e.g. 'task-executor', 'chat-handler')
  *
@@ -62,21 +62,21 @@
  *  const builtIn: ExecutionRef = {
  *    meta: 'task-executor',
  *    howToRun: 'built-in',
- *    whatToRun: '::built-in::source-cli-task-executor',
+ *    whatToRun: 'b64:<base64url({"kind":"built-in","value":"source-cli-task-executor"})>',
  *  };
  *
  *  // External local-node task executor with default protocol args:
  *  const local: ExecutionRef = {
  *    meta: 'task-executor',
  *    howToRun: 'local-node',
- *    whatToRun: '::fs-path::/path/to/my-executor.js',
+ *    whatToRun: 'b64:<base64url({"kind":"fs-path","value":"/path/to/my-executor.js"})>',
  *  };
  *
  *  // Azure Function task executor with custom arg mapping:
  *  const azureFn: ExecutionRef = {
  *    meta: 'task-executor',
  *    howToRun: 'http:post',
- *    whatToRun: '::http-url::https://myfn.azurewebsites.net/api/task-executor',
+ *    whatToRun: 'b64:<base64url({"kind":"http-url","value":"https://myfn.azurewebsites.net/api/task-executor"})>',
  *    argsMassaging: {
  *      urlTemplate: "whatToRun & '?op=' & subcommand",
  *      bodyTemplate: "{ 'inRef': inRef, 'outRef': outRef, 'token': token }",
@@ -87,7 +87,7 @@
  *  const chatHandler: ExecutionRef = {
  *    meta: 'chat-handler',
  *    howToRun: 'http:post',
- *    whatToRun: '::http-url::https://myfn.azurewebsites.net/api/chat',
+ *    whatToRun: 'b64:<base64url({"kind":"http-url","value":"https://myfn.azurewebsites.net/api/chat"})>',
  *    argsMassaging: {
  *      bodyTemplate: "{ 'message': message, 'context': context, 'sessionId': sessionId }",
  *    },
@@ -97,6 +97,8 @@
 // ============================================================================
 // OutputTransforms
 // ============================================================================
+
+import { serializeRef } from './storage-interface.js';
 
 /**
  * Optional JSONata-based transforms applied to the raw invoke result.
@@ -201,10 +203,10 @@ export interface ExecutionRef {
   howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in' | 'in-browser';
 
   /**
-   * Address of the artifact to run, in KindValueRef wire form (::kind::value).
-   * @example '::fs-path::/dist/cli/source-cli-task-executor.js'
-   * @example '::http-url::https://fn.example.com/api/executor'
-   * @example '::built-in::source-cli-task-executor'
+    * Address of the artifact to run, in KindValueRef wire form (b64:<base64url(json)>).
+    * @example 'b64:<base64url({"kind":"fs-path","value":"/dist/cli/source-cli-task-executor.js"})>'
+    * @example 'b64:<base64url({"kind":"http-url","value":"https://fn.example.com/api/executor"})>'
+    * @example 'b64:<base64url({"kind":"built-in","value":"source-cli-task-executor"})>'
    */
   whatToRun: string;
 
@@ -292,7 +294,7 @@ export function executionRefFromScriptPath(
   return {
     meta: 'task-executor',
     howToRun,
-    whatToRun: `::fs-path::${scriptPath}`,
+    whatToRun: serializeRef({ kind: 'fs-path', value: scriptPath }),
     ...(extra ? { extra } : {}),
   };
 }

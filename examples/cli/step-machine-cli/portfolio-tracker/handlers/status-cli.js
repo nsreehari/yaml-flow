@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readStdinJson, runBoardCli, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, toFsRef, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
@@ -10,7 +10,7 @@ try {
     writeFailure('BOARD_DIR is required');
   }
 
-  const status = runBoardCli(['status', '--base-ref', `::fs-path::${boardDir}`], { capture: true });
+  const status = runBoardCli(['status', '--base-ref', toFsRef(boardDir)], { capture: true });
 
   writeResult({
     status,

@@ -195,12 +195,16 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
 def cmd_card_store_set(args: argparse.Namespace) -> int:
     card = _parse_json_file(args.input)
-    prefix = "::fs-path::"
-    if not args.store_ref.startswith(prefix):
-        _print_json({"status": "error", "error": "Only ::fs-path:: store refs are supported"})
+    try:
+        parsed_store_ref = parse_ref(args.store_ref)
+    except Exception:
+        _print_json({"status": "error", "error": "Invalid --store-ref (expected b64:<base64url(json)>)"})
+        return 2
+    if parsed_store_ref.get("kind") != "fs-path":
+        _print_json({"status": "error", "error": "Only fs-path store refs are supported"})
         return 2
 
-    store_root = args.store_ref[len(prefix) :]
+    store_root = parsed_store_ref.get("value", "")
     os.makedirs(store_root, exist_ok=True)
 
     card_id = card.get("id")
@@ -252,7 +256,7 @@ def _board_handler(command: str):
                 if isinstance(token, str) and token:
                     base_ref = _decode_board_ref_from_token(token)
             if not base_ref and command in ("validateTmpCard", "probeTmpSource"):
-                base_ref = f"::fs-path::{os.path.abspath('.') }"
+                base_ref = serialize_ref({"kind": "fs-path", "value": os.path.abspath('.')})
 
             input_obj: Dict[str, Any] = {"params": {}, "body": None}
 
@@ -418,35 +422,35 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_cmd.set_defaults(handler=cmd_dispatch)
 
     card_store_set_cmd = sub.add_parser("card-store-set", help="Set one card into a card store ref")
-    card_store_set_cmd.add_argument("--store-ref", required=True, help="Card store ref (::kind::value)")
+    card_store_set_cmd.add_argument("--store-ref", required=True, help="Card store ref (b64:<base64url(json)>)")
     card_store_set_cmd.add_argument("--in", dest="input", required=True, help="Card JSON file")
     card_store_set_cmd.set_defaults(handler=cmd_card_store_set)
 
     board_init_cmd = sub.add_parser("board-init", help="Initialize board stores")
-    board_init_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
-    board_init_cmd.add_argument("--card-store-ref", required=True, help="Card store ref (::kind::value)")
-    board_init_cmd.add_argument("--outputs-store-ref", required=True, help="Outputs store ref (::kind::value)")
+    board_init_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
+    board_init_cmd.add_argument("--card-store-ref", required=True, help="Card store ref (b64:<base64url(json)>)")
+    board_init_cmd.add_argument("--outputs-store-ref", required=True, help="Outputs store ref (b64:<base64url(json)>)")
     board_init_cmd.add_argument("--in", dest="body_input", help="Optional JSON body file")
     _add_notify_channel_arg(board_init_cmd)
     board_init_cmd.set_defaults(handler=_board_handler("init"))
 
     board_status_cmd = sub.add_parser("board-status", help="Read board status")
-    board_status_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_status_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(board_status_cmd)
     board_status_cmd.set_defaults(handler=_board_handler("status"))
 
     board_card_ref_cmd = sub.add_parser("board-get-card-store-ref", help="Get card store ref")
-    board_card_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_card_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(board_card_ref_cmd)
     board_card_ref_cmd.set_defaults(handler=_board_handler("getCardStoreRef"))
 
     board_out_ref_cmd = sub.add_parser("board-get-outputs-store-ref", help="Get outputs store ref")
-    board_out_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_out_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(board_out_ref_cmd)
     board_out_ref_cmd.set_defaults(handler=_board_handler("getOutputsStoreRef"))
 
     board_get_outputs_cmd = sub.add_parser("board-get-outputs", help="Get outputs data or computed-values")
-    board_get_outputs_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_get_outputs_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_get_outputs_cmd.add_argument("--type", choices=["data-object", "computed-values"], required=True)
     board_get_outputs_cmd.add_argument("--key", required=True, help="Data key (data-object) or card id (computed-values)")
     _add_notify_channel_arg(board_get_outputs_cmd)
@@ -459,24 +463,24 @@ def build_parser() -> argparse.ArgumentParser:
     board_get_outputs_cmd.set_defaults(handler=_board_get_outputs_handler)
 
     board_remove_cmd = sub.add_parser("board-remove-card", help="Remove a card")
-    board_remove_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_remove_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_remove_cmd.add_argument("--id", required=True, help="Card id")
     _add_notify_channel_arg(board_remove_cmd)
     board_remove_cmd.set_defaults(handler=_board_handler("removeCard"))
 
     board_retrigger_cmd = sub.add_parser("board-retrigger", help="Retrigger a card")
-    board_retrigger_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_retrigger_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_retrigger_cmd.add_argument("--id", required=True, help="Card id")
     _add_notify_channel_arg(board_retrigger_cmd)
     board_retrigger_cmd.set_defaults(handler=_board_handler("retrigger"))
 
     board_process_cmd = sub.add_parser("board-process-accumulated-events", help="Process pending board events")
-    board_process_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_process_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(board_process_cmd)
     board_process_cmd.set_defaults(handler=_board_handler("processAccumulatedEvents"))
 
     board_upsert_cmd = sub.add_parser("board-upsert-card", help="Upsert one card or all cards")
-    board_upsert_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_upsert_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_upsert_cmd.add_argument("--card-id", help="Card id")
     board_upsert_cmd.add_argument("--all", action="store_true", help="Upsert all cards")
     board_upsert_cmd.add_argument("--restart", action="store_true", help="Mark upsert as restart")
@@ -484,28 +488,28 @@ def build_parser() -> argparse.ArgumentParser:
     board_upsert_cmd.set_defaults(handler=_board_handler("upsertCard"))
 
     board_task_failed_cmd = sub.add_parser("board-task-failed", help="Send task-failed callback")
-    board_task_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_task_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_task_failed_cmd.add_argument("--token", required=True, help="Callback token")
     board_task_failed_cmd.add_argument("--error", help="Error message")
     _add_notify_channel_arg(board_task_failed_cmd)
     board_task_failed_cmd.set_defaults(handler=_board_handler("taskFailed"))
 
     board_task_progress_cmd = sub.add_parser("board-task-progress", help="Send task-progress callback")
-    board_task_progress_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_task_progress_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_task_progress_cmd.add_argument("--token", required=True, help="Callback token")
     board_task_progress_cmd.add_argument("--update", required=True, help="JSON file for progress update payload")
     _add_notify_channel_arg(board_task_progress_cmd)
     board_task_progress_cmd.set_defaults(handler=_board_handler("taskProgress"))
 
     board_source_fetched_cmd = sub.add_parser("board-source-data-fetched", help="Send source-data-fetched callback")
-    board_source_fetched_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_source_fetched_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_source_fetched_cmd.add_argument("--token", required=True, help="Callback token")
     board_source_fetched_cmd.add_argument("--ref", required=True, help="Fetched source ref")
     _add_notify_channel_arg(board_source_fetched_cmd)
     board_source_fetched_cmd.set_defaults(handler=_board_handler("sourceDataFetched"))
 
     board_source_failed_cmd = sub.add_parser("board-source-data-fetch-failure", help="Send source-data-fetch-failure callback")
-    board_source_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    board_source_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     board_source_failed_cmd.add_argument("--token", required=True, help="Callback token")
     board_source_failed_cmd.add_argument("--reason", help="Failure reason")
     _add_notify_channel_arg(board_source_failed_cmd)
@@ -513,29 +517,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     # JS-parity board CLI commands (unprefixed names).
     init_cmd = sub.add_parser("init", help="Initialize board stores")
-    init_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
-    init_cmd.add_argument("--card-store-ref", required=True, help="Card store ref (::kind::value)")
-    init_cmd.add_argument("--outputs-store-ref", required=True, help="Outputs store ref (::kind::value)")
+    init_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
+    init_cmd.add_argument("--card-store-ref", required=True, help="Card store ref (b64:<base64url(json)>)")
+    init_cmd.add_argument("--outputs-store-ref", required=True, help="Outputs store ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(init_cmd)
     init_cmd.set_defaults(handler=_board_handler("init"))
 
     status_cmd = sub.add_parser("status", help="Read board status")
-    status_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    status_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(status_cmd)
     status_cmd.set_defaults(handler=_board_handler("status"))
 
     get_card_ref_cmd = sub.add_parser("get-card-store-ref", help="Get card store ref")
-    get_card_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    get_card_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(get_card_ref_cmd)
     get_card_ref_cmd.set_defaults(handler=_board_handler("getCardStoreRef"))
 
     get_out_ref_cmd = sub.add_parser("get-outputs-store-ref", help="Get outputs store ref")
-    get_out_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    get_out_ref_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(get_out_ref_cmd)
     get_out_ref_cmd.set_defaults(handler=_board_handler("getOutputsStoreRef"))
 
     get_outputs_cmd = sub.add_parser("get-outputs", help="Get outputs data or computed-values")
-    get_outputs_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    get_outputs_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     get_outputs_cmd.add_argument("--type", choices=["data-object", "computed-values"], required=True)
     get_outputs_cmd.add_argument("--key", required=False, help="Data key/card id")
     get_outputs_cmd.add_argument("--all", action="store_true", help="Return all entries for type")
@@ -553,24 +557,24 @@ def build_parser() -> argparse.ArgumentParser:
     get_outputs_cmd.set_defaults(handler=_js_get_outputs_handler)
 
     remove_cmd = sub.add_parser("remove-card", help="Remove a card")
-    remove_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    remove_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     remove_cmd.add_argument("--id", required=True, help="Card id")
     _add_notify_channel_arg(remove_cmd)
     remove_cmd.set_defaults(handler=_board_handler("removeCard"))
 
     retrigger_cmd = sub.add_parser("retrigger", help="Retrigger a card")
-    retrigger_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    retrigger_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     retrigger_cmd.add_argument("--id", required=True, help="Card id")
     _add_notify_channel_arg(retrigger_cmd)
     retrigger_cmd.set_defaults(handler=_board_handler("retrigger"))
 
     process_cmd = sub.add_parser("process-accumulated-events", help="Process pending board events")
-    process_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    process_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(process_cmd)
     process_cmd.set_defaults(handler=_board_handler("processAccumulatedEvents"))
 
     upsert_cmd = sub.add_parser("upsert-card", help="Upsert one card or all cards")
-    upsert_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    upsert_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     upsert_cmd.add_argument("--card-id", help="Card id")
     upsert_cmd.add_argument("--all", action="store_true", help="Upsert all cards")
     upsert_cmd.add_argument("--restart", action="store_true", help="Mark upsert as restart")
@@ -578,42 +582,42 @@ def build_parser() -> argparse.ArgumentParser:
     upsert_cmd.set_defaults(handler=_board_handler("upsertCard"))
 
     task_failed_cmd = sub.add_parser("task-failed", help="Send task-failed callback")
-    task_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    task_failed_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     task_failed_cmd.add_argument("--token", required=True, help="Callback token")
     task_failed_cmd.add_argument("--error", help="Error message")
     _add_notify_channel_arg(task_failed_cmd)
     task_failed_cmd.set_defaults(handler=_board_handler("taskFailed"))
 
     task_progress_cmd = sub.add_parser("task-progress", help="Send task-progress callback")
-    task_progress_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    task_progress_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     task_progress_cmd.add_argument("--token", required=True, help="Callback token")
     task_progress_cmd.add_argument("--update", dest="update_json", required=False, help="Inline JSON payload for update")
     _add_notify_channel_arg(task_progress_cmd)
     task_progress_cmd.set_defaults(handler=_board_handler("taskProgress"))
 
     source_fetched_cmd = sub.add_parser("source-data-fetched", help="Send source-data-fetched callback")
-    source_fetched_cmd.add_argument("--base-ref", required=False, help="Board base ref (::kind::value)")
+    source_fetched_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
     source_fetched_cmd.add_argument("--token", required=True, help="Callback token")
     source_fetched_cmd.add_argument("--ref", required=True, help="Fetched source ref")
     _add_notify_channel_arg(source_fetched_cmd)
     source_fetched_cmd.set_defaults(handler=_board_handler("sourceDataFetched"))
 
     source_failed_cmd = sub.add_parser("source-data-fetch-failure", help="Send source-data-fetch-failure callback")
-    source_failed_cmd.add_argument("--base-ref", required=False, help="Board base ref (::kind::value)")
+    source_failed_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
     source_failed_cmd.add_argument("--token", required=True, help="Callback token")
     source_failed_cmd.add_argument("--reason", help="Failure reason")
     _add_notify_channel_arg(source_failed_cmd)
     source_failed_cmd.set_defaults(handler=_board_handler("sourceDataFetchFailure"))
 
     validate_cmd = sub.add_parser("validate-card", help="Validate card(s)")
-    validate_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    validate_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     validate_cmd.add_argument("--card-id", help="Card id")
     validate_cmd.add_argument("--all", action="store_true", help="Validate all cards")
     _add_notify_channel_arg(validate_cmd)
     validate_cmd.set_defaults(handler=_board_handler("validateCard"))
 
     probe_cmd = sub.add_parser("probe-source", help="Probe a source")
-    probe_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    probe_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     probe_cmd.add_argument("--card-id", required=True, help="Card id")
     probe_cmd.add_argument("--source-idx", required=True, help="Source index")
     probe_cmd.add_argument("--out-ref", required=False, help="Output ref")
@@ -621,17 +625,17 @@ def build_parser() -> argparse.ArgumentParser:
     probe_cmd.set_defaults(handler=_board_handler("probeSource"))
 
     describe_cmd = sub.add_parser("describe-task-executor-capabilities", help="Describe task executor capabilities")
-    describe_cmd.add_argument("--base-ref", required=True, help="Board base ref (::kind::value)")
+    describe_cmd.add_argument("--base-ref", required=True, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(describe_cmd)
     describe_cmd.set_defaults(handler=_board_handler("describeTaskExecutorCapabilities"))
 
     validate_tmp_cmd = sub.add_parser("validate-tmp-card", help="Validate temporary card body")
-    validate_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (::kind::value)")
+    validate_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
     _add_notify_channel_arg(validate_tmp_cmd)
     validate_tmp_cmd.set_defaults(handler=_board_handler("validateTmpCard"))
 
     probe_tmp_cmd = sub.add_parser("probe-tmp-source", help="Probe temporary source body")
-    probe_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (::kind::value)")
+    probe_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
     probe_tmp_cmd.add_argument("--out-ref", required=True, help="Output ref")
     _add_notify_channel_arg(probe_tmp_cmd)
     probe_tmp_cmd.set_defaults(handler=_board_handler("probeTmpSource"))

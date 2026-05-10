@@ -2,7 +2,7 @@
 
 > **Note**: Unlike `board-live-cards-cli`, `card-store` outputs raw JSON/YAML directly to stdout — not wrapped in a `CommandResult` envelope.
 
-`--store-ref` is a `::kind::value` routing flag, e.g. `::fs-path::/path/to/board`.  
+`--store-ref` is a `b64:<base64url(json)>` routing flag, e.g. `::fs-path::/path/to/board`.  
 It is required on every command and selects the card store directory.
 
 ---
@@ -123,4 +123,4 @@ card-store del: removed N card(s)
 | YAML output | `get --yaml` | — |
 | Output format | raw JSON array / YAML multi-doc | `CommandResult` envelope |
 | Board init required | no | yes — and `init` now requires `--store-ref` |
-| Card store location | `--store-ref` flag (any `::kind::value`) | configured at `init` time, readable via `get-card-store-ref` |
+| Card store location | `--store-ref` flag (any `b64:<base64url(json)>`) | configured at `init` time, readable via `get-card-store-ref` |

@@ -50,7 +50,7 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  const ref = requireFlag(rest, '--store-ref', `artifacts-store ${cmd} --store-ref <::kind::value>`);
+  const ref = requireFlag(rest, '--store-ref', `artifacts-store ${cmd} --store-ref <b64-ref>`);
   const root = parseRef(ref).value;
   const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
 

@@ -8,9 +8,23 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
 const boardCliPath = path.join(repoRoot, 'board-live-cards-cli.js');
 const cardStoreCliPath = path.join(repoRoot, 'card-store.js');
 
+export function toFsRef(value) {
+  const payload = Buffer.from(JSON.stringify({ kind: 'fs-path', value }), 'utf-8').toString('base64url');
+  return `b64:${payload}`;
+}
+
+function normalizeRefArg(v) {
+  if (typeof v !== 'string') return v;
+  return v;
+}
+
+function normalizeArgs(args) {
+  return args.map((v) => normalizeRefArg(v));
+}
+
 export function runBoardCli(args, options = {}) {
   const { capture = false, cwd = process.cwd() } = options;
-  const result = spawnSync(process.execPath, [boardCliPath, ...args], {
+  const result = spawnSync(process.execPath, [boardCliPath, ...normalizeArgs(args)], {
     cwd,
     encoding: 'utf-8',
     windowsHide: true,
@@ -37,7 +51,7 @@ export function runBoardCli(args, options = {}) {
 /** Spawn CLI with JSON piped to stdin. */
 export function runBoardCliWithInput(args, inputJson, options = {}) {
   const { cwd = process.cwd() } = options;
-  const result = spawnSync(process.execPath, [boardCliPath, ...args], {
+  const result = spawnSync(process.execPath, [boardCliPath, ...normalizeArgs(args)], {
     input: inputJson,
     cwd,
     encoding: 'utf-8',
@@ -65,7 +79,7 @@ export function runBoardCliWithInput(args, inputJson, options = {}) {
 /** Spawn card-store-cli with JSON piped to stdin. */
 export function runCardStoreCliWithInput(args, inputJson, options = {}) {
   const { cwd = process.cwd() } = options;
-  const result = spawnSync(process.execPath, [cardStoreCliPath, ...args], {
+  const result = spawnSync(process.execPath, [cardStoreCliPath, ...normalizeArgs(args)], {
     input: inputJson,
     cwd,
     encoding: 'utf-8',

@@ -79,7 +79,7 @@ class NativeBoardPlatformAdapter:
         return {
             "meta": "board-live-cards",
             "howToRun": "local-python",
-            "whatToRun": f"::fs-path::{board_pycli}",
+            "whatToRun": serialize_ref({"kind": "fs-path", "value": board_pycli}),
         }
 
     def dispatch_execution(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,9 +104,9 @@ class NativeBoardPlatformAdapter:
         with open(in_file, "w", encoding="utf-8") as f:
             json.dump(args, f, indent=2)
 
-        in_ref = f"::fs-path::{in_file}"
-        out_ref = f"::fs-path::{out_file}"
-        err_ref = f"::fs-path::{err_file}"
+        in_ref = serialize_ref({"kind": "fs-path", "value": in_file})
+        out_ref = serialize_ref({"kind": "fs-path", "value": out_file})
+        err_ref = serialize_ref({"kind": "fs-path", "value": err_file})
 
         return dispatch_execution(exec_ref, {
             "subcommand": "run-source-fetch",
@@ -157,7 +157,7 @@ class NativeBoardPlatformAdapter:
         how = ref.get("howToRun", "")
         what = ref.get("whatToRun", "")
         timeout = (opts or {}).get("timeout", 30_000)
-        if what.startswith("::"):
+        if what.startswith("b64:"):
             parsed = parse_ref(what)
             target = parsed["value"]
         else:
@@ -279,7 +279,7 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     Accepts the BoardInvokePayload shape:
       {
-        "baseRef": "::fs-path::/some/path",
+        "baseRef": serialize_ref({"kind": "fs-path", "value": "/some/path"}),
         "command": "init" | "status" | "upsertCard" | ...,
         "input": { "params": {...}, "body": ... },
         "notifyChannel": "..."

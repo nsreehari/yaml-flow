@@ -136,7 +136,9 @@ const TOKEN_FIXTURES: Record<string, unknown> = {
 };
 
 function listCardFiles(): string[] {
-  return fs.readdirSync(cardsDir).filter(file => file.endsWith('.json')).sort();
+  return fs.readdirSync(cardsDir)
+    .filter(file => file.endsWith('.json') && file !== '_index.json')
+    .sort();
 }
 
 function readCard(cardFile: string, dir = cardsDir): ComputeNode {

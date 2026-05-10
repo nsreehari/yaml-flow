@@ -377,7 +377,7 @@ async function runSourceFetchSubcommand(argv) {
   }
 
   if (!inRefStr || !outRefStr) {
-    fail('Usage: run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]');
+    fail('Usage: run-source-fetch --in-ref <b64:<base64url(json)>> --out-ref <b64:<base64url(json)>> [--err-ref <b64:<base64url(json)>>]');
   }
 
   let inRef, outRef, errRef;

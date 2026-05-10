@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readStdinJson, runBoardCli, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, toFsRef, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
@@ -11,7 +11,7 @@ try {
     writeFailure('BOARD_DIR and TASK are required');
   }
 
-  runBoardCli(['retrigger', '--base-ref', `::fs-path::${boardDir}`, '--id', task]);
+  runBoardCli(['retrigger', '--base-ref', toFsRef(boardDir), '--id', task]);
 
   writeResult({
     task,

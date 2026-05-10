@@ -5,9 +5,9 @@ Standalone file — copy this to your task-executor project.
 Zero dependencies on the rest of yaml-flow internals.
 
 Provides:
-  - KindValueRef        wire format: ::kind::value
-  - parse_ref()         parse a ::kind::value string
-  - serialize_ref()     produce a ::kind::value string
+    - KindValueRef        wire format: b64:<base64url(json)>
+    - parse_ref()         parse a b64:<base64url(json)> string
+    - serialize_ref()     produce a b64:<base64url(json)> string
   - BlobStorage         read/write interface (protocol class)
   - blob_storage_for_ref()  resolve a ref to its BlobStorage backend
   - TaskCallback        how to report task completion back to the board
@@ -37,6 +37,7 @@ Usage:
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -58,19 +59,27 @@ class KindValueRef:
 
 
 def parse_ref(s: str) -> KindValueRef:
-    """Parse a wire-format ref string (::kind::value) into a KindValueRef."""
-    if not s.startswith("::"):
-        raise ValueError(f"Invalid ref format (expected ::kind::value): {s}")
-    inner = s[2:]
-    idx = inner.find("::")
-    if idx < 0:
-        raise ValueError(f"Invalid ref format (expected ::kind::value): {s}")
-    return KindValueRef(kind=inner[:idx], value=inner[idx + 2:])
+    """Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef."""
+    if not s.startswith("b64:"):
+        raise ValueError(f"Invalid ref format (expected b64:<base64url(json)>): {s}")
+    payload = s[4:]
+    padded = payload + ("=" * ((4 - len(payload) % 4) % 4))
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Invalid ref format (malformed base64url/json): {s}") from exc
+    kind = decoded.get("kind") if isinstance(decoded, dict) else None
+    value = decoded.get("value") if isinstance(decoded, dict) else None
+    if not isinstance(kind, str) or not isinstance(value, str):
+        raise ValueError(f"Invalid ref format (payload must contain string kind/value): {s}")
+    return KindValueRef(kind=kind, value=value)
 
 
 def serialize_ref(ref: KindValueRef) -> str:
-    """Serialize a KindValueRef to the wire format: ::kind::value"""
-    return f"::{ref.kind}::{ref.value}"
+    """Serialize a KindValueRef to the wire format: b64:<base64url(json)>"""
+    payload = json.dumps({"kind": ref.kind, "value": ref.value}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return f"b64:{encoded}"
 
 
 # ============================================================================
@@ -137,7 +146,7 @@ def _parse_task_callback(raw: dict[str, Any]) -> TaskCallback:
 
 
 def _parse_what_to_run(what_to_run: str) -> str:
-    """Extract the path/url value from a whatToRun ::kind::value wire string."""
+    """Extract the path/url value from a whatToRun b64:<base64url(json)> wire string."""
     try:
         return parse_ref(what_to_run).value
     except Exception:

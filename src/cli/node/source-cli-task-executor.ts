@@ -7,7 +7,7 @@
  * .task-executor is configured.
  *
  * Subcommands:
- *   run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]
+ *   run-source-fetch --in-ref <b64-ref> --out-ref <b64-ref> [--err-ref <b64-ref>]
  *   describe-capabilities
  *
  * Supported source kind:
@@ -80,7 +80,7 @@ function runSourceFetch(argv: string[]): void {
   const errRefStr = errIdx !== -1 ? argv[errIdx + 1] : undefined;
 
   if (!inRefStr || !outRefStr) {
-    console.error('[source-cli-task-executor] Usage: run-source-fetch --in-ref <::kind::value> --out-ref <::kind::value> [--err-ref <::kind::value>]');
+    console.error('[source-cli-task-executor] Usage: run-source-fetch --in-ref <b64-ref> --out-ref <b64-ref> [--err-ref <b64-ref>]');
     process.exit(1);
   }
 

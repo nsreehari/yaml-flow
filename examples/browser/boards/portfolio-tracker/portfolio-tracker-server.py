@@ -243,7 +243,7 @@ def create_fs_board_platform_adapter(base_ref: Dict[str, str]):
             return {
                 'meta': 'board-live-cards',
                 'howToRun': 'local-python',
-                'whatToRun': f'::fs-path::{os.path.join(_PYCLI_ROOT, "main", "board_live_cards_pycli.py")}',
+                'whatToRun': serialize_ref({'kind': 'fs-path', 'value': os.path.join(_PYCLI_ROOT, 'main', 'board_live_cards_pycli.py')}),
             }
 
         def dispatch_execution(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
@@ -263,9 +263,9 @@ def create_fs_board_platform_adapter(base_ref: Dict[str, str]):
                 json.dump(args, f, indent=2)
             return _dispatch_execution_impl(exec_ref, {
                 'subcommand': 'run-source-fetch',
-                'inRef': f'::fs-path::{in_file}',
-                'outRef': f'::fs-path::{out_file}',
-                'errRef': f'::fs-path::{err_file}',
+                'inRef': serialize_ref({'kind': 'fs-path', 'value': in_file}),
+                'outRef': serialize_ref({'kind': 'fs-path', 'value': out_file}),
+                'errRef': serialize_ref({'kind': 'fs-path', 'value': err_file}),
             }, cwd=scope, detached=True)
 
         def resolve_blob(self, ref: Dict[str, str]) -> str:
@@ -297,7 +297,14 @@ def create_invocation_adapter():
         def invoke(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
             how = ref.get('howToRun', '')
             what = str(ref.get('whatToRun') or '')
-            script_path = what[len('::fs-path::'):] if what.startswith('::fs-path::') else ''
+            if what.startswith('b64:'):
+                try:
+                    parsed = parse_ref(what)
+                    script_path = parsed.get('value') if parsed.get('kind') == 'fs-path' else ''
+                except Exception:
+                    script_path = ''
+            else:
+                script_path = what
             if not script_path:
                 return {'dispatched': False, 'error': f'no script path: {what}'}
             if how == 'local-python':
@@ -328,13 +335,13 @@ def create_invocation_adapter():
 
 # ── Board adapter & runtime ────────────────────────────────────────────────────
 
-base_ref = parse_ref(f'::fs-path::{RUNTIME_DIR}')
+base_ref = parse_ref(serialize_ref({'kind': 'fs-path', 'value': RUNTIME_DIR}))
 board_adapter = create_fs_board_platform_adapter(base_ref)
 card_store_ref = serialize_ref({'kind': 'fs-path', 'value': os.path.join(CARDS_DIR, 'cards')})
 outputs_store_ref = serialize_ref({'kind': 'fs-path', 'value': os.path.join(OUTPUTS_DIR, '.outputs')})
 task_executor_ref = {
     'howToRun': 'local-python',
-    'whatToRun': f'::fs-path::{FETCH_PRICES_PY}',
+    'whatToRun': serialize_ref({'kind': 'fs-path', 'value': FETCH_PRICES_PY}),
     'meta': 'task-executor',
 }
 

@@ -10,10 +10,7 @@ const distCli = path.join(__dirname, 'dist', 'cli', 'node', 'card-store-cli.js')
 const srcCli = path.join(__dirname, 'src', 'cli', 'node', 'card-store-cli.ts');
 const tsxCli = path.join(__dirname, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
-if (fs.existsSync(distCli)) {
-  const { cli } = await import(pathToFileUrl(distCli).href);
-  await cli(process.argv.slice(2));
-} else if (fs.existsSync(srcCli)) {
+if (fs.existsSync(srcCli)) {
   const result = spawnSync(process.execPath, [tsxCli, srcCli, ...process.argv.slice(2)], {
     stdio: 'inherit',
     shell: false,
@@ -26,6 +23,9 @@ if (fs.existsSync(distCli)) {
   }
 
   process.exit(result.status ?? 0);
+} else if (fs.existsSync(distCli)) {
+  const { cli } = await import(pathToFileUrl(distCli).href);
+  await cli(process.argv.slice(2));
 } else {
   console.error('[card-store] Could not find dist or src CLI entrypoint.');
   process.exit(1);

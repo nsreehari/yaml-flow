@@ -61,11 +61,17 @@ function resolveFromConfig(configValue) {
 function resolveKindRefFromConfig(configValue) {
   if (typeof configValue !== 'string' || !configValue.trim()) return null;
   const trimmed = configValue.trim();
-  if (!trimmed.startsWith('::fs-path::')) return trimmed;
-  const rawPath = trimmed.slice('::fs-path::'.length).trim();
-  if (!rawPath) return null;
-  const resolved = path.isAbsolute(rawPath) ? rawPath : path.resolve(__dirname, rawPath);
-  return `::fs-path::${resolved}`;
+  if (!trimmed.startsWith('b64:')) return trimmed;
+  try {
+    const parsed = parseRef(trimmed);
+    if (parsed.kind !== 'fs-path') return trimmed;
+    const rawPath = parsed.value.trim();
+    if (!rawPath) return null;
+    const resolved = path.isAbsolute(rawPath) ? rawPath : path.resolve(__dirname, rawPath);
+    return serializeRef({ kind: 'fs-path', value: resolved });
+  } catch {
+    return trimmed;
+  }
 }
 
 const serverConfig = loadServerConfig();
@@ -149,7 +155,7 @@ function namedPipePath(pipeName) {
 function makeExecutionRef(scriptPath, meta) {
   if (!scriptPath) return undefined;
   const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(process.cwd(), scriptPath);
-  return { howToRun: 'local-node', whatToRun: `::fs-path::${resolved}`, meta };
+  return { howToRun: 'local-node', whatToRun: serializeRef({ kind: 'fs-path', value: resolved }), meta };
 }
 
 function createNodeSpawnInvocationAdapter() {
@@ -159,7 +165,17 @@ function createNodeSpawnInvocationAdapter() {
         return { dispatched: false, error: `unsupported howToRun: ${ref.howToRun}` };
       }
       const whatToRun = String(ref.whatToRun || '');
-      const scriptPath = whatToRun.startsWith('::fs-path::') ? whatToRun.slice('::fs-path::'.length) : '';
+      let scriptPath = '';
+      if (whatToRun.startsWith('b64:')) {
+        try {
+          const parsed = parseRef(whatToRun);
+          if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+        } catch {
+          scriptPath = '';
+        }
+      } else {
+        scriptPath = whatToRun;
+      }
       if (!scriptPath) {
         return { dispatched: false, error: `no script path in whatToRun: ${whatToRun}` };
       }
@@ -188,7 +204,17 @@ function createNodeSpawnInvocationAdapter() {
     async describe(ref) {
       if (ref.howToRun !== 'local-node') return null;
       const whatToRun = String(ref.whatToRun || '');
-      const scriptPath = whatToRun.startsWith('::fs-path::') ? whatToRun.slice('::fs-path::'.length) : '';
+      let scriptPath = '';
+      if (whatToRun.startsWith('b64:')) {
+        try {
+          const parsed = parseRef(whatToRun);
+          if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+        } catch {
+          scriptPath = '';
+        }
+      } else {
+        scriptPath = whatToRun;
+      }
       if (!scriptPath) return null;
       try {
         const result = spawnSync(process.execPath, [scriptPath, 'describe'], {
@@ -247,7 +273,7 @@ function createNamedPipeNotificationTransport() {
 // Server meta store (multi-board registry)
 // ---------------------------------------------------------------------------
 
-const serverMetaRef = process.env.DEMO_SERVER_META_STORE_REF || configuredServerMetaStoreRef || `::fs-path::${setupDir}`;
+const serverMetaRef = process.env.DEMO_SERVER_META_STORE_REF || configuredServerMetaStoreRef || serializeRef({ kind: 'fs-path', value: setupDir });
 const serverMetaAdapter = createFsBoardPlatformAdapter(
   parseRef(serverMetaRef), YAML_FLOW_CLI_DIR, { suppressSpawn: true },
 );
@@ -269,7 +295,7 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   fs.mkdirSync(boardDir, { recursive: true });
 
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
-  const baseRef = parseRef(`::fs-path::${boardDir}`);
+  const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, YAML_FLOW_CLI_DIR, {
     notifyChannel,
   });
@@ -278,7 +304,7 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   boardAdapter.requestProcessAccumulated = () => {};
   // Separate artifacts adapter rooted at cardsDir (preserves old FS layout where
   // chats/files live under cardsDir rather than boardDir)
-  const artifactsRef = parseRef(`::fs-path::${cardsDir}`);
+  const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: cardsDir }));
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, YAML_FLOW_CLI_DIR, { suppressSpawn: true });
 
   const cardStoreRef = serializeRef({ kind: 'fs-path', value: cardsDir });

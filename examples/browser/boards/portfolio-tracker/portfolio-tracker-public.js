@@ -31,6 +31,7 @@ const {
   createCardStorePublic,
   createCardStore,
   parseRef,
+  serializeRef,
 } = await import(pathToFileURL(_adapterPath).href);
 
 const FETCH_PRICES_JS = path.join(__dirname, 'portfolio-tracker-fetch-prices.js');
@@ -41,9 +42,9 @@ const CARDSTORE_DIR   = path.join(_TMP_BASE, 'cardstore');
 const BOARDRUNTIME_DIR = path.join(_TMP_BASE, 'boardruntime');
 const OUTPUTS_DIR     = path.join(_TMP_BASE, 'outputs');
 
-const CARDSTORE_REF    = `::fs-path::${CARDSTORE_DIR}`;
-const BOARDRUNTIME_REF = `::fs-path::${BOARDRUNTIME_DIR}`;
-const OUTPUTS_REF      = `::fs-path::${OUTPUTS_DIR}`;
+const CARDSTORE_REF    = serializeRef({ kind: 'fs-path', value: CARDSTORE_DIR });
+const BOARDRUNTIME_REF = serializeRef({ kind: 'fs-path', value: BOARDRUNTIME_DIR });
+const OUTPUTS_REF      = serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR });
 const NOTIFY_CHANNEL   = 'yaml-flow-board-notify-portfolio-tracker-public';
 
 // ── Card definitions ───────────────────────────────────────────────────────────
@@ -64,18 +65,16 @@ const CARD_PRICE_FETCH = {
   id: 'price-fetch',
   meta: { title: 'Fetch Market Prices' },
   requires: ['holdings'],
-  provides: [{ bindTo: 'prices', ref: 'fetched_sources.prices' }],
+  provides: [{ bindTo: 'prices', ref: 'computed_values.prices' }],
   card_data: {},
-  source_defs: [{
-    kind: 'mock-quotes',
+  compute: [{
     bindTo: 'prices',
-    outputFile: 'prices.json',
-    projections: { tickers: '$append([], requires.holdings.symbol)' }
+    expr: '$merge($map(requires.holdings, function($h){ { $h.symbol: 100 } }))'
   }],
   view: {
     elements: [
       { kind: 'table', label: 'Market Prices',
-        data: { bind: 'fetched_sources.prices' } }
+        data: { bind: 'computed_values.prices' } }
     ]
   }
 };
@@ -408,7 +407,7 @@ checkResult(
       'task-executor-ref': {
         meta: 'task-executor',
         howToRun: 'local-node',
-        whatToRun: `::fs-path::${FETCH_PRICES_JS}`,
+        whatToRun: serializeRef({ kind: 'fs-path', value: FETCH_PRICES_JS }),
       },
     },
   }),

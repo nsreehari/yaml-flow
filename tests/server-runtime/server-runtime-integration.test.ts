@@ -52,7 +52,9 @@ function createFsCardSource(cardsDir: string): CardSourceAdapter {
       return files.map(f => {
         const raw = fs.readFileSync(path.join(cardsDir, f), 'utf-8');
         return JSON.parse(raw);
-      });
+      }).filter((card): card is Record<string, unknown> & { id: string } =>
+        !!card && typeof card === 'object' && typeof (card as { id?: unknown }).id === 'string' && (card as { id: string }).id.trim().length > 0,
+      );
     },
   };
 }
@@ -77,7 +79,7 @@ beforeAll(async () => {
     }
   }
 
-  const baseRef = parseRef(`::fs-path::${BOARD_DIR}`);
+  const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: BOARD_DIR }));
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, repoRoot, { suppressSpawn: true });
 
   const runtimeOptions: SingleBoardRuntimeOptions = {
@@ -115,6 +117,7 @@ beforeAll(async () => {
   } as any));
   const sourceCards = createFsCardSource(testCardsDir).listCards();
   for (const card of sourceCards) {
+    if (typeof card.id !== 'string' || card.id.trim().length === 0) continue;
     const setResult = preloadStore.set({ body: card });
     if (setResult.status !== 'success') {
       throw new Error(`failed to preload card: ${setResult.error || 'unknown error'}`);
@@ -170,8 +173,8 @@ describe('platform-free server runtime (Node host)', () => {
     expect(data).toHaveProperty('statusSnapshot');
   });
 
-  it('GET /api/board/bootstrap-cards returns card definitions', async () => {
-    const res = await fetch(`${API_BASE}/bootstrap-cards`);
+  it('GET /api/board/board-status returns card definitions', async () => {
+    const res = await fetch(`${API_BASE}/board-status`);
     expect(res.ok).toBe(true);
     const data = await res.json() as Record<string, unknown>;
     expect(data).toHaveProperty('cardDefinitions');

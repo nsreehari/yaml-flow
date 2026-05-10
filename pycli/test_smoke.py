@@ -81,8 +81,10 @@ test("MemoryStore", t3)
 # ===== Test 4: Storage interface =====
 def t4():
     from pylib.cli.storage_interface import parse_ref, serialize_ref
-    ref = parse_ref('::fs-path::/some/dir')
-    assert serialize_ref(ref) == '::fs-path::/some/dir'
+    encoded = serialize_ref({'kind': 'fs-path', 'value': '/some/dir'})
+    ref = parse_ref(encoded)
+    assert ref == {'kind': 'fs-path', 'value': '/some/dir'}
+    assert serialize_ref(ref) == encoded
 
 test("Storage interface roundtrip", t4)
 
@@ -147,12 +149,12 @@ def t8():
         'id': 'bridge-test', 'settings': {'start_step': 's1', 'max_total_steps': 10},
         'steps': {
             's1': {
-                'handler': {'type': 'compute-jsonata', 'expr': ['x = 1']},
+                'handler': {'type': 'compute-jsonata', 'expr': ['data.x = 1', 'result = "success"']},
                 'produces_data': ['x'],
                 'transitions': {'success': 's2'},
             },
             's2': {
-                'handler': {'type': 'compute-jsonata', 'expr': ['y = x + 1']},
+                'handler': {'type': 'compute-jsonata', 'expr': ['data.y = expects_data.x + 1', 'result = "success"']},
                 'produces_data': ['y'],
                 'transitions': {'success': 'done'},
             },
@@ -171,14 +173,15 @@ test("Native step machine bridge (declarative)", t8)
 # ===== Test 9: Declarative handler factory (compute-jsonata) =====
 def t9():
     from pylib.step_machine_public import build_step_handlers_for_flow, is_compute_jsonata_spec, is_ref_spec
-    assert is_compute_jsonata_spec({'type': 'compute-jsonata', 'expr': ['a = 1']})
+    from pylib.cli.storage_interface import serialize_ref
+    assert is_compute_jsonata_spec({'type': 'compute-jsonata', 'expr': ['data.a = 1', 'result = "success"']})
     assert not is_compute_jsonata_spec({'type': 'compute-jsonata', 'expr': []})
-    assert is_ref_spec({'type': 'ref', 'howToRun': 'local-node', 'whatToRun': '::fs-path::/x.js'})
+    assert is_ref_spec({'type': 'ref', 'howToRun': 'local-node', 'whatToRun': serialize_ref({'kind': 'fs-path', 'value': '/x.js'})})
     assert not is_ref_spec({'type': 'ref', 'howToRun': 'local-node'})
 
     flow = {
         'steps': {
-            'a': {'handler': {'type': 'compute-jsonata', 'expr': ['v = 7']}, 'produces_data': ['v']},
+            'a': {'handler': {'type': 'compute-jsonata', 'expr': ['data.v = 7', 'result = "success"']}, 'produces_data': ['v']},
         },
     }
     def fail_invoke(ref, args):
@@ -193,6 +196,7 @@ test("Declarative handler factory (compute-jsonata)", t9)
 # ===== Test 10: Ref handler dispatches via invoke =====
 def t10():
     from pylib.step_machine_public import build_step_handlers_for_flow
+    from pylib.cli.storage_interface import serialize_ref
     captured = {}
     def fake_invoke(ref, args):
         captured['ref'] = ref
@@ -205,7 +209,7 @@ def t10():
                 'handler': {
                     'type': 'ref',
                     'howToRun': 'local-node',
-                    'whatToRun': '::fs-path::/dummy.js',
+                    'whatToRun': serialize_ref({'kind': 'fs-path', 'value': '/dummy.js'}),
                 },
                 'produces_data': ['echo'],
             },

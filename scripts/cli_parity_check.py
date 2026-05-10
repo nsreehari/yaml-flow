@@ -46,6 +46,11 @@ def _assert_equal(label: str, left: Any, right: Any) -> None:
         raise AssertionError(f"{label} mismatch\nLEFT: {left!r}\nRIGHT: {right!r}")
 
 
+def _fs_ref(p: str) -> str:
+    payload = json.dumps({"kind": "fs-path", "value": p}, separators=(",", ":")).encode("utf-8")
+    return "b64:" + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
 def _parse_json_or_text(s: str) -> Any:
     text = s.strip()
     if not text:
@@ -193,8 +198,8 @@ def _assert_cmd_parity_replaced(
 
 def run_card_store_parity(repo_root: Path, node: str, py: str) -> None:
     with tempfile.TemporaryDirectory(prefix="card-node-") as n_dir, tempfile.TemporaryDirectory(prefix="card-py-") as p_dir:
-        n_ref = f"::fs-path::{n_dir}"
-        p_ref = f"::fs-path::{p_dir}"
+        n_ref = _fs_ref(n_dir)
+        p_ref = _fs_ref(p_dir)
 
         # set
         payload = json.dumps({"id": "card-1", "card_data": {"n": 1}})
@@ -242,8 +247,8 @@ def run_card_store_parity(repo_root: Path, node: str, py: str) -> None:
 
 def run_artifacts_store_parity(repo_root: Path, node: str, py: str) -> None:
     with tempfile.TemporaryDirectory(prefix="art-node-") as n_dir, tempfile.TemporaryDirectory(prefix="art-py-") as p_dir:
-        n_ref = f"::fs-path::{n_dir}"
-        p_ref = f"::fs-path::{p_dir}"
+        n_ref = _fs_ref(n_dir)
+        p_ref = _fs_ref(p_dir)
 
         # put text
         put_args = ["put", "--store-ref", "{ref}", "--key", "k1.txt", "--text", "hello", "--content-type", "text/plain"]
@@ -320,12 +325,12 @@ def run_board_live_cards_parity(repo_root: Path, node: str, py_for_board: str) -
         for d in (n_board, n_cards, n_out, p_board, p_cards, p_out):
             d.mkdir(parents=True, exist_ok=True)
 
-        n_board_ref = f"::fs-path::{str(n_board)}"
-        n_cards_ref = f"::fs-path::{str(n_cards)}"
-        n_out_ref = f"::fs-path::{str(n_out)}"
-        p_board_ref = f"::fs-path::{str(p_board)}"
-        p_cards_ref = f"::fs-path::{str(p_cards)}"
-        p_out_ref = f"::fs-path::{str(p_out)}"
+        n_board_ref = _fs_ref(str(n_board))
+        n_cards_ref = _fs_ref(str(n_cards))
+        n_out_ref = _fs_ref(str(n_out))
+        p_board_ref = _fs_ref(str(p_board))
+        p_cards_ref = _fs_ref(str(p_cards))
+        p_out_ref = _fs_ref(str(p_out))
 
         n_rep = [
             (str(n_board), "<BASE_BOARD>"),
@@ -525,12 +530,12 @@ def run_board_live_cards_parity(repo_root: Path, node: str, py_for_board: str) -
         # probe-tmp-source (missing source-def — error path)
         bad_probe_body = json.dumps({"mock-projections": {}})
         n = _run(
-            _node_board_cmd(repo_root, node, ["probe-tmp-source", "--out-ref", f"::fs-path::{n_board}/probe-out.json"]),
+            _node_board_cmd(repo_root, node, ["probe-tmp-source", "--out-ref", _fs_ref(str(n_board / "probe-out.json"))]),
             stdin_text=bad_probe_body,
             cwd=repo_root,
         )
         p = _run(
-            _py_board_cmd(repo_root, py_for_board, ["probe-tmp-source", "--out-ref", f"::fs-path::{p_board}/probe-out.json"]),
+            _py_board_cmd(repo_root, py_for_board, ["probe-tmp-source", "--out-ref", _fs_ref(str(p_board / "probe-out.json"))]),
             stdin_text=bad_probe_body,
             cwd=repo_root,
         )

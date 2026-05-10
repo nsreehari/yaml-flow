@@ -26,10 +26,10 @@
  * BUILT-IN RESOLUTION
  * ────────────────────────────────────────────────────────────────────────────
  *
- *  howToRun: 'built-in' with whatToRun: '::built-in::source-cli-task-executor'
+ *  howToRun: 'built-in' with whatToRun: 'b64:<base64url({"kind":"built-in","value":"source-cli-task-executor"})>'
  *  → resolves to node <cliDir>/source-cli-task-executor.js
  *
- *  howToRun: 'built-in' with whatToRun: '::built-in::board-live-cards'
+ *  howToRun: 'built-in' with whatToRun: 'b64:<base64url({"kind":"built-in","value":"board-live-cards"})>'
  *  → resolves to node <cliDir>/board-live-cards-cli.js (via buildBoardCliInvocation)
  *
  * ────────────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ import { createRequire } from 'module';
 const _requireJsonata = createRequire(import.meta.url);
 const jsonata: (expr: string) => { evaluate: (data: unknown) => unknown } = _requireJsonata('../../card-compute/jsonata-sync.cjs');
 import type { ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
-import { parseRef } from '../common/storage-interface.js';
+import { parseRef, serializeRef } from '../common/storage-interface.js';
 import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.js';
 
 // ============================================================================
@@ -60,11 +60,11 @@ import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.
 export interface TaskExecutorArgs {
   /** Subcommand to dispatch: 'run-source-fetch' | 'validate-source-def' | 'describe-capabilities' | ... */
   subcommand: string;
-  /** Input ref (::kind::value wire form) pointing to the task payload. */
+  /** Input ref (b64:<base64url(json)> wire form) pointing to the task payload. */
   inRef?: string;
-  /** Output ref (::kind::value wire form) where the executor writes its result. */
+  /** Output ref (b64:<base64url(json)> wire form) where the executor writes its result. */
   outRef?: string;
-  /** Error ref (::kind::value wire form) for structured error output. */
+  /** Error ref (b64:<base64url(json)> wire form) for structured error output. */
   errRef?: string;
 }
 
@@ -131,7 +131,7 @@ async function evalJsonataString(expr: string, context: Record<string, unknown>)
  *   board-live-cards          → node <cliDir>/board-live-cards-cli.js (via buildBoardCliInvocation)
  */
 function resolveBuiltIn(whatToRun: string, cliDir: string): { command: string; args: string[] } {
-  // whatToRun is a ::kind::value ref — parse the value portion
+  // whatToRun is a b64:<base64url(json)> ref — parse the value portion
   let name: string;
   try {
     name = parseRef(whatToRun).value;
@@ -484,7 +484,7 @@ async function _invokeTaskExecutorHttp(
   if (ref.argsMassaging?.urlTemplate) {
     url = await evalJsonataString(ref.argsMassaging.urlTemplate, context);
   } else {
-    // Default: use whatToRun as URL directly (strip ::http-url:: prefix if present)
+    // Default: use whatToRun as URL directly (strip b64 KindValueRef if present)
     try {
       url = parseRef(ref.whatToRun).value;
     } catch {
@@ -533,7 +533,7 @@ export function builtInSourceCliExecutorRef(): ExecutionRef {
   return {
     meta: 'task-executor',
     howToRun: 'built-in',
-    whatToRun: '::built-in::source-cli-task-executor',
+    whatToRun: serializeRef({ kind: 'built-in', value: 'source-cli-task-executor' }),
   };
 }
 
@@ -545,7 +545,7 @@ export function builtInBoardCliRef(): ExecutionRef {
   return {
     meta: 'board-live-cards',
     howToRun: 'built-in',
-    whatToRun: '::built-in::board-live-cards',
+    whatToRun: serializeRef({ kind: 'built-in', value: 'board-live-cards' }),
   };
 }
 
@@ -558,7 +558,7 @@ export function localNodeExecutorRef(scriptPath: string): ExecutionRef {
   return {
     meta: 'task-executor',
     howToRun: 'local-node',
-    whatToRun: `::fs-path::${scriptPath}`,
+    whatToRun: serializeRef({ kind: 'fs-path', value: scriptPath }),
   };
 }
 

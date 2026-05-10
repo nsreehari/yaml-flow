@@ -36,11 +36,9 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// ── CLI args ───────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-const portArg = args.indexOf('--port');
-const PORT = portArg !== -1 ? parseInt(args[portArg + 1], 10) : 7800;
+const portIdx = args.indexOf('--port');
+const PORT = portIdx >= 0 ? Number(args[portIdx + 1]) : 7800;
 const RESET = args.includes('--reset');
 
 // ── Paths ──────────────────────────────────────────────────────────────────────
@@ -81,18 +79,18 @@ const INLINE_CARDS = [
     id: 'price-fetch',
     meta: { title: 'Fetch Market Prices' },
     requires: ['holdings'],
-    provides: [{ bindTo: 'prices', ref: 'fetched_sources.prices' }],
+    provides: [{ bindTo: 'prices', ref: 'computed_values.prices' }],
     card_data: {},
-    source_defs: [{
-      kind: 'mock-quotes',
-      bindTo: 'prices',
-      outputFile: 'prices.json',
-      projections: { tickers: '$append([], requires.holdings.symbol)' },
-    }],
+    compute: [
+      {
+        bindTo: 'prices',
+        expr: '$merge($map(requires.holdings, function($h){ { $h.symbol: 100 } }))',
+      },
+    ],
     view: {
       elements: [
         { kind: 'table', label: 'Market Prices',
-          data: { bind: 'fetched_sources.prices' } },
+          data: { bind: 'computed_values.prices' } },
       ],
     },
   },
@@ -145,7 +143,18 @@ function createNodeSpawnInvocationAdapter() {
       if (ref.howToRun !== 'local-node') {
         return { dispatched: false, error: `unsupported howToRun: ${ref.howToRun}` };
       }
-      const scriptPath = String(ref.whatToRun || '').replace(/^::fs-path::/, '');
+      const whatToRun = String(ref.whatToRun || '');
+      let scriptPath = '';
+      if (whatToRun.startsWith('b64:')) {
+        try {
+          const parsed = parseRef(whatToRun);
+          if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+        } catch {
+          scriptPath = '';
+        }
+      } else {
+        scriptPath = whatToRun;
+      }
       if (!scriptPath) return { dispatched: false, error: 'no script path' };
       const extra = Buffer.from(JSON.stringify(invokeArgs)).toString('base64');
       try {
@@ -208,7 +217,7 @@ function createNamedPipeNotificationTransport() {
 // board-live-cards-cli.js there (used to build selfRef for task executor callbacks).
 // __dirname here is examples/browser/boards/portfolio-tracker — 4 levels up = yaml-flow root.
 const YAML_FLOW_CLI_DIR = path.resolve(__dirname, '..', '..', '..', '..');
-const baseRef = parseRef(`::fs-path::${RUNTIME_DIR}`);
+const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: RUNTIME_DIR }));
 const boardAdapter = createFsBoardPlatformAdapter(baseRef, YAML_FLOW_CLI_DIR, { notifyChannel: NOTIFY_CHANNEL });
 // In the server context the drain loop is driven in-process.
 boardAdapter.requestProcessAccumulated = () => {};
@@ -218,7 +227,7 @@ const outputsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(OUTPUTS
 const notifyRef = { kind: 'named-pipe', value: namedPipePath(NOTIFY_CHANNEL) };
 const taskExecutorRef = {
   howToRun: 'local-node',
-  whatToRun: `::fs-path::${FETCH_PRICES_JS}`,
+  whatToRun: serializeRef({ kind: 'fs-path', value: FETCH_PRICES_JS }),
   meta: 'task-executor',
 };
 

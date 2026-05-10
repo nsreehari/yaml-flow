@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _board_pycli import (  # noqa: E402
     read_stdin_json,
     run_board_pycli,
+    to_fs_ref,
     write_failure,
     write_result,
 )
@@ -22,7 +23,7 @@ def main() -> int:
             write_failure("BOARD_DIR is required")
             return 0
 
-        base_ref = f"::fs-path::{board_dir}"
+        base_ref = to_fs_ref(board_dir)
         run_board_pycli([
             "init",
             "--base-ref", base_ref,

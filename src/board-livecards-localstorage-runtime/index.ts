@@ -141,7 +141,7 @@ export function create(
     onWarn,
   });
 
-  const baseRef = parseRef(`::localstorage::${namespace}`);
+  const baseRef = parseRef(serializeRef({ kind: 'localstorage', value: namespace }));
   const cardStoreRef = serializeRef({ kind: 'localstorage', value: `${namespace}:card-store` });
   const outputsStoreRef = serializeRef({ kind: 'localstorage', value: `${namespace}:outputs` });
 
@@ -150,8 +150,8 @@ export function create(
   const browserTaskExecutor = opts?.taskExecutor ?? null;
   const browserChatHandler = opts?.chatHandler ?? null;
 
-  const taskExecutorWhatToRun = `::in-browser::${namespace}:task-executor`;
-  const chatHandlerWhatToRun = `::in-browser::${namespace}:chat-handler`;
+  const taskExecutorWhatToRun = serializeRef({ kind: 'in-browser', value: `${namespace}:task-executor` });
+  const chatHandlerWhatToRun = serializeRef({ kind: 'in-browser', value: `${namespace}:chat-handler` });
 
   // Register in-browser handlers on the adapter
   if (browserTaskExecutor) {

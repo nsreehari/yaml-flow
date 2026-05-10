@@ -11,6 +11,7 @@ from _board_pycli import (  # noqa: E402
     read_stdin_json,
     run_board_pycli,
     run_card_store_pycli_with_input,
+    to_fs_ref,
     write_failure,
     write_result,
 )
@@ -28,7 +29,7 @@ def main() -> int:
             write_failure("BOARD_DIR and CARDS (array) are required")
             return 0
 
-        base_ref = f"::fs-path::{board_dir}"
+        base_ref = to_fs_ref(board_dir)
 
         run_card_store_pycli_with_input(
             ["set", "--store-ref", base_ref],

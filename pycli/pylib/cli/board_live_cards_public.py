@@ -498,7 +498,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             # Dispatch execution requests (source fetches) — detached, fire-and-forget
             executor_ref = config_store().read_task_executor_ref() or {
                 "howToRun": "built-in",
-                "whatToRun": "::built-in::source-cli-task-executor",
+                "whatToRun": serialize_ref({"kind": "built-in", "value": "source-cli-task-executor"}),
             }
 
             exec_req_store.dispatch_entries_for_journal_id(new_cursor, lambda entry: _dispatch_source_fetch(

@@ -17,13 +17,14 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../../src/cli/node/fs-board-adapter.js';
+import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 const adapterOpts = { onWarn: () => {}, suppressSpawn: true };
 
 const cliDir = path.dirname(fileURLToPath(import.meta.url));
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
-const mkCardStoreRef = (d: string) => '::fs-path::' + path.join(d, '.cards');
-const mkOutputsStoreRef = (d: string) => '::fs-path::' + path.join(d, '.output');
+const mkCardStoreRef = (d: string) => serializeRef({ kind: 'fs-path', value: path.join(d, '.cards') });
+const mkOutputsStoreRef = (d: string) => serializeRef({ kind: 'fs-path', value: path.join(d, '.output') });
 
 /** Minimal card that satisfies the live-card schema. */
 const minCard = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -673,8 +674,8 @@ function makeSourceToken(boardDir: string, taskName: string): string {
   const cbkToken = makeCallbackToken(taskName);
   const payload = {
     cbk: cbkToken,
-    rg:  '::fs-path::' + boardDir,
-    br:  '::fs-path::' + boardDir,
+    rg:  serializeRef({ kind: 'fs-path', value: boardDir }),
+    br:  serializeRef({ kind: 'fs-path', value: boardDir }),
     cid: taskName,
     b:   'my-bind',
     d:   'output.json',
@@ -763,7 +764,7 @@ describe('BoardLiveCardsPublic — sourceDataFetched', () => {
 
   it('fails when source token is invalid', () => {
     const { board } = freshBoard();
-    const result = board.sourceDataFetched({ params: { token: 'garbage', ref: '::fs-path::/tmp/x' } });
+    const result = board.sourceDataFetched({ params: { token: 'garbage', ref: serializeRef({ kind: 'fs-path', value: '/tmp/x' }) } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/Invalid source token/);
   });
@@ -775,7 +776,7 @@ describe('BoardLiveCardsPublic — sourceDataFetched', () => {
     const relKey = 'fetched.json';
     fs.writeFileSync(path.join(boardDir, relKey), JSON.stringify({ data: [1, 2, 3] }));
     const token = makeSourceToken(boardDir, 'src-task');
-    const result = board.sourceDataFetched({ params: { token, ref: '::fs-path::' + relKey } });
+    const result = board.sourceDataFetched({ params: { token, ref: serializeRef({ kind: 'fs-path', value: relKey }) } });
     expect(result.status).toBe('success');
   });
 });

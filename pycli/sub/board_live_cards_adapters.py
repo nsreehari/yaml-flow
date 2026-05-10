@@ -17,17 +17,25 @@ from urllib.request import Request, urlopen
 
 
 def serialize_ref(kind: str, value: str) -> str:
-    return f"::{kind}::{value}"
+    payload = json.dumps({"kind": kind, "value": value}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return f"b64:{encoded}"
 
 
 def parse_ref(ref: str) -> Tuple[str, str]:
-    if not ref.startswith("::"):
+    if not ref.startswith("b64:"):
         raise ValueError(f"Invalid ref format: {ref}")
-    inner = ref[2:]
-    idx = inner.find("::")
-    if idx < 0:
+    payload = ref[4:]
+    padded = payload + ("=" * ((4 - len(payload) % 4) % 4))
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Invalid ref format: {ref}") from exc
+    kind = decoded.get("kind") if isinstance(decoded, dict) else None
+    value = decoded.get("value") if isinstance(decoded, dict) else None
+    if not isinstance(kind, str) or not isinstance(value, str):
         raise ValueError(f"Invalid ref format: {ref}")
-    return inner[:idx], inner[idx + 2 :]
+    return kind, value
 
 
 def compute_stable_json_hash(value: Any) -> str:
@@ -276,7 +284,7 @@ def _dispatch_execution_impl(ref: ExecutionRef, args: Dict[str, Any], cwd: Optio
         executor = PythonCommandExecutor()
 
         def _target_from_ref(ref_value: str) -> str:
-            kind, value = parse_ref(ref_value) if ref_value.startswith("::") else ("raw", ref_value)
+            kind, value = parse_ref(ref_value) if ref_value.startswith("b64:") else ("raw", ref_value)
             if kind in ("fs-path", "raw"):
                 return value
             return ref_value
@@ -328,7 +336,7 @@ def _dispatch_execution_impl(ref: ExecutionRef, args: Dict[str, Any], cwd: Optio
             return {"dispatched": True}
 
         if ref.howToRun in ("http:post", "http:get"):
-            url = parse_ref(ref.whatToRun)[1] if ref.whatToRun.startswith("::") else ref.whatToRun
+            url = parse_ref(ref.whatToRun)[1] if ref.whatToRun.startswith("b64:") else ref.whatToRun
             if ref.howToRun == "http:get":
                 req = Request(url=url, method="GET")
             else:

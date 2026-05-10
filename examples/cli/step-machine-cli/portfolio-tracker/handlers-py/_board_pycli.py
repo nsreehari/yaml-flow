@@ -6,6 +6,7 @@ Result schema: {"result": "success" | "failure" | "timeout", "data"?: {...}, "er
 from __future__ import annotations
 
 import json
+import base64
 import os
 import subprocess
 import sys
@@ -50,8 +51,17 @@ def _hidden_kwargs() -> dict[str, Any]:
     return kwargs
 
 
+def to_fs_ref(value: str) -> str:
+    payload = json.dumps({"kind": "fs-path", "value": value}, separators=(",", ":")).encode("utf-8")
+    return "b64:" + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _normalize_args(args: list[str]) -> list[str]:
+    return list(args)
+
+
 def run_board_pycli(args: list[str], *, capture: bool = False) -> str:
-    cmd = [sys.executable, str(BOARD_PYCLI), *args, "--bundle", str(QUICKJS_BUNDLE)]
+    cmd = [sys.executable, str(BOARD_PYCLI), *_normalize_args(args), "--bundle", str(QUICKJS_BUNDLE)]
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -66,7 +76,7 @@ def run_board_pycli(args: list[str], *, capture: bool = False) -> str:
 
 
 def run_board_pycli_with_input(args: list[str], input_json: str) -> str:
-    cmd = [sys.executable, str(BOARD_PYCLI), *args, "--bundle", str(QUICKJS_BUNDLE)]
+    cmd = [sys.executable, str(BOARD_PYCLI), *_normalize_args(args), "--bundle", str(QUICKJS_BUNDLE)]
     proc = subprocess.run(
         cmd,
         input=input_json,
@@ -82,7 +92,7 @@ def run_board_pycli_with_input(args: list[str], input_json: str) -> str:
 
 
 def run_card_store_pycli_with_input(args: list[str], input_json: str) -> str:
-    cmd = [sys.executable, str(CARD_STORE_PYCLI), *args]
+    cmd = [sys.executable, str(CARD_STORE_PYCLI), *_normalize_args(args)]
     proc = subprocess.run(
         cmd,
         input=input_json,

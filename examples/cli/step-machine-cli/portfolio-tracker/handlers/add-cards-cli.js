@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readStdinJson, runBoardCli, runCardStoreCliWithInput, writeFailure, writeResult } from './_board-cli.js';
+import { readStdinJson, runBoardCli, runCardStoreCliWithInput, toFsRef, writeFailure, writeResult } from './_board-cli.js';
 
 try {
   const input = await readStdinJson();
@@ -11,7 +11,7 @@ try {
     writeFailure('BOARD_DIR and CARDS (array) are required');
   }
 
-  const baseRef = `::fs-path::${boardDir}`;
+  const baseRef = toFsRef(boardDir);
 
   // Write all cards to the card store in one call
   runCardStoreCliWithInput(

@@ -72,7 +72,7 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  const br = requireFlag(rest, '--store-ref', `card-store ${cmd} --store-ref <::kind::value>`);
+  const br = requireFlag(rest, '--store-ref', `card-store ${cmd} --store-ref <b64-ref>`);
   const baseRef = parseRef(br);
   const storePublic = createCardStorePublic(
     createCardStore(createFsCardStorageAdapter(baseRef.value), (msg) => console.error(`[card-store] ${msg}`)),

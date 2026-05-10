@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const stepMachineCli = path.join(repoRoot, 'step-machine-cli.js');
@@ -36,6 +37,8 @@ function parseLastJsonObject(text: string) {
 function writeFile(filePath: string, content: string) {
   fs.writeFileSync(filePath, content.trimStart());
 }
+
+const fsRef = (p: string) => serializeRef({ kind: 'fs-path', value: p });
 
 describe('step-machine-cli', () => {
   it('prints usage with --help', () => {
@@ -371,7 +374,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./echo-y.js"
+      whatToRun: "${fsRef('./echo-y.js')}"
     transitions:
       success: success_state
       failure: failed_state
@@ -469,7 +472,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./fail.js"
+      whatToRun: "${fsRef('./fail.js')}"
     transitions:
       success: success_state
       failure: failed_state
@@ -510,7 +513,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./bad-json.js"
+      whatToRun: "${fsRef('./bad-json.js')}"
     transitions:
       success: success_state
       failure: failed_state
@@ -552,7 +555,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./double value.js"
+      whatToRun: "${fsRef('./double value.js')}"
     transitions:
       success: success_state
       failure: failed_state
@@ -604,7 +607,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./echo-y.js"
+      whatToRun: "${fsRef('./echo-y.js')}"
       argsMassaging:
         bodyTemplate: "{ 'X': x }"
     transitions:
@@ -668,7 +671,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./double.js"
+      whatToRun: "${fsRef('./double.js')}"
     transitions:
       success: success_state
       failure: failed_state
@@ -725,7 +728,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./init-board.js"
+      whatToRun: "${fsRef('./init-board.js')}"
       argsMassaging:
         bodyTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
     transitions:
@@ -1041,7 +1044,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./script.js"
+      whatToRun: "${fsRef('./script.js')}"
       outputTransforms:
         resultExpr: "output.data.code = 200 ? 'success' : 'failure'"
         dataTemplate: "{ 'value': output.data.payload.value }"
@@ -1083,7 +1086,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "::fs-path::./script.js"
+      whatToRun: "${fsRef('./script.js')}"
       outputTransforms:
         resultExpr: "output.data.code = 200 ? 'success' : 'failure'"
         errorExpr: "output.data.code != 200 ? output.data.error_message"

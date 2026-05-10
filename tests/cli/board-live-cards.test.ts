@@ -52,7 +52,7 @@ function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
     if (entries.length > 0) throw new Error(`Directory "${dir}" is not empty and has no valid board`);
   }
   const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, testDir, { suppressSpawn: true }));
-  const result = board.init({ params: { cardStoreRef: '::fs-path::' + path.join(dir, '.cards'), outputsStoreRef: '::fs-path::' + path.join(dir, '.output') } });
+  const result = board.init({ params: { cardStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.cards') }), outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.output') }) } });
   if (result.status !== 'success') throw new Error(`initBoard failed: ${JSON.stringify(result)}`);
   return 'created';
 }
@@ -148,8 +148,8 @@ function lookupCardPath(baseRef: KindValueRef, cardId: string): string | null {
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
 
 /** Serialized card store ref — always at <boardDir>/.cards */
-const cardStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.cards');
-const outputsStoreRef = (boardDir: string) => '::fs-path::' + path.join(boardDir, '.output');
+const cardStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.cards') });
+const outputsStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.output') });
 
 /** Create a BoardLiveCardsPublic instance for a given dir. */
 function board(dir: string) {
@@ -347,7 +347,10 @@ describe('board-live-cards CLI', () => {
       cards: unknown[];
     };
 
-    expect(status.meta.board.path).toContain(path.resolve(dir));
+    const statusBoardPath = status.meta.board.path.startsWith('b64:')
+      ? parseRef(status.meta.board.path).value
+      : status.meta.board.path;
+    expect(statusBoardPath).toContain(path.resolve(dir));
     expect(status.summary.card_count).toBe(0);
     expect(status.cards).toEqual([]);
     expect(validateBoardStatusArtifact(status), schemaErrors(validateBoardStatusArtifact)).toBe(true);
@@ -375,7 +378,10 @@ describe('board-live-cards CLI', () => {
     if (result.status !== 'success') throw new Error();
     const data = result.data;
     expect(data.schema_version).toBe('v1');
-    expect(data.meta.board.path).toContain(path.resolve(dir));
+    const metaBoardPath = data.meta.board.path.startsWith('b64:')
+      ? parseRef(data.meta.board.path).value
+      : data.meta.board.path;
+    expect(metaBoardPath).toContain(path.resolve(dir));
     expect(data.summary.card_count).toBe(0);
     expect(data.summary).toMatchObject({ eligible: 0, pending: 0, blocked: 0, unresolved: 0 });
     expect(data.cards).toEqual([]);

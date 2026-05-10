@@ -143,7 +143,7 @@ export interface SingleBoardRuntime {
   handleRuntimeApi(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean>;
   buildPublishedRuntimePayload(): unknown;
   clearChatRecords(cardId: string): void;
-  /** Report that a source fetch completed. Token is the source callback token; ref is the blob ref (::kind::value). */
+  /** Report that a source fetch completed. Token is the source callback token; ref is the blob ref (b64:<base64url(json)>). */
   reportSourceFetched(token: string, ref: string): CommandResult;
   /** Report that a source fetch failed. Token is the source callback token. */
   reportSourceFetchFailure(token: string, reason: string): CommandResult;

@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .storage_interface import serialize_ref
+
 
 # ============================================================================
 # ExecutionRef helpers
@@ -21,7 +23,7 @@ from typing import Any
 # ExecutionRef is a dict:
 # {
 #   "howToRun": str,     # 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in'
-#   "whatToRun": str,     # KindValueRef wire form (::kind::value)
+#   "whatToRun": str,     # KindValueRef wire form (b64:<base64url(json)>)
 #   "meta": str | None,   # optional label
 #   "argsMassaging": dict | None,  # optional JSONata mapping
 #   "extra": dict | None,  # optional opaque executor config
@@ -82,7 +84,7 @@ def execution_ref_from_script_path(
     ref: dict[str, Any] = {
         "meta": "task-executor",
         "howToRun": how_to_run,
-        "whatToRun": f"::fs-path::{script_path}",
+        "whatToRun": serialize_ref({"kind": "fs-path", "value": script_path}),
     }
     if extra:
         ref["extra"] = extra

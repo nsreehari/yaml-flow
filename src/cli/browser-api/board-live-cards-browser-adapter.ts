@@ -133,7 +133,7 @@ export function createBrowserBoardPlatformAdapter(
     : {
         meta: 'board-live-cards',
         howToRun: 'in-browser' as const,
-        whatToRun: `::in-browser::${namespace}`,
+        whatToRun: serializeRef({ kind: 'in-browser', value: namespace }),
       };
 
   // In-browser handler registry: maps whatToRun → handler function
@@ -161,7 +161,7 @@ export function createBrowserBoardPlatformAdapter(
     async dispatchExecution(ref, args): Promise<{ dispatched: boolean; error?: string }> {
       if (ref.howToRun === 'http:post') {
         try {
-          const url = ref.whatToRun.startsWith('::')
+          const url = ref.whatToRun.startsWith('b64:')
             ? parseRef(ref.whatToRun).value
             : ref.whatToRun;
           const resp = await fetch(url, {
@@ -180,7 +180,7 @@ export function createBrowserBoardPlatformAdapter(
 
       if (ref.howToRun === 'http:get') {
         try {
-          const baseUrl = ref.whatToRun.startsWith('::')
+          const baseUrl = ref.whatToRun.startsWith('b64:')
             ? parseRef(ref.whatToRun).value
             : ref.whatToRun;
           const params = new URLSearchParams(
@@ -252,7 +252,7 @@ export function createBrowserBoardPlatformAdapter(
 
     writeMemoryBlob(key: string, data: string): string {
       memoryBlobs.set(key, data);
-      return `::in-memory::${key}`;
+      return serializeRef({ kind: 'in-memory', value: key });
     },
   };
 }
