@@ -281,7 +281,7 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   const artifactsRef = parseRef(`::fs-path::${cardsDir}`);
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, YAML_FLOW_CLI_DIR, { suppressSpawn: true });
 
-  const cardStoreRef = serializeRef({ kind: 'fs-path', value: path.join(cardsDir, 'cards') });
+  const cardStoreRef = serializeRef({ kind: 'fs-path', value: cardsDir });
 
   return {
     label,

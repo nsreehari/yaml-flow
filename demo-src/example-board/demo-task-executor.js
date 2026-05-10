@@ -58,12 +58,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/storage-refs';
+import { loadStepFlow, createStepMachine, MemoryStore } from '../../dist/index.js';
+import { buildStepHandlersForFlow } from '../../dist/step-machine-public/index.js';
+import { invokeRefSync } from '../../dist/cli/node/execution-adapter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SOURCE_DEF_FLOWS_FILE = path.join(__dirname, 'source_def_flows.json');
 
 // ---------------------------------------------------------------------------
 // Mock data — used when a source has { mock: "key" }.
@@ -82,50 +85,6 @@ const MOCK_DB = {
     },
   },
 };
-
-// ---------------------------------------------------------------------------
-// Simple file cache for url / url-list results.
-// Stored in os.tmpdir()/demo-executor-cache/<hash>.json
-// ---------------------------------------------------------------------------
-const CACHE_DIR = path.join(os.tmpdir(), 'demo-executor-cache');
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-function cacheKey(str) {
-  return crypto.createHash('sha1').update(str).digest('hex');
-}
-
-function readCache(key, ttlMs = CACHE_TTL_MS) {
-  const file = path.join(CACHE_DIR, `${key}.json`);
-  try {
-    const stat = fs.statSync(file);
-    if (Date.now() - stat.mtimeMs < ttlMs) {
-      return JSON.parse(fs.readFileSync(file, 'utf-8'));
-    }
-  } catch {}
-  return null;
-}
-
-// Shared single-URL fetch helper used by both url and url-list.
-// cacheTimeoutSec: override TTL in seconds (null → use CACHE_TTL_MS default).
-function doFetchApi(url, method, headers, cacheTimeoutSec) {
-  const ttlMs = cacheTimeoutSec != null ? cacheTimeoutSec * 1000 : CACHE_TTL_MS;
-  const k = cacheKey(`url:${method}:${url}`);
-  const cached = readCache(k, ttlMs);
-  if (cached) {
-    console.warn(`[demo-task-executor] url: cache hit for ${url}`);
-    return cached;
-  }
-  const data = curlFetchJson(url, method, headers);
-  writeCache(k, data);
-  return data;
-}
-
-function writeCache(key, value) {
-  try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(CACHE_DIR, `${key}.json`), JSON.stringify(value));
-  } catch {}
-}
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
@@ -159,26 +118,6 @@ const COPILOT_PROMPT_CONTEXT = {
     '- If you produce both machine-readable and human-readable content, keep machine-readable fields top-level and concise prose in a separate field.',
   ].join('\n'),
 };
-
-/**
- * Fetch a URL using the system curl binary (synchronous, no Node event-loop handles).
- * Throws if curl exits non-zero (e.g. HTTP 4xx/5xx with -f, or network error).
- */
-function curlFetchJson(url, method, headers) {
-  const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
-  // -s  : silent (no progress bar)
-  // -S  : show errors despite -s
-  // -f  : fail (non-zero exit) on HTTP 4xx/5xx
-  // -L  : follow redirects
-  // --max-time 10 : hard timeout
-  const args = ['-s', '-S', '-f', '-L', '--max-time', '10', '-X', method];
-  for (const [k, v] of Object.entries(headers)) {
-    args.push('-H', `${k}: ${v}`);
-  }
-  args.push(url);
-  const raw = execFileSync(bin, args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, windowsHide: true });
-  return JSON.parse(raw);
-}
 
 function resolveCopilotPrompt(sourceDef) {
   const cfg = sourceDef?.copilot && typeof sourceDef.copilot === 'object' ? sourceDef.copilot : {};
@@ -269,7 +208,159 @@ function fail(msg, errFile) {
   process.exit(1);
 }
 
-function runSourceFetchSubcommand(argv) {
+function loadSourceDefFlowsConfig() {
+  try {
+    return readJson(SOURCE_DEF_FLOWS_FILE);
+  } catch (err) {
+    fail(`Cannot read source flow registry at ${SOURCE_DEF_FLOWS_FILE}: ${String(err && err.message || err)}`);
+  }
+}
+
+function matchesDetectRule(sourceDef, detect) {
+  if (!detect || typeof detect !== 'object') return false;
+  if (typeof detect.field === 'string') {
+    return sourceDef[detect.field] !== undefined;
+  }
+  if (Array.isArray(detect.anyOfFields)) {
+    return detect.anyOfFields.some((field) => sourceDef[field] !== undefined);
+  }
+  return false;
+}
+
+function resolveSourceKind(sourceDef, registry) {
+  const kinds = registry?.kinds && typeof registry.kinds === 'object' ? registry.kinds : {};
+  const order = Array.isArray(registry?.resolveOrder) ? registry.resolveOrder : Object.keys(kinds);
+  const matched = [];
+  for (const kind of order) {
+    const spec = kinds[kind];
+    if (!spec) continue;
+    if (matchesDetectRule(sourceDef, spec.detect)) {
+      matched.push(kind);
+    }
+  }
+
+  if (matched.length === 0) {
+    const knownKinds = Object.keys(kinds);
+    throw new Error(`No recognised source kind. Known kinds: ${knownKinds.join(', ')}`);
+  }
+  if (matched.length > 1) {
+    throw new Error(`Multiple source kinds specified: [${matched.join(', ')}]. Use exactly one.`);
+  }
+  return matched[0];
+}
+
+async function executeStepMachineSourceFlow(context) {
+  const { kind, registry } = context;
+  const spec = registry?.kinds?.[kind];
+  if (!spec) {
+    throw new Error(`Missing flow registration for kind: ${kind}`);
+  }
+
+  const flowRef = spec.flow;
+  if (typeof flowRef !== 'string' || flowRef.length === 0) {
+    throw new Error(`Invalid or missing flow for kind: ${kind}`);
+  }
+
+  const flowPath = path.resolve(__dirname, flowRef);
+  const flow = await loadStepFlow(flowPath);
+
+  const invokeHttpRef = async (ref, args) => {
+    let rawUrl = ref.whatToRun;
+    try {
+      rawUrl = parseRef(ref.whatToRun).value;
+    } catch {
+      // Keep raw value when whatToRun is already a URL.
+    }
+
+    const base = String(args?.extra?.serverUrl || 'http://127.0.0.1:7799').replace(/\/$/, '');
+    const resolvedUrl = /^https?:\/\//i.test(rawUrl)
+      ? rawUrl
+      : `${base}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+
+    let body = args;
+    const workiqCfg = args?.sourceDef?.workiq;
+    if (workiqCfg && typeof workiqCfg === 'object' && typeof workiqCfg.query_template === 'string') {
+      const interpolationContext = {
+        ...(args?.sourceDef?._projections || {}),
+        ...(workiqCfg.args || {}),
+      };
+      body = {
+        query: interpolatePrompt(workiqCfg.query_template, interpolationContext),
+      };
+    }
+
+    const method = ref.howToRun === 'http:get' ? 'GET' : 'POST';
+    const response = await fetch(resolvedUrl, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
+    });
+
+    const text = await response.text();
+    let parsed;
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      parsed = { response: text };
+    }
+
+    if (!response.ok) {
+      const msg = typeof parsed?.error === 'string' ? parsed.error : `HTTP ${response.status}`;
+      return { result: 'failure', data: { error: msg }, error: msg };
+    }
+
+    if (typeof parsed?.error === 'string') {
+      return { result: 'failure', data: { error: parsed.error }, error: parsed.error };
+    }
+
+    return {
+      result: 'success',
+      data: {
+        resultValue: Object.prototype.hasOwnProperty.call(parsed, 'response') ? parsed.response : parsed,
+      },
+    };
+  };
+
+  const invoke = async (ref, args) => {
+    if (ref.howToRun === 'http:post' || ref.howToRun === 'http:get') {
+      return invokeHttpRef(ref, args);
+    }
+    if (ref.howToRun === 'demo-local-module') {
+      const modulePath = path.resolve(__dirname, ref.whatToRun);
+      const mod = await import(pathToFileURL(modulePath).href);
+      if (typeof mod.execute !== 'function') {
+        throw new Error(`Flow module ${ref.whatToRun} must export execute(context)`);
+      }
+      return mod.execute(args);
+    }
+    return invokeRefSync(ref, args, { cliDir: __dirname, cwd: process.cwd() });
+  };
+
+  const handlers = buildStepHandlersForFlow(flow, { invoke });
+  const machine = createStepMachine(flow, handlers, { store: new MemoryStore() });
+  const run = await machine.run({
+    ...context,
+    promptContext: COPILOT_PROMPT_CONTEXT,
+    executorDir: __dirname,
+  });
+
+  if (run.status !== 'completed') {
+    const reason = run.error?.message ?? run.intent ?? run.status;
+    throw new Error(`flow execution failed: ${reason}`);
+  }
+
+  if (run.intent !== 'success') {
+    const reason = typeof run.data?.error === 'string' ? run.data.error : `flow returned intent: ${run.intent}`;
+    throw new Error(reason);
+  }
+
+  return {
+    resultValue: run.data?.resultValue,
+    wroteOutputDirectly: !!run.data?.wroteOutputDirectly,
+  };
+}
+
+async function runSourceFetchSubcommand(argv) {
   const inIdx = argv.indexOf('--in-ref');
   const outIdx = argv.indexOf('--out-ref');
   const errIdx = argv.indexOf('--err-ref');
@@ -331,186 +422,37 @@ function runSourceFetchSubcommand(argv) {
     failRef(`Cannot resolve source_def: ${String(err && err.message || err)}`, callback);
   }
 
-  let resultValue;
-
-  if (sourceDef['url']) {
-    // ---------------------------------------------------------------------------
-    // url — single URL fetch via curl
-    // {{key}} interpolation applied to url from _projections and optional args.
-    // cacheTimeout: seconds to cache the response (default: CACHE_TTL_MS / 1000).
-    // ---------------------------------------------------------------------------
-    const cfg     = sourceDef['url'];
-    const method  = (cfg.method || 'GET').toUpperCase();
-    const headers = { ...(cfg.headers || {}) };
-    const cacheTimeoutSec = cfg.cacheTimeout != null ? Number(cfg.cacheTimeout) : null;
-
-    const fetchArgs = { ...(cfg.args || {}) };
-    if (sourceDef.tickersFrom) {
-      const dotIdx = sourceDef.tickersFrom.indexOf('.');
-      if (dotIdx > 0) {
-        const refKey    = sourceDef.tickersFrom.slice(0, dotIdx);
-        const fieldName = sourceDef.tickersFrom.slice(dotIdx + 1);
-        const arr = sourceDef._projections?.[refKey];
-        if (Array.isArray(arr)) {
-          fetchArgs.tickers = arr.map(h => h[fieldName]).filter(Boolean).join(',');
-        }
-      }
-    }
-    if (sourceDef.tickersFrom && !fetchArgs.tickers) {
-      failRef('url: tickersFrom resolved to empty list — skipping fetch', callback);
-    }
-    const urlContext = { ...(sourceDef._projections || {}), ...fetchArgs };
-    const url = interpolatePrompt(cfg.url, urlContext);
-    try {
-      resultValue = doFetchApi(url, method, headers, cacheTimeoutSec);
-    } catch (err) {
-      failRef(`url failed: ${err.message}`, callback);
-    }
-
-  } else if (sourceDef['url-list']) {
-    // ---------------------------------------------------------------------------
-    // url-list — fan-out over a URL list, calling url logic per URL.
-    // url_list must be a string[] pre-resolved in _projections.url_list.
-    // cacheTimeout: seconds to cache each individual response.
-    // ---------------------------------------------------------------------------
-    const cfg     = sourceDef['url-list'];
-    const method  = (cfg.method || 'GET').toUpperCase();
-    const headers = { ...(cfg.headers || {}) };
-    const cacheTimeoutSec = cfg.cacheTimeout != null ? Number(cfg.cacheTimeout) : null;
-
-    const urlList = Array.isArray(sourceDef._projections?.url_list)
-      ? sourceDef._projections.url_list : null;
-
-    if (!urlList || urlList.length === 0) {
-      failRef('url-list: _projections.url_list must be a non-empty string array', callback);
-    }
-
-    const results = [];
-    for (const u of urlList) {
-      try {
-        results.push(doFetchApi(u, method, headers, cacheTimeoutSec));
-      } catch (err) {
-        failRef(`url-list fetch failed for ${u}: ${err.message}`, callback);
-      }
-    }
-    resultValue = results;
-
-  } else if (sourceDef.copilot || sourceDef.prompt_template) {
-    const prompt = resolveCopilotPrompt(sourceDef);
-    if (!prompt) {
-      failRef('Source definition missing copilot.prompt_template (or prompt_template)', callback);
-    }
-
-    // Use boardSetupRoot (from --extra) as copilot working directory
-    const copilotCwd = extra.boardSetupRoot || undefined;
-
-    // On Windows, delegate entirely to copilot_wrapper.bat which handles:
-    //   - session management (--resume UUID for multi-turn continuity)
-    //   - noise/footer stripping, JSON extraction, agentic retry on bad shape
-    // On non-Windows, fall back to a basic direct invocation (no retry).
-    const wrapperPath = path.join(__dirname, 'scripts', 'copilot_wrapper.bat');
-    const useWrapper = process.platform === 'win32' && fs.existsSync(wrapperPath);
-
-    if (useWrapper) {
-      // Session dir is stable across refreshes so --resume continues the conversation.
-      const sessionDir = path.join(
-        extra.boardSetupRoot || os.tmpdir(),
-        'copilot-sessions',
-        String(sourceDef.bindTo || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'),
-      );
-      const wrapperOutFile = outRef.value + '.wrapper-out.json';
-      try {
-        resultValue = runCopilotViaWrapper(prompt, sourceDef, wrapperOutFile, sessionDir, copilotCwd);
-      } catch (err) {
-        failRef(`copilot invocation failed: ${String(err && err.message || err)}`, callback);
-      } finally {
-        try { fs.unlinkSync(wrapperOutFile); } catch {}
-      }
-    } else {
-      // Non-Windows fallback: call copilot directly via cmd.exe and do basic JSON extraction.
-      let rawOutput = '';
-      try {
-        rawOutput = execFileSync('cmd.exe', ['/d', '/c', 'copilot --allow-all'], {
-          input: String(prompt),
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-          maxBuffer: 10 * 1024 * 1024,
-          windowsHide: true,
-          ...(copilotCwd ? { cwd: copilotCwd } : {}),
-        });
-      } catch (err) {
-        failRef(`copilot invocation failed: ${String(err && err.message || err)}`, callback);
-      }
-      // Basic JSON extraction: find first { or [ in output
-      const firstBrace = rawOutput.indexOf('{');
-      const firstBracket = rawOutput.indexOf('[');
-      const jsonStart = (firstBrace === -1) ? firstBracket
-        : (firstBracket === -1) ? firstBrace
-        : Math.min(firstBrace, firstBracket);
-      if (jsonStart !== -1) {
-        try {
-          const parsed = JSON.parse(rawOutput.slice(jsonStart));
-          resultValue = (parsed && typeof parsed === 'object') ? parsed : rawOutput;
-        } catch {
-          resultValue = rawOutput;
-        }
-      } else {
-        resultValue = rawOutput;
-      }
-    }
-  } else if (sourceDef.workiq) {
-    const cfg = typeof sourceDef.workiq === 'object' ? sourceDef.workiq : {};
-    if (!cfg.query_template || typeof cfg.query_template !== 'string') {
-      failRef('Source definition missing workiq.query_template', callback);
-    }
-    const interpolationContext = { ...sourceDef._projections, ...(cfg.args ?? {}) };
-    const query = interpolatePrompt(cfg.query_template, interpolationContext);
-
-    const wrapperPath = path.join(__dirname, 'scripts', 'workiq_wrapper.mjs');
-    if (!fs.existsSync(wrapperPath)) {
-      failRef('workiq source kind requires workiq_wrapper.js in scripts/', callback);
-    }
-    try {
-      execFileSync(process.execPath, [wrapperPath, outRef.value], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        maxBuffer: 10 * 1024 * 1024,
-        windowsHide: true,
-        env: {
-          ...process.env,
-          WORKIQ_QUERY: query,
-          ...(extra.serverUrl ? { WORKIQ_SERVER_URL: extra.serverUrl } : {}),
-        },
-      });
-      // wrapper wrote directly to outRef.value — report completion to board
-      if (callback) {
-        try {
-          reportComplete(callback, outRef);
-        } catch (err) {
-          console.error(`[demo-task-executor] reportComplete failed: ${String(err && err.message || err)}`);
-          process.exit(1);
-        }
-      }
-      return;
-    } catch (err) {
-      const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
-      failRef(`workiq invocation failed: ${String(err && err.message || err)}${detail}`, callback);
-    }
-  } else if (sourceDef.mock) {
-    // MOCK_DB lookup — data hardcoded at the top of this file
-    resultValue = MOCK_DB[sourceDef.mock];
-    if (resultValue === undefined) {
-      failRef(`Key "${sourceDef.mock}" not found in MOCK_DB`, callback);
-    }
-  } else {
-    failRef('Source definition has no recognised kind (url, url-list, copilot, workiq, mock)', callback);
+  const registry = loadSourceDefFlowsConfig();
+  let kind;
+  try {
+    kind = resolveSourceKind(sourceDef, registry);
+  } catch (err) {
+    failRef(String(err && err.message || err), callback);
   }
 
-  // Write result to --out via storage abstraction, then report back to board.
+  let flowResult;
   try {
-    outStorage.write(outRef.value, JSON.stringify(resultValue, null, 2));
+    flowResult = await executeStepMachineSourceFlow({
+      kind,
+      registry,
+      sourceDef,
+      extra,
+      inRef,
+      outRef,
+      errRef,
+      mockDb: MOCK_DB,
+    });
   } catch (err) {
-    failRef(`Cannot write output: ${String(err && err.message || err)}`, callback);
+    const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
+    failRef(`${kind} invocation failed: ${String(err && err.message || err)}${detail}`, callback);
+  }
+
+  if (!flowResult?.wroteOutputDirectly) {
+    try {
+      outStorage.write(outRef.value, JSON.stringify(flowResult?.resultValue, null, 2));
+    } catch (err) {
+      failRef(`Cannot write output: ${String(err && err.message || err)}`, callback);
+    }
   }
 
   if (callback) {
@@ -550,30 +492,16 @@ function validateSourceDefSubcommand(argv) {
   }
 
   const errors = [];
+  const registry = loadSourceDefFlowsConfig();
 
-  // Determine source kind and validate required fields
-  const hasUrl   = !!sourceDef['url'];
-  const hasUrlList  = !!sourceDef['url-list'];
-  const hasCopilot    = !!sourceDef.copilot;
-  const hasPromptTemplate = typeof sourceDef.prompt_template === 'string';
-  const hasWorkiq     = !!sourceDef.workiq;
-  const hasMock       = sourceDef.mock !== undefined;
-
-  const kindCount = [hasUrl, hasUrlList, hasCopilot || hasPromptTemplate, hasWorkiq, hasMock].filter(Boolean).length;
-
-  if (kindCount === 0) {
-    errors.push('No recognised source kind (url, url-list, copilot, workiq, mock). Add one of these fields.');
-  } else if (kindCount > 1) {
-    const kinds = [];
-    if (hasUrl)  kinds.push('url');
-    if (hasUrlList) kinds.push('url-list');
-    if (hasCopilot || hasPromptTemplate) kinds.push('copilot');
-    if (hasWorkiq)    kinds.push('workiq');
-    if (hasMock)      kinds.push('mock');
-    errors.push(`Multiple source kinds specified: [${kinds.join(', ')}]. Use exactly one.`);
+  let kind = '';
+  try {
+    kind = resolveSourceKind(sourceDef, registry);
+  } catch (err) {
+    errors.push(String(err && err.message || err));
   }
 
-  if (hasUrl) {
+  if (kind === 'url') {
     if (typeof sourceDef['url'] !== 'object') {
       errors.push('url must be an object.');
     } else if (!sourceDef['url'].url || typeof sourceDef['url'].url !== 'string') {
@@ -581,24 +509,24 @@ function validateSourceDefSubcommand(argv) {
     }
   }
 
-  if (hasUrlList) {
+  if (kind === 'url-list') {
     if (typeof sourceDef['url-list'] !== 'object') {
       errors.push('url-list must be an object.');
     }
     // url_list is supplied via _projections at runtime — no static validation needed.
   }
 
-  if (hasCopilot) {
+  if (kind === 'copilot') {
     if (typeof sourceDef.copilot !== 'object') {
-      errors.push('copilot must be an object.');
-    } else {
-      if (!sourceDef.copilot.prompt_template && !hasPromptTemplate) {
-        errors.push('copilot.prompt_template is required (or use top-level prompt_template).');
+      if (typeof sourceDef.prompt_template !== 'string') {
+        errors.push('copilot must be an object when prompt_template is not provided at top level.');
       }
+    } else if (!sourceDef.copilot.prompt_template && typeof sourceDef.prompt_template !== 'string') {
+        errors.push('copilot.prompt_template is required (or use top-level prompt_template).');
     }
   }
 
-  if (hasWorkiq) {
+  if (kind === 'workiq') {
     if (typeof sourceDef.workiq !== 'object') {
       errors.push('workiq must be an object.');
     } else if (!sourceDef.workiq.query_template || typeof sourceDef.workiq.query_template !== 'string') {
@@ -606,7 +534,7 @@ function validateSourceDefSubcommand(argv) {
     }
   }
 
-  if (hasMock) {
+  if (kind === 'mock') {
     if (typeof sourceDef.mock !== 'string') {
       errors.push('mock must be a string key.');
     }
@@ -714,13 +642,24 @@ const CAPABILITIES = {
 };
 
 function describeCapabilities() {
-  console.log(JSON.stringify(CAPABILITIES, null, 2));
+  const registry = loadSourceDefFlowsConfig();
+  const merged = {
+    ...CAPABILITIES,
+    sourceKinds: Object.fromEntries(
+      Object.entries(registry?.kinds || {}).map(([kind, spec]) => {
+        const existing = CAPABILITIES.sourceKinds[kind] || {};
+        const manifest = spec?.manifest && typeof spec.manifest === 'object' ? spec.manifest : {};
+        return [kind, { ...existing, ...manifest }];
+      }),
+    ),
+  };
+  console.log(JSON.stringify(merged, null, 2));
 }
 
 async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {
-    runSourceFetchSubcommand(process.argv.slice(3));
+    await runSourceFetchSubcommand(process.argv.slice(3));
     return;
   }
   if (sub === 'describe' || sub === 'describe-capabilities') {

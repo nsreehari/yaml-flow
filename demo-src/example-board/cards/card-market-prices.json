@@ -2,10 +2,15 @@
   "id": "card-market-prices",
   "meta": {
     "title": "Market Prices",
-    "tags": ["prices", "market"],
+    "tags": [
+      "prices",
+      "market"
+    ],
     "desc": "Fetches live prices for portfolio tickers. Publishes enriched quote data for downstream portfolio value calculations."
   },
-  "requires": ["holdings"],
+  "requires": [
+    "holdings"
+  ],
   "source_defs": [
     {
       "bindTo": "quotes",
@@ -32,7 +37,10 @@
     }
   ],
   "provides": [
-    { "bindTo": "quotes", "ref": "computed_values.normalizedQuotes" }
+    {
+      "bindTo": "quotes",
+      "ref": "computed_values.normalizedQuotes"
+    }
   ],
   "view": {
     "elements": [
@@ -41,16 +49,32 @@
         "label": "Prices",
         "data": {
           "bind": "computed_values.prices",
-          "columns": ["ticker", "name", "price", "change", "chg_pct"],
+          "columns": [
+            "ticker",
+            "name",
+            "price",
+            "change",
+            "chg_pct"
+          ],
           "sortable": true
         }
       }
     ],
     "layout": {
-      "board": { "col": 4, "order": 2 },
-      "canvas": { "x": 400, "y": 50, "w": 400, "h": 340 }
+      "board": {
+        "col": 4,
+        "order": 2
+      },
+      "canvas": {
+        "x": 400,
+        "y": 50,
+        "w": 400,
+        "h": 340
+      }
     },
-    "features": { "refresh": true }
+    "features": {
+      "refresh": true
+    }
   },
   "card_data": {}
 }

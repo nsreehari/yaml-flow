@@ -2,11 +2,17 @@
   "id": "card-rebalance-impact",
   "meta": {
     "title": "Rebalance Impact",
-    "tags": ["portfolio", "simulation"],
+    "tags": [
+      "portfolio",
+      "simulation"
+    ],
     "simulation": true,
     "desc": "Before/after impact summary of the proposed rebalance scenario."
   },
-  "requires": ["positions", "proposed_trades"],
+  "requires": [
+    "positions",
+    "proposed_trades"
+  ],
   "compute": [
     {
       "bindTo": "total_current_value",
@@ -53,12 +59,22 @@
     "elements": [
       {
         "kind": "markdown",
-        "data": { "bind": "computed_values.summary_md" }
+        "data": {
+          "bind": "computed_values.summary_md"
+        }
       }
     ],
     "layout": {
-      "board": { "col": 6, "order": 8 },
-      "canvas": { "x": 1360, "y": 480, "w": 400, "h": 280 }
+      "board": {
+        "col": 6,
+        "order": 8
+      },
+      "canvas": {
+        "x": 1360,
+        "y": 480,
+        "w": 400,
+        "h": 280
+      }
     }
   },
   "card_data": {}

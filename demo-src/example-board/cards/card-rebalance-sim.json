@@ -2,11 +2,20 @@
   "id": "card-rebalance-sim",
   "meta": {
     "title": "Rebalance Proposal",
-    "tags": ["portfolio", "simulation"],
+    "tags": [
+      "portfolio",
+      "simulation"
+    ],
     "simulation": true,
     "desc": "AI-proposed rebalance trades based on portfolio intelligence. Edit quantities before pinning."
   },
-  "requires": ["holdings", "portfolio_mix", "portfolio_risks", "portfolio_action", "positions"],
+  "requires": [
+    "holdings",
+    "portfolio_mix",
+    "portfolio_risks",
+    "portfolio_action",
+    "positions"
+  ],
   "source_defs": [
     {
       "bindTo": "rebalance",
@@ -24,11 +33,20 @@
     }
   ],
   "provides": [
-    { "bindTo": "proposed_trades", "ref": "fetched_sources.rebalance.proposed_trades" }
+    {
+      "bindTo": "proposed_trades",
+      "ref": "fetched_sources.rebalance.proposed_trades"
+    }
   ],
   "compute": [
-    { "bindTo": "proposed_trades", "expr": "fetched_sources.rebalance.proposed_trades" },
-    { "bindTo": "_view", "expr": "fetched_sources.rebalance._view" }
+    {
+      "bindTo": "proposed_trades",
+      "expr": "fetched_sources.rebalance.proposed_trades"
+    },
+    {
+      "bindTo": "_view",
+      "expr": "fetched_sources.rebalance._view"
+    }
   ],
   "view": {
     "elements": [
@@ -40,14 +58,33 @@
           "viewBind": "computed_values._view",
           "fallbackKind": "editable-table",
           "writeTo": "card_data.proposed_trades",
-          "columns": ["ticker", "direction", "current_qty", "change", "proposed_qty", "price", "trade_value", "reason"],
+          "columns": [
+            "ticker",
+            "direction",
+            "current_qty",
+            "change",
+            "proposed_qty",
+            "price",
+            "trade_value",
+            "reason"
+          ],
           "schema": {
             "properties": {
-              "current_qty": { "type": "number" },
-              "change": { "type": "number" },
-              "proposed_qty": { "type": "number" },
-              "price": { "type": "number" },
-              "trade_value": { "type": "number" }
+              "current_qty": {
+                "type": "number"
+              },
+              "change": {
+                "type": "number"
+              },
+              "proposed_qty": {
+                "type": "number"
+              },
+              "price": {
+                "type": "number"
+              },
+              "trade_value": {
+                "type": "number"
+              }
             }
           }
         }
@@ -62,10 +99,20 @@
       }
     ],
     "layout": {
-      "board": { "col": 6, "order": 7 },
-      "canvas": { "x": 840, "y": 480, "w": 500, "h": 280 }
+      "board": {
+        "col": 6,
+        "order": 7
+      },
+      "canvas": {
+        "x": 840,
+        "y": 480,
+        "w": 500,
+        "h": 280
+      }
     },
-    "features": { "refresh": true }
+    "features": {
+      "refresh": true
+    }
   },
   "card_data": {}
 }

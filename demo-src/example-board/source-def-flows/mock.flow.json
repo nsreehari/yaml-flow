@@ -1,0 +1,34 @@
+{
+  "id": "demo-source-mock",
+  "settings": {
+    "start_step": "execute",
+    "max_total_steps": 5,
+    "timeout_ms": 30000
+  },
+  "steps": {
+    "execute": {
+      "description": "Execute mock source def",
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "resultValue = $lookup(mockDb, sourceDef.mock)"
+        ]
+      },
+      "transitions": {
+        "success": "completed",
+        "failure": "failed"
+      }
+    }
+  },
+  "terminal_states": {
+    "completed": {
+      "description": "Mock lookup succeeded",
+      "return_intent": "success",
+      "return_artifacts": ["resultValue", "wroteOutputDirectly"]
+    },
+    "failed": {
+      "description": "Mock lookup failed",
+      "return_intent": "failure"
+    }
+  }
+}

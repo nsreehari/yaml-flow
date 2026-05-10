@@ -2,12 +2,21 @@
   "id": "card-portfolio-value",
   "meta": {
     "title": "Portfolio Value",
-    "tags": ["portfolio", "value"],
+    "tags": [
+      "portfolio",
+      "value"
+    ],
     "desc": "Computes total portfolio value, gainers/losers summary, and per-position P&L from holdings and live market quotes."
   },
-  "requires": ["holdings", "quotes"],
+  "requires": [
+    "holdings",
+    "quotes"
+  ],
   "provides": [
-    { "bindTo": "positions", "ref": "computed_values.positions" }
+    {
+      "bindTo": "positions",
+      "ref": "computed_values.positions"
+    }
   ],
   "compute": [
     {
@@ -36,27 +45,46 @@
       {
         "kind": "metric",
         "label": "Portfolio Value ($)",
-        "data": { "bind": "computed_values.totalValue" }
+        "data": {
+          "bind": "computed_values.totalValue"
+        }
       },
       {
         "kind": "text",
-        "data": { "bind": "computed_values.gainersLosers" }
+        "data": {
+          "bind": "computed_values.gainersLosers"
+        }
       },
       {
         "kind": "table",
         "label": "Positions",
         "data": {
           "bind": "computed_values.positions",
-          "columns": ["ticker", "value", "gain_$", "gain_%"],
+          "columns": [
+            "ticker",
+            "value",
+            "gain_$",
+            "gain_%"
+          ],
           "sortable": true
         }
       }
     ],
     "layout": {
-      "board": { "col": 4, "order": 3 },
-      "canvas": { "x": 840, "y": 50, "w": 420, "h": 380 }
+      "board": {
+        "col": 4,
+        "order": 3
+      },
+      "canvas": {
+        "x": 840,
+        "y": 50,
+        "w": 420,
+        "h": 380
+      }
     },
-    "features": { "chat": true }
+    "features": {
+      "chat": true
+    }
   },
   "card_data": {}
 }
