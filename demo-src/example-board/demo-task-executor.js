@@ -473,7 +473,7 @@ function runSourceFetchSubcommand(argv) {
     try {
       execFileSync(process.execPath, [wrapperPath, outRef.value], {
         encoding: 'utf-8',
-        stdio: ['inherit', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         maxBuffer: 10 * 1024 * 1024,
         windowsHide: true,
         env: {
@@ -493,7 +493,8 @@ function runSourceFetchSubcommand(argv) {
       }
       return;
     } catch (err) {
-      failRef(`workiq invocation failed: ${String(err && err.message || err)}`, callback);
+      const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
+      failRef(`workiq invocation failed: ${String(err && err.message || err)}${detail}`, callback);
     }
   } else if (sourceDef.mock) {
     // MOCK_DB lookup — data hardcoded at the top of this file
