@@ -722,7 +722,7 @@ async function main() {
     runSourceFetchSubcommand(process.argv.slice(3));
     return;
   }
-  if (sub === 'describe-capabilities') {
+  if (sub === 'describe' || sub === 'describe-capabilities') {
     describeCapabilities();
     return;
   }

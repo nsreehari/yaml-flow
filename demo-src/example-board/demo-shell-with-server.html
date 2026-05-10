@@ -50,7 +50,7 @@
     </div>
 
     <div class="alert alert-info small py-2 mb-3">
-      Server runtime mode: updates stream in via SSE from the thin demo-server bridge to board-live-cards-cli.
+      Server runtime mode: board initializes on first connect and streams updates via SSE.
       Source execution and event processing happen on the server side.
     </div>
 
@@ -81,12 +81,7 @@
       let runtimeClient = null;
 
       function boardPaths(boardId) {
-        const bid = boardId || activeBoardId || 'default';
-        const base = `/api/boards/${encodeURIComponent(bid)}`;
-        return Object.assign(defaultBoardPaths(bid), {
-          demoSetup: `${base}/demo-setup`,
-          bootstrap:  `${base}/bootstrap`,
-        });
+        return defaultBoardPaths(boardId || activeBoardId || 'default');
       }
 
       function localServerOrigins() {
@@ -142,15 +137,6 @@
         canvas: { height: '72vh', overflow: 'auto' },
       });
 
-      function resolveTaskExecutorPathParam() {
-        const params = new URLSearchParams(window.location.search || '');
-        const fromQuery = params.get('taskExecutorPath');
-        const fromWindow = window.DEMO_TASK_EXECUTOR_PATH;
-        if (typeof fromQuery === 'string' && fromQuery.trim()) return fromQuery.trim();
-        if (typeof fromWindow === 'string' && fromWindow.trim()) return fromWindow.trim();
-        return '';
-      }
-
       async function loadBoardList() {
         try {
           const res = await fetchServer('/api/boards');
@@ -191,13 +177,11 @@
         document.getElementById('boardTitle').textContent = bid + ' (Server Runtime)';
         document.getElementById('boardDesc').textContent = '';
 
-        // Demo-setup is a host-level concern; call it explicitly before bootstrapping.
-        const setupRes = await fetchServer(boardPaths(bid).demoSetup);
-        if (!setupRes.ok) throw new Error(`demo-setup failed (${setupRes.status})`);
-
+        // SSE-first bootstrap: init-board initializes the board server-side,
+        // then /sse sends the full payload as the first frame. No separate
+        // demo-setup step needed — the server runs it automatically at init time.
         await runtimeClient.bootstrapBoard({
           boardId: bid,
-          taskExecutorPath: resolveTaskExecutorPathParam(),
           rootElement: document.getElementById('boardRoot'),
           mode: currentMode,
         });

@@ -325,6 +325,10 @@ const runtime = createMultiBoardServerRuntime({
     // Store host config for demo-setup (FS paths are host concerns)
     boardHostConfig.set(boardId, { cardsDir, gandalfCardsDir: gandalfCardsDir_, boardDir, boardRoot });
 
+    // Auto-run demo-setup (write copilot-instructions.md) at board init time,
+    // so clients no longer need a separate /demo-setup request before bootstrapping.
+    demoPrepSetup(boardId);
+
     const singleBoardRuntime = createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
       boardId,
@@ -416,16 +420,11 @@ function jsonReply(res, status, payload) {
 
 async function handleDemoSetup(req, res, boardId) {
   try {
-    // requireBoardService triggers the factory which populates boardHostConfig
+    // requireBoardService triggers the factory which runs demoPrepSetup automatically.
+    // This endpoint is kept for backward compatibility but setup is now done at board
+    // init time inside boardRuntimeFactory — no extra work needed here.
     runtime.requireBoardService(boardId);
-    let setupPerformed = false;
-
-    if (!isDemoSetupDone(boardId)) {
-      demoPrepSetup(boardId);
-      setupPerformed = true;
-    }
-
-    jsonReply(res, 200, { ok: true, setupPerformed });
+    jsonReply(res, 200, { ok: true, setupPerformed: false });
   } catch (err) {
     jsonReply(res, err.statusCode || 500, { error: String((err && err.message) || err) });
   }
@@ -539,8 +538,8 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('[demo-server] endpoints:');
   console.log(`  GET  ${apiBasePath}                          <- list boards`);
   console.log(`  POST ${apiBasePath}  {id, label?}            <- register board`);
-  console.log(`  GET  ${apiBasePath}/:boardId/demo-setup`);
-  console.log(`  GET  ${apiBasePath}/:boardId/bootstrap`);
+  console.log(`  GET  ${apiBasePath}/:boardId/demo-setup  (no-op; setup now runs at board init)`);
+  console.log(`  GET  ${apiBasePath}/:boardId/init-board`);
   console.log(`  GET  ${apiBasePath}/:boardId/sse`);
   console.log(`  GET  ${apiBasePath}/:boardId/board-status`);
   console.log(`  PATCH ${apiBasePath}/:boardId/cards/:id`);
