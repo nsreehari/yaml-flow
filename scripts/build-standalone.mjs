@@ -17,13 +17,14 @@ const runtimeRootEntries = [
 ];
 
 const runtimeDirs = [
-  'dist/pycli',
+  'dist',
   'pycli/main',
   'pycli/sub',
   'pycli/pylib',
 ];
 
 const runtimeFiles = [
+  'package.json',
   'pycli/requirements.txt',
   'examples/browser/boards/portfolio-tracker/portfolio-tracker.py',
   'examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py',
@@ -37,6 +38,7 @@ const runtimeFiles = [
 ];
 
 const runtimeExampleDirs = [
+  'demo-src/example-board',
   'examples/cli/step-machine-cli/portfolio-tracker/handlers',
   'examples/cli/step-machine-cli/portfolio-tracker/handlers-py',
 ];
@@ -95,6 +97,10 @@ async function writeReadme() {
     '  `python examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker-pycli.py`',
     '- Step-machine pycli inline-Python demo:',
     '  `python examples/cli/step-machine-cli/portfolio-tracker/run-inline-python-demo-pycli.py`',
+    '- Node demo server runtime:',
+    '  `node demo-src/example-board/demo-server.js`',
+    '- Python demo server runtime:',
+    '  `python demo-src/example-board/py-demo-server.py`',
     '',
     'Optional notifications:',
     '',
