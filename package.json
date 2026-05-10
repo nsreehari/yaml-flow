@@ -142,6 +142,7 @@
     "test:cli-parity": "python scripts/cli_parity_check.py",
     "test:cli-parity:full": "python scripts/cli_parity_check.py --include-portfolio",
     "test:e2e": "python examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
+    "test:portfolio-tracker-server": "node examples/browser/boards/portfolio-tracker/portfolio-tracker-http-test.js",
     "test:example-board": "vitest run tests/examples/example-board.test.ts",
     "check:example-board": "npm run test:example-board && npm run validate:cards -- \"examples/example-board/cards/*.json\"",
     "validate:cards": "tsx scripts/validate-live-cards.ts",
