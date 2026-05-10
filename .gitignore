@@ -45,3 +45,4 @@ pydist/
 
 metafile-iife.json
 demo-src/example-board/.server-meta/
+demo-src/example-board/.demo-setup/

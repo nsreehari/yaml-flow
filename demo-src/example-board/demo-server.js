@@ -99,7 +99,7 @@ const CORS_HEADERS = {
 // ---------------------------------------------------------------------------
 
 const setupDir = path.resolve(
-  process.env.DEMO_SETUP_DIR || path.join(os.tmpdir(), 'board-live-cards-demo-setup'),
+  process.env.DEMO_SETUP_DIR || path.join(__dirname, '.demo-setup'),
 );
 fs.mkdirSync(setupDir, { recursive: true });
 
