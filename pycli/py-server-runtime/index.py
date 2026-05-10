@@ -668,6 +668,7 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         return {
             "label": cfg["label"],
             "board": board,
+            "board_adapter": cfg["board_adapter"],
             "card_store": card_store,
             "get_files_artifacts": get_files_artifacts,
             "get_chats_artifacts": get_chats_artifacts,
@@ -866,7 +867,19 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
     # ── Status & runtime artifacts ───────────────────────────────────────────
 
     def read_status_snapshot():
-        statuses = [ctx["notification"]["status"] for ctx in board_contexts if ctx["notification"]["status"]]
+        statuses = []
+        for ctx in board_contexts:
+            try:
+                kv = ctx["board_adapter"].kv_storage_for_ref(ctx["outputs_store_ref"])
+                persisted = kv.read("status")
+                if persisted is not None:
+                    statuses.append(persisted)
+                    continue
+            except Exception:
+                # Fall back to notification memory if direct KV read fails.
+                pass
+            if ctx["notification"]["status"]:
+                statuses.append(ctx["notification"]["status"])
         if not statuses:
             return None
         if len(statuses) == 1:

@@ -396,6 +396,24 @@ def _poll_drain() -> None:
         try:
             poll_board = create_board_live_cards_public(base_ref, board_adapter)
             poll_board.process_accumulated_events({})
+            publish = getattr(board_adapter, 'publish_board_change_notifications', None)
+            if callable(publish):
+                notifications: List[Dict[str, Any]] = []
+                status_result = poll_board.status({})
+                if status_result.get('status') == 'success' and status_result.get('data') is not None:
+                    notifications.append({'kind': 'status', 'status': status_result['data']})
+                data_result = poll_board.get_all_outputs_data_objects({})
+                if data_result.get('status') == 'success' and isinstance(data_result.get('data'), dict):
+                    for token, payload in data_result['data'].items():
+                        if token:
+                            notifications.append({'kind': 'data_object', 'key': token, 'payload': payload})
+                cv_result = poll_board.get_all_outputs_computed_values({})
+                if cv_result.get('status') == 'success' and isinstance(cv_result.get('data'), dict):
+                    for card_id, values in cv_result['data'].items():
+                        if card_id:
+                            notifications.append({'kind': 'computed_values', 'cardId': card_id, 'values': values})
+                if notifications:
+                    publish(notifications)
         except Exception:
             pass
 
