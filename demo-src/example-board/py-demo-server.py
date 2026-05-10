@@ -85,6 +85,12 @@ def resolve_kind_ref_from_config(config_value) -> Optional[str]:
     if not isinstance(config_value, str) or not config_value.strip():
         return None
     trimmed = config_value.strip()
+    if trimmed.startswith("::fs-path::"):
+        raw_path = trimmed[len("::fs-path::"):].strip()
+        if not raw_path:
+            return None
+        resolved = raw_path if os.path.isabs(raw_path) else os.path.normpath(os.path.join(__file_dir, raw_path))
+        return serialize_ref({"kind": "fs-path", "value": resolved})
     if not trimmed.startswith("b64:"):
         return trimmed
     try:
@@ -98,6 +104,16 @@ def resolve_kind_ref_from_config(config_value) -> Optional[str]:
         return serialize_ref({"kind": "fs-path", "value": resolved})
     except Exception:
         return trimmed
+
+
+def prefer_python_script(script_path: Optional[str]) -> Optional[str]:
+    if not isinstance(script_path, str) or not script_path.strip():
+        return script_path
+    if script_path.endswith(".js") or script_path.endswith(".mjs"):
+        py_candidate = script_path.rsplit(".", 1)[0] + ".py"
+        if os.path.isfile(py_candidate):
+            return py_candidate
+    return script_path
 
 
 server_config = load_server_config()
@@ -142,6 +158,11 @@ default_gandalf_cards_dir = os.environ.get("DEMO_GANDALF_CARDS_DIR") or configur
 default_gandalf_task_executor_path = os.environ.get("DEMO_GANDALF_TASK_EXECUTOR_PATH") or configured_gandalf_task_executor_path
 default_gandalf_chat_handler_path = os.environ.get("DEMO_GANDALF_CHAT_HANDLER_PATH") or configured_gandalf_chat_handler_path
 default_gandalf_inference_adapter_path = os.environ.get("DEMO_GANDALF_INFERENCE_ADAPTER_PATH") or configured_gandalf_inference_adapter_path
+
+default_task_executor_path = prefer_python_script(default_task_executor_path)
+default_chat_handler_path = prefer_python_script(default_chat_handler_path)
+default_gandalf_task_executor_path = prefer_python_script(default_gandalf_task_executor_path)
+default_gandalf_chat_handler_path = prefer_python_script(default_gandalf_chat_handler_path)
 
 
 # ============================================================================

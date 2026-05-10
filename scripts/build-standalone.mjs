@@ -11,16 +11,13 @@ const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, 'standalone');
 const shouldMinifyJs = !process.argv.includes('--no-minify-js');
 
-const runtimeRootEntries = [
-  'board-live-cards-cli.js',
-  'card-store.js',
-];
+const runtimeRootEntries = [];
 
 const runtimeDirs = [
-  'dist',
   'pycli/main',
   'pycli/sub',
   'pycli/pylib',
+  'pycli/py-server-runtime',
 ];
 
 const runtimeFiles = [
@@ -38,9 +35,28 @@ const runtimeFiles = [
 ];
 
 const runtimeExampleDirs = [
-  'demo-src/example-board',
+  'demo-src/example-board/cards',
+  'demo-src/example-board/gandalf-cards',
+  'demo-src/example-board/source-def-flows',
   'examples/cli/step-machine-cli/portfolio-tracker/handlers',
   'examples/cli/step-machine-cli/portfolio-tracker/handlers-py',
+];
+
+const runtimeDemoFiles = [
+  'demo-src/example-board/demo-server-config.json',
+  'demo-src/example-board/demo-shell-with-server.html',
+  'demo-src/example-board/demo-shell.html',
+  'demo-src/example-board/demo-shell-browser.html',
+  'demo-src/example-board/demo-shell-localstorage.html',
+  'demo-src/example-board/demo-task-executor.py',
+  'demo-src/example-board/demo-chat-handler.py',
+  'demo-src/example-board/py-demo-server.py',
+  'demo-src/example-board/scripts/copilot_wrapper.bat',
+  'demo-src/example-board/scripts/copilot_wrapper_helper.ps1',
+  'demo-src/example-board/source_def_flows.json',
+  'demo-src/example-board/agent-instructions.md',
+  'demo-src/example-board/agent-instructions-cardlayout.md',
+  'demo-src/example-board/favicon.svg',
 ];
 
 async function exists(p) {
@@ -97,8 +113,6 @@ async function writeReadme() {
     '  `python examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker-pycli.py`',
     '- Step-machine pycli inline-Python demo:',
     '  `python examples/cli/step-machine-cli/portfolio-tracker/run-inline-python-demo-pycli.py`',
-    '- Node demo server runtime:',
-    '  `node demo-src/example-board/demo-server.js`',
     '- Python demo server runtime:',
     '  `python demo-src/example-board/py-demo-server.py`',
     '',
@@ -126,10 +140,7 @@ async function walkFiles(dir) {
 }
 
 async function minifyStandaloneJs() {
-  const staticTargets = [
-    path.join(outDir, 'board-live-cards-cli.js'),
-    path.join(outDir, 'card-store.js'),
-  ];
+  const staticTargets = [];
 
   const distRoot = path.join(outDir, 'dist');
   const distFiles = (await exists(distRoot)) ? await walkFiles(distRoot) : [];
@@ -161,24 +172,6 @@ async function minifyStandaloneJs() {
   }
 }
 
-async function copyJsonataSidecars() {
-  const sidecarRelPaths = [
-    'dist/jsonata-sync.cjs',
-    'dist/cli/browser-api/jsonata-sync.cjs',
-    'dist/card-compute/jsonata-sync.cjs',
-    'dist/continuous-event-graph/jsonata-sync.cjs',
-    'dist/board-livegraph-runtime/jsonata-sync.cjs',
-  ];
-
-  for (const rel of sidecarRelPaths) {
-    const src = path.join(root, rel);
-    if (!(await exists(src))) continue;
-    const dst = path.join(outDir, rel);
-    await fs.mkdir(path.dirname(dst), { recursive: true });
-    await fs.cp(src, dst, { force: true });
-  }
-}
-
 async function main() {
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(outDir, { recursive: true });
@@ -192,6 +185,9 @@ async function main() {
   for (const rel of runtimeFiles) {
     await copyIntoDist(rel);
   }
+  for (const rel of runtimeDemoFiles) {
+    await copyIntoDist(rel);
+  }
   for (const rel of runtimeExampleDirs) {
     await copyIntoDist(rel);
   }
@@ -199,9 +195,6 @@ async function main() {
   if (shouldMinifyJs) {
     await minifyStandaloneJs();
   }
-
-  // Keep required CommonJS sidecars available for runtime require() paths.
-  await copyJsonataSidecars();
 
   await writeReadme();
 
