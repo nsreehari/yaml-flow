@@ -5,7 +5,7 @@
     "tags": [
       "portfolio"
     ],
-    "desc": "Manage your stock holdings \u2014 edit tickers and quantities inline, add or delete rows. Changes propagate downstream immediately."
+    "desc": "Manage your stock holdings — edit tickers and quantities inline, add or delete rows. Changes propagate downstream immediately."
   },
   "provides": [
     {
@@ -61,22 +61,17 @@
       {
         "ticker": "AAPL",
         "quantity": 10,
-        "cost_basis": 150.0
-      },
-      {
-        "ticker": "MSFT",
-        "quantity": 5,
-        "cost_basis": 310.0
+        "cost_basis": 150
       },
       {
         "ticker": "GOOGL",
         "quantity": 2,
-        "cost_basis": 280.0
+        "cost_basis": 280
       },
       {
         "ticker": "TSLA",
         "quantity": 3,
-        "cost_basis": 200.0
+        "cost_basis": 200
       }
     ]
   }

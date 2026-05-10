@@ -34,6 +34,11 @@ function resolveYamlFlowDir() {
 }
 
 const _yamlFlowDir = resolveYamlFlowDir();
+
+// cliDir must point to the yaml-flow root so buildBoardCliInvocation finds
+// board-live-cards-cli.js for task-executor completion callbacks.
+// demo-src/example-board is 2 levels below the yaml-flow root.
+const YAML_FLOW_CLI_DIR = _yamlFlowDir || path.resolve(__dirname, '..', '..');
 const _pkgStepMachineCli = _yamlFlowDir ? path.join(_yamlFlowDir, 'step-machine-cli.js') : null;
 
 function loadServerConfig() {
@@ -244,7 +249,7 @@ function createNamedPipeNotificationTransport() {
 
 const serverMetaRef = process.env.DEMO_SERVER_META_STORE_REF || configuredServerMetaStoreRef || `::fs-path::${setupDir}`;
 const serverMetaAdapter = createFsBoardPlatformAdapter(
-  parseRef(serverMetaRef), __dirname, { suppressSpawn: true },
+  parseRef(serverMetaRef), YAML_FLOW_CLI_DIR, { suppressSpawn: true },
 );
 const serverMetaStore = createArtifactsStore(serverMetaAdapter.blobStorage('server-meta'));
 
@@ -265,7 +270,7 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
 
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
   const baseRef = parseRef(`::fs-path::${boardDir}`);
-  const boardAdapter = createFsBoardPlatformAdapter(baseRef, __dirname, {
+  const boardAdapter = createFsBoardPlatformAdapter(baseRef, YAML_FLOW_CLI_DIR, {
     notifyChannel,
   });
   // In the server context the drain loop is driven in-process; suppress the
@@ -274,7 +279,7 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   // Separate artifacts adapter rooted at cardsDir (preserves old FS layout where
   // chats/files live under cardsDir rather than boardDir)
   const artifactsRef = parseRef(`::fs-path::${cardsDir}`);
-  const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, __dirname, { suppressSpawn: true });
+  const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, YAML_FLOW_CLI_DIR, { suppressSpawn: true });
 
   const cardStoreRef = serializeRef({ kind: 'fs-path', value: path.join(cardsDir, 'cards') });
 
