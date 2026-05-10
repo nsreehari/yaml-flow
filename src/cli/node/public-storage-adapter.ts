@@ -43,8 +43,13 @@ export interface KindValueRef {
   readonly value: string;
 }
 
-/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef. */
+/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef.
+ * Also accepts the legacy ::fs-path::<path> format for backward compatibility. */
 export function parseRef(s: string): KindValueRef {
+  // Legacy format: ::fs-path::<path>
+  if (s.startsWith('::fs-path::')) {
+    return { kind: 'fs-path', value: s.slice('::fs-path::'.length) };
+  }
   if (!s.startsWith('b64:')) throw new Error(`Invalid ref format (expected b64:<base64url(json)>): ${s}`);
   const payload = s.slice(4);
   const padded = payload.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (payload.length % 4)) % 4);
