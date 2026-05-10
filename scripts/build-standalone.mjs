@@ -20,6 +20,7 @@ const runtimeDirs = [
   'dist/pycli',
   'pycli/main',
   'pycli/sub',
+  'pycli/pylib',
 ];
 
 const runtimeFiles = [

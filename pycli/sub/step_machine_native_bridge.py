@@ -39,17 +39,66 @@ class _FileStore:
         self._dir = directory
         os.makedirs(directory, exist_ok=True)
 
-    def get(self, run_id: str) -> Optional[dict]:
-        p = os.path.join(self._dir, f"{run_id}.json")
+    def _run_path(self, run_id: str) -> str:
+        return os.path.join(self._dir, f"{run_id}.run.json")
+
+    def _data_path(self, run_id: str) -> str:
+        return os.path.join(self._dir, f"{run_id}.data.json")
+
+    def save_run_state(self, run_id: str, state: dict) -> None:
+        p = self._run_path(run_id)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=True)
+
+    def load_run_state(self, run_id: str) -> Optional[dict]:
+        p = self._run_path(run_id)
         if not os.path.exists(p):
             return None
         with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+            loaded = json.load(f)
+        return loaded if isinstance(loaded, dict) else None
 
-    def put(self, run_id: str, state: dict) -> None:
-        p = os.path.join(self._dir, f"{run_id}.json")
+    def delete_run_state(self, run_id: str) -> None:
+        for p in (self._run_path(run_id), self._data_path(run_id)):
+            try:
+                os.remove(p)
+            except FileNotFoundError:
+                pass
+
+    def _load_data(self, run_id: str) -> dict[str, Any]:
+        p = self._data_path(run_id)
+        if not os.path.exists(p):
+            return {}
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:
+            return {}
+        return {}
+
+    def _save_data(self, run_id: str, data: dict[str, Any]) -> None:
+        p = self._data_path(run_id)
         with open(p, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
+            json.dump(data, f, indent=2, ensure_ascii=True)
+
+    def set_data(self, run_id: str, key: str, value: Any) -> None:
+        data = self._load_data(run_id)
+        data[key] = value
+        self._save_data(run_id, data)
+
+    def get_data(self, run_id: str, key: str) -> Any:
+        return self._load_data(run_id).get(key)
+
+    def get_all_data(self, run_id: str) -> dict[str, Any]:
+        return dict(self._load_data(run_id))
+
+    def clear_data(self, run_id: str) -> None:
+        try:
+            os.remove(self._data_path(run_id))
+        except FileNotFoundError:
+            pass
 
     def list_runs(self) -> list:
         p = Path(self._dir)

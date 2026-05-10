@@ -13,7 +13,6 @@ def main() -> int:
 
     pycli = repo_root / "pycli" / "main" / "step_machine_pycli.py"
     flow = here / "inline-python-demo.flow.yaml"
-    handlers = here / "inline-python-handlers.py"
 
     initial_data = {
         "name": "Ada",
@@ -25,8 +24,6 @@ def main() -> int:
         sys.executable,
         str(pycli),
         str(flow),
-        "--handlers",
-        str(handlers),
         "--initial-data",
         json.dumps(initial_data, ensure_ascii=True),
         "--store",

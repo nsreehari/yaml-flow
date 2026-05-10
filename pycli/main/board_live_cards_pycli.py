@@ -26,6 +26,7 @@ from sub.board_live_cards_adapters import (
 )
 from sub.board_live_cards_native_bridge import invoke_board_command_native
 from sub.board_live_cards_state_snapshot import commit_snapshot, read_snapshot
+from pylib.cli.storage_interface import serialize_ref as serialize_storage_ref
 
 
 def _parse_json_file(file_path: str) -> Dict[str, Any]:
@@ -256,7 +257,7 @@ def _board_handler(command: str):
                 if isinstance(token, str) and token:
                     base_ref = _decode_board_ref_from_token(token)
             if not base_ref and command in ("validateTmpCard", "probeTmpSource"):
-                base_ref = serialize_ref({"kind": "fs-path", "value": os.path.abspath('.')})
+                base_ref = serialize_storage_ref({"kind": "fs-path", "value": os.path.abspath('.')})
 
             input_obj: Dict[str, Any] = {"params": {}, "body": None}
 
@@ -315,7 +316,7 @@ def _board_handler(command: str):
             _print_json(result)
 
             status = result.get("status")
-            return 0 if status in ("success", "fail") else 2
+            return 0 if status in ("success", "fail", "ok", "completed", "noop") else 2
         except Exception as e:
             _print_json({"status": "error", "error": str(e)})
             return 2

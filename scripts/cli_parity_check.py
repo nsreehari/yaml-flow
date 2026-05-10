@@ -85,13 +85,52 @@ def _normalize_stream(text: str) -> Any:
 
 
 def _normalize_stream_with_replacements(text: str, replacements: List[Tuple[str, str]]) -> Any:
-    replaced = text
-    for src, dst in replacements:
-        replaced = replaced.replace(src, dst)
-        replaced = replaced.replace(src.replace("\\", "\\\\"), dst)
-        replaced = replaced.replace(src.replace("\\", "/"), dst)
-        replaced = replaced.replace(src.replace("/", "\\"), dst)
-    return _normalize_obj(_parse_json_or_text(replaced))
+    def _replace_string(value: str) -> str:
+        out = value
+        for src, dst in replacements:
+            out = out.replace(src, dst)
+            out = out.replace(src.replace("\\", "\\\\"), dst)
+            out = out.replace(src.replace("\\", "/"), dst)
+            out = out.replace(src.replace("/", "\\"), dst)
+        return out
+
+    def _decode_b64_ref(value: str) -> Any:
+        if not value.startswith("b64:"):
+            return value
+        token = value[4:]
+        try:
+            padded = token + ("=" * ((4 - (len(token) % 4)) % 4))
+            raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+            payload = json.loads(raw)
+            if isinstance(payload, dict) and isinstance(payload.get("kind"), str):
+                return {"$ref": payload}
+        except Exception:
+            return value
+        return value
+
+    def _normalize(value: Any) -> Any:
+        if isinstance(value, str):
+            replaced = _replace_string(value)
+            decoded = _decode_b64_ref(replaced)
+            if isinstance(decoded, dict) and "$ref" in decoded:
+                return _normalize(decoded)
+            if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$", replaced):
+                return "<timestamp>"
+            return replaced
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            for k, v in value.items():
+                if k == "updatedAt" and isinstance(v, str):
+                    out[k] = "<timestamp>"
+                else:
+                    out[k] = _normalize(v)
+            return out
+        if isinstance(value, list):
+            return [_normalize(v) for v in value]
+        return value
+
+    parsed = _parse_json_or_text(text)
+    return _normalize(parsed)
 
 
 def _normalize_validate_result(text: str) -> Any:
