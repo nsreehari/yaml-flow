@@ -31,10 +31,10 @@ function findPython(): string | null {
 const PYTHON_CMD = findPython();
 const DEEP = process.env.DEEP === 'true';
 
-function runScript(scriptName: string, timeoutMs = 120_000): Promise<{ stdout: string; stderr: string; code: number }> {
+function runScript(scriptName: string, timeoutMs = 120_000, extraArgs: string[] = []): Promise<{ stdout: string; stderr: string; code: number }> {
   const scriptPath = path.join(portfolioDir, scriptName);
   return new Promise((resolve) => {
-    const proc = execFile('node', [scriptPath], {
+    const proc = execFile('node', [scriptPath, ...extraArgs], {
       cwd: repoRoot,
       timeout: timeoutMs,
       maxBuffer: 10 * 1024 * 1024,
@@ -111,4 +111,21 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toContain('[T4] assertions passed');
     expect(combined).toContain('[T5] totals assertion passed');
   }, 180_000);
+
+  it('portfolio-tracker-http-test.js — HTTP + SSE E2E (T1–T5, two-track worker architecture)', async () => {
+    const { stdout, stderr, code } = await runScript('portfolio-tracker-http-test.js', 240_000);
+    const combined = stdout + stderr;
+
+    expect(code, `exit code non-zero\nstdout: ${stdout}\nstderr: ${stderr}`).toBe(0);
+    expect(combined).toContain('=== All tests passed ✓ ===');
+  }, 240_000);
+
+  it.skipIf(!PYTHON_CMD || !DEEP)('portfolio-tracker-http-test.js --server py — HTTP+SSE E2E against Python server (T1–T5)', async () => {
+    console.log(`[python] using: ${PYTHON_CMD}`);
+    const { stdout, stderr, code } = await runScript('portfolio-tracker-http-test.js', 300_000, ['--server', 'py', '--port', '7801']);
+    const combined = stdout + stderr;
+
+    expect(code, `exit code non-zero\nstdout: ${stdout}\nstderr: ${stderr}`).toBe(0);
+    expect(combined).toContain('=== All tests passed ✓ ===');
+  }, 300_000);
 });

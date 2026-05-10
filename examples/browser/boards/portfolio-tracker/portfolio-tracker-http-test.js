@@ -16,11 +16,11 @@
  *     All "wait for X" helpers poll NS with setInterval — no callbacks needed.
  *
  * Usage:
- *   node portfolio-tracker-http-test.js [--port 7800]
+ *   node portfolio-tracker-http-test.js [--port 7800] [--server node|py]
  */
 
 import { Worker } from 'node:worker_threads';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
@@ -30,10 +30,25 @@ const __dirname = path.dirname(__filename);
 
 const cliArgs = process.argv.slice(2);
 const portArg = cliArgs.indexOf('--port');
-const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : 7800;
+const serverArg = cliArgs.indexOf('--server');
+const SERVER_TYPE = serverArg !== -1 ? cliArgs[serverArg + 1] : 'node'; // 'node' | 'py'
+const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : (SERVER_TYPE === 'py' ? 7801 : 7800);
 const BASE = `http://127.0.0.1:${PORT}/api/board`;
 const SERVER_SCRIPT = path.join(__dirname, 'portfolio-tracker-server.js');
+const PY_SERVER_SCRIPT = path.join(__dirname, 'portfolio-tracker-server.py');
 const SSE_WORKER_SCRIPT = path.join(__dirname, 'portfolio-tracker-sse-worker.js');
+
+/** Find a working Python interpreter. Returns null if none found. */
+function findPython() {
+  const candidates = ['python3', 'python'];
+  for (const cmd of candidates) {
+    try {
+      const r = spawnSync(cmd, ['--version'], { stdio: 'pipe', timeout: 3000 });
+      if (r.status === 0 && r.stdout?.toString().startsWith('Python ')) return cmd;
+    } catch { /* next */ }
+  }
+  return null;
+}
 
 // =============================================================================
 // NOTIFICATION STATE — accumulated by the main thread from worker SSE frames
@@ -178,8 +193,19 @@ function applyFrame(payload) {
   // ── Server process ────────────────────────────────────────────────────────────
 
   function startServer(port) {
+    const isPy = SERVER_TYPE === 'py';
+    let cmd, cmdArgs;
+    if (isPy) {
+      const python = findPython();
+      if (!python) throw new Error('Python interpreter not found on PATH');
+      cmd = python;
+      cmdArgs = [PY_SERVER_SCRIPT, '--port', String(port), '--reset'];
+    } else {
+      cmd = process.execPath;
+      cmdArgs = [SERVER_SCRIPT, '--port', String(port), '--reset'];
+    }
     return new Promise((resolve, reject) => {
-      const proc = spawn(process.execPath, [SERVER_SCRIPT, '--port', String(port), '--reset'], {
+      const proc = spawn(cmd, cmdArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -199,7 +225,7 @@ function applyFrame(payload) {
   // ── Main ──────────────────────────────────────────────────────────────────────
 
   console.log('\n=== portfolio-tracker HTTP E2E test ===');
-  console.log(`target: ${BASE}`);
+  console.log(`target: ${BASE}  [server: ${SERVER_TYPE}]`);
   console.log(`architecture: main-thread (test driver) + worker-thread (SSE consumer)\n`);
 
   const serverProc = await startServer(PORT);
@@ -327,5 +353,5 @@ function applyFrame(payload) {
     sseWorker?.terminate();
     serverProc.kill();
     await new Promise(r => serverProc.on('exit', r));
-    console.log('[portfolio-tracker-http-test] server stopped');
+    console.log(`[portfolio-tracker-http-test] server stopped (${SERVER_TYPE})`);
   }
