@@ -24,6 +24,23 @@ _PYCLI_SUB = os.path.join(_PYCLI_ROOT, "sub")
 from pylib.cli.storage_interface import parse_ref
 
 
+def _hidden_subprocess_kwargs() -> Dict[str, Any]:
+    """Return subprocess kwargs that suppress console windows on Windows."""
+    if os.name != "nt":
+        return {}
+    kwargs: Dict[str, Any] = {}
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        si = startupinfo_cls()
+        si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = si
+    return kwargs
+
+
 def _public_storage_adapter():
     """Lazy-load public_storage_adapter (sub/ in source, adapters/ in standalone)."""
     mod_name = "_demo_psa"
@@ -270,7 +287,7 @@ def _execute_copilot(source_def: Dict[str, Any], out_ref: str) -> Any:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **_hidden_subprocess_kwargs(),
         )
         with open(out_file, "r", encoding="utf-8") as f:
             return json.load(f)

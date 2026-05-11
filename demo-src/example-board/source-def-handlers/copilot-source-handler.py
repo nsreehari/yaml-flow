@@ -43,6 +43,23 @@ _DEFAULT_PROMPT_CONTEXT = {
 }
 
 
+def _hidden_subprocess_kwargs() -> Dict[str, Any]:
+    """Return subprocess kwargs that suppress console windows on Windows."""
+    if os.name != "nt":
+        return {}
+    kwargs: Dict[str, Any] = {}
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        si = startupinfo_cls()
+        si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = si
+    return kwargs
+
+
 def _interpolate(template: str, args: Dict[str, Any]) -> str:
     out = str(template)
     for key, value in args.items():
@@ -122,7 +139,7 @@ def execute(context: Dict[str, Any]) -> Dict[str, Any]:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    **_hidden_subprocess_kwargs(),
                 )
                 with open(wrapper_out_file, "r", encoding="utf-8-sig") as f:
                     result_value = json.load(f)
@@ -147,7 +164,7 @@ def execute(context: Dict[str, Any]) -> Dict[str, Any]:
             text=True,
             timeout=120,
             cwd=copilot_cwd or None,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            **_hidden_subprocess_kwargs(),
         )
         raw_output = proc.stdout
         first_brace = raw_output.find("{")
