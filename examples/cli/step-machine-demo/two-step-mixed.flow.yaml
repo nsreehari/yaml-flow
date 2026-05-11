@@ -28,7 +28,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9zdGVwMi1kb3VibGUtY2xpLmpzIn0"
+      whatToRun: {kind: fs-path, value: ./step2-double-cli.js}
     transitions:
       success: success_state
       failure: failed_state

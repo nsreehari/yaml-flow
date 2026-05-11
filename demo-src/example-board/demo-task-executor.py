@@ -300,8 +300,11 @@ def _execute_via_step_machine_flow(
         what = ref.get("whatToRun", "")
 
         if how == "demo-local-module":
+            # whatToRun is always a b64 wire string; parse to get the value
+            parsed_what = parse_ref(what)
+            what_value = parsed_what.get("value", "")
             # For Python standalone, fall back from .js to .py automatically
-            py_what = what[:-3] + ".py" if what.endswith(".js") else what
+            py_what = what_value[:-3] + ".py" if what_value.endswith(".js") else what_value
             module_path = os.path.normpath(os.path.join(_HERE, py_what))
             if not os.path.isfile(module_path):
                 raise FileNotFoundError(f"Handler module not found: {py_what}")

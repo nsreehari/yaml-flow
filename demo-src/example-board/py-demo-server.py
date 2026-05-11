@@ -212,14 +212,8 @@ def create_subprocess_invocation_adapter():
         def invoke(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
             how_to_run = ref.get("howToRun", "")
             what_to_run = str(ref.get("whatToRun") or "")
-            if what_to_run.startswith("b64:"):
-                try:
-                    parsed = parse_ref(what_to_run)
-                    script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
-                except Exception:
-                    script_path = ""
-            else:
-                script_path = what_to_run
+            parsed = parse_ref(what_to_run)
+            script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
 
             if not script_path:
                 return {"dispatched": False, "error": f"no script path in whatToRun: {what_to_run}"}
@@ -263,14 +257,8 @@ def create_subprocess_invocation_adapter():
         def describe(self, ref: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             how_to_run = ref.get("howToRun", "")
             what_to_run = str(ref.get("whatToRun") or "")
-            if what_to_run.startswith("b64:"):
-                try:
-                    parsed = parse_ref(what_to_run)
-                    script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
-                except Exception:
-                    script_path = ""
-            else:
-                script_path = what_to_run
+            parsed = parse_ref(what_to_run)
+            script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
             if not script_path:
                 return None
 

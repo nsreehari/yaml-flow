@@ -203,12 +203,14 @@ export interface ExecutionRef {
   howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in' | 'in-browser';
 
   /**
-    * Address of the artifact to run, in KindValueRef wire form (b64:<base64url(json)>).
+    * Address of the artifact to run. Two valid forms:
+    *   - string:  must be KindValueRef wire form `b64:<base64url(json)>` (programmatically generated via serializeRef)
+    *   - object:  `{ kind: string; value: string }` plain object (human-authored flow files — normalized by the handler factory)
     * @example 'b64:<base64url({"kind":"fs-path","value":"/dist/cli/source-cli-task-executor.js"})>'
-    * @example 'b64:<base64url({"kind":"http-url","value":"https://fn.example.com/api/executor"})>'
-    * @example 'b64:<base64url({"kind":"built-in","value":"source-cli-task-executor"})>'
+    * @example { kind: 'http-url', value: '/api/workiq/ask' }
+    * @example { kind: 'fs-path', value: './my-handler.js' }
    */
-  whatToRun: string;
+  whatToRun: string | { kind: string; value: string };
 
   /**
    * Optional JSONata-based mapping from logical args → physical call shape.

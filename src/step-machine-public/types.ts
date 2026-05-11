@@ -50,6 +50,13 @@ export interface ComputeJsonataSpec {
  *
  * The engine never invokes refs directly — invocation is delegated to an
  * `InvokeFn` adapter (e.g. Node spawn, HTTP, Azure Function).
+ *
+ * `whatToRun` may be either:
+ *   - a `b64:<base64url(json)>` wire string (programmatically generated)
+ *   - a plain `{ kind, value }` object (human-authored flow files)
+ *
+ * The handler factory normalizes the object form via `serializeRef` before
+ * dispatching, so downstream adapters always receive the string form.
  */
 export interface RefSpec extends ExecutionRef {
   type: 'ref';

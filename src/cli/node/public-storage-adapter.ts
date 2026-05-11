@@ -150,10 +150,9 @@ export interface TaskCallback {
 
 /**
  * Extract the path/url value from a whatToRun b64:<base64url(json)> wire string.
- * Falls back to the raw string if it isn’t in b64:<base64url(json)> form.
  */
 function _parseWhatToRun(whatToRun: string): string {
-  try { return parseRef(whatToRun).value; } catch { return whatToRun; }
+  return parseRef(whatToRun).value;
 }
 
 function _notifyChannelFromVia(via: ExecutionRef): string | undefined {

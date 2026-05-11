@@ -17,6 +17,7 @@
 import { jsonata } from './jsonata-loader.js';
 import { wrapWithInputValidations, wrapWithOutputFiltering } from './result-utils.js';
 import { resolveOutputTransforms } from '../cli/common/args-massaging.js';
+import { serializeRef } from '../cli/common/storage-interface.js';
 import type {
   ComputeJsonataSpec,
   HandlerSpec,
@@ -44,11 +45,13 @@ export function isComputeJsonataSpec(spec: unknown): spec is ComputeJsonataSpec 
 export function isRefSpec(spec: unknown): spec is RefSpec {
   if (!spec || typeof spec !== 'object') return false;
   const s = spec as Record<string, unknown>;
-  return (
-    s.type === 'ref' &&
-    typeof s.howToRun === 'string' &&
-    typeof s.whatToRun === 'string'
-  );
+  if (s.type !== 'ref' || typeof s.howToRun !== 'string') return false;
+  if (typeof s.whatToRun === 'string') return true;
+  if (s.whatToRun && typeof s.whatToRun === 'object') {
+    const w = s.whatToRun as Record<string, unknown>;
+    return typeof w.kind === 'string' && typeof w.value === 'string';
+  }
+  return false;
 }
 
 // ============================================================================
@@ -170,8 +173,14 @@ export function createRefStepHandler(
 ): StepHandler {
   // The handler spec itself is a superset of ExecutionRef. Strip the discriminator
   // before passing to the adapter so it sees a plain ExecutionRef.
+  // Normalize whatToRun from object form { kind, value } → b64 string.
   const { type: _t, ...refOnly } = spec;
-  const ref = refOnly;
+  const ref = {
+    ...refOnly,
+    whatToRun: typeof refOnly.whatToRun === 'object'
+      ? serializeRef(refOnly.whatToRun)
+      : refOnly.whatToRun,
+  };
 
   return async (input) => {
     const stepInput: Record<string, unknown> =

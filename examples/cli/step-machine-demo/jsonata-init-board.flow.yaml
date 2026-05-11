@@ -25,7 +25,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9qc29uYXRhLWluaXQtYm9hcmQtY2xpLmpzIn0"
+      whatToRun: {kind: fs-path, value: ./jsonata-init-board-cli.js}
     transitions:
       success: t2_map_output
       failure: failed_state

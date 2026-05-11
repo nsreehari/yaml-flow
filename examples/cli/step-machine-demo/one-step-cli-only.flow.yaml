@@ -8,7 +8,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9zdGVwLWNsaS1lY2hvLXkuanMifQ"
+      whatToRun: {kind: fs-path, value: ./step-cli-echo-y.js}
     transitions:
       success: success_state
       failure: failed_state

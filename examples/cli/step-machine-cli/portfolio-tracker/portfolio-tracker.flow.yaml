@@ -12,7 +12,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9oYW5kbGVycy9yZXNldC1ib2FyZC1kaXItY2xpLmpzIn0"
+      whatToRun: {kind: fs-path, value: ./handlers/reset-board-dir-cli.js}
       argsMassaging:
         bodyTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
     transitions:
@@ -27,7 +27,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9oYW5kbGVycy9pbml0LWJvYXJkLWNsaS5qcyJ9"
+      whatToRun: {kind: fs-path, value: ./handlers/init-board-cli.js}
       argsMassaging:
         bodyTemplate: "{ 'BOARD_DIR': board_dir }"
     transitions:
@@ -42,7 +42,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9oYW5kbGVycy9hZGQtY2FyZHMtY2xpLmpzIn0"
+      whatToRun: {kind: fs-path, value: ./handlers/add-cards-cli.js}
       argsMassaging:
         bodyTemplate: "{ 'BOARD_DIR': board_dir, 'CARDS': cards }"
     transitions:
@@ -57,7 +57,7 @@ steps:
     handler:
       type: ref
       howToRun: local-node
-      whatToRun: "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi9oYW5kbGVycy9wb2xsLXN0YXR1cy1jbGkuanMifQ"
+      whatToRun: {kind: fs-path, value: ./handlers/poll-status-cli.js}
       argsMassaging:
         bodyTemplate: "{ 'BOARD_DIR': board_dir, 'EXPECTED_CARD_COUNT': expected_card_count, 'TIMEOUT_MS': '30000', 'POLL_MS': '500' }"
     transitions:
