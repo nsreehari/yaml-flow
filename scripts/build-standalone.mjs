@@ -18,7 +18,7 @@ const shouldMinifyJs = !process.argv.includes('--no-minify-js');
 //   core/adapters/   ← pycli/sub/             (platform adapters)
 //   core/server/     ← pycli/py-server-runtime/
 //   browser/         ← demo-src html + svg
-//   examples/demo-board/   ← demo-src/example-board/ python files + cards + flows
+//   examples/demo-board/   ← demo-src/example-board/ python files + cards + flows + Python handlers
 //   examples/portfolio-tracker/ ← merged portfolio-tracker examples (Python only)
 //   requirements.txt ← pycli/requirements.txt
 //
@@ -33,10 +33,9 @@ const copyMap = [
   ['pycli/py-server-runtime', 'core/server'],
   // requirements at root
   ['pycli/requirements.txt',  'requirements.txt'],
-  // browser shells
+  // browser shells (demo-shell-browser.html excluded — JS/browser-only)
   ['demo-src/example-board/demo-shell-with-server.html', 'browser/demo-shell-with-server.html'],
   ['demo-src/example-board/demo-shell.html',             'browser/demo-shell.html'],
-  ['demo-src/example-board/demo-shell-browser.html',     'browser/demo-shell-browser.html'],
   ['demo-src/example-board/demo-shell-localstorage.html','browser/demo-shell-localstorage.html'],
   ['demo-src/example-board/favicon.svg',                 'browser/favicon.svg'],
   // demo-board example (python files + data)
@@ -50,6 +49,9 @@ const copyMap = [
   ['demo-src/example-board/demo-task-executor.py',           'examples/demo-board/demo-task-executor.py'],
   ['demo-src/example-board/demo-chat-handler.py',            'examples/demo-board/demo-chat-handler.py'],
   ['demo-src/example-board/py-demo-server.py',               'examples/demo-board/py-demo-server.py'],
+  // source-def Python handlers (JS handlers excluded from standalone)
+  ['demo-src/example-board/source-def-handlers/http-source-handler.py',    'examples/demo-board/source-def-handlers/http-source-handler.py'],
+  ['demo-src/example-board/source-def-handlers/copilot-source-handler.py', 'examples/demo-board/source-def-handlers/copilot-source-handler.py'],
   // portfolio-tracker example — Python only (no JS handlers)
   ['examples/browser/boards/portfolio-tracker/portfolio-tracker.py',            'examples/portfolio-tracker/portfolio-tracker.py'],
   ['examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py','examples/portfolio-tracker/portfolio-tracker-fetch-prices.py'],
@@ -84,6 +86,16 @@ const pythonPathPatches = [
     // main → cli
     ['os.path.join(_PYCLI_ROOT, "main", "board_live_cards_pycli.py")',
      'os.path.join(_PYCLI_ROOT, "cli", "board_live_cards_pycli.py")'],
+  ]],
+  // Patch flow JSONs: replace JS handler refs with Python equivalents
+  ['examples/demo-board/source-def-flows/url.flow.json', [
+    ['./source-def-handlers/http-source-handler.js', './source-def-handlers/http-source-handler.py'],
+  ]],
+  ['examples/demo-board/source-def-flows/url-list.flow.json', [
+    ['./source-def-handlers/http-source-handler.js', './source-def-handlers/http-source-handler.py'],
+  ]],
+  ['examples/demo-board/source-def-flows/copilot.flow.json', [
+    ['./source-def-handlers/copilot-source-handler.js', './source-def-handlers/copilot-source-handler.py'],
   ]],
 ];
 

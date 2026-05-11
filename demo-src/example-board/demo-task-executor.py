@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import time
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PYCLI_ROOT = os.path.normpath(os.path.join(_HERE, "..", "..", "pycli"))
@@ -19,6 +20,24 @@ if _PYCLI_ROOT not in sys.path:
     sys.path.insert(0, _PYCLI_ROOT)
 
 from pylib.cli.storage_interface import parse_ref
+
+COPILOT_PROMPT_CONTEXT: Dict[str, Any] = {
+    "view_kind_guidance": "\n".join([
+        "VIEW KIND GUIDANCE (for dynamic ref rendering):",
+        "- Return a _view object whenever your output data is meant for a ref element.",
+        "- Allowed _view.kind values only: table, editable-table, chart, metric, list, badge, text, narrative, markdown, form, filter, todo, alert.",
+        '- If uncertain, use "table".',
+        '- For array rows that users should edit, prefer "editable-table" and set _view.data.writeTo to a card_data path.',
+        "- For chart, set _view.data.chartType and _view.data.columns with [labelField, valueField].",
+        "- Keep _view.data minimal and valid JSON (no comments, no trailing text).",
+    ]),
+    "card_layout_guidance": "\n".join([
+        "CARD LAYOUT GUIDANCE:",
+        "- Prefer compact outputs that fit a card: one primary structure plus concise rationale text.",
+        "- Avoid repeating values already present in upstream inputs.",
+        "- If you produce both machine-readable and human-readable content, keep machine-readable fields top-level and concise prose in a separate field.",
+    ]),
+}
 
 MOCK_DB: Dict[str, Any] = {
     "quotes": {
@@ -245,34 +264,93 @@ def _execute_copilot(source_def: Dict[str, Any], out_ref: str) -> Any:
                 pass
 
 
-def _execute_workiq(source_def: Dict[str, Any]) -> Any:
-    raise RuntimeError("workiq source is not available in Python-only standalone")
+def _execute_via_step_machine_flow(
+    source_def: Dict[str, Any],
+    out_ref: str,
+    extra: Optional[Dict[str, Any]],
+) -> Tuple[Any, bool]:
+    """Run source def through the Python step machine using flow files + Python handler modules.
+
+    Mirrors executeStepMachineSourceFlow in demo-task-executor.js.
+    Supports howToRun='demo-local-module' by dynamically importing .py handler files.
+    """
+    from pylib.step_machine.step_machine import StepMachine
+    from pylib.step_machine_public import build_step_handlers_for_flow
+    from pylib.stores.memory import MemoryStore
+
+    registry_path = os.path.join(_HERE, "source_def_flows.json")
+    with open(registry_path, "r", encoding="utf-8") as f:
+        registry = json.load(f)
+
+    kind = _detect_kind(source_def)
+    spec = (registry.get("kinds") or {}).get(kind)
+    if not spec:
+        raise ValueError(f"Missing flow registration for kind: {kind}")
+
+    flow_ref = spec.get("flow")
+    if not isinstance(flow_ref, str) or not flow_ref:
+        raise ValueError(f"Invalid or missing flow for kind: {kind}")
+
+    flow_path = os.path.normpath(os.path.join(_HERE, flow_ref))
+    with open(flow_path, "r", encoding="utf-8") as f:
+        flow = json.load(f)
+
+    def invoke(ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
+        how = ref.get("howToRun", "")
+        what = ref.get("whatToRun", "")
+
+        if how == "demo-local-module":
+            # For Python standalone, fall back from .js to .py automatically
+            py_what = what[:-3] + ".py" if what.endswith(".js") else what
+            module_path = os.path.normpath(os.path.join(_HERE, py_what))
+            if not os.path.isfile(module_path):
+                raise FileNotFoundError(f"Handler module not found: {py_what}")
+            mod_spec = importlib.util.spec_from_file_location("_handler_mod", module_path)
+            mod = importlib.util.module_from_spec(mod_spec)  # type: ignore[arg-type]
+            mod_spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            if not callable(getattr(mod, "execute", None)):
+                raise ValueError(f"Handler module {py_what} must define execute(context)")
+            return mod.execute(args)
+
+        raise ValueError(f"[demo-task-executor.py] Unsupported howToRun for Python executor: {how!r}")
+
+    handlers = build_step_handlers_for_flow(flow, invoke)
+    machine = StepMachine(flow, handlers, options={"store": MemoryStore()})
+
+    run = machine.run({
+        "kind": kind,
+        "sourceDef": source_def,
+        "extra": extra or {},
+        "executorDir": _HERE,
+        "outRef": out_ref,
+        "promptContext": COPILOT_PROMPT_CONTEXT,
+        "mockDb": MOCK_DB,
+    })
+
+    if run.get("status") != "completed":
+        reason = str(run.get("error") or run.get("intent") or run.get("status"))
+        raise RuntimeError(f"flow execution failed: {reason}")
+
+    if run.get("intent") != "success":
+        data = run.get("data") or {}
+        error_msg = data.get("error") or f"flow returned intent: {run.get('intent')}"
+        raise RuntimeError(str(error_msg))
+
+    data = run.get("data") or {}
+    return data.get("resultValue"), bool(data.get("wroteOutputDirectly"))
 
 
-def _execute_mock(source_def: Dict[str, Any]) -> Any:
-    key = source_def.get("mock")
-    if not isinstance(key, str) or not key:
-        raise ValueError("mock source requires a string key")
-    if key not in MOCK_DB:
-        raise ValueError(f"mock key not found: {key}")
-    return MOCK_DB[key]
-
-
-def _run_source_fetch(in_ref: str, out_ref: str, err_ref: Optional[str]) -> int:
+def _run_source_fetch(
+    in_ref: str,
+    out_ref: str,
+    err_ref: Optional[str],
+    extra: Optional[Dict[str, Any]] = None,
+) -> int:
     try:
         source_def = _read_json_file(in_ref)
-        kind = _detect_kind(source_def)
-        if kind == "url":
-            result_value = _execute_url(source_def)
-        elif kind == "url-list":
-            result_value = _execute_url_list(source_def)
-        elif kind == "copilot":
-            result_value = _execute_copilot(source_def, out_ref)
-        elif kind == "workiq":
-            result_value = _execute_workiq(source_def)
-        else:
-            result_value = _execute_mock(source_def)
-        _write_json_file(out_ref, result_value)
+        result_value, wrote_directly = _execute_via_step_machine_flow(source_def, out_ref, extra)
+        if not wrote_directly:
+            _write_json_file(out_ref, result_value)
         return 0
     except Exception as err:
         _write_err(err_ref, str(err))
@@ -304,7 +382,13 @@ def main() -> int:
     if not args.in_ref or not args.out_ref:
         print("run-source-fetch requires --in-ref and --out-ref", file=sys.stderr)
         return 2
-    return _run_source_fetch(args.in_ref, args.out_ref, args.err_ref)
+    extra: Optional[Dict[str, Any]] = None
+    if args.extra:
+        try:
+            extra = json.loads(base64.b64decode(args.extra).decode("utf-8"))
+        except Exception:
+            pass
+    return _run_source_fetch(args.in_ref, args.out_ref, args.err_ref, extra)
 
 
 if __name__ == "__main__":

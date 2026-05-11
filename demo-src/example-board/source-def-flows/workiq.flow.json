@@ -11,7 +11,7 @@
       "handler": {
         "type": "ref",
         "howToRun": "http:post",
-        "whatToRun": "::http-url::/api/workiq/ask"
+        "whatToRun": "b64:eyJraW5kIjoiaHR0cC11cmwiLCJ2YWx1ZSI6Ii9hcGkvd29ya2lxL2FzayJ9"
       },
       "transitions": {
         "success": "completed",
