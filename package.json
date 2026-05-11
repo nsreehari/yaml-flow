@@ -138,7 +138,7 @@
     "build:example": "node demo-src/example-board/build.js",
     "dev": "tsup --watch",
     "test": "npm run build:example && vitest",
-    "test:run": "npm run build:example && vitest run",
+    "test:run": "npm run build && npm run build:example && vitest run",
     "test:cli-parity": "python scripts/cli_parity_check.py",
     "test:cli-parity:full": "python scripts/cli_parity_check.py --include-portfolio",
     "test:e2e": "python examples/browser/boards/portfolio-tracker/portfolio-tracker.py --run-pycli",
