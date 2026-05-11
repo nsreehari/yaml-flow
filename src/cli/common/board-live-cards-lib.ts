@@ -977,10 +977,21 @@ export function createCardHandlerFn(
               const incomingRqt = u.rqt as string;
               if (!entry.lastFetchedAt || incomingRqt > entry.lastFetchedAt) {
                 const deliveryToken = typeof u.deliveryToken === 'string' ? u.deliveryToken : undefined;
+                let committed = false;
                 if (deliveryToken) {
-                  adapters.fetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
+                  committed = adapters.fetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
                 }
-                setSourceEntry(outputFile, nextEntryAfterFetchDelivery(entry, incomingRqt));
+                if (committed) {
+                  setSourceEntry(outputFile, nextEntryAfterFetchDelivery(entry, incomingRqt));
+                } else {
+                  setSourceEntry(
+                    outputFile,
+                    nextEntryAfterFetchFailure(
+                      entry,
+                      `source delivery commit failed for ${outputFile} token=${String(deliveryToken)}`,
+                    ),
+                  );
+                }
               }
             }
             flush();

@@ -27,7 +27,8 @@
     },
     "failed": {
       "description": "WorkIQ source failed",
-      "return_intent": "failure"
+      "return_intent": "failure",
+      "return_artifacts": ["error"]
     }
   }
 }

@@ -11,7 +11,8 @@
       "handler": {
         "type": "compute-jsonata",
         "expr": [
-          "resultValue = $lookup(mockDb, sourceDef.mock)"
+          "data.resultValue = $lookup(expects_data.mockDb, expects_data.sourceDef.mock)",
+          "result = $exists(data.resultValue) ? \"success\" : \"failure\""
         ]
       },
       "transitions": {

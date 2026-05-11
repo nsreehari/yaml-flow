@@ -15,7 +15,7 @@ const shouldMinifyJs = !process.argv.includes('--no-minify-js');
 //
 //   core/pylib/      ← pycli/pylib/          (pure engine library)
 //   core/cli/        ← pycli/main/            (CLI entrypoints)
-//   core/adapters/   ← pycli/sub/             (platform adapters)
+//   core/sub/         ← pycli/sub/             (platform adapters)
 //   core/server/     ← pycli/py-server-runtime/
 //   browser/         ← demo-src html + svg
 //   examples/pyboard/        ← Python demo board (self-contained)
@@ -35,7 +35,7 @@ const copyMap = [
   // core library
   ['pycli/pylib',             'core/pylib'],
   ['pycli/main',              'core/cli'],
-  ['pycli/sub',               'core/adapters'],
+  ['pycli/sub',               'core/sub'],
   ['pycli/py-server-runtime', 'core/server'],
   // requirements at root
   ['pycli/requirements.txt',  'requirements.txt'],
@@ -80,8 +80,6 @@ const pythonPathPatches = [
      'os.path.normpath(os.path.join(__file_dir, "..", "..", "..", "core"))'],
     ['os.path.join(_PYCLI_ROOT, "py-server-runtime")',
      'os.path.join(_PYCLI_ROOT, "server")'],
-    ['os.path.join(_PYCLI_ROOT, "sub")',
-     'os.path.join(_PYCLI_ROOT, "adapters")'],
     ['os.path.join(_PYCLI_ROOT, "main", "board_live_cards_pycli.py")',
      'os.path.join(_PYCLI_ROOT, "cli", "board_live_cards_pycli.py")'],
   ]],
@@ -190,7 +188,7 @@ async function writeReadme() {
     '```',
     'core/pylib/        — pure engine library (step-machine, event-graph, etc.)',
     'core/cli/          — CLI entrypoints (board_live_cards_pycli, step_machine_pycli, ...)',
-    'core/adapters/     — platform adapters (FS, HTTP, native bridge)',
+    'core/sub/          — platform adapters (FS, HTTP, native bridge)',
     'core/server/       — platform-free board server runtime',
     'browser/           — HTML shells for the live-cards board UI',
     'examples/pyboard/         — Python demo board (self-contained)',

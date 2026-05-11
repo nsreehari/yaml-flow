@@ -36,6 +36,25 @@ from sub.board_live_cards_adapters import (
 )
 
 
+def _resolve_board_pycli_path(repo_root: str) -> str:
+    """Resolve board_live_cards_pycli.py across source and standalone layouts."""
+    candidates = [
+        # Source layout
+        os.path.join(repo_root, "pycli", "main", "board_live_cards_pycli.py"),
+        # Standalone layout
+        os.path.join(repo_root, "core", "cli", "board_live_cards_pycli.py"),
+        # Relative to this module's _PYCLI_ROOT (pycli/ in source, core/ in standalone)
+        os.path.join(_PYCLI_ROOT, "main", "board_live_cards_pycli.py"),
+        os.path.join(_PYCLI_ROOT, "cli", "board_live_cards_pycli.py"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    raise FileNotFoundError(
+        "Cannot resolve board_live_cards_pycli.py; checked: " + ", ".join(candidates)
+    )
+
+
 class NativeBoardPlatformAdapter:
     """
     Implements the BoardPlatformAdapter protocol using Python fs-based
@@ -73,9 +92,7 @@ class NativeBoardPlatformAdapter:
 
     @property
     def self_ref(self) -> Dict[str, Any]:
-        board_pycli = os.path.join(
-            self._repo_root, "pycli", "main", "board_live_cards_pycli.py"
-        )
+        board_pycli = _resolve_board_pycli_path(self._repo_root)
         return {
             "meta": "board-live-cards",
             "howToRun": "local-python",
@@ -136,9 +153,7 @@ class NativeBoardPlatformAdapter:
         Matches TS requestProcessAccumulatedDetached: spawns a background
         process that re-acquires the lock and drains any new journal entries.
         """
-        board_pycli = os.path.join(
-            self._repo_root, "pycli", "main", "board_live_cards_pycli.py"
-        )
+        board_pycli = _resolve_board_pycli_path(self._repo_root)
         cmd_args = [
             board_pycli,
             "process-accumulated-events",

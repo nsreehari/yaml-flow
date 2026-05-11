@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
@@ -18,8 +19,23 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _PYCLI_ROOT = os.path.normpath(os.path.join(_HERE, "..", "..", "pycli"))
 if _PYCLI_ROOT not in sys.path:
     sys.path.insert(0, _PYCLI_ROOT)
+_PYCLI_SUB = os.path.join(_PYCLI_ROOT, "sub")
 
 from pylib.cli.storage_interface import parse_ref
+
+
+def _public_storage_adapter():
+    """Lazy-load public_storage_adapter (sub/ in source, adapters/ in standalone)."""
+    mod_name = "_demo_psa"
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
+    spec = importlib.util.spec_from_file_location(
+        mod_name, os.path.join(_PYCLI_SUB, "public_storage_adapter.py")
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules[mod_name] = mod  # register before exec so @dataclass can resolve __module__
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
 
 COPILOT_PROMPT_CONTEXT: Dict[str, Any] = {
     "view_kind_guidance": "\n".join([
@@ -66,30 +82,31 @@ def _resolve_ref_to_path(ref: str) -> str:
     return ref
 
 
-def _read_json_file(ref: str) -> Dict[str, Any]:
-    path = _resolve_ref_to_path(ref)
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+def _read_json_file_psa(psa: Any, ref: str) -> Dict[str, Any]:
+    parsed_ref = psa.parse_ref(ref)
+    storage = psa.blob_storage_for_ref(parsed_ref)
+    raw = storage.read(parsed_ref.value)
+    if not raw:
+        raise ValueError(f"Input envelope not found at: {ref}")
+    data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("Input JSON root must be an object")
     return data
 
 
-def _write_json_file(ref: str, payload: Any) -> None:
-    path = _resolve_ref_to_path(ref)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=True)
+def _write_json_file_psa(psa: Any, ref: str, payload: Any) -> None:
+    parsed_ref = psa.parse_ref(ref)
+    storage = psa.blob_storage_for_ref(parsed_ref)
+    storage.write(parsed_ref.value, json.dumps(payload, indent=2, ensure_ascii=True))
 
 
-def _write_err(err_ref: Optional[str], msg: str) -> None:
+def _write_err_psa(psa: Any, err_ref: Optional[str], msg: str) -> None:
     if not err_ref:
         return
     try:
-        path = _resolve_ref_to_path(err_ref)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(msg)
+        parsed_ref = psa.parse_ref(err_ref)
+        storage = psa.blob_storage_for_ref(parsed_ref)
+        storage.write(parsed_ref.value, msg)
     except Exception:
         pass
 
@@ -299,6 +316,64 @@ def _execute_via_step_machine_flow(
         how = ref.get("howToRun", "")
         what = ref.get("whatToRun", "")
 
+        if how in ("http:post", "http:get"):
+            raw_url = what.get("value") if isinstance(what, dict) else parse_ref(what).get("value", what)
+            server_url = str((args.get("extra") or {}).get("serverUrl") or "http://127.0.0.1:7799").rstrip("/")
+            if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+                resolved_url = server_url + ("" if raw_url.startswith("/") else "/") + raw_url
+            else:
+                resolved_url = raw_url
+            body: Any = args
+            workiq_cfg = (args.get("sourceDef") or {}).get("workiq")
+            timeout_sec = 90
+            if isinstance(workiq_cfg, dict) and isinstance(workiq_cfg.get("query_template"), str):
+                interp_ctx = {
+                    **((args.get("sourceDef") or {}).get("_projections") or {}),
+                    **(workiq_cfg.get("args") or {}),
+                }
+                body = {"query": _interpolate(workiq_cfg["query_template"], interp_ctx)}
+            if how == "http:get":
+                req = urllib.request.Request(url=resolved_url, method="GET")
+            else:
+                req = urllib.request.Request(
+                    url=resolved_url,
+                    data=json.dumps(body, ensure_ascii=True).encode("utf-8"),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                    text = resp.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                err_text = ""
+                try:
+                    err_text = exc.read().decode("utf-8")
+                except Exception:
+                    err_text = ""
+                err_msg = f"HTTP {exc.code} calling {resolved_url}"
+                if err_text:
+                    try:
+                        err_json = json.loads(err_text)
+                        if isinstance(err_json, dict) and isinstance(err_json.get("error"), str):
+                            err_msg = f"{err_msg}: {err_json['error']}"
+                        else:
+                            err_msg = f"{err_msg}: {err_text}"
+                    except Exception:
+                        err_msg = f"{err_msg}: {err_text}"
+                return {"result": "failure", "data": {"error": err_msg}, "error": err_msg}
+            except Exception as exc:
+                err_msg = str(exc)
+                return {"result": "failure", "data": {"error": err_msg}, "error": err_msg}
+            try:
+                parsed = json.loads(text) if text else {}
+            except Exception:
+                parsed = {"response": text}
+            if isinstance(parsed.get("error"), str):
+                err_msg = parsed["error"]
+                return {"result": "failure", "data": {"error": err_msg}, "error": err_msg}
+            result_value = parsed.get("response") if "response" in parsed else parsed
+            return {"result": "success", "data": {"resultValue": result_value}}
+
         if how == "demo-local-module":
             # whatToRun must be a b64 wire string or { kind, value } object
             if isinstance(what, dict):
@@ -352,16 +427,57 @@ def _run_source_fetch(
     err_ref: Optional[str],
     extra: Optional[Dict[str, Any]] = None,
 ) -> int:
+    psa = _public_storage_adapter()
+
+    # Read envelope via PSA storage and enforce envelope protocol.
     try:
-        source_def = _read_json_file(in_ref)
+        envelope = _read_json_file_psa(psa, in_ref)
+    except Exception as err:
+        _write_err_psa(psa, err_ref, str(err))
+        print(f"[demo-task-executor.py] Cannot read input: {err}", file=sys.stderr)
+        return 1
+
+    source_def = envelope.get("source_def")
+    if not isinstance(source_def, dict):
+        msg = "Input must be an envelope with object field 'source_def'"
+        _write_err_psa(psa, err_ref, msg)
+        print(f"[demo-task-executor.py] {msg}", file=sys.stderr)
+        return 1
+
+    callback = envelope.get("callback")
+
+    def _write_out(payload: Any) -> None:
+        _write_json_file_psa(psa, out_ref, payload)
+
+    def _write_fail(msg: str) -> None:
+        _write_err_psa(psa, err_ref, msg)
+
+    def _fail_ref(msg: str) -> int:
+        _write_fail(msg)
+        print(f"[demo-task-executor.py] {msg}", file=sys.stderr)
+        if callback:
+            try:
+                psa.report_failed(callback, msg)
+            except Exception:
+                pass
+        return 1
+
+    try:
         result_value, wrote_directly = _execute_via_step_machine_flow(source_def, out_ref, extra)
         if not wrote_directly:
-            _write_json_file(out_ref, result_value)
-        return 0
+            _write_out(result_value)
     except Exception as err:
-        _write_err(err_ref, str(err))
-        print(f"[demo-task-executor.py] {err}", file=sys.stderr)
-        return 1
+        return _fail_ref(str(err))
+
+    if callback:
+        try:
+            out_ref_parsed = psa.parse_ref(out_ref)
+            psa.report_complete(callback, out_ref_parsed)
+        except Exception as err:
+            print(f"[demo-task-executor.py] reportComplete failed: {err}", file=sys.stderr)
+            return 1
+
+    return 0
 
 
 def _describe_capabilities() -> int:

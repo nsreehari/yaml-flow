@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs, unquote
 
+_CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
 # ── Resolve paths ────────────────────────────────────────────────────────────
 
 __file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -319,11 +321,14 @@ def create_fs_board_platform_adapter(base_ref: Dict[str, str], notify_channel: O
         @property
         def self_ref(self) -> Dict[str, Any]:
             board_pycli = os.path.join(_PYCLI_ROOT, "main", "board_live_cards_pycli.py")
-            return {
+            ref: Dict[str, Any] = {
                 "meta": "board-live-cards",
                 "howToRun": "local-python",
                 "whatToRun": serialize_ref({"kind": "fs-path", "value": board_pycli}),
             }
+            if notify_channel:
+                ref["extra"] = {"notifyChannel": notify_channel}
+            return ref
 
         def dispatch_execution(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
             from board_live_cards_adapters import ExecutionRef, dispatch_execution
@@ -721,31 +726,40 @@ class ResponseAdapter:
 
     def write(self, data):
         self._send_headers()
-        if isinstance(data, str):
-            self._handler.wfile.write(data.encode("utf-8"))
-        else:
-            self._handler.wfile.write(data)
-        self._handler.wfile.flush()
-
-    def end(self, data=None):
-        self._send_headers()
-        if data:
+        try:
             if isinstance(data, str):
                 self._handler.wfile.write(data.encode("utf-8"))
             else:
                 self._handler.wfile.write(data)
-        self._handler.wfile.flush()
+            self._handler.wfile.flush()
+        except _CLIENT_DISCONNECT_ERRORS:
+            return
+
+    def end(self, data=None):
+        self._send_headers()
+        try:
+            if data:
+                if isinstance(data, str):
+                    self._handler.wfile.write(data.encode("utf-8"))
+                else:
+                    self._handler.wfile.write(data)
+            self._handler.wfile.flush()
+        except _CLIENT_DISCONNECT_ERRORS:
+            return
 
 
 def json_reply(handler: http.server.BaseHTTPRequestHandler, status: int, payload: Any):
     body = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    for k, v in CORS_HEADERS.items():
-        handler.send_header(k, v)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.send_response(status)
+        for k, v in CORS_HEADERS.items():
+            handler.send_header(k, v)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    except _CLIENT_DISCONNECT_ERRORS:
+        return
 
 
 class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -835,7 +849,7 @@ class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
 # ============================================================================
 
 def main():
-    server = http.server.HTTPServer(("127.0.0.1", PORT), DemoRequestHandler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), DemoRequestHandler)
     print(f"[py-demo-server] listening on http://127.0.0.1:{PORT}")
     print(f"[py-demo-server] setup dir: {setup_dir}")
     print(f"[py-demo-server] server-meta store: {server_meta_ref}")

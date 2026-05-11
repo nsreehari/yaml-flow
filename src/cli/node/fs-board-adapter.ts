@@ -12,7 +12,7 @@
 
 import {
   makeBoardTempFilePath,
-  buildBoardCliInvocation,
+  resolveBoardCliCallbackTarget,
   genUUID,
   getHash,
   joinPath,
@@ -83,16 +83,12 @@ export function createFsBoardPlatformAdapter(
 ): BoardPlatformAdapter {
   const dir = baseRef.value;
 
-  // Resolve selfRef once — the board CLI script path that executors call back to.
-  const { cmd: _cliCmd, args: _cliArgs } = buildBoardCliInvocation(cliDir, '_', []);
-  const boardCliScriptPath =
-    (_cliCmd === process.execPath && _cliArgs[0]?.endsWith('.js'))
-      ? _cliArgs[0]
-      : (_cliArgs[1] ?? _cliArgs[0]);
+  // Resolve selfRef once for callback-style invocations (node <script> ...).
+  const callbackScriptPath = resolveBoardCliCallbackTarget(cliDir);
   const selfRef = {
     meta: 'board-live-cards',
     howToRun: 'local-node' as const,
-    whatToRun: serializeRef({ kind: 'fs-path', value: boardCliScriptPath }),
+    whatToRun: serializeRef({ kind: 'fs-path', value: callbackScriptPath }),
     ...(opts?.notifyChannel ? { extra: { notifyChannel: opts.notifyChannel } } : {}),
   };
 

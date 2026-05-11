@@ -309,6 +309,26 @@ export function buildBoardCliInvocation(
   return { cmd: npxCmd, args: ['tsx', tsPath, command, ...args] };
 }
 
+/**
+ * Resolve a stable script path for callback-style invocations where the callee
+ * only accepts `node <script> ...` (no separate runtime args like tsx).
+ *
+ * Prefer the repo wrapper when present because it can bridge src/dist modes.
+ * Fall back to the compiled JS CLI entrypoint in cliDir when available.
+ */
+export function resolveBoardCliCallbackTarget(cliDir: string): string {
+  const repoBoardCliWrapper = path.join(cliDir, '..', '..', '..', 'board-live-cards-cli.js');
+  if (fs.existsSync(repoBoardCliWrapper)) return repoBoardCliWrapper;
+
+  const jsPath = path.join(cliDir, 'board-live-cards-cli.js');
+  if (fs.existsSync(jsPath)) return jsPath;
+
+  throw new Error(
+    `resolveBoardCliCallbackTarget: cannot find callback target in ${cliDir} ` +
+    `(expected ../board-live-cards-cli.js wrapper or ${jsPath})`
+  );
+}
+
 // ============================================================================
 // requestProcessAccumulatedDetached — fire-and-forget dispatch of next drain pass
 // ============================================================================
