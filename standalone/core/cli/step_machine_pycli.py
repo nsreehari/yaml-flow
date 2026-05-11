@@ -40,7 +40,7 @@ def _load_flow(flow_path: str) -> Dict[str, Any]:
             import yaml  # type: ignore
         except Exception as ex:
             raise RuntimeError(
-                "[step-machine-pycli] YAML support requires pyyaml. Run: python -m pip install -r pycli/requirements.txt"
+                "[step-machine-pycli] YAML support requires pyyaml. Run: python -m pip install -r standalone/requirements.txt"
             ) from ex
         value = yaml.safe_load(text)
 

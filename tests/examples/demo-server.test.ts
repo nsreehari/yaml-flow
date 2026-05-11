@@ -9,7 +9,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 function resolveExampleBoardDir(): string {
   const candidates = [
     path.join(repoRoot, 'examples', 'example-board'),
-    path.join(repoRoot, 'demo-src', 'example-board'),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(path.join(candidate, 'demo-server.js')) && fs.existsSync(path.join(candidate, 'cards'))) {

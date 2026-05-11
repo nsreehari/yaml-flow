@@ -6,7 +6,7 @@
  *   node scripts/seed-cards.mjs <cards-dir> [--board <boardId>] [--project <firebaseProject>]
  *
  * Example:
- *   node scripts/seed-cards.mjs ../../demo-src/example-board/cards --board default
+ *   node scripts/seed-cards.mjs ../../standalone/examples/pyboard/data/cards --board default
  *
  * This reads all .json/.yaml/.yml files from the given directory and writes
  * them to Firestore at: boards/{boardId}/seed-cards/{cardId}

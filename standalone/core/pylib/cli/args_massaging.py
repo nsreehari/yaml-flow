@@ -30,7 +30,7 @@ def _jsonata_evaluate(expr: str, context: Dict[str, Any]) -> Any:
     if not _JSONATA_AVAILABLE:
         raise RuntimeError(
             "[args-massaging] jsonata package not installed. "
-            "Run: python -m pip install -r pycli/requirements.txt"
+            "Run: python -m pip install -r standalone/requirements.txt"
         )
     return _Jsonata(expr).evaluate(context)
 

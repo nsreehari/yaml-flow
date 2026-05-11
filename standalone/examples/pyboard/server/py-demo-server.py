@@ -2,7 +2,7 @@
 """
 py-demo-server.py
 
-Python port of demo-src/example-board/demo-server.js — exact step-by-step parity.
+Standalone canonical demo server.
 
 Node.js host using http module → Python host using http.server.
 Same endpoints, same config loading, same adapter factories.

@@ -9,8 +9,8 @@ import type { ComputeNode } from '../../src/card-compute/index.js';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 function resolveExampleBoardDir(): string {
   const candidates = [
+    path.join(repoRoot, 'standalone', 'examples', 'pyboard', 'data'),
     path.join(repoRoot, 'examples', 'example-board'),
-    path.join(repoRoot, 'demo-src', 'example-board'),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(path.join(candidate, 'cards'))) return candidate;
