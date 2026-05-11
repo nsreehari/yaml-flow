@@ -451,6 +451,8 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             tx: list[dict] = list(undrained)
             cx: list[dict] = []
             dx: list[dict] = []
+            # NX: card refresh notifications keyed by card id; last write wins.
+            nx: dict[str, dict] = {}
 
             def task_completed_fn(task_name: str, data: dict) -> None:
                 tx.append({"type": "task-completed", "taskName": task_name, "data": data, "timestamp": _now_iso()})
@@ -474,6 +476,16 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             while tx:
                 pending = tx
                 tx = []
+                # Match JS parity: task-restart preloads refreshed card notifications.
+                for ev in pending:
+                    if ev.get("type") != "task-restart":
+                        continue
+                    task_name = ev.get("taskName")
+                    if not isinstance(task_name, str) or not task_name:
+                        continue
+                    card = card_handler_adapters["cardStore"].read_card(task_name)
+                    if card:
+                        nx[task_name] = card
                 rg.push_all(pending)
                 rg.wait_for_handlers()
 
@@ -489,11 +501,31 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             for data in dx:
                 out.write_data_objects(data)
 
+            status_obj = None
             try:
                 status_obj = build_board_status_object(board_path, final_live)
                 out.write_status_snapshot(status_obj)
             except Exception as e:
                 warn(f"[board-live-cards-public] status publish failed: {e}")
+
+            batch: list[dict] = []
+            for item in cx:
+                batch.append({"kind": "computed_values", "cardId": item["cardId"], "values": item["values"]})
+            for data in dx:
+                for key, payload in data.items():
+                    if key:
+                        batch.append({"kind": "data_object", "key": key, "payload": payload})
+            for card_id, card in nx.items():
+                batch.append({"kind": "card_refreshed", "cardId": card_id, "card": card})
+            if status_obj is not None:
+                batch.append({"kind": "status", "status": status_obj})
+
+            publish_fn = getattr(adapter, "publish_board_change_notifications", None)
+            if callable(publish_fn) and batch:
+                try:
+                    publish_fn(batch)
+                except Exception as e:
+                    warn(f"[board-live-cards-public] publish_board_change_notifications failed: {e}")
 
             # Dispatch execution requests (source fetches) — detached, fire-and-forget
             executor_ref = config_store().read_task_executor_ref() or {
