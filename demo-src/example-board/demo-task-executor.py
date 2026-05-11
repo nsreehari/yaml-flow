@@ -270,6 +270,7 @@ def _execute_copilot(source_def: Dict[str, Any], out_ref: str) -> Any:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         with open(out_file, "r", encoding="utf-8") as f:
             return json.load(f)

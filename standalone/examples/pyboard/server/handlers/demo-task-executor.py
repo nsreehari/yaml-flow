@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
@@ -269,6 +270,7 @@ def _execute_copilot(source_def: Dict[str, Any], out_ref: str) -> Any:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         with open(out_file, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -324,6 +326,7 @@ def _execute_via_step_machine_flow(
                 resolved_url = raw_url
             body: Any = args
             workiq_cfg = (args.get("sourceDef") or {}).get("workiq")
+            timeout_sec = 90
             if isinstance(workiq_cfg, dict) and isinstance(workiq_cfg.get("query_template"), str):
                 interp_ctx = {
                     **((args.get("sourceDef") or {}).get("_projections") or {}),
@@ -340,8 +343,25 @@ def _execute_via_step_machine_flow(
                     headers={"Content-Type": "application/json"},
                 )
             try:
-                with urllib.request.urlopen(req, timeout=20) as resp:
+                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
                     text = resp.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                err_text = ""
+                try:
+                    err_text = exc.read().decode("utf-8")
+                except Exception:
+                    err_text = ""
+                err_msg = f"HTTP {exc.code} calling {resolved_url}"
+                if err_text:
+                    try:
+                        err_json = json.loads(err_text)
+                        if isinstance(err_json, dict) and isinstance(err_json.get("error"), str):
+                            err_msg = f"{err_msg}: {err_json['error']}"
+                        else:
+                            err_msg = f"{err_msg}: {err_text}"
+                    except Exception:
+                        err_msg = f"{err_msg}: {err_text}"
+                return {"result": "failure", "data": {"error": err_msg}, "error": err_msg}
             except Exception as exc:
                 err_msg = str(exc)
                 return {"result": "failure", "data": {"error": err_msg}, "error": err_msg}

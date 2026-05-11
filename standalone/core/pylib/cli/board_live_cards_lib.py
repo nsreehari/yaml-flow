@@ -692,9 +692,21 @@ def create_card_handler_fn(
                     incoming_rqt = update.get("rqt", "")
                     if not entry.get("lastFetchedAt") or incoming_rqt > entry.get("lastFetchedAt", ""):
                         delivery_token = update.get("deliveryToken")
+                        committed = False
                         if isinstance(delivery_token, str):
-                            adapters["fetchedSourcesStore"].commit_source_data(card_id, output_file, delivery_token)
-                        set_source_entry(output_file, next_entry_after_fetch_delivery(entry, incoming_rqt))
+                            committed = adapters["fetchedSourcesStore"].commit_source_data(
+                                card_id, output_file, delivery_token
+                            )
+                        if committed:
+                            set_source_entry(output_file, next_entry_after_fetch_delivery(entry, incoming_rqt))
+                        else:
+                            set_source_entry(
+                                output_file,
+                                next_entry_after_fetch_failure(
+                                    entry,
+                                    f"source delivery commit failed for {output_file} token={delivery_token}",
+                                ),
+                            )
                 flush()
 
         # Load source data

@@ -1284,7 +1284,9 @@ var LiveCard = (function () {
 
       saveBtn.addEventListener('click', () => {
         const nextValue = textarea.value;
-        cfg.onPatchState(node.id, { notes: nextValue });
+        // Wrap in a named key so spread into card_data gives card_data.notes = "..."
+        // (same dict pattern as form/filter; writeTo is not required).
+        cfg.onPatchState(node.id, { fieldValues: { notes: nextValue } });
         saveBtn.textContent = 'Saving...';
         _showSavingOverlay(el);
       }, { signal });

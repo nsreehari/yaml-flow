@@ -1020,7 +1020,8 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                     target = target[p]
                 target[parts[-1]] = value
 
-            if "fieldValues" in patch and isinstance(patch["fieldValues"], dict):
+            if "fieldValues" in patch and patch["fieldValues"] is not None:
+                # fieldValues can be: plain dict (form/filter), list (editable-table), or primitive (notes).
                 write_to = None
                 view = card.get("view")
                 if view and isinstance(view.get("elements"), list):
@@ -1029,9 +1030,12 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                             write_to = elem["data"]["writeTo"]
                             break
                 if write_to:
+                    # writeTo present: deep_set handles any value type (dict, list, primitive)
                     deep_set(card, write_to, patch["fieldValues"])
-                else:
+                elif isinstance(patch["fieldValues"], dict):
+                    # No writeTo + plain dict: merge-spread into card_data
                     card["card_data"] = {**(card.get("card_data") or {}), **patch["fieldValues"]}
+                # No writeTo + list or primitive: skip — no safe implicit target
             elif isinstance(patch.get("_stagedFiles"), list) and patch["_stagedFiles"]:
                 return card
             else:

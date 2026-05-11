@@ -122,6 +122,7 @@ def execute(context: Dict[str, Any]) -> Dict[str, Any]:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
                 )
                 with open(wrapper_out_file, "r", encoding="utf-8-sig") as f:
                     result_value = json.load(f)
@@ -146,6 +147,7 @@ def execute(context: Dict[str, Any]) -> Dict[str, Any]:
             text=True,
             timeout=120,
             cwd=copilot_cwd or None,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         raw_output = proc.stdout
         first_brace = raw_output.find("{")

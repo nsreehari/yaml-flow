@@ -520,7 +520,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         target[parts[parts.length - 1]] = value;
       }
 
-      if (patch.fieldValues && typeof patch.fieldValues === 'object') {
+      if (patch.fieldValues !== undefined && patch.fieldValues !== null) {
+        // fieldValues can be: plain object (form/filter), array (editable-table), or primitive (notes).
         let writeTo: string | null = null;
         const view = card.view as Record<string, unknown> | undefined;
         if (view && Array.isArray(view.elements)) {
@@ -529,10 +530,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           }
         }
         if (writeTo) {
+          // writeTo present: deepSet handles any value type (object, array, primitive)
           deepSet(card, writeTo, patch.fieldValues);
-        } else {
+        } else if (typeof patch.fieldValues === 'object' && !Array.isArray(patch.fieldValues)) {
+          // No writeTo + plain object: merge-spread into card_data
           card.card_data = { ...((card.card_data || {}) as Record<string, unknown>), ...(patch.fieldValues as Record<string, unknown>) };
         }
+        // No writeTo + array or primitive: skip — no safe implicit target
       } else if (Array.isArray(patch._stagedFiles) && (patch._stagedFiles as unknown[]).length > 0) {
         return card;
       } else {

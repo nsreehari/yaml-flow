@@ -66,6 +66,15 @@ Purpose: Track the live-cards and board-live-cards CLI evolution work and comple
 - [ ] 13. Support for Foundry Models / Agency in demo-tool-executor
 - [ ] 14. Support for MCP tools
 - [ ] 15. Simulation mode wiring for the cards
+- [ ] 16. Runtime policy for compute expression failures (degrade vs fail)
+  - Status: TODO
+  - Goal: define and implement a consistent policy when compute JSONata errors occur (for example, explicit task failure vs partial publish with diagnostics).
+
+  Actually, need to provide a tool or wire compute in validate-card so that when AI Agents author any such card which doesn't compute well, that needs to throw an error.
+  So, for this, whatever task executor should provide some valid mock outputs and then the compute could be run against the card.  Need to figure out a mechanism for this efficiently for such a tool also.
+  - Notes: current behavior can silently publish null downstream values when compute steps fail.
+
+
 
 ## Completed Recently
 

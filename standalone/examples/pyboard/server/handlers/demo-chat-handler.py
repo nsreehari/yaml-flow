@@ -76,6 +76,7 @@ def _run_wrapper(prompt: str, board_setup_root: str, card_id: str) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if os.path.isfile(out_file):
             with open(out_file, "r", encoding="utf-8") as f:
