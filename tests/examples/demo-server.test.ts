@@ -31,7 +31,7 @@ const SURFACE_DIR = path.join(BOARD_ROOT, 'surface');
 const BOARD_DIR = path.join(BOARD_ROOT, 'runtime');
 const RUNTIME_OUT_DIR = path.join(BOARD_ROOT, 'runtime-out');
 const TMP_CARDS_DIR = path.join(SURFACE_DIR, 'tmp-cards');
-const TMP_CHATS_DIR = path.join(TMP_CARDS_DIR, 'chats');
+const TMP_CHATS_DIR = path.join(BOARD_DIR, 'cards', 'chats');
 const ECHO_HANDLER_PATH = path.join(TEST_ROOT, 'echo-chat-handler.mjs');
 const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/boards/default`;
 
