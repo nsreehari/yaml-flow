@@ -39,11 +39,16 @@ const copyMap = [
   ['pycli/py-server-runtime', 'core/server'],
   // requirements at root
   ['pycli/requirements.txt',  'requirements.txt'],
-  // browser shells (demo-shell-browser.html excluded — JS/browser-only)
-  ['demo-src/example-board/demo-shell-with-server.html', 'browser/demo-shell-with-server.html'],
-  ['demo-src/example-board/demo-shell.html',             'browser/demo-shell.html'],
-  ['demo-src/example-board/demo-shell-localstorage.html','browser/demo-shell-localstorage.html'],
-  ['demo-src/example-board/favicon.svg',                 'browser/favicon.svg'],
+  // browser assets (JS bundles + favicon) — referenced as ../../browser/ from example HTML shells
+  ['browser/live-cards.js',                    'browser/live-cards.js'],
+  ['browser/board-livecards-client.js',        'browser/board-livecards-client.js'],
+  ['browser/board-livecards-localstorage.js',  'browser/board-livecards-localstorage.js'],
+  ['browser/compute-jsonata.js',               'browser/compute-jsonata.js'],
+  ['demo-src/example-board/favicon.svg',       'browser/favicon.svg'],
+  // HTML shells — placed in their example directories (../../browser/ resolves to standalone/browser/)
+  ['demo-src/example-board/demo-shell-with-server.html', 'examples/pyboard/demo-shell-with-server.html'],
+  ['demo-src/example-board/demo-shell-localstorage.html','examples/pyboard-local/demo-shell-localstorage.html'],
+  // demo-shell.html intentionally excluded from standalone
   // pyboard — server
   ['demo-src/example-board/py-demo-server.py', 'examples/pyboard/server/py-demo-server.py'],
   // pyboard — handlers (note: demo-server-config.json is written fresh by writeStandaloneServerConfig)
@@ -95,6 +100,13 @@ const pythonPathPatches = [
   ['examples/pyboard/server/handlers/source-def-handlers/copilot-source-handler.py', [
     ['os.path.join(executor_dir, "scripts")',
      'os.path.join(executor_dir, "source-def-handlers", "scripts")'],
+  ]],
+  // ── HTML shells: fix favicon path (favicon lives in browser/, not alongside HTML) ──
+  ['examples/pyboard/demo-shell-with-server.html', [
+    ['href="favicon.svg"', 'href="../../browser/favicon.svg"'],
+  ]],
+  ['examples/pyboard-local/demo-shell-localstorage.html', [
+    ['href="favicon.svg"', 'href="../../browser/favicon.svg"'],
   ]],
   // ── flow JSONs: replace JS handler refs with Python equivalents ────────────
   ['examples/pyboard/server/handlers/source-def-flows/url.flow.json', [
