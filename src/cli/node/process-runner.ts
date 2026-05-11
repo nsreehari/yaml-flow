@@ -317,8 +317,13 @@ export function buildBoardCliInvocation(
  * Fall back to the compiled JS CLI entrypoint in cliDir when available.
  */
 export function resolveBoardCliCallbackTarget(cliDir: string): string {
+  // 3 levels up: dist/cli/node -> repo root (compiled mode)
   const repoBoardCliWrapper = path.join(cliDir, '..', '..', '..', 'board-live-cards-cli.js');
   if (fs.existsSync(repoBoardCliWrapper)) return repoBoardCliWrapper;
+
+  // 2 levels up: tests/cli -> repo root (test/source mode)
+  const repoBoardCliWrapper2 = path.join(cliDir, '..', '..', 'board-live-cards-cli.js');
+  if (fs.existsSync(repoBoardCliWrapper2)) return repoBoardCliWrapper2;
 
   const jsPath = path.join(cliDir, 'board-live-cards-cli.js');
   if (fs.existsSync(jsPath)) return jsPath;

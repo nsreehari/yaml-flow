@@ -84,11 +84,12 @@ export function createFsBoardPlatformAdapter(
   const dir = baseRef.value;
 
   // Resolve selfRef once for callback-style invocations (node <script> ...).
-  const callbackScriptPath = resolveBoardCliCallbackTarget(cliDir);
+  // When suppressSpawn is set, skip path resolution because spawning is disabled.
+  const callbackScriptPath = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(cliDir);
   const selfRef = {
     meta: 'board-live-cards',
     howToRun: 'local-node' as const,
-    whatToRun: serializeRef({ kind: 'fs-path', value: callbackScriptPath }),
+    whatToRun: callbackScriptPath ? serializeRef({ kind: 'fs-path', value: callbackScriptPath }) : '',
     ...(opts?.notifyChannel ? { extra: { notifyChannel: opts.notifyChannel } } : {}),
   };
 
