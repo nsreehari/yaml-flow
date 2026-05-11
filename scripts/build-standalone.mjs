@@ -18,8 +18,14 @@ const shouldMinifyJs = !process.argv.includes('--no-minify-js');
 //   core/adapters/   ← pycli/sub/             (platform adapters)
 //   core/server/     ← pycli/py-server-runtime/
 //   browser/         ← demo-src html + svg
-//   examples/demo-board/   ← demo-src/example-board/ python files + cards + flows + Python handlers
-//   examples/portfolio-tracker/ ← merged portfolio-tracker examples (Python only)
+//   examples/pyboard/        ← Python demo board (self-contained)
+//     server/               ← py-demo-server.py + standalone demo-server-config.json
+//     server/handlers/      ← demo-task-executor.py, demo-chat-handler.py,
+//                               source_def_flows.json, source-def-flows/, source-def-handlers/
+//     server/handlers/source-def-handlers/scripts/ ← copilot_wrapper.bat + .ps1
+//     data/cards/           ← card definitions
+//     data/gandalf-cards/   ← gandalf board cards
+//   examples/portfolio-tracker/ ← portfolio-tracker example (Python only)
 //   requirements.txt ← pycli/requirements.txt
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,63 +44,66 @@ const copyMap = [
   ['demo-src/example-board/demo-shell.html',             'browser/demo-shell.html'],
   ['demo-src/example-board/demo-shell-localstorage.html','browser/demo-shell-localstorage.html'],
   ['demo-src/example-board/favicon.svg',                 'browser/favicon.svg'],
-  // demo-board example (python files + data)
-  ['demo-src/example-board/cards',            'examples/demo-board/cards'],
-  ['demo-src/example-board/gandalf-cards',    'examples/demo-board/gandalf-cards'],
-  ['demo-src/example-board/source-def-flows', 'examples/demo-board/source-def-flows'],
-  ['demo-src/example-board/scripts/copilot_wrapper.bat',           'examples/demo-board/scripts/copilot_wrapper.bat'],
-  ['demo-src/example-board/scripts/copilot_wrapper_helper.ps1',    'examples/demo-board/scripts/copilot_wrapper_helper.ps1'],
-  ['demo-src/example-board/source_def_flows.json',           'examples/demo-board/source_def_flows.json'],
-  ['demo-src/example-board/demo-server-config.json',         'examples/demo-board/demo-server-config.json'],
-  ['demo-src/example-board/demo-task-executor.py',           'examples/demo-board/demo-task-executor.py'],
-  ['demo-src/example-board/demo-chat-handler.py',            'examples/demo-board/demo-chat-handler.py'],
-  ['demo-src/example-board/py-demo-server.py',               'examples/demo-board/py-demo-server.py'],
-  // source-def Python handlers (JS handlers excluded from standalone)
-  ['demo-src/example-board/source-def-handlers/http-source-handler.py',    'examples/demo-board/source-def-handlers/http-source-handler.py'],
-  ['demo-src/example-board/source-def-handlers/copilot-source-handler.py', 'examples/demo-board/source-def-handlers/copilot-source-handler.py'],
-  // portfolio-tracker example — Python only (no JS handlers)
-  ['examples/browser/boards/portfolio-tracker/portfolio-tracker.py',            'examples/portfolio-tracker/portfolio-tracker.py'],
+  // pyboard — server
+  ['demo-src/example-board/py-demo-server.py', 'examples/pyboard/server/py-demo-server.py'],
+  // pyboard — handlers (note: demo-server-config.json is written fresh by writeStandaloneServerConfig)
+  ['demo-src/example-board/demo-task-executor.py',  'examples/pyboard/server/handlers/demo-task-executor.py'],
+  ['demo-src/example-board/demo-chat-handler.py',   'examples/pyboard/server/handlers/demo-chat-handler.py'],
+  ['demo-src/example-board/source_def_flows.json',  'examples/pyboard/server/handlers/source_def_flows.json'],
+  ['demo-src/example-board/source-def-flows',       'examples/pyboard/server/handlers/source-def-flows'],
+  // pyboard — source-def Python handlers (JS handlers excluded from standalone)
+  ['demo-src/example-board/source-def-handlers/http-source-handler.py',    'examples/pyboard/server/handlers/source-def-handlers/http-source-handler.py'],
+  ['demo-src/example-board/source-def-handlers/copilot-source-handler.py', 'examples/pyboard/server/handlers/source-def-handlers/copilot-source-handler.py'],
+  // pyboard — copilot scripts land inside source-def-handlers/ where they belong
+  ['demo-src/example-board/scripts/copilot_wrapper.bat',        'examples/pyboard/server/handlers/source-def-handlers/scripts/copilot_wrapper.bat'],
+  ['demo-src/example-board/scripts/copilot_wrapper_helper.ps1', 'examples/pyboard/server/handlers/source-def-handlers/scripts/copilot_wrapper_helper.ps1'],
+  // pyboard — data
+  ['demo-src/example-board/cards',         'examples/pyboard/data/cards'],
+  ['demo-src/example-board/gandalf-cards', 'examples/pyboard/data/gandalf-cards'],
+  // portfolio-tracker example — only the main script and its fetch-prices handler
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker.py',             'examples/portfolio-tracker/portfolio-tracker.py'],
   ['examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py','examples/portfolio-tracker/portfolio-tracker-fetch-prices.py'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml',        'examples/portfolio-tracker/portfolio-tracker.flow.yaml'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker-pycli.flow.yaml',  'examples/portfolio-tracker/portfolio-tracker-pycli.flow.yaml'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.input.json',       'examples/portfolio-tracker/portfolio-tracker.input.json'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker-pycli.py',     'examples/portfolio-tracker/run-portfolio-tracker-pycli.py'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/inline-python-demo.flow.yaml',       'examples/portfolio-tracker/inline-python-demo.flow.yaml'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/inline-python-handlers.py',          'examples/portfolio-tracker/inline-python-handlers.py'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/run-inline-python-demo-pycli.py',    'examples/portfolio-tracker/run-inline-python-demo-pycli.py'],
-  ['examples/cli/step-machine-cli/portfolio-tracker/handlers-py',                        'examples/portfolio-tracker/handlers'],
 ];
 
 // Python path patches: [dstRel, [[oldStr, newStr], ...]]
 // Applied to the copied file in standalone after all copies are done.
 const pythonPathPatches = [
-  ['examples/demo-board/demo-task-executor.py', [
-    // _PYCLI_ROOT bootstrap: was ../../../pycli from demo-src/example-board/, now ../../core from examples/demo-board/
-    ['os.path.normpath(os.path.join(_HERE, "..", "..", "pycli"))',
-     'os.path.normpath(os.path.join(_HERE, "..", "..", "core"))'],
-  ]],
-  ['examples/demo-board/py-demo-server.py', [
-    // _PYCLI_ROOT bootstrap
+  // ── py-demo-server.py ──────────────────────────────────────────────────────
+  // server/ is at examples/pyboard/server/ → core is 3 levels up (../../..)
+  ['examples/pyboard/server/py-demo-server.py', [
     ['os.path.normpath(os.path.join(__file_dir, "..", "..", "pycli"))',
-     'os.path.normpath(os.path.join(__file_dir, "..", "..", "core"))'],
-    // py-server-runtime subdir
+     'os.path.normpath(os.path.join(__file_dir, "..", "..", "..", "core"))'],
     ['os.path.join(_PYCLI_ROOT, "py-server-runtime")',
      'os.path.join(_PYCLI_ROOT, "server")'],
-    // sub → adapters
     ['os.path.join(_PYCLI_ROOT, "sub")',
      'os.path.join(_PYCLI_ROOT, "adapters")'],
-    // main → cli
     ['os.path.join(_PYCLI_ROOT, "main", "board_live_cards_pycli.py")',
      'os.path.join(_PYCLI_ROOT, "cli", "board_live_cards_pycli.py")'],
   ]],
-  // Patch flow JSONs: replace JS handler refs with Python equivalents
-  ['examples/demo-board/source-def-flows/url.flow.json', [
+  // ── demo-task-executor.py ──────────────────────────────────────────────────
+  // handlers/ is at examples/pyboard/server/handlers/ → core is 4 levels up (../../../..)
+  ['examples/pyboard/server/handlers/demo-task-executor.py', [
+    ['os.path.normpath(os.path.join(_HERE, "..", "..", "pycli"))',
+     'os.path.normpath(os.path.join(_HERE, "..", "..", "..", "..", "core"))'],
+    // scripts/ moved into source-def-handlers/scripts/ in standalone
+    ['os.path.join(_HERE, "scripts", "copilot_wrapper.bat")',
+     'os.path.join(_HERE, "source-def-handlers", "scripts", "copilot_wrapper.bat")'],
+  ]],
+  // ── copilot-source-handler.py ──────────────────────────────────────────────
+  // executor_dir is passed in as _HERE of demo-task-executor (handlers/)
+  // scripts/ is at handlers/source-def-handlers/scripts/
+  ['examples/pyboard/server/handlers/source-def-handlers/copilot-source-handler.py', [
+    ['os.path.join(executor_dir, "scripts")',
+     'os.path.join(executor_dir, "source-def-handlers", "scripts")'],
+  ]],
+  // ── flow JSONs: replace JS handler refs with Python equivalents ────────────
+  ['examples/pyboard/server/handlers/source-def-flows/url.flow.json', [
     ['./source-def-handlers/http-source-handler.js', './source-def-handlers/http-source-handler.py'],
   ]],
-  ['examples/demo-board/source-def-flows/url-list.flow.json', [
+  ['examples/pyboard/server/handlers/source-def-flows/url-list.flow.json', [
     ['./source-def-handlers/http-source-handler.js', './source-def-handlers/http-source-handler.py'],
   ]],
-  ['examples/demo-board/source-def-flows/copilot.flow.json', [
+  ['examples/pyboard/server/handlers/source-def-flows/copilot.flow.json', [
     ['./source-def-handlers/copilot-source-handler.js', './source-def-handlers/copilot-source-handler.py'],
   ]],
 ];
@@ -138,6 +147,25 @@ async function applyPythonPatches() {
   }
 }
 
+async function writeStandaloneServerConfig() {
+  // Written fresh so all paths are correct for the standalone layout.
+  // All paths are relative to server/ (where py-demo-server.py lives).
+  const config = {
+    port: 7799,
+    serverMetaStoreRef: 'b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi8uc2VydmVyLW1ldGEifQ',
+    cardsDir: '../data/cards',
+    gandalfCardsDir: '../data/gandalf-cards',
+    taskExecutorPath: './handlers/demo-task-executor.py',
+    chatHandlerPath: './handlers/demo-chat-handler.py',
+    chatSessionsDir: '',
+    gandalfTaskExecutorPath: './handlers/demo-task-executor.py',
+    gandalfChatHandlerPath: './handlers/demo-chat-handler.py',
+  };
+  const dst = path.join(outDir, 'examples/pyboard/server/demo-server-config.json');
+  await fs.mkdir(path.dirname(dst), { recursive: true });
+  await fs.writeFile(dst, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+}
+
 async function writeReadme() {
   const readme = [
     '# yaml-flow standalone',
@@ -152,7 +180,13 @@ async function writeReadme() {
     'core/adapters/     — platform adapters (FS, HTTP, native bridge)',
     'core/server/       — platform-free board server runtime',
     'browser/           — HTML shells for the live-cards board UI',
-    'examples/demo-board/      — full Python demo board (server + task executor + cards)',
+    'examples/pyboard/         — Python demo board (self-contained)',
+    '  server/              — py-demo-server.py + demo-server-config.json',
+    '  server/handlers/     — task-executor, chat-handler, flows, source-def-handlers',
+    '  data/                — card definitions (cards/ + gandalf-cards/)',
+    '',
+    '  (deprecated: examples/demo-board/ renamed to examples/pyboard/)',
+    '',
     'examples/portfolio-tracker/ — step-machine portfolio-tracker example',
     'requirements.txt   — Python dependencies',
     '```',
@@ -184,11 +218,9 @@ async function writeReadme() {
     '### Examples',
     '',
     '- Python demo board server:',
-    '  `python examples/demo-board/py-demo-server.py`',
-    '- Portfolio-tracker (pure Python handlers):',
-    '  `python examples/portfolio-tracker/run-portfolio-tracker-pycli.py`',
-    '- Portfolio-tracker inline-Python demo:',
-    '  `python examples/portfolio-tracker/run-inline-python-demo-pycli.py`',
+    '  `python examples/pyboard/server/py-demo-server.py`',
+    '- Portfolio tracker:',
+    '  `python examples/portfolio-tracker/portfolio-tracker.py`',
   ].join('\n');
 
   await fs.writeFile(path.join(outDir, 'README-STANDALONE.md'), readme, 'utf-8');
@@ -250,6 +282,7 @@ async function main() {
     await copyAs(srcRel, dstRel);
   }
 
+  await writeStandaloneServerConfig();
   await applyPythonPatches();
 
   if (shouldMinifyJs) {
