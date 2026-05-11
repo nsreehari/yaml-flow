@@ -13,6 +13,7 @@ import http.server
 import json
 import os
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -707,6 +708,7 @@ class ResponseAdapter:
         self._status = 200
         self._headers: Dict[str, str] = {}
         self._is_sse = False
+        self._write_lock = threading.Lock()
 
     def write_head(self, status_code: int, headers: Optional[Dict[str, str]] = None):
         self._status = status_code
@@ -725,27 +727,50 @@ class ResponseAdapter:
         self._headers_sent = True
 
     def write(self, data):
-        self._send_headers()
-        try:
-            if isinstance(data, str):
-                self._handler.wfile.write(data.encode("utf-8"))
-            else:
-                self._handler.wfile.write(data)
-            self._handler.wfile.flush()
-        except _CLIENT_DISCONNECT_ERRORS:
-            return
-
-    def end(self, data=None):
-        self._send_headers()
-        try:
-            if data:
+        with self._write_lock:
+            self._send_headers()
+            try:
                 if isinstance(data, str):
                     self._handler.wfile.write(data.encode("utf-8"))
                 else:
                     self._handler.wfile.write(data)
-            self._handler.wfile.flush()
-        except _CLIENT_DISCONNECT_ERRORS:
-            return
+                self._handler.wfile.flush()
+            except _CLIENT_DISCONNECT_ERRORS:
+                return
+
+    def end(self, data=None):
+        with self._write_lock:
+            self._send_headers()
+            try:
+                if data:
+                    if isinstance(data, str):
+                        self._handler.wfile.write(data.encode("utf-8"))
+                    else:
+                        self._handler.wfile.write(data)
+                self._handler.wfile.flush()
+            except _CLIENT_DISCONNECT_ERRORS:
+                return
+
+    def wait_for_close(self) -> None:
+        """Keep SSE connection thread alive until the client disconnects."""
+        conn = self._handler.connection
+        try:
+            while True:
+                try:
+                    r, _, e = select.select([conn], [], [conn], 1.0)
+                except Exception:
+                    break
+                if e:
+                    break
+                if r:
+                    try:
+                        data = conn.recv(16)
+                        if not data:
+                            break
+                    except Exception:
+                        break
+        except Exception:
+            pass
 
 
 def json_reply(handler: http.server.BaseHTTPRequestHandler, status: int, payload: Any):
@@ -811,6 +836,12 @@ class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
         handled = runtime.handle_api(req, res, parsed_url)
         if not handled:
             json_reply(self, 404, {"error": "Not found"})
+            return
+
+        if res._is_sse:
+            # Keep the request thread alive for SSE; runtime/adapter callbacks
+            # can then safely push updates to this response stream.
+            res.wait_for_close()
 
     def _handle_workiq_ask(self, body: bytes):
         try:
