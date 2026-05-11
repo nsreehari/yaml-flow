@@ -32,12 +32,16 @@ def is_compute_jsonata_spec(spec: Any) -> bool:
 
 
 def is_ref_spec(spec: Any) -> bool:
-    return (
-        isinstance(spec, dict)
-        and spec.get("type") == "ref"
-        and isinstance(spec.get("howToRun"), str)
-        and isinstance(spec.get("whatToRun"), str)
-    )
+    if not isinstance(spec, dict):
+        return False
+    if spec.get("type") != "ref" or not isinstance(spec.get("howToRun"), str):
+        return False
+    wtr = spec.get("whatToRun")
+    if isinstance(wtr, str):
+        return True
+    if isinstance(wtr, dict):
+        return isinstance(wtr.get("kind"), str) and isinstance(wtr.get("value"), str)
+    return False
 
 
 # ============================================================================
@@ -140,6 +144,7 @@ def create_ref_step_handler(
     config: Optional[Dict[str, Any]] = None,
 ) -> Callable[..., Dict[str, Any]]:
     # Spec is a superset of ExecutionRef (has type: 'ref'). Strip discriminator.
+    # Normalize whatToRun: object form { kind, value } stays as dict (invoke handles both forms).
     ref = {k: v for k, v in spec.items() if k != "type"}
 
     def handler(input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
