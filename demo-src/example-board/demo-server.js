@@ -291,8 +291,16 @@ const logger = { info: console.log, warn: console.warn, error: console.error };
 // Track per-board host config for demo-setup (FS paths are host concerns, not runtime concerns)
 const boardHostConfig = new Map();
 
-function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHandlerPath, infAdapterPath, boardId) {
+function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerPath, infAdapterPath, boardId) {
   fs.mkdirSync(boardDir, { recursive: true });
+
+  // Runtime card store lives inside the board's setup dir, isolated from the source cards dir.
+  // Layout: boardDir/cards/store  — KV card store
+  //         boardDir/cards/chats  — chat blobs
+  //         boardDir/cards/files  — file uploads
+  const runtimeCardsDir = path.join(boardDir, 'cards');
+  const runtimeCardStoreDir = path.join(runtimeCardsDir, 'store');
+  fs.mkdirSync(runtimeCardStoreDir, { recursive: true });
 
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
@@ -302,12 +310,11 @@ function buildBoardContextConfig(label, boardDir, cardsDir, taskExecPath, chatHa
   // In the server context the drain loop is driven in-process; suppress the
   // detached CLI spawn that the FS adapter would otherwise fire as a continuation.
   boardAdapter.requestProcessAccumulated = () => {};
-  // Separate artifacts adapter rooted at cardsDir (preserves old FS layout where
-  // chats/files live under cardsDir rather than boardDir)
-  const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: cardsDir }));
+  // Artifacts adapter rooted at runtimeCardsDir so chats/ and files/ are siblings of store/.
+  const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: runtimeCardsDir }));
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, YAML_FLOW_CLI_DIR, { suppressSpawn: true });
 
-  const cardStoreRef = serializeRef({ kind: 'fs-path', value: cardsDir });
+  const cardStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardStoreDir });
 
   return {
     label,
@@ -328,7 +335,8 @@ const runtime = createMultiBoardServerRuntime({
   serverMetaStore,
   logger,
   boardRuntimeFactory: (boardId, entry) => {
-    const cardsDir = typeof entry.cardsDir === 'string' ? path.resolve(entry.cardsDir) : defaultCardsDir;
+    // sourceCardsDir: read-only source used only for initial seeding.
+    const sourceCardsDir = typeof entry.cardsDir === 'string' ? path.resolve(entry.cardsDir) : defaultCardsDir;
     const boardRoot = path.join(setupDir, `board-${boardId}`);
     const boardDir = path.join(boardRoot, 'runtime');
 
@@ -337,28 +345,31 @@ const runtime = createMultiBoardServerRuntime({
     const infAdapterPath = typeof entry.inferenceAdapterPath === 'string' ? entry.inferenceAdapterPath : defaultInferenceAdapterPath;
     const stepMachinePath = typeof entry.stepMachineCliPath === 'string' ? entry.stepMachineCliPath : defaultStepMachineCliPath;
 
-    const gandalfCardsDir_ = typeof entry.gandalfCardsDir === 'string' ? path.resolve(entry.gandalfCardsDir) : defaultGandalfCardsDir;
+    const sourceGandalfCardsDir = typeof entry.gandalfCardsDir === 'string' ? path.resolve(entry.gandalfCardsDir) : defaultGandalfCardsDir;
     const gandalfTaskExecPath = typeof entry.gandalfTaskExecutorPath === 'string' ? entry.gandalfTaskExecutorPath : defaultGandalfTaskExecutorPath;
     const gandalfChatPath = typeof entry.gandalfChatHandlerPath === 'string' ? entry.gandalfChatHandlerPath : defaultGandalfChatHandlerPath;
     const gandalfInfPath = typeof entry.gandalfInferenceAdapterPath === 'string' ? entry.gandalfInferenceAdapterPath : defaultGandalfInferenceAdapterPath;
 
-    const baseCfg = buildBoardContextConfig('base', boardDir, cardsDir, taskExecPath, chatHandlerPath_, infAdapterPath, boardId);
+    const baseCfg = buildBoardContextConfig('base', boardDir, taskExecPath, chatHandlerPath_, infAdapterPath, boardId);
 
     const boards = [baseCfg];
-    if (gandalfCardsDir_ && gandalfTaskExecPath) {
-      const gandalfBoardDir = path.join(boardRoot, 'gandalf-runtime');
-      const gandalfCfg = buildBoardContextConfig('gandalf', gandalfBoardDir, gandalfCardsDir_, gandalfTaskExecPath, gandalfChatPath, gandalfInfPath, boardId);
-      // Fix gandalf outputsStoreRef
+    let gandalfBoardDir = null;
+    if (sourceGandalfCardsDir && gandalfTaskExecPath) {
+      gandalfBoardDir = path.join(boardRoot, 'gandalf-runtime');
+      const gandalfCfg = buildBoardContextConfig('gandalf', gandalfBoardDir, gandalfTaskExecPath, gandalfChatPath, gandalfInfPath, boardId);
       gandalfCfg.outputsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(boardRoot, 'gandalf-runtime-out', '.outputs') });
       boards.push(gandalfCfg);
     }
 
     // Store host config for demo-setup (FS paths are host concerns)
-    boardHostConfig.set(boardId, { cardsDir, gandalfCardsDir: gandalfCardsDir_, boardDir, boardRoot });
+    boardHostConfig.set(boardId, { cardsDir: sourceCardsDir, gandalfCardsDir: sourceGandalfCardsDir, boardDir, boardRoot });
 
     // Auto-run demo-setup (write copilot-instructions.md) at board init time,
     // so clients no longer need a separate /demo-setup request before bootstrapping.
     demoPrepSetup(boardId);
+
+    // runtimeCardsDir is where the live card store lives (inside setupDir).
+    const runtimeCardsDir = path.join(boardDir, 'cards');
 
     const singleBoardRuntime = createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
@@ -370,17 +381,29 @@ const runtime = createMultiBoardServerRuntime({
       serverUrl: `http://127.0.0.1:${PORT}`,
       executionExtra: {
         boardSetupRoot: boardRoot,
-        chatsBlobBasePath: path.join(cardsDir, 'chats'),
+        chatsBlobBasePath: path.join(runtimeCardsDir, 'chats'),
         ...(stepMachinePath ? { stepMachineCliPath: stepMachinePath } : {}),
       },
     });
 
-    // Host concern (Part A): seed card store from FS source only if empty
+    // Host concern: seed card store from source cardsDir only if the runtime store is empty.
     const existing = singleBoardRuntime.cardStore.get({});
     const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
     if (isEmpty) {
-      const cards = createFsCardSource(cardsDir).listCards();
+      const cards = createFsCardSource(sourceCardsDir).listCards();
       if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
+    }
+    // Seed gandalf board if present
+    if (gandalfBoardDir && sourceGandalfCardsDir) {
+      const gandalfRuntime = singleBoardRuntime.getBoardRuntime?.('gandalf');
+      if (gandalfRuntime) {
+        const gExisting = gandalfRuntime.cardStore.get({});
+        const gEmpty = gExisting.status !== 'success' || !gExisting.data?.cards?.length;
+        if (gEmpty) {
+          const gCards = createFsCardSource(sourceGandalfCardsDir).listCards();
+          if (gCards.length) gandalfRuntime.cardStore.set({ body: gCards });
+        }
+      }
     }
 
     return singleBoardRuntime;

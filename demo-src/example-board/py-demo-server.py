@@ -480,18 +480,26 @@ logger_obj = type("Logger", (), {
 board_host_config: Dict[str, Dict[str, Any]] = {}
 
 
-def build_board_context_config(label, board_dir, cards_dir, task_exec_path, chat_handler_path_, inf_adapter_path, board_id_):
+def build_board_context_config(label, board_dir, task_exec_path, chat_handler_path_, inf_adapter_path, board_id_):
     os.makedirs(board_dir, exist_ok=True)
+
+    # Runtime card store lives inside the board's setup dir, isolated from the source cards dir.
+    # Layout: board_dir/cards/store  — KV card store
+    #         board_dir/cards/chats  — chat blobs
+    #         board_dir/cards/files  — file uploads
+    runtime_cards_dir = os.path.join(board_dir, "cards")
+    runtime_card_store_dir = os.path.join(runtime_cards_dir, "store")
+    os.makedirs(runtime_card_store_dir, exist_ok=True)
 
     notify_channel = f"yaml-flow-py-server-{label}-{board_id_}-{os.getpid()}"
     base_ref = parse_ref(serialize_ref({"kind": "fs-path", "value": board_dir}))
     board_adapter = create_fs_board_platform_adapter(base_ref, notify_channel)
 
-    # Separate artifacts adapter rooted at cardsDir
-    artifacts_ref = parse_ref(serialize_ref({"kind": "fs-path", "value": cards_dir}))
+    # Artifacts adapter rooted at runtime_cards_dir so chats/ and files/ are siblings of store/.
+    artifacts_ref = parse_ref(serialize_ref({"kind": "fs-path", "value": runtime_cards_dir}))
     artifacts_adapter = create_fs_board_platform_adapter(artifacts_ref)
 
-    card_store_ref = serialize_ref({"kind": "fs-path", "value": os.path.join(cards_dir, "cards")})
+    card_store_ref = serialize_ref({"kind": "fs-path", "value": runtime_card_store_dir})
 
     return {
         "label": label,
@@ -508,7 +516,8 @@ def build_board_context_config(label, board_dir, cards_dir, task_exec_path, chat
 
 
 def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
-    cards_dir = os.path.abspath(entry["cardsDir"]) if isinstance(entry.get("cardsDir"), str) else default_cards_dir
+    # source_cards_dir: read-only source used only for initial seeding.
+    source_cards_dir = os.path.abspath(entry["cardsDir"]) if isinstance(entry.get("cardsDir"), str) else default_cards_dir
     board_root = os.path.join(setup_dir, f"board-{board_id_}")
     board_dir = os.path.join(board_root, "runtime")
 
@@ -516,7 +525,7 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
     chat_handler_path_ = entry.get("chatHandlerPath") if isinstance(entry.get("chatHandlerPath"), str) else default_chat_handler_path
     inf_adapter_path = entry.get("inferenceAdapterPath") if isinstance(entry.get("inferenceAdapterPath"), str) else default_inference_adapter_path
 
-    gandalf_cards_dir_ = (
+    source_gandalf_cards_dir = (
         os.path.normpath(entry["gandalfCardsDir"]) if isinstance(entry.get("gandalfCardsDir"), str)
         else default_gandalf_cards_dir
     )
@@ -524,16 +533,20 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
     gandalf_chat_path = entry.get("gandalfChatHandlerPath") if isinstance(entry.get("gandalfChatHandlerPath"), str) else default_gandalf_chat_handler_path
     gandalf_inf_path = entry.get("gandalfInferenceAdapterPath") if isinstance(entry.get("gandalfInferenceAdapterPath"), str) else default_gandalf_inference_adapter_path
 
-    base_cfg = build_board_context_config("base", board_dir, cards_dir, task_exec_path, chat_handler_path_, inf_adapter_path, board_id_)
+    base_cfg = build_board_context_config("base", board_dir, task_exec_path, chat_handler_path_, inf_adapter_path, board_id_)
+
+    # runtimeCardsDir is where the live card store lives (inside setupDir).
+    runtime_cards_dir = os.path.join(board_dir, "cards")
 
     boards = [base_cfg]
-    if gandalf_cards_dir_ and gandalf_task_exec_path:
+    gandalf_board_dir = None
+    if source_gandalf_cards_dir and gandalf_task_exec_path:
         gandalf_board_dir = os.path.join(board_root, "gandalf-runtime")
-        gandalf_cfg = build_board_context_config("gandalf", gandalf_board_dir, gandalf_cards_dir_, gandalf_task_exec_path, gandalf_chat_path, gandalf_inf_path, board_id_)
+        gandalf_cfg = build_board_context_config("gandalf", gandalf_board_dir, gandalf_task_exec_path, gandalf_chat_path, gandalf_inf_path, board_id_)
         gandalf_cfg["outputs_store_ref"] = serialize_ref({"kind": "fs-path", "value": os.path.join(board_root, "gandalf-runtime-out", ".outputs")})
         boards.append(gandalf_cfg)
 
-    board_host_config[board_id_] = {"cardsDir": cards_dir, "gandalfCardsDir": gandalf_cards_dir_, "boardDir": board_dir, "boardRoot": board_root}
+    board_host_config[board_id_] = {"cardsDir": source_cards_dir, "gandalfCardsDir": source_gandalf_cards_dir, "boardDir": board_dir, "boardRoot": board_root}
 
     single_board_runtime = create_single_board_server_runtime({
         "api_base_path": f"{api_base_path}/{board_id_}",
@@ -544,15 +557,15 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
         "server_url": f"http://127.0.0.1:{PORT}",
         "execution_extra": {
             "boardSetupRoot": board_root,
-            "chatsBlobBasePath": os.path.join(cards_dir, "chats"),
+            "chatsBlobBasePath": os.path.join(runtime_cards_dir, "chats"),
         },
     })
 
-    # Host concern (Part A): seed card store from FS source only if empty
+    # Host concern: seed card store from source cards dir only if the runtime store is empty.
     existing = single_board_runtime.card_store.get({})
     is_empty = existing.get("status") != "success" or not existing.get("data", {}).get("cards")
     if is_empty:
-        cards = create_fs_card_source(cards_dir).list_cards()
+        cards = create_fs_card_source(source_cards_dir).list_cards()
         if cards:
             single_board_runtime.card_store.set({"body": cards})
 
@@ -750,19 +763,15 @@ class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
         content_length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
-        # Demo-setup route (host concern)
+        # WorkIQ proxy route (host concern — requires WorkIQ CLI)
+        if self.command == "POST" and pathname == "/api/workiq/ask":
+            self._handle_workiq_ask(body)
+            return
+
+        # Demo-setup route — no-op (setup now runs at board init time)
         board_seg_match = BOARD_SEG_RE.match(pathname)
         if board_seg_match and board_seg_match.group(2) == "demo-setup":
-            board_id_ = unquote(board_seg_match.group(1))
-            try:
-                runtime.require_board_service(board_id_)
-                setup_performed = False
-                if not is_demo_setup_done(board_id_):
-                    demo_prep_setup(board_id_)
-                    setup_performed = True
-                json_reply(self, 200, {"ok": True, "setupPerformed": setup_performed})
-            except Exception as err:
-                json_reply(self, getattr(err, "status_code", 500), {"error": str(err)})
+            json_reply(self, 200, {"ok": True, "setupPerformed": False})
             return
 
         # All other /api/boards routes handled by platform-free runtime
@@ -773,6 +782,37 @@ class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
         handled = runtime.handle_api(req, res, parsed_url)
         if not handled:
             json_reply(self, 404, {"error": "Not found"})
+
+    def _handle_workiq_ask(self, body: bytes):
+        try:
+            query = json.loads(body.decode("utf-8")).get("query")
+        except Exception:
+            json_reply(self, 400, {"error": "Invalid JSON body"})
+            return
+        if not query or not isinstance(query, str):
+            json_reply(self, 400, {"error": "{ query } string is required"})
+            return
+
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        workiq_js = os.path.join(appdata, "npm", "node_modules", "@microsoft", "workiq", "bin", "workiq.js")
+        if not os.path.isfile(workiq_js):
+            json_reply(self, 503, {"error": f"WorkIQ CLI not found at: {workiq_js}"})
+            return
+
+        node = shutil.which("node") or "node"
+        try:
+            result = subprocess.run(
+                [node, workiq_js, "ask", "-q", query],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                json_reply(self, 500, {"error": f"workiq exited {result.returncode}", "stderr": result.stderr})
+            else:
+                json_reply(self, 200, {"response": result.stdout})
+        except subprocess.TimeoutExpired:
+            json_reply(self, 504, {"error": "workiq timed out after 60s"})
+        except Exception as err:
+            json_reply(self, 500, {"error": f"workiq spawn error: {err}"})
 
 
 # ============================================================================
@@ -787,8 +827,9 @@ def main():
     print("[py-demo-server] endpoints:")
     print(f"  GET  {api_base_path}                          <- list boards")
     print(f"  POST {api_base_path}  {{id, label?}}            <- register board")
-    print(f"  GET  {api_base_path}/:boardId/demo-setup")
-    print(f"  GET  {api_base_path}/:boardId/bootstrap")
+    print(f"  GET  {api_base_path}/:boardId/demo-setup  (no-op; setup now runs at board init)")
+    print(f"  GET  {api_base_path}/:boardId/init-board")
+    print(f"  POST /api/workiq/ask  {{query}}              <- WorkIQ (M365 Copilot) proxy")
     print(f"  GET  {api_base_path}/:boardId/sse")
     print(f"  GET  {api_base_path}/:boardId/board-status")
     print(f"  PATCH {api_base_path}/:boardId/cards/:id")
