@@ -1,0 +1,12 @@
+{
+  "port": 7799,
+  "setupDir": "./.demo-setup",
+  "serverMetaStoreRef": "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi8uc2VydmVyLW1ldGEifQ",
+  "cardsDir": "../data/cards",
+  "gandalfCardsDir": "../data/gandalf-cards",
+  "taskExecutorPath": "./handlers/demo-task-executor.py",
+  "chatHandlerPath": "./handlers/demo-chat-handler.py",
+  "chatSessionsDir": "",
+  "gandalfTaskExecutorPath": "./handlers/demo-task-executor.py",
+  "gandalfChatHandlerPath": "./handlers/demo-chat-handler.py"
+}
