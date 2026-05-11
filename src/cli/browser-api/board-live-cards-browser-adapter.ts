@@ -161,9 +161,8 @@ export function createBrowserBoardPlatformAdapter(
     async dispatchExecution(ref, args): Promise<{ dispatched: boolean; error?: string }> {
       if (ref.howToRun === 'http:post') {
         try {
-          const url = ref.whatToRun.startsWith('b64:')
-            ? parseRef(ref.whatToRun).value
-            : ref.whatToRun;
+          const raw = ref.whatToRun;
+          const url = typeof raw === 'object' ? raw.value : parseRef(raw).value;
           const resp = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -180,9 +179,8 @@ export function createBrowserBoardPlatformAdapter(
 
       if (ref.howToRun === 'http:get') {
         try {
-          const baseUrl = ref.whatToRun.startsWith('b64:')
-            ? parseRef(ref.whatToRun).value
-            : ref.whatToRun;
+          const raw = ref.whatToRun;
+          const baseUrl = typeof raw === 'object' ? raw.value : parseRef(raw).value;
           const params = new URLSearchParams(
             Object.entries(args as Record<string, unknown>)
               .filter(([, v]) => v !== undefined && v !== null)
@@ -200,9 +198,11 @@ export function createBrowserBoardPlatformAdapter(
       }
 
       if (ref.howToRun === 'in-browser') {
-        const handler = handlerRegistry.get(ref.whatToRun);
+        const raw = ref.whatToRun;
+        const handlerKey = typeof raw === 'object' ? raw.value : parseRef(raw).value;
+        const handler = handlerRegistry.get(handlerKey);
         if (handler) return handler(ref, args);
-        return { dispatched: false, error: `No in-browser handler registered for: ${ref.whatToRun}` };
+        return { dispatched: false, error: `No in-browser handler registered for: ${handlerKey}` };
       }
 
       return {

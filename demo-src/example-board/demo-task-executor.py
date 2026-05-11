@@ -300,9 +300,12 @@ def _execute_via_step_machine_flow(
         what = ref.get("whatToRun", "")
 
         if how == "demo-local-module":
-            # whatToRun is always a b64 wire string; parse to get the value
-            parsed_what = parse_ref(what)
-            what_value = parsed_what.get("value", "")
+            # whatToRun must be a b64 wire string or { kind, value } object
+            if isinstance(what, dict):
+                what_value = str(what.get("value") or "")
+            else:
+                parsed_what = parse_ref(what)
+                what_value = str(parsed_what.get("value") or "")
             # For Python standalone, fall back from .js to .py automatically
             py_what = what_value[:-3] + ".py" if what_value.endswith(".js") else what_value
             module_path = os.path.normpath(os.path.join(_HERE, py_what))

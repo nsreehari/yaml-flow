@@ -265,7 +265,7 @@ async function executeStepMachineSourceFlow(context) {
   const flow = await loadStepFlow(flowPath);
 
   const invokeHttpRef = async (ref, args) => {
-    const rawUrl = parseRef(ref.whatToRun).value;
+    const rawUrl = typeof ref.whatToRun === 'object' ? ref.whatToRun.value : parseRef(ref.whatToRun).value;
 
     const base = String(args?.extra?.serverUrl || 'http://127.0.0.1:7799').replace(/\/$/, '');
     const resolvedUrl = /^https?:\/\//i.test(rawUrl)
@@ -321,10 +321,11 @@ async function executeStepMachineSourceFlow(context) {
       return invokeHttpRef(ref, args);
     }
     if (ref.howToRun === 'demo-local-module') {
-      const modulePath = path.resolve(__dirname, parseRef(ref.whatToRun).value);
+      const whatValue = typeof ref.whatToRun === 'object' ? ref.whatToRun.value : parseRef(ref.whatToRun).value;
+      const modulePath = path.resolve(__dirname, whatValue);
       const mod = await import(pathToFileURL(modulePath).href);
       if (typeof mod.execute !== 'function') {
-        throw new Error(`Flow module ${ref.whatToRun} must export execute(context)`);
+        throw new Error(`Flow module ${JSON.stringify(ref.whatToRun)} must export execute(context)`);
       }
       return mod.execute(args);
     }

@@ -168,8 +168,7 @@ export function createFirebaseBoardPlatformAdapter(
     const howToRun = ref.howToRun;
     if (howToRun === 'http:post' || howToRun === 'http:get') {
       const urlRef = ref.whatToRun;
-      let url = urlRef;
-      if (urlRef.startsWith('b64:')) url = parseRef(urlRef).value;
+      const url: string = typeof urlRef === 'object' ? urlRef.value : parseRef(urlRef).value;
 
       try {
         const method = howToRun === 'http:get' ? 'GET' : 'POST';

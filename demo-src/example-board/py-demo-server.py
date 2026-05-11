@@ -211,12 +211,15 @@ def create_subprocess_invocation_adapter():
     class _InvocationAdapter:
         def invoke(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
             how_to_run = ref.get("howToRun", "")
-            what_to_run = str(ref.get("whatToRun") or "")
-            parsed = parse_ref(what_to_run)
+            what_to_run = ref.get("whatToRun")
+            if isinstance(what_to_run, dict):
+                parsed = what_to_run
+            else:
+                parsed = parse_ref(str(what_to_run or ""))
             script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
 
             if not script_path:
-                return {"dispatched": False, "error": f"no script path in whatToRun: {what_to_run}"}
+                return {"dispatched": False, "error": f"no fs-path in whatToRun: {json.dumps(what_to_run)}"}
 
             # Determine interpreter
             if how_to_run == "local-python":
@@ -256,8 +259,11 @@ def create_subprocess_invocation_adapter():
 
         def describe(self, ref: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             how_to_run = ref.get("howToRun", "")
-            what_to_run = str(ref.get("whatToRun") or "")
-            parsed = parse_ref(what_to_run)
+            what_to_run = ref.get("whatToRun")
+            if isinstance(what_to_run, dict):
+                parsed = what_to_run
+            else:
+                parsed = parse_ref(str(what_to_run or ""))
             script_path = parsed.get("value") if parsed.get("kind") == "fs-path" else ""
             if not script_path:
                 return None

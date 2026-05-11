@@ -130,15 +130,9 @@ async function evalJsonataString(expr: string, context: Record<string, unknown>)
  *   source-cli-task-executor  → node <cliDir>/source-cli-task-executor.js
  *   board-live-cards          → node <cliDir>/board-live-cards-cli.js (via buildBoardCliInvocation)
  */
-function resolveBuiltIn(whatToRun: string, cliDir: string): { command: string; args: string[] } {
-  // whatToRun is a b64:<base64url(json)> ref — parse the value portion
-  let name: string;
-  try {
-    name = parseRef(whatToRun).value;
-  } catch {
-    // fallback: treat as bare name
-    name = whatToRun;
-  }
+function resolveBuiltIn(whatToRun: string | { kind: string; value: string }, cliDir: string): { command: string; args: string[] } {
+  // whatToRun must be a b64 KindValueRef string or a plain-object ref
+  const name = typeof whatToRun === 'object' ? whatToRun.value : parseRef(whatToRun).value;
 
   switch (name) {
     case 'source-cli-task-executor': {
@@ -177,13 +171,10 @@ function resolveBaseInvocation(
     return { command, baseArgs: args };
   }
 
-  // For local-* transports, parse the whatToRun as a storage ref or bare path
-  let scriptPath: string;
-  try {
-    scriptPath = parseRef(ref.whatToRun).value;
-  } catch {
-    scriptPath = ref.whatToRun;
-  }
+  // For local-* transports, resolve the whatToRun as a KindValueRef
+  const scriptPath: string = typeof ref.whatToRun === 'object'
+    ? ref.whatToRun.value
+    : parseRef(ref.whatToRun).value;
 
   switch (ref.howToRun) {
     case 'local-node':
@@ -484,12 +475,8 @@ async function _invokeTaskExecutorHttp(
   if (ref.argsMassaging?.urlTemplate) {
     url = await evalJsonataString(ref.argsMassaging.urlTemplate, context);
   } else {
-    // Default: use whatToRun as URL directly (strip b64 KindValueRef if present)
-    try {
-      url = parseRef(ref.whatToRun).value;
-    } catch {
-      url = ref.whatToRun;
-    }
+    // Resolve whatToRun as a KindValueRef (object or b64 string)
+    url = typeof ref.whatToRun === 'object' ? ref.whatToRun.value : parseRef(ref.whatToRun).value;
   }
 
   if (ref.argsMassaging?.bodyTemplate) {

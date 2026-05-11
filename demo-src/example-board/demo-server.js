@@ -164,20 +164,20 @@ function createNodeSpawnInvocationAdapter() {
       if (ref.howToRun !== 'local-node') {
         return { dispatched: false, error: `unsupported howToRun: ${ref.howToRun}` };
       }
-      const whatToRun = String(ref.whatToRun || '');
+      const whatToRun = ref.whatToRun;
       let scriptPath = '';
-      if (whatToRun.startsWith('b64:')) {
+      if (whatToRun && typeof whatToRun === 'object') {
+        if (whatToRun.kind === 'fs-path') scriptPath = whatToRun.value;
+      } else if (typeof whatToRun === 'string' && whatToRun.startsWith('b64:')) {
         try {
           const parsed = parseRef(whatToRun);
           if (parsed.kind === 'fs-path') scriptPath = parsed.value;
         } catch {
           scriptPath = '';
         }
-      } else {
-        scriptPath = whatToRun;
       }
       if (!scriptPath) {
-        return { dispatched: false, error: `no script path in whatToRun: ${whatToRun}` };
+        return { dispatched: false, error: `no fs-path in whatToRun: ${JSON.stringify(whatToRun)}` };
       }
       // Resolve chatsKeyPrefix (blob key prefix) to absolute FS chatDir for handlers
       const finalArgs = { ...args };
@@ -203,17 +203,17 @@ function createNodeSpawnInvocationAdapter() {
     },
     async describe(ref) {
       if (ref.howToRun !== 'local-node') return null;
-      const whatToRun = String(ref.whatToRun || '');
+      const whatToRun = ref.whatToRun;
       let scriptPath = '';
-      if (whatToRun.startsWith('b64:')) {
+      if (whatToRun && typeof whatToRun === 'object') {
+        if (whatToRun.kind === 'fs-path') scriptPath = whatToRun.value;
+      } else if (typeof whatToRun === 'string' && whatToRun.startsWith('b64:')) {
         try {
           const parsed = parseRef(whatToRun);
           if (parsed.kind === 'fs-path') scriptPath = parsed.value;
         } catch {
           scriptPath = '';
         }
-      } else {
-        scriptPath = whatToRun;
       }
       if (!scriptPath) return null;
       try {
