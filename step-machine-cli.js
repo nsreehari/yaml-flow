@@ -376,7 +376,7 @@ function normalizeExecutionRef(ref) {
     if (!decoded || typeof decoded !== 'object' || typeof decoded.value !== 'string') {
       return ref;
     }
-    return { ...ref, whatToRun: decoded.value };
+    return { ...ref, whatToRun: decoded };
   } catch {
     return ref;
   }
