@@ -44,8 +44,6 @@ def _resolve_ref_to_path(ref: str) -> str:
         if parsed.get("kind") != "fs-path":
             raise ValueError(f"Unsupported ref kind for file IO: {parsed.get('kind')}")
         return str(parsed.get("value") or "")
-    if ref.startswith("::fs-path::"):
-        return ref[len("::fs-path::"):]
     return ref
 
 

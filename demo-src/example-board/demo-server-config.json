@@ -1,6 +1,6 @@
 {
   "port": 7799,
-  "serverMetaStoreRef": "::fs-path::./.server-meta",
+  "serverMetaStoreRef": "b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi8uc2VydmVyLW1ldGEifQ",
   "cardsDir": "./cards",
   "taskExecutorPath": "./demo-task-executor.js",
   "chatHandlerPath": "./demo-chat-handler.js",

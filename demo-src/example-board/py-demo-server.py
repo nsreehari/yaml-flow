@@ -85,12 +85,7 @@ def resolve_kind_ref_from_config(config_value) -> Optional[str]:
     if not isinstance(config_value, str) or not config_value.strip():
         return None
     trimmed = config_value.strip()
-    if trimmed.startswith("::fs-path::"):
-        raw_path = trimmed[len("::fs-path::"):].strip()
-        if not raw_path:
-            return None
-        resolved = raw_path if os.path.isabs(raw_path) else os.path.normpath(os.path.join(__file_dir, raw_path))
-        return serialize_ref({"kind": "fs-path", "value": resolved})
+
     if not trimmed.startswith("b64:"):
         return trimmed
     try:

@@ -120,13 +120,8 @@ export function serializeRef(ref: KindValueRef): string {
   return `${REF_PREFIX}${toBase64Url(JSON.stringify(ref))}`;
 }
 
-/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef.
- * Also accepts the legacy ::fs-path::<path> format for backward compatibility. */
+/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef. */
 export function parseRef(s: string): KindValueRef {
-  // Legacy format: ::fs-path::<path>
-  if (s.startsWith('::fs-path::')) {
-    return { kind: 'fs-path', value: s.slice('::fs-path::'.length) };
-  }
   if (!s.startsWith(REF_PREFIX)) throw new Error(`Invalid ref format (expected ${REF_PREFIX}<base64url(json)>): ${s}`);
   let parsed: unknown;
   try {
