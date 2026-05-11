@@ -139,7 +139,7 @@ CORS_HEADERS = {
 # ============================================================================
 
 setup_dir = os.path.normpath(
-    os.environ.get("DEMO_SETUP_DIR") or os.path.join(tempfile.gettempdir(), "board-live-cards-py-demo-setup")
+    os.environ.get("DEMO_SETUP_DIR") or resolve_from_config(server_config.get("setupDir")) or os.path.join(__file_dir, ".demo-setup")
 )
 os.makedirs(setup_dir, exist_ok=True)
 
@@ -174,7 +174,7 @@ def create_fs_card_source(cards_dir: str):
                 return []
             results = []
             for fname in sorted(os.listdir(cards_dir)):
-                if not fname.endswith(".json"):
+                if not fname.endswith(".json") or fname.startswith("_"):
                     continue
                 fpath = os.path.join(cards_dir, fname)
                 try:
@@ -548,6 +548,9 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
 
     board_host_config[board_id_] = {"cardsDir": source_cards_dir, "gandalfCardsDir": source_gandalf_cards_dir, "boardDir": board_dir, "boardRoot": board_root}
 
+    # Auto-run demo-setup at board init time (mirrors JS demoPrepSetup call)
+    demo_prep_setup(board_id_)
+
     single_board_runtime = create_single_board_server_runtime({
         "api_base_path": f"{api_base_path}/{board_id_}",
         "board_id": board_id_,
@@ -568,6 +571,18 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
         cards = create_fs_card_source(source_cards_dir).list_cards()
         if cards:
             single_board_runtime.card_store.set({"body": cards})
+
+    # Seed gandalf board if present
+    if gandalf_board_dir and source_gandalf_cards_dir:
+        get_gandalf_runtime = getattr(single_board_runtime, "get_board_runtime", None)
+        gandalf_runtime = get_gandalf_runtime("gandalf") if callable(get_gandalf_runtime) else None
+        if gandalf_runtime:
+            g_existing = gandalf_runtime.card_store.get({})
+            g_empty = g_existing.get("status") != "success" or not g_existing.get("data", {}).get("cards")
+            if g_empty:
+                g_cards = create_fs_card_source(source_gandalf_cards_dir).list_cards()
+                if g_cards:
+                    gandalf_runtime.card_store.set({"body": g_cards})
 
     return single_board_runtime
 

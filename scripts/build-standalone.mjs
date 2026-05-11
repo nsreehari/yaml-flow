@@ -164,6 +164,7 @@ async function writeStandaloneServerConfig() {
   // All paths are relative to server/ (where py-demo-server.py lives).
   const config = {
     port: 7799,
+    setupDir: './.demo-setup',
     serverMetaStoreRef: 'b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiLi8uc2VydmVyLW1ldGEifQ',
     cardsDir: '../data/cards',
     gandalfCardsDir: '../data/gandalf-cards',
