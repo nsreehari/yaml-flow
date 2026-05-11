@@ -65,9 +65,20 @@ const copyMap = [
   // pyboard — data
   ['demo-src/example-board/cards',         'examples/pyboard/data/cards'],
   ['demo-src/example-board/gandalf-cards', 'examples/pyboard/data/gandalf-cards'],
-  // portfolio-tracker example — only the main script and its fetch-prices handler
+  // portfolio-tracker example — Python and HTTP+SSE harness files
   ['examples/browser/boards/portfolio-tracker/portfolio-tracker.py',             'examples/portfolio-tracker/portfolio-tracker.py'],
   ['examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py','examples/portfolio-tracker/portfolio-tracker-fetch-prices.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-http-test.py',   'examples/portfolio-tracker/portfolio-tracker-http-test.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-server.py',      'examples/portfolio-tracker/portfolio-tracker-server.py'],
+  // Also ship Python HTTP test harness under standalone/test as:
+  //   test/portfolio-tracker-http-test.py
+  //   test/portfolio-tracker-http-test/... (required files)
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-http-test.py',   'test/portfolio-tracker-http-test.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-server.py',      'test/portfolio-tracker-server.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py','test/portfolio-tracker-fetch-prices.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-http-test.py',   'test/portfolio-tracker-http-test/portfolio-tracker-http-test.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-server.py',      'test/portfolio-tracker-http-test/portfolio-tracker-server.py'],
+  ['examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.py','test/portfolio-tracker-http-test/portfolio-tracker-fetch-prices.py'],
 ];
 
 // Python path patches: [dstRel, [[oldStr, newStr], ...]]
@@ -115,6 +126,60 @@ const pythonPathPatches = [
   ]],
   ['examples/pyboard/server/handlers/source-def-flows/copilot.flow.json', [
     ['./source-def-handlers/copilot-source-handler.js', './source-def-handlers/copilot-source-handler.py'],
+  ]],
+  // ── portfolio-tracker-server.py (standalone examples) ─────────────────────
+  ['examples/portfolio-tracker/portfolio-tracker-server.py', [
+    ["_REPO_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..', '..', '..'))",
+     "_REPO_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..', 'core'))"],
+    ["_PYCLI_ROOT = os.path.join(_REPO_ROOT, 'pycli')",
+     "_PYCLI_ROOT = _REPO_ROOT"],
+    ["os.path.join(_PYCLI_ROOT, 'py-server-runtime')",
+     "os.path.join(_PYCLI_ROOT, 'server')"],
+    ["os.path.join(_PYCLI_ROOT, 'main', 'board_live_cards_pycli.py')",
+     "os.path.join(_PYCLI_ROOT, 'cli', 'board_live_cards_pycli.py')"],
+  ]],
+  // ── portfolio-tracker-server.py (standalone test flat) ────────────────────
+  ['test/portfolio-tracker-server.py', [
+    ["_REPO_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..', '..', '..'))",
+     "_REPO_ROOT = os.path.normpath(os.path.join(_HERE, '..', 'core'))"],
+    ["_PYCLI_ROOT = os.path.join(_REPO_ROOT, 'pycli')",
+     "_PYCLI_ROOT = _REPO_ROOT"],
+    ["os.path.join(_PYCLI_ROOT, 'py-server-runtime')",
+     "os.path.join(_PYCLI_ROOT, 'server')"],
+    ["os.path.join(_PYCLI_ROOT, 'main', 'board_live_cards_pycli.py')",
+     "os.path.join(_PYCLI_ROOT, 'cli', 'board_live_cards_pycli.py')"],
+  ]],
+  // ── portfolio-tracker-server.py (standalone test folder) ──────────────────
+  ['test/portfolio-tracker-http-test/portfolio-tracker-server.py', [
+    ["_REPO_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..', '..', '..'))",
+     "_REPO_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..', 'core'))"],
+    ["_PYCLI_ROOT = os.path.join(_REPO_ROOT, 'pycli')",
+     "_PYCLI_ROOT = _REPO_ROOT"],
+    ["os.path.join(_PYCLI_ROOT, 'py-server-runtime')",
+     "os.path.join(_PYCLI_ROOT, 'server')"],
+    ["os.path.join(_PYCLI_ROOT, 'main', 'board_live_cards_pycli.py')",
+     "os.path.join(_PYCLI_ROOT, 'cli', 'board_live_cards_pycli.py')"],
+  ]],
+  // ── portfolio-tracker-fetch-prices.py (standalone examples) ───────────────
+  ['examples/portfolio-tracker/portfolio-tracker-fetch-prices.py', [
+    ["_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..'))",
+     "_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'core'))"],
+    ["from pycli.sub.public_storage_adapter import (",
+     "from sub.public_storage_adapter import ("],
+  ]],
+  // ── portfolio-tracker-fetch-prices.py (standalone test flat) ──────────────
+  ['test/portfolio-tracker-fetch-prices.py', [
+    ["_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..'))",
+     "_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'core'))"],
+    ["from pycli.sub.public_storage_adapter import (",
+     "from sub.public_storage_adapter import ("],
+  ]],
+  // ── portfolio-tracker-fetch-prices.py (standalone test folder) ────────────
+  ['test/portfolio-tracker-http-test/portfolio-tracker-fetch-prices.py', [
+    ["_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..'))",
+     "_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'core'))"],
+    ["from pycli.sub.public_storage_adapter import (",
+     "from sub.public_storage_adapter import ("],
   ]],
 ];
 
@@ -232,6 +297,10 @@ async function writeReadme() {
     '  `python examples/pyboard/server/py-demo-server.py`',
     '- Portfolio tracker:',
     '  `python examples/portfolio-tracker/portfolio-tracker.py`',
+    '- Portfolio tracker HTTP+SSE test (Python harness):',
+    '  `python examples/portfolio-tracker/portfolio-tracker-http-test.py --server py --port 7801`',
+    '- Portfolio tracker HTTP+SSE test (Python harness copy under test/):',
+    '  `python test/portfolio-tracker-http-test.py --server py --port 7801`',
   ].join('\n');
 
   await fs.writeFile(path.join(outDir, 'README-STANDALONE.md'), readme, 'utf-8');

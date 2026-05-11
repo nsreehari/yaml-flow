@@ -59,6 +59,8 @@ const NS = {
   statusGeneration: 0,      // bumped on every status notification received
   dataObjects: {},          // token → payload  (e.g. 'prices' → { AAPL: 142.5, ... })
   computedValues: {},       // cardId → values  (e.g. 'holdings-table' → { table: { rows: [...] } })
+  cardRefreshedCount: 0,    // total card_refreshed notifications seen
+  cardRefreshedByCardId: {},// cardId → count
 };
 
 // Apply a parsed SSE frame into NS (called from worker message handler)
@@ -92,6 +94,11 @@ function applyFrame(payload) {
           NS.dataObjects[n.key] = n.payload;
         } else if (n.kind === 'computed_values' && n.cardId) {
           NS.computedValues[n.cardId] = n.values;
+        } else if (n.kind === 'card_refreshed') {
+          NS.cardRefreshedCount++;
+          if (typeof n.cardId === 'string' && n.cardId) {
+            NS.cardRefreshedByCardId[n.cardId] = (NS.cardRefreshedByCardId[n.cardId] || 0) + 1;
+          }
         }
       }
     }
@@ -276,6 +283,7 @@ function applyFrame(payload) {
 
     // ── T2a: Add GOOG to holdings ────────────────────────────────────────────────
     console.log('\n=== T2a: Update holdings — add GOOG ===');
+    const t2CardRefreshedBefore = NS.cardRefreshedCount;
     const t2Patch = await httpPatch(
       `${BASE}/cards/portfolio-form`,
       makeHoldingsPatch({ AAPL: 50, MSFT: 30, GOOG: 100 }),
@@ -289,6 +297,11 @@ function applyFrame(payload) {
     console.log(`[T2b] completed — ${JSON.stringify(t2Summary)}`);
 
     const t2Prices = await waitForPriceSymbols(['AAPL', 'GOOG', 'MSFT'], 30_000, 'T2b prices');
+    const t2CardRefreshedAfter = NS.cardRefreshedCount;
+    assert(
+      t2CardRefreshedAfter > t2CardRefreshedBefore,
+      `T2b: expected at least one card_refreshed notification after PATCH (before=${t2CardRefreshedBefore}, after=${t2CardRefreshedAfter})`,
+    );
     const t2Table = NS.computedValues['holdings-table']?.table;
     assert(Array.isArray(t2Table?.rows) && t2Table.rows.length === 3, `T2b: expected 3 rows, got ${t2Table?.rows?.length}`);
     const t2Total = NS.computedValues['portfolio-value']?.totalValue;

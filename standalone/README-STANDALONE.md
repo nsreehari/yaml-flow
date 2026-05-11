@@ -51,3 +51,7 @@ Run from this directory root:
   `python examples/pyboard/server/py-demo-server.py`
 - Portfolio tracker:
   `python examples/portfolio-tracker/portfolio-tracker.py`
+- Portfolio tracker HTTP+SSE test (Python harness):
+  `python examples/portfolio-tracker/portfolio-tracker-http-test.py --server py --port 7801`
+- Portfolio tracker HTTP+SSE test (Python harness copy under test/):
+  `python test/portfolio-tracker-http-test.py --server py --port 7801`

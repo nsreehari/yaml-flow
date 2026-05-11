@@ -161,12 +161,51 @@ export function applyNotification(
     } else if (note.kind === 'card_refreshed') {
       const cardId = note.cardId as string;
       let fresh: CardModel | null = null;
-      try {
-        const fp = getFullPayload();
-        if (fp) fresh = selectLiveCardModel(fp, cardId);
-      } catch (_) { /* ignore */ }
-      if (!fresh) continue;
       const existing = modelsById[cardId];
+      const noteCard = note.card;
+
+      // Prefer authoritative card payload from notification to avoid stale
+      // getFullPayload snapshots during server-runtime incremental updates.
+      if (existing && noteCard && typeof noteCard === 'object' && !Array.isArray(noteCard)) {
+        const cardObj = noteCard as Record<string, unknown>;
+        const nextCardData = (
+          cardObj.card_data && typeof cardObj.card_data === 'object' && !Array.isArray(cardObj.card_data)
+        )
+          ? cardObj.card_data
+          : existing.card_data;
+        const nextRequires = (
+          cardObj.requires && typeof cardObj.requires === 'object' && !Array.isArray(cardObj.requires)
+        )
+          ? cardObj.requires
+          : existing.requires;
+        const nextComputedValues = (
+          cardObj.computed_values && typeof cardObj.computed_values === 'object' && !Array.isArray(cardObj.computed_values)
+        )
+          ? cardObj.computed_values
+          : existing.computed_values;
+        const nextRuntimeState = (
+          cardObj.runtime_state && typeof cardObj.runtime_state === 'object' && !Array.isArray(cardObj.runtime_state)
+        )
+          ? cardObj.runtime_state
+          : existing.runtime_state;
+        fresh = {
+          ...existing,
+          card: noteCard,
+          card_data: nextCardData,
+          requires: nextRequires,
+          computed_values: nextComputedValues,
+          runtime_state: nextRuntimeState,
+        };
+      }
+
+      if (!fresh) {
+        try {
+          const fp = getFullPayload();
+          if (fp) fresh = selectLiveCardModel(fp, cardId);
+        } catch (_) { /* ignore */ }
+      }
+
+      if (!fresh) continue;
       if (existing &&
         deepEqJson(existing.card,            fresh.card) &&
         deepEqJson(existing.card_data,       fresh.card_data) &&
