@@ -706,7 +706,7 @@ Before adding a card to a running board, agents should validate that each source
 
 ```bash
 node board-live-cards-cli.js probe-source \
-  --card cards/card-market-prices.json \
+  --card cards/cardT-market-prices.json \
   --source-idx 0 \
   --rg <boardRuntimeDir> \
   --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10},{"ticker":"MSFT","quantity":5}]}'

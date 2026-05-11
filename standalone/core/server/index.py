@@ -66,6 +66,15 @@ def _make_notification_state() -> Dict[str, Any]:
     return {"status": None, "computedValues": {}, "dataObjects": {}, "cards": {}}
 
 
+def _has_non_empty_card_count_status(status: Any) -> bool:
+    if not status or not isinstance(status, dict):
+        return False
+    summary = status.get("summary")
+    if not summary or not isinstance(summary, dict):
+        return False
+    return int(summary.get("card_count") or 0) > 0
+
+
 def _append_notification(state: Dict[str, Any], event: Any) -> None:
     if not event or not isinstance(event, dict):
         return
@@ -75,7 +84,10 @@ def _append_notification(state: Dict[str, Any], event: Any) -> None:
             _append_notification(state, n)
         return
     if event.get("kind") == "status":
-        state["status"] = event.get("status")
+        # Ignore empty status snapshots (e.g. auxiliary contexts)
+        # so they do not overwrite the primary board status.
+        if _has_non_empty_card_count_status(event.get("status")):
+            state["status"] = event.get("status")
     if event.get("kind") == "computed_values" and event.get("cardId"):
         state["computedValues"][event["cardId"]] = event.get("values")
     if event.get("kind") == "data_object" and event.get("key"):
@@ -801,7 +813,8 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
         notifications: List[Dict[str, Any]] = []
         status_result = ctx["board"].status({})
         if status_result.get("status") == "success" and status_result.get("data") is not None:
-            notifications.append({"kind": "status", "status": status_result["data"]})
+            if _has_non_empty_card_count_status(status_result["data"]):
+                notifications.append({"kind": "status", "status": status_result["data"]})
         data_result = ctx["board"].get_all_outputs_data_objects({})
         if data_result.get("status") == "success" and data_result.get("data") is not None:
             for token, payload in (data_result["data"] or {}).items():
@@ -1343,8 +1356,14 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
                 return True
 
             if method == "GET" and p == f"{api_base_path}/sse":
-                bootstrap_board()
+                # Initialize runtime first, then register SSE client, then bootstrap.
+                # This prevents a race where bootstrap emits early notifications before
+                # the newly connected SSE client is added to sse_clients.
+                init_board_and_setup()
                 handle_sse(req, res)
+                for i, ctx in enumerate(board_contexts):
+                    publish_persisted_state_snapshot(ctx)
+                    upsert_cards_from_source(ctx, i)
                 return True
 
             if method == "GET" and p == f"{api_base_path}/board-status":

@@ -93,11 +93,14 @@ class NativeBoardPlatformAdapter:
     @property
     def self_ref(self) -> Dict[str, Any]:
         board_pycli = _resolve_board_pycli_path(self._repo_root)
-        return {
+        ref = {
             "meta": "board-live-cards",
             "howToRun": "local-python",
             "whatToRun": serialize_ref({"kind": "fs-path", "value": board_pycli}),
         }
+        if self._notify_channel:
+            ref["extra"] = {"notifyChannel": self._notify_channel}
+        return ref
 
     def dispatch_execution(self, ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
         import tempfile
@@ -221,7 +224,22 @@ class NativeBoardPlatformAdapter:
         return _AbsoluteBlob()
 
     def publish_board_change_notifications(self, notifications):
-        pass  # no-op for now
+        if not self._notify_channel:
+            return
+        try:
+            notify_path = str(self._notify_channel)
+            os.makedirs(os.path.dirname(notify_path), exist_ok=True)
+            envelope = {
+                "notification": {
+                    "kind": "notification-batch",
+                    "notifications": notifications or [],
+                }
+            }
+            with open(notify_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(envelope, ensure_ascii=True) + "\n")
+        except Exception:
+            # Best-effort only; callback processing should not crash on notify I/O errors.
+            return
 
 
 def _make_kv_adapter(root: str):

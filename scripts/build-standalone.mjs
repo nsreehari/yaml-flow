@@ -62,6 +62,7 @@ const copyMap = [
   // pyboard — copilot scripts land inside source-def-handlers/ where they belong
   ['demo-src/example-board/scripts/copilot_wrapper.bat',        'examples/pyboard/server/handlers/source-def-handlers/scripts/copilot_wrapper.bat'],
   ['demo-src/example-board/scripts/copilot_wrapper_helper.ps1', 'examples/pyboard/server/handlers/source-def-handlers/scripts/copilot_wrapper_helper.ps1'],
+  ['demo-src/example-board/test/demo-http-test.py',             'examples/pyboard/server/test/demo-http-test.py'],
   // pyboard — data
   ['demo-src/example-board/cards',         'examples/pyboard/data/cards'],
   ['demo-src/example-board/gandalf-cards', 'examples/pyboard/data/gandalf-cards'],

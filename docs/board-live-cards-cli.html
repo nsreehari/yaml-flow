@@ -283,7 +283,7 @@ echo "node ./my-executor.js" &gt; ./my-board/.task-executor</code></pre>
       <h2>Probing Sources Before Deployment</h2>
       <p>The <code>probe-source</code> command lets agents validate that a card source works end-to-end before adding the card to a live board. It builds the exact same <code>run-source-fetch</code> <code>--in</code> payload the runtime would send, invokes the registered executor, and reports <code>PROBE_PASS</code> or <code>PROBE_FAIL</code>.</p>
       <pre><code>board-live-cards-cli probe-source \
-  --card cards/card-market-prices.json \
+    --card cards/cardT-market-prices.json \
   --source-idx 0 \
   --rg ./my-board \
   --mock-projections '{"holdings":[{"ticker":"AAPL","quantity":10}]}'</code></pre>

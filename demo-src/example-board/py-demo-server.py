@@ -14,6 +14,7 @@ import json
 import os
 import re
 import select
+import fnmatch
 import shutil
 import subprocess
 import sys
@@ -128,6 +129,20 @@ configured_gandalf_chat_handler_path = resolve_from_config(server_config.get("ga
 configured_gandalf_inference_adapter_path = resolve_from_config(server_config.get("gandalfInferenceAdapterPath"))
 configured_server_meta_store_ref = resolve_kind_ref_from_config(server_config.get("serverMetaStoreRef"))
 
+
+def _arg_value(flag: str) -> Optional[str]:
+    try:
+        idx = sys.argv.index(flag)
+    except ValueError:
+        return None
+    if idx + 1 >= len(sys.argv):
+        return None
+    value = str(sys.argv[idx + 1]).strip()
+    return value or None
+
+
+TESTING_PATTERN = _arg_value("--testing-pattern")
+
 PORT = int(os.environ.get("DEMO_SERVER_PORT") or server_config.get("port") or 7799)
 RESET_ON_START = "--reset" in sys.argv
 
@@ -168,7 +183,7 @@ default_gandalf_chat_handler_path = prefer_python_script(default_gandalf_chat_ha
 # platform-free server runtime.
 # ============================================================================
 
-def create_fs_card_source(cards_dir: str):
+def create_fs_card_source(cards_dir: str, testing_pattern: Optional[str] = None):
     """Port of createFsCardSource."""
 
     class _FsCardSource:
@@ -184,6 +199,16 @@ def create_fs_card_source(cards_dir: str):
                     with open(fpath, "r", encoding="utf-8") as f:
                         card = json.load(f)
                     if card:
+                        if testing_pattern:
+                            card_id = card.get("id") if isinstance(card, dict) else None
+                            stem = os.path.splitext(fname)[0]
+                            matched = (
+                                fnmatch.fnmatch(fname, testing_pattern)
+                                or fnmatch.fnmatch(stem, testing_pattern)
+                                or (isinstance(card_id, str) and fnmatch.fnmatch(card_id, testing_pattern))
+                            )
+                            if not matched:
+                                continue
                         results.append(card)
                 except Exception:
                     pass
@@ -486,6 +511,72 @@ logger_obj = type("Logger", (), {
 board_host_config: Dict[str, Dict[str, Any]] = {}
 
 
+def create_file_notification_transport(poll_interval_s: float = 0.1):
+    """File-backed notification transport for cross-process callback events."""
+
+    class _Transport:
+        def subscribe(self, ref: Dict[str, str], on_event: Callable[[Any], None]):
+            if ref.get("kind") != "file-notify":
+                logger_obj.warn(f"[notification] unsupported transport kind: {ref.get('kind')}")
+                return lambda: None
+
+            notify_path = str(ref.get("value") or "").strip()
+            if not notify_path:
+                logger_obj.warn("[notification] missing notify file path")
+                return lambda: None
+
+            os.makedirs(os.path.dirname(notify_path), exist_ok=True)
+            if not os.path.exists(notify_path):
+                with open(notify_path, "w", encoding="utf-8"):
+                    pass
+
+            stop = threading.Event()
+
+            def _tail() -> None:
+                pos = 0
+                while not stop.is_set():
+                    try:
+                        if not os.path.exists(notify_path):
+                            os.makedirs(os.path.dirname(notify_path), exist_ok=True)
+                            with open(notify_path, "w", encoding="utf-8"):
+                                pass
+                            pos = 0
+
+                        size = os.path.getsize(notify_path)
+                        if size < pos:
+                            pos = 0
+
+                        with open(notify_path, "r", encoding="utf-8") as f:
+                            f.seek(pos)
+                            while not stop.is_set():
+                                line = f.readline()
+                                if not line:
+                                    pos = f.tell()
+                                    break
+                                txt = line.strip()
+                                if not txt:
+                                    continue
+                                try:
+                                    msg = json.loads(txt)
+                                    on_event(msg.get("notification") if isinstance(msg, dict) and "notification" in msg else msg)
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+
+                    stop.wait(poll_interval_s)
+
+            th = threading.Thread(target=_tail, daemon=True, name="file-notify-tail")
+            th.start()
+
+            def _teardown() -> None:
+                stop.set()
+
+            return _teardown
+
+    return _Transport()
+
+
 def build_board_context_config(label, board_dir, task_exec_path, chat_handler_path_, inf_adapter_path, board_id_):
     os.makedirs(board_dir, exist_ok=True)
 
@@ -497,7 +588,12 @@ def build_board_context_config(label, board_dir, task_exec_path, chat_handler_pa
     runtime_card_store_dir = os.path.join(runtime_cards_dir, "store")
     os.makedirs(runtime_card_store_dir, exist_ok=True)
 
-    notify_channel = f"yaml-flow-py-server-{label}-{board_id_}-{os.getpid()}"
+    notify_dir = os.path.join(board_dir, ".notify")
+    os.makedirs(notify_dir, exist_ok=True)
+    notify_channel = os.path.join(notify_dir, f"{label}.jsonl")
+    with open(notify_channel, "w", encoding="utf-8"):
+        pass
+
     base_ref = parse_ref(serialize_ref({"kind": "fs-path", "value": board_dir}))
     board_adapter = create_fs_board_platform_adapter(base_ref, notify_channel)
 
@@ -514,7 +610,7 @@ def build_board_context_config(label, board_dir, task_exec_path, chat_handler_pa
         "base_ref": base_ref,
         "card_store_ref": card_store_ref,
         "outputs_store_ref": serialize_ref({"kind": "fs-path", "value": os.path.join(os.path.dirname(board_dir), "runtime-out", ".outputs")}),
-        "notify_ref": {"kind": "named-pipe", "value": notify_channel},
+        "notify_ref": {"kind": "file-notify", "value": notify_channel},
         "task_executor_ref": make_execution_ref(task_exec_path, "task-executor"),
         "chat_handler_ref": make_execution_ref(chat_handler_path_, "chat-handler"),
         "inference_adapter_ref": make_execution_ref(inf_adapter_path, "inference-adapter"),
@@ -562,6 +658,7 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
         "board_id": board_id_,
         "boards": boards,
         "invocation_adapter": invocation_adapter,
+        "notification_transport": create_file_notification_transport(),
         "logger": logger_obj,
         "server_url": f"http://127.0.0.1:{PORT}",
         "execution_extra": {
@@ -574,7 +671,7 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
     existing = single_board_runtime.card_store.get({})
     is_empty = existing.get("status") != "success" or not existing.get("data", {}).get("cards")
     if is_empty:
-        cards = create_fs_card_source(source_cards_dir).list_cards()
+        cards = create_fs_card_source(source_cards_dir, TESTING_PATTERN).list_cards()
         if cards:
             single_board_runtime.card_store.set({"body": cards})
 
@@ -586,7 +683,7 @@ def board_runtime_factory(board_id_: str, entry: Dict[str, Any]):
             g_existing = gandalf_runtime.card_store.get({})
             g_empty = g_existing.get("status") != "success" or not g_existing.get("data", {}).get("cards")
             if g_empty:
-                g_cards = create_fs_card_source(source_gandalf_cards_dir).list_cards()
+                g_cards = create_fs_card_source(source_gandalf_cards_dir, TESTING_PATTERN).list_cards()
                 if g_cards:
                     gandalf_runtime.card_store.set({"body": g_cards})
 
@@ -882,6 +979,8 @@ class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
 def main():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), DemoRequestHandler)
     print(f"[py-demo-server] listening on http://127.0.0.1:{PORT}")
+    if TESTING_PATTERN:
+        print(f"[py-demo-server] testing pattern: {TESTING_PATTERN}")
     print(f"[py-demo-server] setup dir: {setup_dir}")
     print(f"[py-demo-server] server-meta store: {server_meta_ref}")
     print("[py-demo-server] endpoints:")

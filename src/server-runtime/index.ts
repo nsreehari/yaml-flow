@@ -107,6 +107,13 @@ function makeNotificationState(): NotificationState {
   return { status: null, computedValues: {}, dataObjects: {}, cards: {} };
 }
 
+function hasNonEmptyCardCountStatus(status: unknown): boolean {
+  if (!status || typeof status !== 'object') return false;
+  const summary = (status as Record<string, unknown>).summary;
+  if (!summary || typeof summary !== 'object') return false;
+  return Number((summary as Record<string, unknown>).card_count || 0) > 0;
+}
+
 function appendNotification(state: NotificationState, event: unknown): void {
   if (!event || typeof event !== 'object') return;
   const e = event as Record<string, unknown>;
@@ -115,7 +122,11 @@ function appendNotification(state: NotificationState, event: unknown): void {
     for (const n of e.notifications) appendNotification(state, n);
     return;
   }
-  if (e.kind === 'status') state.status = e.status;
+  if (e.kind === 'status') {
+    // Ignore empty status snapshots (e.g. auxiliary contexts)
+    // so they do not overwrite the primary board status.
+    if (hasNonEmptyCardCountStatus(e.status)) state.status = e.status;
+  }
   if (e.kind === 'computed_values' && e.cardId) state.computedValues[e.cardId as string] = e.values;
   if (e.kind === 'data_object' && e.key) state.dataObjects[e.key as string] = e.payload;
   if (e.kind === 'card_refreshed' && e.cardId) state.cards[e.cardId as string] = e.card;
@@ -280,7 +291,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     // 1. Status
     const statusResult = ctx.board.status({});
     if (statusResult.status === 'success' && statusResult.data != null) {
-      notifications.push({ kind: 'status', status: statusResult.data });
+      if (hasNonEmptyCardCountStatus(statusResult.data)) {
+        notifications.push({ kind: 'status', status: statusResult.data });
+      }
     }
     // 2. All data objects
     const dataResult = ctx.board.getAllOutputsDataObjects({});
@@ -871,8 +884,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       }
 
       if (method === 'GET' && p === `${apiBasePath}/sse`) {
-        await bootstrapBoard();
+        // Initialize runtime first, then register SSE client, then bootstrap.
+        // This prevents a race where bootstrap emits early notifications before
+        // the newly connected SSE client is added to sseClients.
+        await initBoardAndSetup();
         handleSse(req, res);
+        for (let i = 0; i < boardContexts.length; i++) {
+          publishPersistedStateSnapshot(boardContexts[i]);
+          upsertCardsFromSource(boardContexts[i], i);
+        }
         return true;
       }
 
