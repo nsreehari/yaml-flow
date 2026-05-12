@@ -1,3 +1,5 @@
+import { I as InvocationAdapter } from './types-Btm6Kd4w.cjs';
+export { D as DescribeEnvelope } from './types-Btm6Kd4w.cjs';
 import { K as KindValueRef, B as BoardNonCorePlatformAdapter, a as BoardPlatformAdapter } from './board-live-cards-public-CrVcAhuO.cjs';
 export { b as BOARD_GRAPH_KEY, c as BoardLiveCardsNonCorePublic, d as BoardLiveCardsPublic, C as CommandInput, e as CommandResult, E as EMPTY_CONFIG, L as LiveCard, S as SNAPSHOT_SCHEMA_VERSION_V1, f as createBoardLiveCardsNonCorePublic, g as createBoardLiveCardsPublic, h as createCardStore, p as parseRef, s as serializeRef } from './board-live-cards-public-CrVcAhuO.cjs';
 export { ExecutionRef, executionRefFromScriptPath, parseExecutionRef, serializeExecutionRef } from './execution-refs.cjs';
@@ -17,6 +19,17 @@ import './types-BBhqYGhE.cjs';
  * Re-exports the full public API so consumers only need to import from this file.
  */
 
+/**
+ * Creates an InvocationAdapter backed by Node.js `spawn`/`spawnSync`.
+ *
+ * Supports howToRun: 'local-node'
+ *   → spawns the script as a detached Node.js child process (fire-and-forget).
+ *
+ * Pass to createSingleBoardServerRuntime / createMultiBoardServerRuntime as
+ * the `invocationAdapter` option. This is the reference Node.js implementation;
+ * replace with your own for Azure Functions, Lambda, etc.
+ */
+declare function createNodeSpawnInvocationAdapter(): InvocationAdapter;
 declare function createFsBoardPlatformAdapter(baseRef: KindValueRef, cliDir: string, opts?: {
     onWarn?: (msg: string) => void;
     suppressSpawn?: boolean;
@@ -31,4 +44,4 @@ declare function createFsBoardNonCorePlatformAdapter(baseRef: KindValueRef, cliD
  */
 declare function decodeBoardRefFromToken(token: string): string | null;
 
-export { BoardNonCorePlatformAdapter, BoardPlatformAdapter, KindValueRef, createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter, decodeBoardRefFromToken };
+export { BoardNonCorePlatformAdapter, BoardPlatformAdapter, InvocationAdapter, KindValueRef, createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter, createNodeSpawnInvocationAdapter, decodeBoardRefFromToken };

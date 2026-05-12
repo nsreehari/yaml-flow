@@ -10,6 +10,8 @@
  * Re-exports the full public API so consumers only need to import from this file.
  */
 
+import { spawn, spawnSync } from 'node:child_process';
+import type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 import {
   makeBoardTempFilePath,
   resolveBoardCliCallbackTarget,
@@ -63,6 +65,83 @@ export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public
 export { createCardStore } from '../common/board-live-cards-lib.js';
 export { createArtifactsStore, createChatArtifactsStore, createFileArtifactsStore, createCardFileMetadataStore } from '../common/artifacts-store-lib.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
+export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
+
+// ============================================================================
+// createNodeSpawnInvocationAdapter
+// ============================================================================
+
+/**
+ * Creates an InvocationAdapter backed by Node.js `spawn`/`spawnSync`.
+ *
+ * Supports howToRun: 'local-node'
+ *   → spawns the script as a detached Node.js child process (fire-and-forget).
+ *
+ * Pass to createSingleBoardServerRuntime / createMultiBoardServerRuntime as
+ * the `invocationAdapter` option. This is the reference Node.js implementation;
+ * replace with your own for Azure Functions, Lambda, etc.
+ */
+export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
+  return {
+    async invoke(ref, args): Promise<{ dispatched: boolean; error?: string }> {
+      if (ref.howToRun !== 'local-node') {
+        return { dispatched: false, error: `createNodeSpawnInvocationAdapter: unsupported howToRun "${ref.howToRun}"` };
+      }
+      let scriptPath = '';
+      try {
+        const w = ref.whatToRun;
+        const parsed = typeof w === 'string' ? parseRef(w) : w;
+        if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+      } catch {
+        scriptPath = '';
+      }
+      if (!scriptPath) {
+        return { dispatched: false, error: `createNodeSpawnInvocationAdapter: could not resolve fs-path from whatToRun` };
+      }
+      const finalArgs: Record<string, unknown> = { ...args };
+      // FS-specific: resolve chatsKeyPrefix + chatsBlobBasePath → chatDir
+      if (finalArgs.chatsKeyPrefix && finalArgs.chatsBlobBasePath) {
+        const cardPart = String(finalArgs.chatsKeyPrefix).split('/')[0];
+        finalArgs.chatDir = joinPath(String(finalArgs.chatsBlobBasePath), cardPart);
+      }
+      delete finalArgs.chatsKeyPrefix;
+      delete finalArgs.chatsBlobBasePath;
+      const extra = Buffer.from(JSON.stringify(finalArgs)).toString('base64');
+      try {
+        const proc = spawn(process.execPath, [
+          scriptPath,
+          '--boardId', String(args.boardId ?? ''),
+          '--cardId',  String(args.cardId  ?? ''),
+          '--extraEncJson', extra,
+        ], { stdio: 'ignore', windowsHide: true });
+        proc.unref();
+        return { dispatched: true };
+      } catch (err) {
+        return { dispatched: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    async describe(ref): Promise<DescribeEnvelope | null> {
+      if (ref.howToRun !== 'local-node') return null;
+      let scriptPath = '';
+      try {
+        const w = ref.whatToRun;
+        const parsed = typeof w === 'string' ? parseRef(w) : w;
+        if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+      } catch {
+        scriptPath = '';
+      }
+      if (!scriptPath) return null;
+      try {
+        const result = spawnSync(process.execPath, [scriptPath, 'describe'], {
+          timeout: 5000, encoding: 'utf-8', windowsHide: true,
+        });
+        if (result.status !== 0) return null;
+        return JSON.parse(String(result.stdout).trim()) as DescribeEnvelope;
+      } catch { return null; }
+    },
+  };
+}
 
 // ============================================================================
 // Constants
