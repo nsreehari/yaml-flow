@@ -51,9 +51,9 @@
       "require": "./lib/card-validation.cjs"
     },
     "./board-live-cards-node": {
-      "types": "./cli/node/fs-board-adapter.d.ts",
-      "import": "./cli/node/fs-board-adapter.js",
-      "require": "./cli/node/fs-board-adapter.cjs"
+      "types": "./lib/board-live-cards-node.d.ts",
+      "import": "./lib/board-live-cards-node.js",
+      "require": "./lib/board-live-cards-node.cjs"
     },
     "./package.json": "./package.json"
   },

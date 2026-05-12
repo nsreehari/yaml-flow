@@ -1,5 +1,5 @@
-import { B as BoardPlatformAdapter, K as KindValueRef, a as CommandResult } from '../board-live-cards-public-CoFbtvIy.cjs';
-export { c as BlobStorage, d as BoardChangeNotification, e as BoardLiveCardsPublic, C as CommandInput, f as KVStorage } from '../board-live-cards-public-CoFbtvIy.cjs';
+import { a as BoardPlatformAdapter, K as KindValueRef, e as CommandResult } from '../board-live-cards-public-CrVcAhuO.cjs';
+export { j as BlobStorage, k as BoardChangeNotification, d as BoardLiveCardsPublic, C as CommandInput, l as KVStorage } from '../board-live-cards-public-CrVcAhuO.cjs';
 import { ExecutionRef } from '../execution-refs.cjs';
 import '../types-BBhqYGhE.cjs';
 

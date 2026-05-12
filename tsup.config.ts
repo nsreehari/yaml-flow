@@ -52,6 +52,7 @@ export default defineConfig({
     'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'card-validation': 'src/card-validation.ts',
+    'board-live-cards-node': 'src/cli/node/fs-board-adapter.ts',
     'stores/file': 'src/stores/file.ts',
     'execution-refs': 'src/cli/common/execution-interface.ts',
     'server-runtime/index': 'src/server-runtime/index.ts',

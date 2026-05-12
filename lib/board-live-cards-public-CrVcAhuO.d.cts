@@ -58,6 +58,10 @@ interface KindValueRef {
     readonly kind: string;
     readonly value: string;
 }
+/** Serialize a KindValueRef to the wire format: b64:<base64url(json)> */
+declare function serializeRef(ref: KindValueRef): string;
+/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef. */
+declare function parseRef(s: string): KindValueRef;
 interface KVStorage {
     /** Returns the stored value, or null if the key does not exist. */
     read(key: string): unknown | null;
@@ -109,6 +113,15 @@ interface CardIndexEntry {
 }
 type CardIndex = Record<string, CardIndexEntry>;
 type CardChecksumIndex = Record<string, string>;
+interface CardStorageAdapter {
+    readIndex(): CardIndex | null;
+    writeIndex(index: CardIndex): void;
+    readCard(key: string): LiveCard | null;
+    /** Write card content; returns checksum of what was written. */
+    writeCard(key: string, card: LiveCard): string;
+    cardExists(key: string): boolean;
+    defaultCardKey(cardId: string): string;
+}
 interface CardStore {
     readCard(id: string): LiveCard | null;
     readCardKey(id: string): string | null;
@@ -127,6 +140,7 @@ interface CardAdminStore extends CardStore {
     removeCard(id: string): void;
     readIndex(): CardIndex;
 }
+declare function createCardStore(adapter: CardStorageAdapter, onWarn?: (msg: string) => void): CardAdminStore;
 interface JournalEntry {
     id: string;
     event: GraphEvent;
@@ -434,4 +448,4 @@ interface BoardLiveCardsNonCorePublic {
 }
 declare function createBoardLiveCardsNonCorePublic(baseRef: KindValueRef, adapter: BoardNonCorePlatformAdapter): BoardLiveCardsNonCorePublic;
 
-export { type BoardPlatformAdapter as B, type CommandInput as C, EMPTY_CONFIG as E, type KindValueRef as K, type LiveCard as L, SNAPSHOT_SCHEMA_VERSION_V1 as S, type CommandResult as a, type CardAdminStore as b, type BlobStorage as c, type BoardChangeNotification as d, type BoardLiveCardsPublic as e, type KVStorage as f, BOARD_GRAPH_KEY as g, type BoardLiveCardsNonCorePublic as h, type BoardNonCorePlatformAdapter as i, createBoardLiveCardsNonCorePublic as j, createBoardLiveCardsPublic as k };
+export { type BoardNonCorePlatformAdapter as B, type CommandInput as C, EMPTY_CONFIG as E, type KindValueRef as K, type LiveCard as L, SNAPSHOT_SCHEMA_VERSION_V1 as S, type BoardPlatformAdapter as a, BOARD_GRAPH_KEY as b, type BoardLiveCardsNonCorePublic as c, type BoardLiveCardsPublic as d, type CommandResult as e, createBoardLiveCardsNonCorePublic as f, createBoardLiveCardsPublic as g, createCardStore as h, type CardAdminStore as i, type BlobStorage as j, type BoardChangeNotification as k, type KVStorage as l, parseRef as p, serializeRef as s };
