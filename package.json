@@ -5,105 +5,45 @@
   "author": "",
   "license": "MIT",
   "type": "module",
-  "main": "./lib/index.cjs",
-  "module": "./lib/index.js",
-  "types": "./lib/index.d.ts",
+  "main": "./lib/board-live-cards-public.cjs",
+  "module": "./lib/board-live-cards-public.js",
+  "types": "./lib/board-live-cards-public.d.ts",
   "bin": {
     "board-live-cards-cli": "./cli/node/board-live-cards-cli.js",
     "card-store": "./cli/node/card-store-cli.js",
+    "artifacts-store": "./cli/node/artifacts-store-cli.js",
     "step-machine-cli": "./cli/node/step-machine-cli.js"
   },
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "import": "./lib/index.js",
-      "require": "./lib/index.cjs"
+      "types": "./lib/board-live-cards-public.d.ts",
+      "import": "./lib/board-live-cards-public.js",
+      "require": "./lib/board-live-cards-public.cjs"
     },
-    "./step-machine": {
-      "types": "./lib/step-machine/index.d.ts",
-      "import": "./lib/step-machine/index.js",
-      "require": "./lib/step-machine/index.cjs"
+    "./board-live-cards-public": {
+      "types": "./lib/board-live-cards-public.d.ts",
+      "import": "./lib/board-live-cards-public.js",
+      "require": "./lib/board-live-cards-public.cjs"
     },
-    "./event-graph": {
-      "types": "./lib/event-graph/index.d.ts",
-      "import": "./lib/event-graph/index.js",
-      "require": "./lib/event-graph/index.cjs"
+    "./card-store-public": {
+      "types": "./lib/card-store-public.d.ts",
+      "import": "./lib/card-store-public.js",
+      "require": "./lib/card-store-public.cjs"
     },
-    "./stores": {
-      "types": "./lib/stores/index.d.ts",
-      "import": "./lib/stores/index.js",
-      "require": "./lib/stores/index.cjs"
+    "./artifacts-store-public": {
+      "types": "./lib/artifacts-store-public.d.ts",
+      "import": "./lib/artifacts-store-public.js",
+      "require": "./lib/artifacts-store-public.cjs"
     },
-    "./stores/memory": {
-      "types": "./lib/stores/memory.d.ts",
-      "import": "./lib/stores/memory.js",
-      "require": "./lib/stores/memory.cjs"
+    "./public-storage-adapter": {
+      "types": "./lib/public-storage-adapter.d.ts",
+      "import": "./lib/public-storage-adapter.js",
+      "require": "./lib/public-storage-adapter.cjs"
     },
-    "./stores/localStorage": {
-      "types": "./lib/stores/localStorage.d.ts",
-      "import": "./lib/stores/localStorage.js",
-      "require": "./lib/stores/localStorage.cjs"
-    },
-    "./stores/file": {
-      "types": "./lib/stores/file.d.ts",
-      "import": "./lib/stores/file.js",
-      "require": "./lib/stores/file.cjs"
-    },
-    "./batch": {
-      "types": "./lib/batch/index.d.ts",
-      "import": "./lib/batch/index.js",
-      "require": "./lib/batch/index.cjs"
-    },
-    "./config": {
-      "types": "./lib/config/index.d.ts",
-      "import": "./lib/config/index.js",
-      "require": "./lib/config/index.cjs"
-    },
-    "./continuous-event-graph": {
-      "types": "./lib/continuous-event-graph/index.d.ts",
-      "import": "./lib/continuous-event-graph/index.js",
-      "require": "./lib/continuous-event-graph/index.cjs"
-    },
-    "./board-livegraph-runtime": {
-      "types": "./lib/board-livegraph-runtime/index.d.ts",
-      "import": "./lib/board-livegraph-runtime/index.js",
-      "require": "./lib/board-livegraph-runtime/index.cjs"
-    },
-    "./inference": {
-      "types": "./lib/inference/index.d.ts",
-      "import": "./lib/inference/index.js",
-      "require": "./lib/inference/index.cjs"
-    },
-    "./card-compute": {
-      "types": "./lib/card-compute/index.d.ts",
-      "import": "./lib/card-compute/index.js",
-      "require": "./lib/card-compute/index.cjs"
-    },
-    "./storage-refs": {
-      "types": "./lib/storage-refs.d.ts",
-      "import": "./lib/storage-refs.js",
-      "require": "./lib/storage-refs.cjs"
-    },
-    "./execution-refs": {
-      "types": "./lib/execution-refs.d.ts",
-      "import": "./lib/execution-refs.js",
-      "require": "./lib/execution-refs.cjs"
-    },
-    "./board-live-cards-browser": {
-      "types": "./cli/browser-api/board-live-cards-browser-adapter.d.ts",
-      "import": "./cli/browser-api/board-live-cards-browser-adapter.js"
-    },
-    "./board-live-cards-node": {
-      "types": "./cli/node/fs-board-adapter.d.ts",
-      "import": "./cli/node/fs-board-adapter.js"
-    },
-    "./card-store-browser": {
-      "types": "./cli/browser-api/card-store-browser-api.d.ts",
-      "import": "./cli/browser-api/card-store-browser-api.js"
-    },
-    "./server-runtime": {
-      "types": "./lib/server-runtime/index.d.ts",
-      "import": "./lib/server-runtime/index.js"
+    "./step-machine-public": {
+      "types": "./lib/step-machine-public/index.d.ts",
+      "import": "./lib/step-machine-public/index.js",
+      "require": "./lib/step-machine-public/index.cjs"
     },
     "./package.json": "./package.json"
   },
@@ -116,6 +56,8 @@
     "examples",
     "schema",
     "browser",
+    "!browser/card-compute.js",
+    "!browser/board-livegraph-engine.js",
     "!lib/**/*.map",
     "!cli/**/*.map",
     "!browser/**/*.map",

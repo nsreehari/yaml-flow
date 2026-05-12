@@ -35,6 +35,10 @@ function copyJsonataSyncToLibDirs() {
 export default defineConfig({
   entry: {
     'index': 'src/index.ts',
+    'board-live-cards-public': 'src/cli/common/board-live-cards-public.ts',
+    'card-store-public': 'src/cli/common/card-store-lib-public.ts',
+    'artifacts-store-public': 'src/cli/common/artifacts-store-lib-public.ts',
+    'public-storage-adapter': 'src/cli/node/public-storage-adapter.ts',
     'step-machine/index': 'src/step-machine/index.ts',
     'step-machine-public/index': 'src/step-machine-public/index.ts',
     'event-graph/index': 'src/event-graph/index.ts',
@@ -48,7 +52,6 @@ export default defineConfig({
     'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'stores/file': 'src/stores/file.ts',
-    'storage-refs': 'src/cli/node/public-storage-adapter.ts',
     'execution-refs': 'src/cli/common/execution-interface.ts',
     'server-runtime/index': 'src/server-runtime/index.ts',
   },
