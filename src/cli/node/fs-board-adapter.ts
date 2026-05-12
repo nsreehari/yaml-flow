@@ -24,7 +24,7 @@ import {
 import { buildLocalBaseSpec, dispatchTaskExecutorDetached } from './execution-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
-import { blobStorageForRef } from './public-storage-adapter.js';
+import { blobStorageForRef } from './board-worker-adapter.js';
 import {
   createFsKvStorage,
   createFsBlobStorage,
@@ -52,6 +52,12 @@ export type {
 export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from '../common/board-live-cards-public.js';
 export { parseRef, serializeRef } from '../common/storage-interface.js';
 export type { KindValueRef } from '../common/storage-interface.js';
+export {
+  executionRefFromScriptPath,
+  serializeExecutionRef,
+  parseExecutionRef,
+} from '../common/execution-interface.js';
+export type { ExecutionRef } from '../common/execution-interface.js';
 export { createCardStorePublic } from '../common/card-store-lib-public.js';
 export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
 export { createCardStore } from '../common/board-live-cards-lib.js';

@@ -22,7 +22,7 @@
  */
 
 import fs from 'node:fs';
-import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/public-storage-adapter';
+import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/board-worker-adapter';
 
 // ---------------------------------------------------------------------------
 // validate-source-def — structural validation of a source definition

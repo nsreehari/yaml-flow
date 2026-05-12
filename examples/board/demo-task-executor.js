@@ -60,7 +60,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/public-storage-adapter';
+import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/board-worker-adapter';
 import { loadStepFlow, createStepMachine } from '../../lib/step-machine/index.js';
 import { MemoryStore } from '../../lib/stores/memory.js';
 import { buildStepHandlersForFlow } from '../../lib/step-machine-public/index.js';

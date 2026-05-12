@@ -50,7 +50,10 @@ async function main() {
 
   const htmlFiles = [];
   for (const root of generatedRoots) {
-    htmlFiles.push(...(await collectHtmlFiles(root)));
+    const info = await stat(root);
+    if (info.isDirectory()) {
+      htmlFiles.push(...(await collectHtmlFiles(root)));
+    }
   }
   let rewrittenCount = 0;
 

@@ -1,7 +1,7 @@
 /**
- * public-storage-adapter.ts
+ * board-worker-adapter.ts
  *
- * Standalone file — copy this to your task-executor project.
+ * Standalone file — copy this to your board worker project (task executor, chat handler, etc.).
  * Zero dependencies on the rest of yaml-flow.
  *
  * Provides:
@@ -17,13 +17,14 @@
  *
  * Supported storage kinds:
  *   fs-path   — ref.value is an absolute file path; reads/writes via node:fs
+ *   (add more cases to blobStorageForRef for other backends, e.g. cosmos, azure-blob)
  *
  * Supported callback transports (via ExecutionRef.howToRun):
  *   local-node     — invoke board CLI as a child Node process
  *   http:post      — HTTP POST to a board endpoint
  *
  * Usage:
- *   import { parseRef, blobStorageForRef, reportComplete, reportFailed } from './public-storage-adapter.js';
+ *   import { parseRef, blobStorageForRef, reportComplete, reportFailed } from './board-worker-adapter.js';
  *
  *   const { source_def, callback } = JSON.parse(blobStorageForRef(inRef).read(inRef.value));
  *   // ... do work, write to outRef ...

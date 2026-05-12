@@ -3,10 +3,10 @@
 Generated from npm pack --dry-run.
 
 ## Summary
-filename: yaml-flow-7.1.0.tgz
-package size: 1.3 MB
-unpacked size: 5.6 MB
-total files: 166
+filename: yaml-flow-8.0.0.tgz
+package size: 1.6 MB
+unpacked size: 6.5 MB
+total files: 195
 
 ## Browser files (published)
 - browser/asset-integrity.json
@@ -18,7 +18,7 @@ total files: 166
 
 ## CLI files (published)
 - cli/board-live-cards-lib-tjYsPt5U.d.ts
-- cli/board-live-cards-public-BCTzToTZ.d.ts
+- cli/board-live-cards-public-Dn1K3i-V.d.ts
 - cli/browser-api/board-live-cards-browser-adapter.d.ts
 - cli/browser-api/board-live-cards-browser-adapter.js
 - cli/browser-api/card-store-browser-api.d.ts
@@ -42,6 +42,8 @@ total files: 166
 - cli/node/step-machine-cli.js
 
 ## Lib modules/files (published)
+- lib/artifacts-store-lib-public-BHVQ9aHh.d.cts
+- lib/artifacts-store-lib-public-C8HCAS79.d.ts
 - lib/artifacts-store-public.cjs
 - lib/artifacts-store-public.d.cts
 - lib/artifacts-store-public.d.ts
@@ -50,17 +52,29 @@ total files: 166
 - lib/batch/index.d.cts
 - lib/batch/index.d.ts
 - lib/batch/index.js
-- lib/board-live-cards-public-BHzvwKoj.d.ts
-- lib/board-live-cards-public-DHrcpTPv.d.cts
+- lib/board-live-cards-node.cjs
+- lib/board-live-cards-node.d.cts
+- lib/board-live-cards-node.d.ts
+- lib/board-live-cards-node.js
+- lib/board-live-cards-public-Cf__4Q0f.d.ts
+- lib/board-live-cards-public-CrVcAhuO.d.cts
 - lib/board-live-cards-public.cjs
 - lib/board-live-cards-public.d.cts
 - lib/board-live-cards-public.d.ts
 - lib/board-live-cards-public.js
+- lib/board-live-cards-server-runtime.cjs
+- lib/board-live-cards-server-runtime.d.cts
+- lib/board-live-cards-server-runtime.d.ts
+- lib/board-live-cards-server-runtime.js
 - lib/board-livegraph-runtime/index.cjs
 - lib/board-livegraph-runtime/index.d.cts
 - lib/board-livegraph-runtime/index.d.ts
 - lib/board-livegraph-runtime/index.js
 - lib/board-livegraph-runtime/jsonata-sync.cjs
+- lib/board-worker-adapter.cjs
+- lib/board-worker-adapter.d.cts
+- lib/board-worker-adapter.d.ts
+- lib/board-worker-adapter.js
 - lib/card-compute/index.cjs
 - lib/card-compute/index.d.cts
 - lib/card-compute/index.d.ts
@@ -70,6 +84,10 @@ total files: 166
 - lib/card-store-public.d.cts
 - lib/card-store-public.d.ts
 - lib/card-store-public.js
+- lib/card-validation.cjs
+- lib/card-validation.d.cts
+- lib/card-validation.d.ts
+- lib/card-validation.js
 - lib/config/index.cjs
 - lib/config/index.d.cts
 - lib/config/index.d.ts
@@ -100,10 +118,6 @@ total files: 166
 - lib/jsonata-sync.cjs
 - lib/live-cards-bridge-BXbVTsna.d.cts
 - lib/live-cards-bridge-Ds28XR15.d.ts
-- lib/public-storage-adapter.cjs
-- lib/public-storage-adapter.d.cts
-- lib/public-storage-adapter.d.ts
-- lib/public-storage-adapter.js
 - lib/server-runtime/index.cjs
 - lib/server-runtime/index.d.cts
 - lib/server-runtime/index.d.ts
@@ -144,9 +158,21 @@ total files: 166
 - lib/validate-Dbu7ygys.d.cts
 
 ## Examples (published)
-Total examples files: 30
+Total examples files: 45 (includes .demo-setup pre-seeded state)
 
 - examples/board-local/demo-shell-localstorage.html
+- examples/board/.demo-setup/board-default/gandalf-runtime-out/.outputs/status.json
+- examples/board/.demo-setup/board-default/gandalf-runtime/.config/card-store-ref.json
+- examples/board/.demo-setup/board-default/gandalf-runtime/.config/chat-handler.json
+- examples/board/.demo-setup/board-default/gandalf-runtime/.config/outputs-store-ref.json
+- examples/board/.demo-setup/board-default/gandalf-runtime/.config/task-executor.json
+- examples/board/.demo-setup/board-default/gandalf-runtime/.state-snapshot/board/graph.json
+- examples/board/.demo-setup/board-default/gandalf-runtime/.state-snapshot/board/lastJournalProcessedId.json
+- examples/board/.demo-setup/board-default/runtime-out/.outputs/cards/card-market-prices/computed_values.json
+- examples/board/.demo-setup/board-default/runtime-out/.outputs/cards/card-my-identity/computed_values.json
+- examples/board/.demo-setup/board-default/runtime-out/.outputs/cards/card-portfolio/computed_values.json
+- examples/board/.demo-setup/board-default/runtime-out/.outputs/data-objects/holdings.json
+- examples/board/.demo-setup/board-default/runtime-out/.outputs/status.json
 - examples/board/cards/card-concentration.json
 - examples/board/cards/card-my-identity.json
 - examples/board/cards/card-portfolio-action.json
@@ -174,5 +200,8 @@ Total examples files: 30
 - examples/board/source-def-flows/url.flow.json
 - examples/board/source-def-flows/workiq.flow.json
 - examples/board/source_def_flows.json
+- examples/board/test/demo-http-test.js
+- examples/board/test/portfolio-tracker-sse-worker.js
 - examples/portfolio-tracker/handlers/portfolio-tracker-fetch-prices.js
 - examples/portfolio-tracker/portfolio-tracker.js
+- examples/portfolio-tracker/test/portfolio-t4.js

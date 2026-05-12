@@ -35,10 +35,10 @@
       "import": "./lib/artifacts-store-public.js",
       "require": "./lib/artifacts-store-public.cjs"
     },
-    "./public-storage-adapter": {
-      "types": "./lib/public-storage-adapter.d.ts",
-      "import": "./lib/public-storage-adapter.js",
-      "require": "./lib/public-storage-adapter.cjs"
+    "./board-worker-adapter": {
+      "types": "./lib/board-worker-adapter.d.ts",
+      "import": "./lib/board-worker-adapter.js",
+      "require": "./lib/board-worker-adapter.cjs"
     },
     "./step-machine-public": {
       "types": "./lib/step-machine-public/index.d.ts",
@@ -54,6 +54,11 @@
       "types": "./lib/board-live-cards-node.d.ts",
       "import": "./lib/board-live-cards-node.js",
       "require": "./lib/board-live-cards-node.cjs"
+    },
+    "./board-live-cards-server-runtime": {
+      "types": "./lib/board-live-cards-server-runtime.d.ts",
+      "import": "./lib/board-live-cards-server-runtime.js",
+      "require": "./lib/board-live-cards-server-runtime.cjs"
     },
     "./package.json": "./package.json"
   },

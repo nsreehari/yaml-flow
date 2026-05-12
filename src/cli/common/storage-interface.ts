@@ -75,7 +75,7 @@ export interface BlobStorage {
 // A ref describes WHERE content lives without carrying the bytes.
 // Serialized on the CLI wire as: b64:<base64url({"kind":"...","value":"..."})>
 //   kind = 'fs-path': value is an absolute file path
-// Additional kinds (e.g. 'cosmos') are added in public-storage-adapter.ts as new backends are supported.
+// Additional kinds (e.g. 'cosmos') are added in board-worker-adapter.ts as new backends are supported.
 // ============================================================================
 
 export interface KindValueRef {

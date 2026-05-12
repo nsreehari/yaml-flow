@@ -1,8 +1,8 @@
 import { K as KindValueRef, B as BoardNonCorePlatformAdapter, a as BoardPlatformAdapter } from './board-live-cards-public-CrVcAhuO.cjs';
 export { b as BOARD_GRAPH_KEY, c as BoardLiveCardsNonCorePublic, d as BoardLiveCardsPublic, C as CommandInput, e as CommandResult, E as EMPTY_CONFIG, L as LiveCard, S as SNAPSHOT_SCHEMA_VERSION_V1, f as createBoardLiveCardsNonCorePublic, g as createBoardLiveCardsPublic, h as createCardStore, p as parseRef, s as serializeRef } from './board-live-cards-public-CrVcAhuO.cjs';
+export { ExecutionRef, executionRefFromScriptPath, parseExecutionRef, serializeExecutionRef } from './execution-refs.cjs';
 export { createCardStorePublic } from './card-store-public.cjs';
 export { c as createArtifactsStore, a as createArtifactsStorePublic, b as createCardFileMetadataStore, d as createChatArtifactsStore, e as createFileArtifactsStore } from './artifacts-store-lib-public-BHVQ9aHh.cjs';
-import './execution-refs.cjs';
 import './types-BBhqYGhE.cjs';
 
 /**

@@ -84,9 +84,23 @@ export interface BootstrapBoardParams {
  *   getServerOrigin: () => activeOrigin,
  * });
  */
-export function defaultBoardPaths(boardId: string): BoardPaths {
+export function defaultBoardPaths(boardId: string, apiBase = '/api/boards'): BoardPaths {
+  const base_ = apiBase.replace(/\/$/, '');
   const b = encodeURIComponent(boardId || 'default');
-  const base = `/api/boards/${b}`;
+  const base = `${base_}/${b}`;
+  return {
+    initBoard: `${base}/init-board`,
+    stream:    `${base}/sse`,
+    patchCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
+    cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
+    cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
+    cardChats:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats`,
+  };
+}
+
+/** Flat path helper for single-board servers (no boardId segment in URL). */
+export function singleBoardPaths(apiBase = '/api/board'): BoardPaths {
+  const base = apiBase.replace(/\/$/, '');
   return {
     initBoard: `${base}/init-board`,
     stream:    `${base}/sse`,
