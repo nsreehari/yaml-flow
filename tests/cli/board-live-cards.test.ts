@@ -775,7 +775,7 @@ describe('cli validate-card', () => {
 
   it('accepts a valid card', () => {
     freshDir();
-    const result = makeNonCore().validateTmpCard({ body: {
+    const result = makeNonCore().validateCardPreflight({ body: {
       id: 'ok-card',
       provides: [{ bindTo: 'prices', ref: 'card_data.prices' }],
       card_data: { prices: {} },
@@ -785,7 +785,7 @@ describe('cli validate-card', () => {
 
   it('rejects a card with invalid provides.ref namespace', () => {
     freshDir();
-    const result = makeNonCore().validateTmpCard({ body: {
+    const result = makeNonCore().validateCardPreflight({ body: {
       id: 'bad-ns',
       provides: [{ bindTo: 'data', ref: 'source_defs.foo.bar' }],
       card_data: {},
@@ -798,7 +798,7 @@ describe('cli validate-card', () => {
 
   it('rejects a card with an unparseable compute expression', () => {
     freshDir();
-    const result = makeNonCore().validateTmpCard({ body: {
+    const result = makeNonCore().validateCardPreflight({ body: {
       id: 'bad-expr',
       compute: [{ bindTo: 'total', expr: '$$$broken(' }],
       card_data: {},
@@ -811,7 +811,7 @@ describe('cli validate-card', () => {
 
   it('rejects a card missing the id field', () => {
     freshDir();
-    const result = makeNonCore().validateTmpCard({ body: { card_data: { x: 1 } } });
+    const result = makeNonCore().validateCardPreflight({ body: { card_data: { x: 1 } } });
     // id is '(unknown)' when missing — schema validation should still catch that
     expect(result.status).toBe('success');
     const data = (result as { status: string; data: { cardId: string; isValid: boolean; issues: string[] } }).data;

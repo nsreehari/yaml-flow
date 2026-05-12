@@ -166,7 +166,7 @@ export function createFsBoardPlatformAdapter(
 // ============================================================================
 // createFsBoardNonCorePlatformAdapter — extends the FS adapter with synchronous
 // executor dispatch, schema validation, temp file factory, and absolute blob I/O.
-// Required for: validateCard, validateTmpCard, probeSource, probeTmpSource,
+// Required for: validateCard, validateCardPreflight, probeSource, probeTmpSource,
 //               describeTaskExecutorCapabilities
 // ============================================================================
 
@@ -184,6 +184,7 @@ export function createFsBoardNonCorePlatformAdapter(
       return executor.executeSync(command, [...baseArgs, subcommand, ...args], {
         timeout: execOpts?.timeout ?? 30_000,
         encoding: 'utf-8',
+        input: execOpts?.input,
       });
     },
     validateSchema(card) {

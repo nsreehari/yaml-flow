@@ -1,4 +1,4 @@
-import { K as KindValueRef, B as BoardPlatformAdapter } from '../board-live-cards-public-BCTzToTZ.js';
+import { K as KindValueRef, B as BoardPlatformAdapter } from '../board-live-cards-public-Dn1K3i-V.js';
 import { E as ExecutionRef } from '../execution-interface-Ba-R-DNg.js';
 import '../board-live-cards-lib-tjYsPt5U.js';
 

@@ -244,10 +244,6 @@ export function findGitBash(): string | false {
   return _gitBashPath;
 }
 
-function _shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
 // ============================================================================
 // runDetached — fire-and-forget background spawn
 // ============================================================================

@@ -45,6 +45,16 @@
       "import": "./lib/step-machine-public/index.js",
       "require": "./lib/step-machine-public/index.cjs"
     },
+    "./card-validation": {
+      "types": "./lib/card-validation.d.ts",
+      "import": "./lib/card-validation.js",
+      "require": "./lib/card-validation.cjs"
+    },
+    "./board-live-cards-node": {
+      "types": "./cli/node/fs-board-adapter.d.ts",
+      "import": "./cli/node/fs-board-adapter.js",
+      "require": "./cli/node/fs-board-adapter.cjs"
+    },
     "./package.json": "./package.json"
   },
   "browser": {
@@ -85,7 +95,7 @@
     "build:example": "echo deprecated: standalone is canonical",
     "dev": "tsup --watch",
     "test": "vitest",
-    "test:run": "npm run build && vitest run",
+    "test:run": "vitest run",
     "test:cli-parity": "echo removed: standalone canonical mode",
     "test:cli-parity:full": "echo removed: standalone canonical mode",
     "test:e2e": "python standalone/examples/portfolio-tracker/portfolio-tracker.py --run-pycli",

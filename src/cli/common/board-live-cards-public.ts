@@ -893,7 +893,7 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
     ref: ExecutionRef,
     subcommand: string,
     args: string[],
-    opts?: { timeout?: number },
+    opts?: { timeout?: number; input?: string },
   ): string;
 
   /** Schema-only card validator (no executor invocation). */
@@ -914,8 +914,8 @@ export interface BoardLiveCardsNonCorePublic {
   /** params: cardId? or all?; returns array even for single card */
   validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
 
-  /** body: { "card-content": <card> } — card JSON arrives via stdin */
-  validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
+  /** body: { "card-content": <card> } — card JSON arrives via stdin; validates schema + JSONata + provides refs + source_defs (executor, if configured) */
+  validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
 
   /** params: cardId, sourceIdx, outRef?; body — mockProjections object */
   probeSource(input: CommandInput): CommandResult;
@@ -977,12 +977,11 @@ export function createBoardLiveCardsNonCorePublic(
     if (teRef && Array.isArray(card['source_defs'])) {
       for (const src of card['source_defs'] as Array<Record<string, unknown>>) {
         const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : '(unknown)';
-        const tmpFile = adapter.makeTempFilePath(`validate-src-${bindTo}`);
         try {
-          adapter.absoluteBlob.write(tmpFile, JSON.stringify(src));
           let stdout: string;
           try {
-            stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', ['--in', tmpFile], { timeout: 10_000 });
+            // Pass source_def JSON via stdin; executor reads stdin, writes { ok, errors } to stdout.
+            stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', [], { timeout: 10_000, input: JSON.stringify(src) });
           } catch (execErr: unknown) {
             const se = execErr as { stdout?: unknown };
             stdout = typeof se?.stdout === 'string' ? se.stdout : '';
@@ -997,8 +996,6 @@ export function createBoardLiveCardsNonCorePublic(
           }
         } catch (e) {
           sourceErrors.push(`source "${bindTo}": executor validate-source-def failed — ${e instanceof Error ? e.message : String(e)}`);
-        } finally {
-          try { adapter.absoluteBlob.remove(tmpFile); } catch { /* best-effort */ }
         }
       }
     }
@@ -1081,10 +1078,10 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e) as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>; }
   }
 
-  function validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }> {
+  function validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }> {
     try {
       if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
-        return fail('validateTmpCard requires card JSON object in body') as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
+        return fail('validateCardPreflight requires card JSON object in body') as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
       }
       const body = input.body as Record<string, unknown>;
       const card = (body['card-content'] ?? body) as Record<string, unknown>;
@@ -1170,7 +1167,7 @@ export function createBoardLiveCardsNonCorePublic(
   }
 
   return {
-    validateCard, validateTmpCard,
+    validateCard, validateCardPreflight,
     probeSource, probeTmpSource,
     describeTaskExecutorCapabilities,
     updatesInCardStore,

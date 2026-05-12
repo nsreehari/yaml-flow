@@ -25,7 +25,7 @@
  * Global: window.BoardLiveCardsClient
  */
 
-import { selectLiveCardModel, selectAllLiveCardModels } from '../board-livegraph-runtime/index.js';
+import { selectLiveCardModel, selectAllLiveCardModels, type BoardRuntimeArtifactsPayload } from '../board-livegraph-runtime/index.js';
 import { buildBoardState, applyNotification, type BoardState, type CardModel } from '../cli/common/board-state-reducer.js';
 
 // ============================================================================
@@ -243,7 +243,7 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
       };
     });
 
-    if (!selectAllLiveCardModels(initialPayload)) throw new Error('SSE payload missing published runtime artifacts');
+    if (!selectAllLiveCardModels(initialPayload as BoardRuntimeArtifactsPayload)) throw new Error('SSE payload missing published runtime artifacts');
 
     // Build initial reactive state using bundled selectLiveCardModel
     stateRef.current = buildBoardState(initialPayload, null, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
@@ -255,10 +255,10 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
       resolve: (id: string) => stateRef.current?.modelsById[id],
       chartLib:  (globalThis as { Chart?: unknown }).Chart  ?? null,
       markdown:  (globalThis as { marked?: { parse: (t: string) => string } }).marked
-        ? (text: string) => (globalThis as { marked: { parse: (t: string) => string } }).marked.parse(text)
+        ? (text: string) => (globalThis as unknown as { marked: { parse: (t: string) => string } }).marked.parse(text)
         : null,
       sanitize:  (globalThis as { DOMPurify?: { sanitize: (h: string) => string } }).DOMPurify
-        ? (html: string) => (globalThis as { DOMPurify: { sanitize: (h: string) => string } }).DOMPurify.sanitize(html)
+        ? (html: string) => (globalThis as unknown as { DOMPurify: { sanitize: (h: string) => string } }).DOMPurify.sanitize(html)
         : null,
       onPatchState: async (id: string, patch: Record<string, unknown>) => {
         await fetchServer(paths.patchCard(id), {

@@ -348,7 +348,7 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
         "sourceDataFetched": board.source_data_fetched,
         "sourceDataFetchFailure": board.source_data_fetch_failure,
         "validateCard": board.validate_card,
-        "validateTmpCard": board.validate_tmp_card,
+        "validateCardPreflight": board.validate_card_preflight,
         "probeSource": board.probe_source,
         "probeTmpSource": board.probe_tmp_source,
         "describeTaskExecutorCapabilities": board.describe_task_executor_capabilities,

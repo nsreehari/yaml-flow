@@ -1,4 +1,4 @@
-import { C as CommandInput, a as CommandResult, L as LiveCard, b as CardAdminStore } from './board-live-cards-public-DHrcpTPv.cjs';
+import { C as CommandInput, a as CommandResult, L as LiveCard, b as CardAdminStore } from './board-live-cards-public-CoFbtvIy.cjs';
 import './execution-refs.cjs';
 import './types-BBhqYGhE.cjs';
 

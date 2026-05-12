@@ -100,12 +100,12 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── validate-tmp-card — card JSON arrives via stdin, optional --base-ref ─────
-  if (cmd === 'validate-tmp-card') {
+  // ── validate-card-preflight — card JSON arrives via stdin, optional --base-ref ─────
+  if (cmd === 'validate-card-preflight') {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
     const body = await readStdinBody();
-    printResult(nonCore.validateTmpCard({ body }));
+    printResult(nonCore.validateCardPreflight({ body }));
     return;
   }
 

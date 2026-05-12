@@ -96,7 +96,7 @@ sourceDataFetchFailure(input: CommandInput): CommandResult
 validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>
   params: { cardId?, all? }             // cardId or all required
 
-validateTmpCard(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>
+validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>
   body:   { "card-content": <card object> }
 ```
 

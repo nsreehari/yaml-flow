@@ -12,11 +12,24 @@
  */
 
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+import { existsSync } from 'node:fs';
 
+const _thisDir = dirname(fileURLToPath(import.meta.url));
 const _require = createRequire(import.meta.url);
 
 export type JsonataExpression = {
   evaluate: (data: unknown) => unknown;
 };
 
-export const jsonata: (expr: string) => JsonataExpression = _require('./jsonata-sync.cjs');
+function _jsonataCjsPath(): string {
+  // Dist layout: tsup copies jsonata-sync.cjs next to each bundle.
+  const sibling = resolve(_thisDir, './jsonata-sync.cjs');
+  if (existsSync(sibling)) return sibling;
+  // Source layout (vitest/tsx): canonical copy lives in src/card-compute/.
+  // From src/step-machine-public/, ../card-compute/ = src/card-compute/.
+  return resolve(_thisDir, '../card-compute/jsonata-sync.cjs');
+}
+
+export const jsonata: (expr: string) => JsonataExpression = _require(_jsonataCjsPath());

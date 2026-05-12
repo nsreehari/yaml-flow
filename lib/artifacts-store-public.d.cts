@@ -1,4 +1,4 @@
-import { C as CommandInput, a as CommandResult } from './board-live-cards-public-DHrcpTPv.cjs';
+import { C as CommandInput, a as CommandResult } from './board-live-cards-public-CoFbtvIy.cjs';
 import './execution-refs.cjs';
 import './types-BBhqYGhE.cjs';
 

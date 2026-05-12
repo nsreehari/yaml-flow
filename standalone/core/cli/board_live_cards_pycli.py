@@ -256,7 +256,7 @@ def _board_handler(command: str):
                 token = getattr(args, "token", None)
                 if isinstance(token, str) and token:
                     base_ref = _decode_board_ref_from_token(token)
-            if not base_ref and command in ("validateTmpCard", "probeTmpSource"):
+            if not base_ref and command in ("validateCardPreflight", "probeTmpSource"):
                 base_ref = serialize_storage_ref({"kind": "fs-path", "value": os.path.abspath('.')})
 
             input_obj: Dict[str, Any] = {"params": {}, "body": None}
@@ -630,10 +630,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_notify_channel_arg(describe_cmd)
     describe_cmd.set_defaults(handler=_board_handler("describeTaskExecutorCapabilities"))
 
-    validate_tmp_cmd = sub.add_parser("validate-tmp-card", help="Validate temporary card body")
-    validate_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
-    _add_notify_channel_arg(validate_tmp_cmd)
-    validate_tmp_cmd.set_defaults(handler=_board_handler("validateTmpCard"))
+    validate_preflight_cmd = sub.add_parser("validate-card-preflight", help="Validate card body preflight")
+    validate_preflight_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
+    _add_notify_channel_arg(validate_preflight_cmd)
+    validate_preflight_cmd.set_defaults(handler=_board_handler("validateCardPreflight"))
 
     probe_tmp_cmd = sub.add_parser("probe-tmp-source", help="Probe temporary source body")
     probe_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")

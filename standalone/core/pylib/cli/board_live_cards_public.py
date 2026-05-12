@@ -736,15 +736,15 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             except Exception as e:
                 return _err(e)
 
-        def validate_tmp_card(self, input_data: dict | None = None) -> dict:
-            """Port of validateTmpCard — validate a card passed directly in the body."""
+        def validate_card_preflight(self, input_data: dict | None = None) -> dict:
+            """Port of validateCardPreflight — validate a card passed directly in the body."""
             try:
                 body = (input_data or {}).get("body")
                 if not body or not isinstance(body, dict):
-                    return _fail("validateTmpCard requires card JSON object in body")
+                    return _fail("validateCardPreflight requires card JSON object in body")
                 card = body.get("card-content", body)
                 if not isinstance(card, dict):
-                    return _fail("validateTmpCard requires card JSON object in body")
+                    return _fail("validateCardPreflight requires card JSON object in body")
                 card_id = card.get("id", "(unknown)")
                 return self._validate_card_object(card_id, card)
             except Exception as e:

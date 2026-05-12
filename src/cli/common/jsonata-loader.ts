@@ -8,24 +8,24 @@
  */
 
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+import { existsSync } from 'node:fs';
 
+const _thisDir = dirname(fileURLToPath(import.meta.url));
 const _require = createRequire(import.meta.url);
 
 export type JsonataExpression = {
   evaluate: (data: unknown) => unknown;
 };
 
-// Source path resolves via the file's location at src/cli/common/.
-// Dist path resolves via the post-build copy that places jsonata-sync.cjs
-// alongside the bundled output (handled by tsup's copyJsonataSyncToDistDirs).
-function _loadJsonata(): (expr: string) => JsonataExpression {
-  // Try sibling first (dist layout). If that fails, fall back to the canonical
-  // source location (used when running TypeScript directly under vitest/tsx).
-  try {
-    return _require('./jsonata-sync.cjs');
-  } catch {
-    return _require('../../lib/card-compute/jsonata-sync.cjs');
-  }
+function _jsonataCjsPath(): string {
+  // Dist layout: tsup copies jsonata-sync.cjs next to each bundle.
+  const sibling = resolve(_thisDir, './jsonata-sync.cjs');
+  if (existsSync(sibling)) return sibling;
+  // Source layout (vitest/tsx): canonical copy lives in src/card-compute/.
+  // From src/cli/common/, ../../card-compute/ = src/card-compute/.
+  return resolve(_thisDir, '../../card-compute/jsonata-sync.cjs');
 }
 
-export const jsonata: (expr: string) => JsonataExpression = _loadJsonata();
+export const jsonata: (expr: string) => JsonataExpression = _require(_jsonataCjsPath());

@@ -385,6 +385,7 @@ interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
      */
     invokeExecutorSync(ref: ExecutionRef, subcommand: string, args: string[], opts?: {
         timeout?: number;
+        input?: string;
     }): string;
     /** Schema-only card validator (no executor invocation). */
     validateSchema(card: Record<string, unknown>): {
@@ -403,8 +404,8 @@ interface BoardLiveCardsNonCorePublic {
         isValid: boolean;
         issues: string[];
     }>>;
-    /** body: { "card-content": <card> } — card JSON arrives via stdin */
-    validateTmpCard(input: CommandInput): CommandResult<{
+    /** body: { "card-content": <card> } — card JSON arrives via stdin; validates schema + JSONata + provides refs + source_defs (executor, if configured) */
+    validateCardPreflight(input: CommandInput): CommandResult<{
         cardId: string;
         isValid: boolean;
         issues: string[];

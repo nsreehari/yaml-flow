@@ -235,10 +235,10 @@ describe('BoardLiveCardsNonCorePublic — readFromCardStore', () => {
 });
 
 // ============================================================================
-// BoardLiveCardsNonCorePublic — validateTmpCard
+// BoardLiveCardsNonCorePublic — validateCardPreflight
 // ============================================================================
 
-describe('BoardLiveCardsNonCorePublic — validateTmpCard', () => {
+describe('BoardLiveCardsNonCorePublic — validateCardPreflight', () => {
   let tmpDir = '';
 
   function freshNonCore() {
@@ -256,7 +256,7 @@ describe('BoardLiveCardsNonCorePublic — validateTmpCard', () => {
 
   it('returns success + cardId for a valid card object in body', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateTmpCard({ body: minCard('tmp-card') });
+    const result = nonCore.validateCardPreflight({ body: minCard('tmp-card') });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('tmp-card');
@@ -266,7 +266,7 @@ describe('BoardLiveCardsNonCorePublic — validateTmpCard', () => {
 
   it('uses (unknown) as cardId when card body lacks an id string', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateTmpCard({ body: { card_data: { x: 1 } } });
+    const result = nonCore.validateCardPreflight({ body: { card_data: { x: 1 } } });
     // still returns success — errors embedded in data.errors
     expect(result.status).toBe('success');
     if (result.status === 'success') {
@@ -276,20 +276,20 @@ describe('BoardLiveCardsNonCorePublic — validateTmpCard', () => {
 
   it('fails when body is absent', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateTmpCard({});
+    const result = nonCore.validateCardPreflight({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/body/);
   });
 
   it('fails when body is a string', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateTmpCard({ body: 'not-an-object' });
+    const result = nonCore.validateCardPreflight({ body: 'not-an-object' });
     expect(result.status).toBe('fail');
   });
 
   it('fails when body is an array', () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateTmpCard({ body: [] });
+    const result = nonCore.validateCardPreflight({ body: [] });
     expect(result.status).toBe('fail');
   });
 });

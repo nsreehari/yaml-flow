@@ -1,5 +1,5 @@
-import { ExecutionRef } from './execution-refs.js';
-import { f as GraphEvent, G as GraphConfig } from './types-BBhqYGhE.js';
+import { E as ExecutionRef } from './execution-interface-Ba-R-DNg.js';
+import { L as LiveCard, B as BoardStatusObject, J as JournalStorageAdapter, O as OutputStoreEvent } from './board-live-cards-lib-tjYsPt5U.js';
 
 /**
  * storage-interface.ts
@@ -58,6 +58,10 @@ interface KindValueRef {
     readonly kind: string;
     readonly value: string;
 }
+/** Serialize a KindValueRef to the wire format: b64:<base64url(json)> */
+declare function serializeRef(ref: KindValueRef): string;
+/** Parse a wire-format ref string (b64:<base64url(json)>) into a KindValueRef. */
+declare function parseRef(s: string): KindValueRef;
 interface KVStorage {
     /** Returns the stored value, or null if the key does not exist. */
     read(key: string): unknown | null;
@@ -79,129 +83,6 @@ interface AtomicRelayLock {
      */
     tryAcquire(): (() => void) | null;
 }
-
-/**
- * board-live-cards-lib — Pure logic library for the board-live-cards CLI.
- *
- * Merged from:
- *   board-live-cards-all-stores.ts
- *   board-live-cards-lib-types.ts
- *   board-live-cards-lib-board-status.ts
- *   board-live-cards-lib-card-handler.ts
- *   board-live-cards-cli-board-commands.ts
- *   board-live-cards-cli-card-commands.ts
- *   board-live-cards-cli-callbacks.ts
- *
- * Zero platform imports. All storage is injected via adapter interfaces.
- * Safe for Node, browser, and neutral (V8/PyMiniRacer) bundles.
- */
-
-interface LiveCard {
-    id: string;
-    [key: string]: unknown;
-}
-interface CardIndexEntry {
-    /** Storage-specific address (file path, Cosmos doc id, localStorage key). */
-    key: string;
-    /** Checksum of card content — computed by the adapter at write time. */
-    checksum: string;
-    updatedAt: string;
-}
-type CardIndex = Record<string, CardIndexEntry>;
-type CardChecksumIndex = Record<string, string>;
-interface CardStore {
-    readCard(id: string): LiveCard | null;
-    readCardKey(id: string): string | null;
-    readAllCards(): LiveCard[];
-    readChecksumIndex(): CardChecksumIndex;
-    changedSince(snapshotChecksumIndex: CardChecksumIndex): string[];
-}
-interface CardUpsertValidation {
-    ok: boolean;
-    error?: string;
-}
-interface CardAdminStore extends CardStore {
-    validateUpsert(id: string, cardKey: string): CardUpsertValidation;
-    writeCard(id: string, card: LiveCard, cardKey?: string): void;
-    patchCard(id: string, jsonPath: string, value: unknown): void;
-    removeCard(id: string): void;
-    readIndex(): CardIndex;
-}
-interface JournalEntry {
-    id: string;
-    event: GraphEvent;
-}
-interface JournalStorageAdapter {
-    readAllEntries(): JournalEntry[];
-    appendEntry(entry: JournalEntry): void;
-    generateId(): string;
-}
-declare const SNAPSHOT_SCHEMA_VERSION_V1 = "v1";
-declare const BOARD_GRAPH_KEY = "board/graph";
-type OutputStoreEvent = {
-    kind: 'computed_values';
-    cardId: string;
-    values: Record<string, unknown>;
-} | {
-    kind: 'data_object';
-    key: string;
-    payload: unknown;
-} | {
-    kind: 'status';
-    status: unknown;
-};
-interface BoardStatusCard {
-    name: string;
-    status: string;
-    error?: {
-        message: string;
-        code?: string;
-        at?: string;
-        source?: 'task-runtime' | 'source-fetch' | 'timeout' | 'unknown';
-    };
-    requires: string[];
-    requires_satisfied: string[];
-    requires_missing: string[];
-    provides_declared: string[];
-    provides_runtime: string[];
-    blocked_by: string[];
-    unblocks: string[];
-    runtime: {
-        attempt_count: number;
-        restart_count: number;
-        in_progress_since: string | null;
-        last_transition_at: string | null;
-        last_completed_at: string | null;
-        last_restarted_at: string | null;
-        status_age_ms: number | null;
-    };
-}
-interface BoardStatusObject {
-    schema_version: 'v1';
-    meta: {
-        board: {
-            path: string;
-        };
-    };
-    summary: {
-        card_count: number;
-        completed: number;
-        eligible: number;
-        pending: number;
-        blocked: number;
-        unresolved: number;
-        failed?: number;
-        in_progress?: number;
-        orphan_cards?: number;
-        topology?: {
-            edge_count: number;
-            max_fan_out_card: string | null;
-            max_fan_out: number;
-        };
-    };
-    cards: BoardStatusCard[];
-}
-declare const EMPTY_CONFIG: GraphConfig;
 
 /**
  * board-live-cards-public.ts
@@ -385,6 +266,7 @@ interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
      */
     invokeExecutorSync(ref: ExecutionRef, subcommand: string, args: string[], opts?: {
         timeout?: number;
+        input?: string;
     }): string;
     /** Schema-only card validator (no executor invocation). */
     validateSchema(card: Record<string, unknown>): {
@@ -403,8 +285,8 @@ interface BoardLiveCardsNonCorePublic {
         isValid: boolean;
         issues: string[];
     }>>;
-    /** body: { "card-content": <card> } — card JSON arrives via stdin */
-    validateTmpCard(input: CommandInput): CommandResult<{
+    /** body: { "card-content": <card> } — card JSON arrives via stdin; validates schema + JSONata + provides refs + source_defs (executor, if configured) */
+    validateCardPreflight(input: CommandInput): CommandResult<{
         cardId: string;
         isValid: boolean;
         issues: string[];
@@ -433,4 +315,4 @@ interface BoardLiveCardsNonCorePublic {
 }
 declare function createBoardLiveCardsNonCorePublic(baseRef: KindValueRef, adapter: BoardNonCorePlatformAdapter): BoardLiveCardsNonCorePublic;
 
-export { type BoardPlatformAdapter as B, type CommandInput as C, EMPTY_CONFIG as E, type KindValueRef as K, type LiveCard as L, SNAPSHOT_SCHEMA_VERSION_V1 as S, type CommandResult as a, type CardAdminStore as b, type BlobStorage as c, type BoardChangeNotification as d, type BoardLiveCardsPublic as e, type KVStorage as f, BOARD_GRAPH_KEY as g, type BoardLiveCardsNonCorePublic as h, type BoardNonCorePlatformAdapter as i, createBoardLiveCardsNonCorePublic as j, createBoardLiveCardsPublic as k };
+export { type BoardPlatformAdapter as B, type CommandInput as C, type KindValueRef as K, type CommandResult as a, type BlobStorage as b, type BoardNonCorePlatformAdapter as c, type BoardLiveCardsNonCorePublic as d, type BoardLiveCardsPublic as e, createBoardLiveCardsNonCorePublic as f, createBoardLiveCardsPublic as g, parseRef as p, serializeRef as s };
