@@ -6,6 +6,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     exclude: [],  // previously excluded portfolio-tracker-e2e.test.ts — now included
+    forceExit: true,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
