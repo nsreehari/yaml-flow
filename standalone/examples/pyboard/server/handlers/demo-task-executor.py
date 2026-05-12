@@ -3,13 +3,10 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import importlib.util
 import json
 import os
-import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -22,23 +19,6 @@ if _PYCLI_ROOT not in sys.path:
 _PYCLI_SUB = os.path.join(_PYCLI_ROOT, "sub")
 
 from pylib.cli.storage_interface import parse_ref
-
-
-def _hidden_subprocess_kwargs() -> Dict[str, Any]:
-    """Return subprocess kwargs that suppress console windows on Windows."""
-    if os.name != "nt":
-        return {}
-    kwargs: Dict[str, Any] = {}
-    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    if create_no_window:
-        kwargs["creationflags"] = create_no_window
-    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
-    if startupinfo_cls is not None:
-        si = startupinfo_cls()
-        si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-        si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-        kwargs["startupinfo"] = si
-    return kwargs
 
 
 def _public_storage_adapter():
@@ -86,19 +66,6 @@ MOCK_DB: Dict[str, Any] = {
     },
 }
 
-CACHE_DIR = os.path.join(tempfile.gettempdir(), "demo-executor-cache")
-DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000
-
-
-def _resolve_ref_to_path(ref: str) -> str:
-    if ref.startswith("b64:"):
-        parsed = parse_ref(ref)
-        if parsed.get("kind") != "fs-path":
-            raise ValueError(f"Unsupported ref kind for file IO: {parsed.get('kind')}")
-        return str(parsed.get("value") or "")
-    return ref
-
-
 def _read_json_file_psa(psa: Any, ref: str) -> Dict[str, Any]:
     parsed_ref = psa.parse_ref(ref)
     storage = psa.blob_storage_for_ref(parsed_ref)
@@ -137,169 +104,49 @@ def _interpolate(template: str, args: Dict[str, Any]) -> str:
     return out
 
 
-def _detect_kind(source_def: Dict[str, Any]) -> str:
-    if "url" in source_def:
-        return "url"
-    if "url-list" in source_def:
-        return "url-list"
-    if "copilot" in source_def or "prompt_template" in source_def:
-        return "copilot"
-    if "workiq" in source_def:
-        return "workiq"
-    if "mock" in source_def:
-        return "mock"
-    raise ValueError("No recognised source kind")
+def _load_registry() -> Dict[str, Any]:
+    """Load source_def_flows.json registry."""
+    registry_path = os.path.join(_HERE, "source_def_flows.json")
+    with open(registry_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-def _cache_key(seed: str) -> str:
-    return hashlib.sha1(seed.encode("utf-8")).hexdigest()
+def _matches_detect_rule(source_def: Dict[str, Any], detect: Any) -> bool:
+    """Check if a source def matches a kind's detect rule."""
+    if not detect or not isinstance(detect, dict):
+        return False
+    if isinstance(detect.get("field"), str):
+        return detect["field"] in source_def
+    any_of = detect.get("anyOfFields")
+    if isinstance(any_of, list):
+        return any(f in source_def for f in any_of)
+    return False
 
 
-def _read_cache(key: str, ttl_ms: int) -> Any:
-    path = os.path.join(CACHE_DIR, f"{key}.json")
-    try:
-        st = os.stat(path)
-        age_ms = int(time.time() * 1000) - int(st.st_mtime * 1000)
-        if age_ms > ttl_ms:
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _write_cache(key: str, value: Any) -> None:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    with open(os.path.join(CACHE_DIR, f"{key}.json"), "w", encoding="utf-8") as f:
-        json.dump(value, f, ensure_ascii=True)
-
-
-def _fetch_json(url: str, method: str, headers: Dict[str, str]) -> Any:
-    req = urllib.request.Request(url=url, method=method.upper())
-    for k, v in headers.items():
-        req.add_header(str(k), str(v))
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        raw = resp.read().decode("utf-8")
-    return json.loads(raw)
-
-
-def _resolve_tickers_arg(source_def: Dict[str, Any], fetch_args: Dict[str, Any]) -> None:
-    tickers_from = source_def.get("tickersFrom")
-    if not isinstance(tickers_from, str) or "." not in tickers_from:
-        return
-    ref_key, field_name = tickers_from.split(".", 1)
-    arr = (source_def.get("_projections") or {}).get(ref_key)
-    if not isinstance(arr, list):
-        return
-    vals = [row.get(field_name) for row in arr if isinstance(row, dict) and row.get(field_name)]
-    if vals:
-        fetch_args["tickers"] = ",".join(str(v) for v in vals)
-
-
-def _execute_url(source_def: Dict[str, Any]) -> Any:
-    cfg = source_def.get("url")
-    if not isinstance(cfg, dict):
-        raise ValueError("url source requires object config")
-    method = str(cfg.get("method") or "GET").upper()
-    headers = dict(cfg.get("headers") or {})
-    cache_timeout = cfg.get("cacheTimeout")
-    ttl_ms = int(cache_timeout * 1000) if isinstance(cache_timeout, (int, float)) else DEFAULT_CACHE_TTL_MS
-    fetch_args = dict(cfg.get("args") or {})
-
-    _resolve_tickers_arg(source_def, fetch_args)
-    context = {}
-    context.update(source_def.get("_projections") or {})
-    context.update(fetch_args)
-    url_tpl = cfg.get("url")
-    if not isinstance(url_tpl, str):
-        raise ValueError("url source missing url template")
-    url = _interpolate(url_tpl, context)
-
-    key = _cache_key(f"url:{method}:{url}")
-    cached = _read_cache(key, ttl_ms)
-    if cached is not None:
-        return cached
-
-    data = _fetch_json(url, method, headers)
-    _write_cache(key, data)
-    return data
-
-
-def _execute_url_list(source_def: Dict[str, Any]) -> Any:
-    cfg = source_def.get("url-list")
-    if not isinstance(cfg, dict):
-        raise ValueError("url-list source requires object config")
-    method = str(cfg.get("method") or "GET").upper()
-    headers = dict(cfg.get("headers") or {})
-    cache_timeout = cfg.get("cacheTimeout")
-    ttl_ms = int(cache_timeout * 1000) if isinstance(cache_timeout, (int, float)) else DEFAULT_CACHE_TTL_MS
-    url_list = (source_def.get("_projections") or {}).get("url_list")
-    if not isinstance(url_list, list) or not url_list:
-        raise ValueError("url-list source requires _projections.url_list as non-empty array")
-
-    out = []
-    for item in url_list:
-        url = str(item)
-        key = _cache_key(f"url-list:{method}:{url}")
-        cached = _read_cache(key, ttl_ms)
-        if cached is not None:
-            out.append(cached)
+def _resolve_source_kind(source_def: Dict[str, Any], registry: Optional[Dict[str, Any]] = None) -> str:
+    """Registry-driven kind detection — mirrors resolveSourceKind in JS."""
+    if registry is None:
+        registry = _load_registry()
+    kinds = registry.get("kinds") or {}
+    order = registry.get("resolveOrder") or list(kinds.keys())
+    matched = []
+    for kind in order:
+        spec = kinds.get(kind)
+        if not spec:
             continue
-        data = _fetch_json(url, method, headers)
-        _write_cache(key, data)
-        out.append(data)
-    return out
-
-
-def _execute_copilot(source_def: Dict[str, Any], out_ref: str) -> Any:
-    cfg = source_def.get("copilot") if isinstance(source_def.get("copilot"), dict) else {}
-    template = cfg.get("prompt_template") or source_def.get("prompt_template")
-    if not isinstance(template, str) or not template:
-        raise ValueError("copilot source missing prompt_template")
-
-    args = {}
-    args.update(source_def.get("_projections") or {})
-    args.update(cfg.get("args") or source_def.get("args") or {})
-    prompt = _interpolate(template, args)
-
-    wrapper = os.path.join(_HERE, "source-def-handlers", "scripts", "copilot_wrapper.bat")
-    if os.name != "nt" or not os.path.isfile(wrapper):
-        raise RuntimeError("copilot wrapper is unavailable in this environment")
-
-    out_file = _resolve_ref_to_path(out_ref) + ".copilot.json"
-    prompt_file = out_file + ".prompt.txt"
-    with open(prompt_file, "w", encoding="utf-8") as f:
-        f.write(prompt)
-    try:
-        subprocess.run(
-            [
-                "cmd.exe", "/d", "/c", wrapper,
-                out_file,
-                os.path.join(tempfile.gettempdir(), "demo-task-executor-copilot"),
-                os.getcwd(),
-                "@" + prompt_file,
-                "json",
-                str(source_def.get("bindTo") or "executor"),
-                "",
-                "",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            **_hidden_subprocess_kwargs(),
-        )
-        with open(out_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    finally:
-        for p in (prompt_file, out_file):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        if _matches_detect_rule(source_def, spec.get("detect")):
+            matched.append(kind)
+    if len(matched) == 0:
+        known = list(kinds.keys())
+        raise ValueError(f"No recognised source kind. Known kinds: {', '.join(known)}")
+    if len(matched) > 1:
+        raise ValueError(f"Multiple source kinds specified: [{', '.join(matched)}]. Use exactly one.")
+    return matched[0]
 
 
 def _execute_via_step_machine_flow(
+    kind: str,
+    registry: Dict[str, Any],
     source_def: Dict[str, Any],
     out_ref: str,
     extra: Optional[Dict[str, Any]],
@@ -313,11 +160,6 @@ def _execute_via_step_machine_flow(
     from pylib.step_machine_public import build_step_handlers_for_flow
     from pylib.stores.memory import MemoryStore
 
-    registry_path = os.path.join(_HERE, "source_def_flows.json")
-    with open(registry_path, "r", encoding="utf-8") as f:
-        registry = json.load(f)
-
-    kind = _detect_kind(source_def)
     spec = (registry.get("kinds") or {}).get(kind)
     if not spec:
         raise ValueError(f"Missing flow registration for kind: {kind}")
@@ -480,8 +322,14 @@ def _run_source_fetch(
                 pass
         return 1
 
+    registry = _load_registry()
     try:
-        result_value, wrote_directly = _execute_via_step_machine_flow(source_def, out_ref, extra)
+        kind = _resolve_source_kind(source_def, registry)
+    except ValueError as err:
+        return _fail_ref(str(err))
+
+    try:
+        result_value, wrote_directly = _execute_via_step_machine_flow(kind, registry, source_def, out_ref, extra)
         if not wrote_directly:
             _write_out(result_value)
     except Exception as err:
@@ -499,24 +347,24 @@ def _run_source_fetch(
 
 
 def _describe_capabilities() -> int:
+    registry = _load_registry()
+    source_kinds = {}
+    for kind, spec in (registry.get("kinds") or {}).items():
+        manifest = spec.get("manifest") or {}
+        source_kinds[kind] = manifest
     payload = {
-        "ok": True,
-        "kinds": ["url", "url-list", "copilot", "workiq", "mock"],
-        "subcommands": [
-            "run-source-fetch",
-            "describe-capabilities",
-            "validate-source-def",
-            "validate-card-preflight",
-            "probe-source-preflight",
-        ],
-        "python_only": True,
+        "version": registry.get("version", "1.0"),
+        "executor": registry.get("executor", "demo-task-executor.py"),
+        "subcommands": registry.get("subcommands", []),
+        "sourceKinds": source_kinds,
+        "extraSchema": registry.get("extraSchema", {}),
     }
-    print(json.dumps(payload, ensure_ascii=True))
+    print(json.dumps(payload, indent=2, ensure_ascii=True))
     return 0
 
 
 def _validate_source_def_from_stdin() -> int:
-    """Structural validation of a source definition passed via stdin."""
+    """Structural validation of a source definition — data-driven from registry."""
     raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
     if not raw:
         print(json.dumps({"ok": False, "errors": ["No input provided on stdin"]}))
@@ -533,47 +381,38 @@ def _validate_source_def_from_stdin() -> int:
         return 1
 
     errors: list[str] = []
+    registry = _load_registry()
+
+    kind = ""
     try:
-        _detect_kind(source_def)
+        kind = _resolve_source_kind(source_def, registry)
     except ValueError as exc:
         errors.append(str(exc))
 
-    kind = None
-    try:
-        kind = _detect_kind(source_def)
-    except ValueError:
-        pass
-
-    if kind == "url":
-        cfg = source_def.get("url")
-        if not isinstance(cfg, dict):
-            errors.append("url must be an object.")
-        elif not isinstance(cfg.get("url"), str) or not cfg.get("url"):
-            errors.append("url.url is required and must be a string.")
-
-    if kind == "url-list":
-        cfg = source_def.get("url-list")
-        if not isinstance(cfg, dict):
-            errors.append("url-list must be an object.")
-
-    if kind == "copilot":
-        if not isinstance(source_def.get("copilot"), dict):
-            if not isinstance(source_def.get("prompt_template"), str):
-                errors.append("copilot must be an object when prompt_template is not provided at top level.")
-        else:
-            if not source_def["copilot"].get("prompt_template") and not isinstance(source_def.get("prompt_template"), str):
-                errors.append("copilot.prompt_template is required (or use top-level prompt_template).")
-
-    if kind == "workiq":
-        cfg = source_def.get("workiq")
-        if not isinstance(cfg, dict):
-            errors.append("workiq must be an object.")
-        elif not isinstance(cfg.get("query_template"), str) or not cfg.get("query_template"):
-            errors.append("workiq.query_template is required and must be a string.")
-
-    if kind == "mock":
-        if not isinstance(source_def.get("mock"), str):
-            errors.append("mock must be a string key.")
+    # Data-driven validation: rules come from source_def_flows.json "validate" array
+    if kind:
+        spec = (registry.get("kinds") or {}).get(kind) or {}
+        rules = spec.get("validate") or []
+        for rule in rules:
+            if rule.get("condition") == "copilot-or-prompt":
+                has_copilot_obj = isinstance(source_def.get("copilot"), dict)
+                has_top_level_template = isinstance(source_def.get("prompt_template"), str)
+                has_nested_template = has_copilot_obj and isinstance(source_def["copilot"].get("prompt_template"), str)
+                if not has_copilot_obj and not has_top_level_template:
+                    errors.append(rule.get("message", ""))
+                elif has_copilot_obj and not has_nested_template and not has_top_level_template:
+                    errors.append("copilot.prompt_template is required (or use top-level prompt_template).")
+            elif rule.get("field"):
+                # Dot-path field check: e.g. "url.url" → source_def["url"]["url"]
+                parts = rule["field"].split(".")
+                val: Any = source_def
+                for p in parts:
+                    val = val.get(p) if isinstance(val, dict) else None
+                expected_type = rule.get("type", "string")
+                type_map = {"string": str, "object": dict, "number": (int, float), "boolean": bool}
+                expected = type_map.get(expected_type, str)
+                if val is None or not isinstance(val, expected):
+                    errors.append(rule.get("message", ""))
 
     result = {"ok": len(errors) == 0, "errors": errors}
     print(json.dumps(result, ensure_ascii=True))
@@ -613,7 +452,7 @@ def _validate_card_preflight_from_stdin() -> int:
                 continue
             bind_to = sd.get("bindTo", "(unknown)")
             try:
-                _detect_kind(sd)
+                _resolve_source_kind(sd)
             except ValueError as exc:
                 errors.append(f'source "{bind_to}": {exc}')
 
@@ -622,15 +461,42 @@ def _validate_card_preflight_from_stdin() -> int:
     return 0 if not errors else 1
 
 
+def _resolve_dot_path(obj: Any, path_str: str) -> Any:
+    """Resolve a dot-path like 'url.url' or '_projections.url_list[0]' from an object."""
+    if not path_str:
+        return None
+    parts = path_str.replace("[", ".[").split(".")
+    val = obj
+    for part in parts:
+        if val is None:
+            return None
+        if part.startswith("[") and part.endswith("]"):
+            idx_str = part[1:-1]
+            if isinstance(val, list):
+                try:
+                    val = val[int(idx_str)]
+                except (IndexError, ValueError):
+                    return None
+            else:
+                return None
+        elif isinstance(val, dict):
+            val = val.get(part)
+        else:
+            return None
+    return val
+
+
 def _probe_source_preflight_from_stdin() -> int:
-    """Lightweight preflight probe for a source definition passed via stdin.
+    """Lightweight preflight probe — data-driven from registry probe config.
 
     Input (stdin JSON): source def object with _projections already merged.
-    Output: { ok: boolean, reachable: boolean, latencyMs?: number, note?: string, error?: string }
+    Output: { ok, reachable, latencyMs?, note?, error? }
 
-    For url sources, this does a HEAD request to check reachability.
-    For mock sources, it checks the key exists.
-    For other kinds, returns a generic success.
+    Strategies from registry:
+      - http-head: HEAD request to the URL resolved from urlFrom
+      - mock-db-lookup: check key exists in MOCK_DB
+      - command-check: check command is available (always returns reachable in Python)
+      - (fallback): generic success
     """
     raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
     if not raw:
@@ -647,15 +513,20 @@ def _probe_source_preflight_from_stdin() -> int:
         print(json.dumps({"ok": False, "error": "Input must be a JSON object"}))
         return 1
 
+    registry = _load_registry()
     try:
-        kind = _detect_kind(source_def)
+        kind = _resolve_source_kind(source_def, registry)
     except ValueError as exc:
         print(json.dumps({"ok": False, "reachable": False, "error": str(exc)}))
         return 0
 
+    spec = (registry.get("kinds") or {}).get(kind) or {}
+    probe_cfg = spec.get("probe") or {}
+    strategy = probe_cfg.get("strategy", "")
+
     start_ms = int(time.time() * 1000)
 
-    if kind == "mock":
+    if strategy == "mock-db-lookup":
         mock_key = source_def.get("mock", "")
         reachable = mock_key in MOCK_DB
         latency_ms = int(time.time() * 1000) - start_ms
@@ -663,16 +534,21 @@ def _probe_source_preflight_from_stdin() -> int:
         print(json.dumps({"ok": True, "reachable": reachable, "latencyMs": latency_ms, "note": note}))
         return 0
 
-    if kind == "url":
-        cfg = source_def.get("url", {})
-        url_tpl = cfg.get("url", "") if isinstance(cfg, dict) else ""
-        if not url_tpl:
-            print(json.dumps({"ok": False, "reachable": False, "error": "url source missing url template"}))
+    if strategy == "http-head":
+        url_from = probe_cfg.get("urlFrom", "")
+        # Resolve dot-path (e.g. "url.url" or "_projections.url_list[0]")
+        url = _resolve_dot_path(source_def, url_from)
+        if not url or not isinstance(url, str):
+            print(json.dumps({"ok": False, "reachable": False, "error": f"Cannot resolve probe URL from {url_from}"}))
             return 0
+        # Interpolate template variables
         projections = source_def.get("_projections") or {}
-        fetch_args = dict((cfg if isinstance(cfg, dict) else {}).get("args") or {})
+        fetch_args = {}
+        cfg = source_def.get(kind)
+        if isinstance(cfg, dict):
+            fetch_args = dict(cfg.get("args") or {})
         context = {**projections, **fetch_args}
-        url = _interpolate(url_tpl, context)
+        url = _interpolate(url, context)
         try:
             req = urllib.request.Request(url=url, method="HEAD")
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -684,7 +560,13 @@ def _probe_source_preflight_from_stdin() -> int:
             print(json.dumps({"ok": True, "reachable": False, "latencyMs": latency_ms, "note": str(exc)}))
             return 0
 
-    # For copilot, workiq, url-list — we can't do a lightweight probe, just report reachable
+    if strategy == "command-check":
+        # In Python standalone context, command-check probes report reachable generically
+        latency_ms = int(time.time() * 1000) - start_ms
+        print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"kind '{kind}': command-check (assumed available)"}))
+        return 0
+
+    # Fallback: no probe strategy defined
     latency_ms = int(time.time() * 1000) - start_ms
     print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"kind '{kind}': no lightweight probe available"}))
     return 0

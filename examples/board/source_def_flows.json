@@ -1,10 +1,36 @@
 {
   "version": "1.0",
   "description": "Registry of source-def kinds to flow handlers for demo-task-executor.",
+  "executor": "demo-task-executor",
+  "subcommands": [
+    "run-source-fetch",
+    "describe-capabilities",
+    "validate-source-def",
+    "validate-card-preflight",
+    "probe-source-preflight"
+  ],
+  "extraSchema": {
+    "description": "Board topology context passed via --extra (base64-encoded JSON, baked at init).",
+    "properties": {
+      "boardSetupRoot":   { "type": "string", "description": "Absolute path to board root." },
+      "boardId":          { "type": "string", "description": "Board identifier." },
+      "boardRuntimeDir":  { "type": "string", "description": "Relative path to runtime dir." },
+      "runtimeStatusDir": { "type": "string", "description": "Relative path to runtime-out dir." },
+      "cardsDir":         { "type": "string", "description": "Relative path to cards dir." },
+      "serverUrl":        { "type": "string", "description": "Base URL of the hosting server (e.g. http://127.0.0.1:7799). Used by source kinds that call server-side proxy endpoints." },
+      "boardLiveCardsCliJs": { "type": "string", "description": "Absolute path to board-live-cards-cli.js when configured by the runtime." },
+      "stepMachineCliPath": { "type": "string", "description": "Absolute path to step-machine-cli.js when configured by the runtime." }
+    }
+  },
   "kinds": {
     "url": {
       "detect": { "field": "url" },
       "flow": "./source-def-flows/url.flow.json",
+      "validate": [
+        { "field": "url", "type": "object", "message": "url must be an object." },
+        { "field": "url.url", "type": "string", "message": "url.url is required and must be a string." }
+      ],
+      "probe": { "strategy": "http-head", "urlFrom": "url.url" },
       "manifest": {
         "description": "Single URL fetch via curl with interpolation and cache.",
         "inputSchema": {
@@ -26,6 +52,10 @@
     "url-list": {
       "detect": { "field": "url-list" },
       "flow": "./source-def-flows/url-list.flow.json",
+      "validate": [
+        { "field": "url-list", "type": "object", "message": "url-list must be an object." }
+      ],
+      "probe": { "strategy": "http-head", "urlFrom": "_projections.url_list[0]" },
       "manifest": {
         "description": "Fan-out URL fetch over _projections.url_list.",
         "inputSchema": {
@@ -44,6 +74,10 @@
     "copilot": {
       "detect": { "anyOfFields": ["copilot", "prompt_template"] },
       "flow": "./source-def-flows/copilot.flow.json",
+      "validate": [
+        { "condition": "copilot-or-prompt", "message": "copilot must be an object, or prompt_template must be a top-level string." }
+      ],
+      "probe": { "strategy": "command-check", "command": "copilot", "args": ["--version"] },
       "manifest": {
         "description": "Invoke Copilot with prompt interpolation.",
         "inputSchema": {
@@ -55,6 +89,11 @@
     "workiq": {
       "detect": { "field": "workiq" },
       "flow": "./source-def-flows/workiq.flow.json",
+      "validate": [
+        { "field": "workiq", "type": "object", "message": "workiq must be an object." },
+        { "field": "workiq.query_template", "type": "string", "message": "workiq.query_template is required and must be a string." }
+      ],
+      "probe": { "strategy": "command-check", "command": "workiq", "args": ["--version"] },
       "manifest": {
         "description": "Invoke WorkIQ via demo-server HTTP proxy endpoint.",
         "inputSchema": {
@@ -65,6 +104,10 @@
     "mock": {
       "detect": { "field": "mock" },
       "flow": "./source-def-flows/mock.flow.json",
+      "validate": [
+        { "field": "mock", "type": "string", "message": "mock must be a string key." }
+      ],
+      "probe": { "strategy": "mock-db-lookup" },
       "manifest": {
         "description": "Look up values from demo MOCK_DB map.",
         "inputSchema": {

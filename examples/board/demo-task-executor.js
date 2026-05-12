@@ -498,42 +498,30 @@ function validateSourceDefSubcommand(argv) {
     errors.push(String(err && err.message || err));
   }
 
-  if (kind === 'url') {
-    if (typeof sourceDef['url'] !== 'object') {
-      errors.push('url must be an object.');
-    } else if (!sourceDef['url'].url || typeof sourceDef['url'].url !== 'string') {
-      errors.push('url.url is required and must be a string.');
-    }
-  }
-
-  if (kind === 'url-list') {
-    if (typeof sourceDef['url-list'] !== 'object') {
-      errors.push('url-list must be an object.');
-    }
-    // url_list is supplied via _projections at runtime — no static validation needed.
-  }
-
-  if (kind === 'copilot') {
-    if (typeof sourceDef.copilot !== 'object') {
-      if (typeof sourceDef.prompt_template !== 'string') {
-        errors.push('copilot must be an object when prompt_template is not provided at top level.');
+  // Data-driven validation: rules come from source_def_flows.json "validate" array
+  if (kind) {
+    const spec = registry.kinds?.[kind];
+    const rules = Array.isArray(spec?.validate) ? spec.validate : [];
+    for (const rule of rules) {
+      if (rule.condition === 'copilot-or-prompt') {
+        // Special condition: copilot object OR top-level prompt_template string
+        const hasCopilotObj = typeof sourceDef.copilot === 'object';
+        const hasTopLevelTemplate = typeof sourceDef.prompt_template === 'string';
+        const hasNestedTemplate = hasCopilotObj && typeof sourceDef.copilot.prompt_template === 'string';
+        if (!hasCopilotObj && !hasTopLevelTemplate) {
+          errors.push(rule.message);
+        } else if (hasCopilotObj && !hasNestedTemplate && !hasTopLevelTemplate) {
+          errors.push('copilot.prompt_template is required (or use top-level prompt_template).');
+        }
+      } else if (rule.field) {
+        // Dot-path field check: e.g. "url.url" → sourceDef.url.url
+        const parts = rule.field.split('.');
+        let val = sourceDef;
+        for (const p of parts) { val = val != null ? val[p] : undefined; }
+        if (val === undefined || val === null || typeof val !== rule.type) {
+          errors.push(rule.message);
+        }
       }
-    } else if (!sourceDef.copilot.prompt_template && typeof sourceDef.prompt_template !== 'string') {
-        errors.push('copilot.prompt_template is required (or use top-level prompt_template).');
-    }
-  }
-
-  if (kind === 'workiq') {
-    if (typeof sourceDef.workiq !== 'object') {
-      errors.push('workiq must be an object.');
-    } else if (!sourceDef.workiq.query_template || typeof sourceDef.workiq.query_template !== 'string') {
-      errors.push('workiq.query_template is required and must be a string.');
-    }
-  }
-
-  if (kind === 'mock') {
-    if (typeof sourceDef.mock !== 'string') {
-      errors.push('mock must be a string key.');
     }
   }
 
@@ -544,113 +532,24 @@ function validateSourceDefSubcommand(argv) {
 
 // ---------------------------------------------------------------------------
 // describe-capabilities — introspection metadata for this executor
+// Entirely derived from source_def_flows.json registry.
 // ---------------------------------------------------------------------------
-const CAPABILITIES = {
-  version: '1.0',
-  executor: 'demo-task-executor',
-  subcommands: ['run-source-fetch', 'describe-capabilities', 'validate-source-def'],
-  sourceKinds: {
-    mock: {
-      description: 'Look up a key in a hardcoded MOCK_DB dictionary.',
-      inputSchema: {
-        mock: { type: 'string', required: true, description: 'Key in MOCK_DB (e.g. "quotes").' },
-      },
-      outputShape: 'Arbitrary JSON — depends on the mock key.',
-      example: {
-        input:  { mock: 'quotes' },
-        output: { quoteResponse: { result: [{ symbol: 'AAPL', regularMarketPrice: 198.15 }], error: null } },
-      },
-    },
-    copilot: {
-      description: 'Invoke GitHub Copilot CLI with an interpolated prompt template.',
-      inputSchema: {
-        copilot: {
-          type: 'object', required: false,
-          description: 'Object with prompt_template (string) and optional args (object).',
-          properties: {
-            prompt_template: { type: 'string', required: true, description: 'Prompt with {{key}} placeholders.' },
-            args:            { type: 'object', required: false, description: 'Extra interpolation args (highest precedence).' },
-          },
-        },
-        prompt_template: { type: 'string', required: false, description: 'Shorthand — top-level prompt template (alternative to copilot.prompt_template).' },
-      },
-      outputShape: 'string | object — raw Copilot text, or parsed JSON if the response is valid JSON.',
-    },
-    workiq: {
-      description: 'Query WorkIQ (Microsoft 365 Copilot) with an interpolated query template. Returns raw text response.',
-      inputSchema: {
-        workiq: {
-          type: 'object', required: true,
-          properties: {
-            query_template: { type: 'string', required: true,  description: 'Query with {{key}} placeholders interpolated from _projections and args.' },
-            args:            { type: 'object', required: false, description: 'Extra interpolation args (highest precedence).' },
-          },
-        },
-      },
-      outputShape: 'string — raw M365 Copilot response text.',
-      note: 'Requires workiq CLI installed and Azure CLI logged in (az login).',
-    },
-    'url': {
-      description: 'Single URL fetch via curl with {{key}} interpolation from _projections. Supports cacheTimeout.',
-      inputSchema: {
-        'url': {
-          type: 'object', required: true,
-          properties: {
-            url:          { type: 'string', required: true,  description: 'URL template with {{key}} placeholders.' },
-            method:       { type: 'string', required: false, description: 'HTTP method (default: GET).' },
-            headers:      { type: 'object', required: false, description: 'Request headers.' },
-            args:         { type: 'object', required: false, description: 'Extra interpolation args (highest precedence).' },
-            cacheTimeout: { type: 'number', required: false, description: 'Cache TTL in seconds (default: 3600).' },
-          },
-        },
-        tickersFrom: { type: 'string', required: false, description: '"refKey.fieldName" — join tickers from _projections into {{tickers}}.' },
-      },
-      outputShape: 'Arbitrary JSON from the fetched URL.',
-    },
-    'url-list': {
-      description: 'Fan-out over a pre-resolved URL list — calls url logic per URL and returns an array of responses. url_list must be a string[] in _projections.url_list (built via projections JSONata).',
-      inputSchema: {
-        'url-list': {
-          type: 'object', required: true,
-          properties: {
-            method:       { type: 'string', required: false, description: 'HTTP method (default: GET).' },
-            headers:      { type: 'object', required: false, description: 'Request headers.' },
-            cacheTimeout: { type: 'number', required: false, description: 'Cache TTL per URL in seconds (default: 3600).' },
-          },
-        },
-      },
-      outputShape: 'Array of raw JSON responses, one per URL in _projections.url_list.',
-      urlListNote: 'Declare `"projections": { "url_list": "<JSONata producing string[]>" }` on the source def. Example: `requires.holdings.ticker.(\'https://api.example.com/\' & $ & \'?q=1\')`',
-    },
-  },
-  extraSchema: {
-    description: 'Board topology context passed via --extra (base64-encoded JSON, baked at init).',
-    properties: {
-      boardSetupRoot:   { type: 'string', description: 'Absolute path to board root.' },
-      boardId:          { type: 'string', description: 'Board identifier.' },
-      boardRuntimeDir:  { type: 'string', description: 'Relative path to runtime dir.' },
-      runtimeStatusDir: { type: 'string', description: 'Relative path to runtime-out dir.' },
-      cardsDir:         { type: 'string', description: 'Relative path to cards dir.' },
-      serverUrl:        { type: 'string', description: 'Base URL of the hosting server (e.g. http://127.0.0.1:7799). Used by source kinds that call server-side proxy endpoints.' },
-      boardLiveCardsCliJs: { type: 'string', description: 'Absolute path to board-live-cards-cli.js when configured by the runtime.' },
-      stepMachineCliPath: { type: 'string', description: 'Absolute path to step-machine-cli.js when configured by the runtime.' },
-    },
-  },
-};
-
 function describeCapabilities() {
   const registry = loadSourceDefFlowsConfig();
-  const merged = {
-    ...CAPABILITIES,
-    sourceKinds: Object.fromEntries(
-      Object.entries(registry?.kinds || {}).map(([kind, spec]) => {
-        const existing = CAPABILITIES.sourceKinds[kind] || {};
-        const manifest = spec?.manifest && typeof spec.manifest === 'object' ? spec.manifest : {};
-        return [kind, { ...existing, ...manifest }];
-      }),
-    ),
+  const sourceKinds = Object.fromEntries(
+    Object.entries(registry?.kinds || {}).map(([kind, spec]) => {
+      const manifest = spec?.manifest && typeof spec.manifest === 'object' ? spec.manifest : {};
+      return [kind, manifest];
+    }),
+  );
+  const capabilities = {
+    version: registry.version || '1.0',
+    executor: registry.executor || 'demo-task-executor',
+    subcommands: registry.subcommands || [],
+    sourceKinds,
+    extraSchema: registry.extraSchema || {},
   };
-  console.log(JSON.stringify(merged, null, 2));
+  console.log(JSON.stringify(capabilities, null, 2));
 }
 
 async function main() {
