@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import {
   createMultiBoardServerRuntime,
   createSingleBoardServerRuntime,
-} from '../../lib/server-runtime/index.js';
+} from '../../lib/board-live-cards-server-runtime.js';
 
 import {
   createFsBoardPlatformAdapter,

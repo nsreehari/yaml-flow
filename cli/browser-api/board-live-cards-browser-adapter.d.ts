@@ -1,31 +1,6 @@
-import { K as KindValueRef, B as BoardPlatformAdapter } from '../board-live-cards-public-Dn1K3i-V.js';
-import { E as ExecutionRef } from '../execution-interface-Ba-R-DNg.js';
+import { B as BoardPlatformAdapter, N as NotificationTransport } from '../types-CO2xUF1X.js';
+import { E as ExecutionRef } from '../execution-interface-87BHR8LJ.js';
 import '../board-live-cards-lib-tjYsPt5U.js';
-
-/**
- * server-runtime/types.ts
- *
- * Platform-free adapter interfaces for the board server runtime.
- *
- * The runtime (index.ts) imports ONLY this file and board-live-cards-public
- * for its dependencies — no node:fs, node:net, node:child_process, etc.
- *
- * Hosts (demo-server, Azure Function, Firebase Function) provide implementations
- * of these interfaces when constructing the runtime.
- */
-
-interface NotificationTransport {
-    /**
-     * Start listening for events on a notification endpoint identified by a kind-ref.
-     * The ref kind determines the transport mechanism:
-     *   ::named-pipe::/tmp/board-x.sock
-     *   ::firestore-watch::collections/board-x/notifications
-     *   ::signalr::https://x.service.signalr.net/hub/board-x
-     * onEvent is called with parsed JSON notification objects.
-     * Returns a teardown function.
-     */
-    subscribe(ref: KindValueRef, onEvent: (event: unknown) => void): Promise<() => void>;
-}
 
 interface InMemoryBus {
     publish(event: unknown): void;

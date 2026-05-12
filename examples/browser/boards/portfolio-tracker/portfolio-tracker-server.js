@@ -3,7 +3,7 @@
  * portfolio-tracker-server.js
  *
  * Minimal single-board HTTP server for the portfolio-tracker example.
- * Uses createSingleBoardServerRuntime from yaml-flow/server-runtime.
+ * Uses createSingleBoardServerRuntime from yaml-flow/board-live-cards-server-runtime.
  *
  * Cards are seeded inline on first start (if the card store is empty).
  * Task executor: portfolio-tracker-fetch-prices.js (mock-quotes source kind).
@@ -27,7 +27,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { createSingleBoardServerRuntime } from 'yaml-flow/server-runtime';
+import { createSingleBoardServerRuntime } from 'yaml-flow/board-live-cards-server-runtime';
 import {
   createFsBoardPlatformAdapter,
   parseRef,

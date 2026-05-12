@@ -240,5 +240,26 @@ interface ExecutionResult {
      */
     error?: string;
 }
+/**
+ * Create an ExecutionRef from a script path string (e.g. from a --task-executor CLI arg).
+ * File extension determines howToRun:
+ *   .js / .mjs → 'local-node'
+ *   .py        → 'local-python'
+ *   other      → 'local-process'
+ *
+ * @param scriptPath  Absolute or relative path to the script / binary.
+ * @param extra       Optional opaque executor config stored on the ref.
+ */
+declare function executionRefFromScriptPath(scriptPath: string, extra?: Record<string, unknown>): ExecutionRef;
+/**
+ * Serialize an ExecutionRef to a JSON string for storage.
+ * Plain JSON.stringify — no special encoding.
+ */
+declare function serializeExecutionRef(ref: ExecutionRef): string;
+/**
+ * Parse a JSON string back into an ExecutionRef.
+ * Throws if the string is not valid JSON or is missing required fields.
+ */
+declare function parseExecutionRef(s: string): ExecutionRef;
 
-export type { ExecutionRef as E, ExecutionResult as a };
+export { type ExecutionRef as E, type ExecutionResult as a, executionRefFromScriptPath as e, parseExecutionRef as p, serializeExecutionRef as s };

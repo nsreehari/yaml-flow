@@ -1,8 +1,8 @@
-import { C as CommandInput, a as CommandResult, b as BlobStorage, K as KindValueRef, c as BoardNonCorePlatformAdapter, B as BoardPlatformAdapter } from '../board-live-cards-public-Dn1K3i-V.js';
-export { d as BoardLiveCardsNonCorePublic, e as BoardLiveCardsPublic, f as createBoardLiveCardsNonCorePublic, g as createBoardLiveCardsPublic, p as parseRef, s as serializeRef } from '../board-live-cards-public-Dn1K3i-V.js';
+import { C as CommandInput, a as CommandResult, b as BlobStorage, K as KindValueRef, c as BoardNonCorePlatformAdapter, B as BoardPlatformAdapter, I as InvocationAdapter } from '../types-CO2xUF1X.js';
+export { d as BoardLiveCardsNonCorePublic, e as BoardLiveCardsPublic, D as DescribeEnvelope, f as createBoardLiveCardsNonCorePublic, g as createBoardLiveCardsPublic, p as parseRef, s as serializeRef } from '../types-CO2xUF1X.js';
+export { E as ExecutionRef, e as executionRefFromScriptPath, p as parseExecutionRef, s as serializeExecutionRef } from '../execution-interface-87BHR8LJ.js';
 import { C as CardAdminStore, L as LiveCard } from '../board-live-cards-lib-tjYsPt5U.js';
 export { a as BOARD_GRAPH_KEY, E as EMPTY_CONFIG, S as SNAPSHOT_SCHEMA_VERSION_V1, c as createCardStore } from '../board-live-cards-lib-tjYsPt5U.js';
-import '../execution-interface-Ba-R-DNg.js';
 
 /**
  * card-store-lib-public.ts
@@ -186,6 +186,17 @@ declare function createArtifactsStorePublic(store: ArtifactsStore): ArtifactsSto
  * Re-exports the full public API so consumers only need to import from this file.
  */
 
+/**
+ * Creates an InvocationAdapter backed by Node.js `spawn`/`spawnSync`.
+ *
+ * Supports howToRun: 'local-node'
+ *   → spawns the script as a detached Node.js child process (fire-and-forget).
+ *
+ * Pass to createSingleBoardServerRuntime / createMultiBoardServerRuntime as
+ * the `invocationAdapter` option. This is the reference Node.js implementation;
+ * replace with your own for Azure Functions, Lambda, etc.
+ */
+declare function createNodeSpawnInvocationAdapter(): InvocationAdapter;
 declare function createFsBoardPlatformAdapter(baseRef: KindValueRef, cliDir: string, opts?: {
     onWarn?: (msg: string) => void;
     suppressSpawn?: boolean;
@@ -200,4 +211,4 @@ declare function createFsBoardNonCorePlatformAdapter(baseRef: KindValueRef, cliD
  */
 declare function decodeBoardRefFromToken(token: string): string | null;
 
-export { BoardNonCorePlatformAdapter, BoardPlatformAdapter, CommandInput, CommandResult, KindValueRef, LiveCard, createArtifactsStore, createArtifactsStorePublic, createCardFileMetadataStore, createCardStorePublic, createChatArtifactsStore, createFileArtifactsStore, createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter, decodeBoardRefFromToken };
+export { BoardNonCorePlatformAdapter, BoardPlatformAdapter, CommandInput, CommandResult, InvocationAdapter, KindValueRef, LiveCard, createArtifactsStore, createArtifactsStorePublic, createCardFileMetadataStore, createCardStorePublic, createChatArtifactsStore, createFileArtifactsStore, createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter, createNodeSpawnInvocationAdapter, decodeBoardRefFromToken };
