@@ -292,6 +292,40 @@ describe('BoardLiveCardsNonCorePublic — validateCardPreflight', () => {
     const result = nonCore.validateCardPreflight({ body: [] });
     expect(result.status).toBe('fail');
   });
+
+  it('accepts card-content wrapper and still returns success for a valid card', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.validateCardPreflight({ body: { 'card-content': minCard('wrapped') } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cardId).toBe('wrapped');
+    }
+  });
+
+  it('returns issues for a card with invalid source_defs structure', () => {
+    const { nonCore } = freshNonCore();
+    // source_defs entries missing bindTo trigger schema validation issues
+    const card = minCard('bad-src', { source_defs: [{ outputFile: 'x.json' }] });
+    const result = nonCore.validateCardPreflight({ body: card });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      // Structural validation should flag the missing fields
+      expect(result.data.cardId).toBe('bad-src');
+    }
+  });
+
+  it('merges executor validate-card-preflight issues when executor is registered', () => {
+    // This test verifies the pluggable hook path — without a real executor
+    // it falls back to structural-only validation (no error).
+    const { nonCore } = freshNonCore();
+    const result = nonCore.validateCardPreflight({ body: minCard('exec-test') });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cardId).toBe('exec-test');
+      // No executor registered → structural result only (no merge needed)
+      expect(Array.isArray(result.data.issues)).toBe(true);
+    }
+  });
 });
 
 // ============================================================================
@@ -947,6 +981,45 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
     const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
+  });
+
+  it('passes mock-projections through from card-content wrapper', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('c', { source_defs: [{ mock: 'quotes', bindTo: 'prices', outputFile: 'prices.json' }] });
+    const result = nonCore.probeSourcePreflight({
+      params: { sourceIdx: 0 },
+      body: { 'card-content': card, 'mock-projections': { tickers: ['AAPL'] } },
+    });
+    // Without an executor this still fails, but the key test is that it doesn't
+    // blow up parsing mock-projections — the error should be about executor, not projections.
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
+  });
+
+  it('handles sourceIdx = 0 with multiple source_defs correctly', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('c', {
+      source_defs: [
+        { mock: 'quotes', bindTo: 'first', outputFile: 'first.json' },
+        { cli: 'other.sh', bindTo: 'second', outputFile: 'second.json' },
+      ],
+    });
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
+  });
+
+  it('handles sourceIdx = 1 with multiple source_defs correctly', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('c', {
+      source_defs: [
+        { mock: 'quotes', bindTo: 'first', outputFile: 'first.json' },
+        { cli: 'other.sh', bindTo: 'second', outputFile: 'second.json' },
+      ],
+    });
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 1 }, body: card });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });

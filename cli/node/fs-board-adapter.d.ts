@@ -1,5 +1,5 @@
-import { C as CommandInput, a as CommandResult, b as BlobStorage, K as KindValueRef, c as BoardNonCorePlatformAdapter, B as BoardPlatformAdapter, I as InvocationAdapter } from '../types-CO2xUF1X.js';
-export { d as BoardLiveCardsNonCorePublic, e as BoardLiveCardsPublic, D as DescribeEnvelope, f as createBoardLiveCardsNonCorePublic, g as createBoardLiveCardsPublic, p as parseRef, s as serializeRef } from '../types-CO2xUF1X.js';
+import { C as CommandInput, a as CommandResult, b as BlobStorage, K as KindValueRef, c as BoardNonCorePlatformAdapter, B as BoardPlatformAdapter, I as InvocationAdapter } from '../types-DgyDftQ1.js';
+export { d as BoardLiveCardsNonCorePublic, e as BoardLiveCardsPublic, D as DescribeEnvelope, f as createBoardLiveCardsNonCorePublic, g as createBoardLiveCardsPublic, p as parseRef, s as serializeRef } from '../types-DgyDftQ1.js';
 export { E as ExecutionRef, e as executionRefFromScriptPath, p as parseExecutionRef, s as serializeExecutionRef } from '../execution-interface-87BHR8LJ.js';
 import { C as CardAdminStore, L as LiveCard } from '../board-live-cards-lib-tjYsPt5U.js';
 export { a as BOARD_GRAPH_KEY, E as EMPTY_CONFIG, S as SNAPSHOT_SCHEMA_VERSION_V1, c as createCardStore } from '../board-live-cards-lib-tjYsPt5U.js';

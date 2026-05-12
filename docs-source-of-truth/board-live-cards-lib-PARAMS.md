@@ -98,6 +98,9 @@ validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid
 
 validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>
   body:   { "card-content": <card object> }
+  // Runs structural validation inline.
+  // If a task-executor is registered and supports `validate-card-preflight`,
+  // delegates to it via stdin and merges any executor-reported issues.
 ```
 
 ### Source probing
@@ -110,6 +113,13 @@ probeSource(input: CommandInput): CommandResult
 probeTmpSource(input: CommandInput): CommandResult
   params: { outRef }
   body:   { "source-def": <object>, "mock-projections": <object> }   // from stdin
+
+probeSourcePreflight(input: CommandInput): CommandResult
+  params: { sourceIdx, outRef? }
+  body:   { "card-content": <card object>, "mock-projections"?: <object> }
+  // If a task-executor is registered and supports `probe-source-preflight`,
+  // delegates to it via stdin for a lightweight reachability check (no full data fetch).
+  // Falls back to full runSourceProbe (same as probeSource) if unsupported.
 ```
 
 ### Task executor introspection

@@ -428,6 +428,8 @@ interface BoardLiveCardsNonCorePublic {
     probeSource(input: CommandInput): CommandResult;
     /** body: { sourceDef, mockProjections }; params: outRef? */
     probeTmpSource(input: CommandInput): CommandResult;
+    /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
+    probeSourcePreflight(input: CommandInput): CommandResult;
     /** no params needed */
     describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
     /**

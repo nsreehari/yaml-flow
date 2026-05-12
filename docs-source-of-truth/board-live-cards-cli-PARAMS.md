@@ -87,6 +87,12 @@ validate-card --base-ref <ref> (--card-id <card-id> | --all)
 validate-tmp-card
   body: { "card-content": <card object> }              # stdin
   → data: { "cardId": "<card-id>", "isValid": true|false, "issues": ["<message>", ...] }
+
+validate-card-preflight
+  body: { "card-content": <card object> }              # stdin
+  → data: { "cardId": "<card-id>", "isValid": true|false, "issues": ["<message>", ...] }
+  # Same as validate-tmp-card but also delegates to executor's validate-card-preflight
+  # subcommand (if registered) and merges any additional issues.
 ```
 
 ## Source probing
@@ -99,6 +105,12 @@ probe-source --base-ref <ref> --card-id <card-id> --source-idx <n> --out-ref <re
 probe-tmp-source --out-ref <ref>
   params: { outRef }
   body: { "source-def": <object>, "mock-projections": <object> }  # stdin
+
+probe-source-preflight --source-idx <n>
+  params: { sourceIdx }
+  body: { "card-content": <card object>, "mock-projections"?: <object> }  # stdin
+  # Lightweight reachability check. Delegates to executor's probe-source-preflight
+  # subcommand (if registered). Falls back to full source execution otherwise.
 ```
 
 ## Task executor introspection

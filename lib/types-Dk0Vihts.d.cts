@@ -1,4 +1,4 @@
-import { a as BoardPlatformAdapter, K as KindValueRef, e as CommandResult } from './board-live-cards-public-CrVcAhuO.cjs';
+import { a as BoardPlatformAdapter, K as KindValueRef, e as CommandResult } from './board-live-cards-public-CdEgQEoa.cjs';
 import { ExecutionRef } from './execution-refs.cjs';
 
 /**

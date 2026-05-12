@@ -1089,7 +1089,29 @@ export function createBoardLiveCardsNonCorePublic(
       const body = input.body as Record<string, unknown>;
       const card = (body['card-content'] ?? body) as Record<string, unknown>;
       const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
-      return validateCardObject(cardId, card);
+
+      // Structural validation (always runs inline).
+      const structResult = validateCardObject(cardId, card);
+
+      // Pluggable executor hook: if a task-executor is registered and supports
+      // validate-card-preflight, call it and merge any additional issues.
+      const teRef = configStore().readTaskExecutorRef();
+      if (teRef) {
+        try {
+          const stdout = adapter.invokeExecutorSync(teRef, 'validate-card-preflight', [],
+            { timeout: 10_000, input: JSON.stringify(card) });
+          const execResult = JSON.parse(stdout.trim()) as { ok: boolean; errors: string[] };
+          if (!execResult.ok && Array.isArray(execResult.errors) && execResult.errors.length > 0) {
+            const mergedIssues = [
+              ...(structResult.status === 'success' ? structResult.data.issues : []),
+              ...execResult.errors,
+            ];
+            return ok({ cardId, isValid: false, issues: mergedIssues }) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
+          }
+        } catch { /* executor doesn't support subcommand or isn't available — use structural result */ }
+      }
+
+      return structResult;
     } catch (e) { return err(e) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>; }
   }
 
@@ -1140,7 +1162,27 @@ export function createBoardLiveCardsNonCorePublic(
       if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
         return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
       }
-      return runSourceProbe(sourceDefs[sourceIdx], mockProjections, outRef);
+      const src = sourceDefs[sourceIdx];
+
+      // Try the lightweight probe-source-preflight executor hook first.
+      // Falls back to the full runSourceProbe if the hook is unavailable.
+      const teRef = configStore().readTaskExecutorRef();
+      if (teRef) {
+        const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
+        try {
+          const inPayload = { ...src, _projections: mockProjections };
+          const stdout = adapter.invokeExecutorSync(teRef, 'probe-source-preflight', [],
+            { timeout: (src['timeout'] as number | undefined) ?? 10_000, input: JSON.stringify(inPayload) });
+          const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; note?: string };
+          if (!result.ok) return fail(result.error ?? 'Preflight probe failed');
+          return ok({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, note: result.note });
+        } catch {
+          /* executor doesn't support subcommand — fall through to full probe */
+        }
+      }
+
+      // Fallback: full source execution (original behaviour).
+      return runSourceProbe(src, mockProjections, outRef);
     } catch (e) { return err(e); }
   }
 

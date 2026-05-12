@@ -1,4 +1,4 @@
-import { j as BlobStorage, C as CommandInput, e as CommandResult } from './board-live-cards-public-CrVcAhuO.cjs';
+import { j as BlobStorage, C as CommandInput, e as CommandResult } from './board-live-cards-public-CVgJ1hzj.js';
 
 /**
  * artifacts-store-lib.ts
