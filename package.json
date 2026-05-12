@@ -53,7 +53,9 @@
   "files": [
     "lib",
     "cli",
-    "examples",
+    "examples/board",
+    "examples/board-local",
+    "examples/portfolio-tracker",
     "schema",
     "browser",
     "!browser/card-compute.js",
@@ -67,9 +69,10 @@
     "!examples/**/cards/**/files/**"
   ],
   "scripts": {
-    "build": "npm run -s build:lib && npm run -s build:cli",
+    "build": "npm run -s build:lib && npm run -s build:cli && npm run -s build:public-examples",
     "build:lib": "tsup --config tsup.config.ts",
     "build:cli": "tsup --config tsup.cli.config.ts",
+    "build:public-examples": "node scripts/generate-public-examples.mjs",
     "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
@@ -92,7 +95,7 @@
     "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run build:browser && npm run check:bundle-budget && npm run check:browser-bundle"
+    "prepublishOnly": "npm run build && npm run build:browser && npm run build:public-examples && npm run check:bundle-budget && npm run check:browser-bundle"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

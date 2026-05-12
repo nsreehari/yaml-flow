@@ -1,0 +1,78 @@
+{
+  "id": "card-portfolio",
+  "meta": {
+    "title": "My Portfolio",
+    "tags": [
+      "portfolio"
+    ],
+    "desc": "Manage your stock holdings — edit tickers and quantities inline, add or delete rows. Changes propagate downstream immediately."
+  },
+  "provides": [
+    {
+      "bindTo": "holdings",
+      "ref": "card_data.holdings"
+    }
+  ],
+  "compute": [],
+  "view": {
+    "elements": [
+      {
+        "kind": "editable-table",
+        "label": "Holdings",
+        "data": {
+          "bind": "card_data.holdings",
+          "writeTo": "card_data.holdings",
+          "columns": [
+            "ticker",
+            "quantity",
+            "cost_basis"
+          ],
+          "schema": {
+            "properties": {
+              "quantity": {
+                "type": "number"
+              },
+              "cost_basis": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "layout": {
+      "board": {
+        "col": 4,
+        "order": 1
+      },
+      "canvas": {
+        "x": 50,
+        "y": 50,
+        "w": 320,
+        "h": 340
+      }
+    },
+    "features": {
+      "chat": true
+    }
+  },
+  "card_data": {
+    "holdings": [
+      {
+        "ticker": "AAPL",
+        "quantity": 10,
+        "cost_basis": 150
+      },
+      {
+        "ticker": "NVDA",
+        "quantity": 5,
+        "cost_basis": 310
+      },
+      {
+        "ticker": "GOOG",
+        "quantity": 3,
+        "cost_basis": 33
+      }
+    ]
+  }
+}

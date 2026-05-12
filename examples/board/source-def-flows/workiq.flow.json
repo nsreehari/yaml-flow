@@ -1,0 +1,34 @@
+{
+  "id": "demo-source-workiq",
+  "settings": {
+    "start_step": "execute",
+    "max_total_steps": 8,
+    "timeout_ms": 120000
+  },
+  "steps": {
+    "execute": {
+      "description": "Execute workiq source def via demo-server HTTP proxy",
+      "handler": {
+        "type": "ref",
+        "howToRun": "http:post",
+        "whatToRun": { "kind": "http-url", "value": "/api/workiq/ask" }
+      },
+      "transitions": {
+        "success": "completed",
+        "failure": "failed"
+      }
+    }
+  },
+  "terminal_states": {
+    "completed": {
+      "description": "WorkIQ source succeeded",
+      "return_intent": "success",
+      "return_artifacts": ["resultValue", "wroteOutputDirectly"]
+    },
+    "failed": {
+      "description": "WorkIQ source failed",
+      "return_intent": "failure",
+      "return_artifacts": ["error"]
+    }
+  }
+}

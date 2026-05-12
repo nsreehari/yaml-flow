@@ -4,25 +4,9 @@ Generated from npm pack --dry-run.
 
 ## Summary
 filename: yaml-flow-7.1.0.tgz
-package size: 1.4 MB
-unpacked size: 6.0 MB
-total files: 248
-
-## Public surface (intended)
-
-### Public lib exports
-- . -> lib/board-live-cards-public
-- ./board-live-cards-public
-- ./card-store-public
-- ./artifacts-store-public
-- ./public-storage-adapter
-- ./step-machine-public
-
-### Public CLI commands
-- board-live-cards-cli
-- card-store
-- artifacts-store
-- step-machine-cli
+package size: 1.3 MB
+unpacked size: 5.4 MB
+total files: 137
 
 ## Browser files (published)
 - browser/asset-integrity.json
@@ -66,6 +50,8 @@ total files: 248
 - lib/batch/index.d.cts
 - lib/batch/index.d.ts
 - lib/batch/index.js
+- lib/board-live-cards-public-BHzvwKoj.d.ts
+- lib/board-live-cards-public-DHrcpTPv.d.cts
 - lib/board-live-cards-public.cjs
 - lib/board-live-cards-public.d.cts
 - lib/board-live-cards-public.d.ts
@@ -114,20 +100,24 @@ total files: 248
 - lib/jsonata-sync.cjs
 - lib/live-cards-bridge-BXbVTsna.d.cts
 - lib/live-cards-bridge-Ds28XR15.d.ts
+- lib/public-storage-adapter.cjs
+- lib/public-storage-adapter.d.cts
+- lib/public-storage-adapter.d.ts
+- lib/public-storage-adapter.js
 - lib/server-runtime/index.cjs
 - lib/server-runtime/index.d.cts
 - lib/server-runtime/index.d.ts
 - lib/server-runtime/index.js
 - lib/server-runtime/jsonata-sync.cjs
-- lib/step-machine/index.cjs
-- lib/step-machine/index.d.cts
-- lib/step-machine/index.d.ts
-- lib/step-machine/index.js
 - lib/step-machine-public/index.cjs
 - lib/step-machine-public/index.d.cts
 - lib/step-machine-public/index.d.ts
 - lib/step-machine-public/index.js
 - lib/step-machine-public/jsonata-sync.cjs
+- lib/step-machine/index.cjs
+- lib/step-machine/index.d.cts
+- lib/step-machine/index.d.ts
+- lib/step-machine/index.js
 - lib/stores/file.cjs
 - lib/stores/file.d.cts
 - lib/stores/file.d.ts
@@ -154,117 +144,6 @@ total files: 248
 - lib/validate-Dbu7ygys.d.cts
 
 ## Examples (published)
-Total examples files: 112
+Total examples files: 1
 
-- examples/browser/boards/portfolio-tracker/portfolio-t4.js
-- examples/browser/boards/portfolio-tracker/portfolio-tracker-fetch-prices.js
-- examples/browser/boards/portfolio-tracker/portfolio-tracker-http-test.js
-- examples/browser/boards/portfolio-tracker/portfolio-tracker-inference-adapter.js
-- examples/browser/boards/portfolio-tracker/portfolio-tracker-public.js
-- examples/browser/boards/portfolio-tracker/portfolio-tracker-server.js
-- examples/browser/boards/portfolio-tracker/portfolio-tracker-sse-worker.js
-- examples/browser/livecards-browser/index.html
-- examples/browser/step-machine-browser/index.html
-- examples/cli/step-machine-cli/portfolio-tracker/cards/holdings-table.json
-- examples/cli/step-machine-cli/portfolio-tracker/cards/portfolio-form.json
-- examples/cli/step-machine-cli/portfolio-tracker/cards/portfolio-value.json
-- examples/cli/step-machine-cli/portfolio-tracker/cards/price-fetch.json
-- examples/cli/step-machine-cli/portfolio-tracker/fetch-prices.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/_board-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/add-cards-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/init-board-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/poll-status-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/reset-board-dir-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/retrigger-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/status-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/update-holdings-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/wait-completed-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/handlers/write-prices-cli.js
-- examples/cli/step-machine-cli/portfolio-tracker/inline-python-demo.flow.yaml
-- examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml
-- examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker.input.json
-- examples/cli/step-machine-cli/portfolio-tracker/portfolio-tracker-pycli.flow.yaml
-- examples/cli/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat
-- examples/cli/step-machine-demo/jsonata-init-board.flow.yaml
-- examples/cli/step-machine-demo/jsonata-init-board-cli.js
-- examples/cli/step-machine-demo/one-step-cli-only.flow.yaml
-- examples/cli/step-machine-demo/step2-double-cli.js
-- examples/cli/step-machine-demo/step-cli-echo-y.js
-- examples/cli/step-machine-demo/two-step-math.flow.yaml
-- examples/cli/step-machine-demo/two-step-mixed.flow.yaml
-- examples/example-board/agent-instructions.md
-- examples/example-board/agent-instructions-cardlayout.md
-- examples/example-board/cards/_index.json
-- examples/example-board/cards/card-concentration.json
-- examples/example-board/cards/card-my-identity.json
-- examples/example-board/cards/card-portfolio-action.json
-- examples/example-board/cards/card-portfolio-intelligence.json
-- examples/example-board/cards/card-portfolio-risks.json
-- examples/example-board/cards/card-rebalance-impact.json
-- examples/example-board/cards/card-rebalance-sim.json
-- examples/example-board/cards/cards/_index.json
-- examples/example-board/cards/cards/card-my-identity.json
-- examples/example-board/cards/cards/card-portfolio-action.json
-- examples/example-board/cards/cards/card-portfolio-intelligence.json
-- examples/example-board/cards/cards/card-portfolio-risks.json
-- examples/example-board/cards/cards/card-rebalance-impact.json
-- examples/example-board/cards/cards/card-rebalance-sim.json
-- examples/example-board/cards/cards/cardT-market-prices.json
-- examples/example-board/cards/cards/cardT-portfolio.json
-- examples/example-board/cards/cards/cardT-portfolio-value.json
-- examples/example-board/cards/cardT-market-prices.json
-- examples/example-board/cards/cardT-portfolio.json
-- examples/example-board/cards/cardT-portfolio-value.json
-- examples/example-board/demo-chat-handler.js
-- examples/example-board/demo-server.js
-- examples/example-board/demo-server-config.json
-- examples/example-board/demo-shell.html
-- examples/example-board/demo-shell-browser.html
-- examples/example-board/demo-shell-localstorage.html
-- examples/example-board/demo-shell-with-server.html
-- examples/example-board/demo-task-executor.js
-- examples/example-board/scripts/copilot_wrapper.bat
-- examples/example-board/scripts/copilot_wrapper_helper.ps1
-- examples/example-board/scripts/workiq_wrapper.mjs
-- examples/index.html
-- examples/npm-libs/batch/batch-step-machine.ts
-- examples/npm-libs/continuous-event-graph/live-cards-board.ts
-- examples/npm-libs/continuous-event-graph/live-portfolio-dashboard.ts
-- examples/npm-libs/continuous-event-graph/portfolio-tracker.ts
-- examples/npm-libs/continuous-event-graph/reactive-monitoring.ts
-- examples/npm-libs/continuous-event-graph/reactive-pipeline.ts
-- examples/npm-libs/continuous-event-graph/soc-incident-board.ts
-- examples/npm-libs/continuous-event-graph/stock-dashboard.ts
-- examples/npm-libs/event-graph/ci-cd-pipeline.ts
-- examples/npm-libs/event-graph/executor-diamond.ts
-- examples/npm-libs/event-graph/executor-pipeline.ts
-- examples/npm-libs/event-graph/research-pipeline.ts
-- examples/npm-libs/flows/ai-conversation.yaml
-- examples/npm-libs/flows/order-processing.yaml
-- examples/npm-libs/flows/simple-greeting.yaml
-- examples/npm-libs/graph-of-graphs/multi-stage-etl.ts
-- examples/npm-libs/graph-of-graphs/url-processing-pipeline.ts
-- examples/npm-libs/inference/azure-deployment.ts
-- examples/npm-libs/inference/copilot-cli.ts
-- examples/npm-libs/inference/data-pipeline.ts
-- examples/npm-libs/inference/pluggable-adapters.ts
-- examples/npm-libs/node/ai-conversation.ts
-- examples/npm-libs/node/simple-greeting.ts
-- examples/step-machine-cli/portfolio-tracker/cards/holdings-table.json
-- examples/step-machine-cli/portfolio-tracker/cards/portfolio-form.json
-- examples/step-machine-cli/portfolio-tracker/cards/portfolio-value.json
-- examples/step-machine-cli/portfolio-tracker/cards/price-fetch.json
-- examples/step-machine-cli/portfolio-tracker/fetch-prices.js
-- examples/step-machine-cli/portfolio-tracker/handlers/_board-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/add-cards-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/init-board-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/reset-board-dir-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/retrigger-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/status-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/update-holdings-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/wait-completed-cli.js
-- examples/step-machine-cli/portfolio-tracker/handlers/write-prices-cli.js
-- examples/step-machine-cli/portfolio-tracker/portfolio-tracker.flow.yaml
-- examples/step-machine-cli/portfolio-tracker/portfolio-tracker.input.json
-- examples/step-machine-cli/portfolio-tracker/portfolio-tracker-task-executor.cjs
-- examples/step-machine-cli/portfolio-tracker/run-portfolio-tracker.bat
+- examples/board-local/demo-shell-localstorage.html

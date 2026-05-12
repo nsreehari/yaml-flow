@@ -1,0 +1,77 @@
+{
+  "version": "1.0",
+  "description": "Registry of source-def kinds to flow handlers for demo-task-executor.",
+  "kinds": {
+    "url": {
+      "detect": { "field": "url" },
+      "flow": "./source-def-flows/url.flow.json",
+      "manifest": {
+        "description": "Single URL fetch via curl with interpolation and cache.",
+        "inputSchema": {
+          "url": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "url": { "type": "string", "required": true },
+              "method": { "type": "string", "required": false },
+              "headers": { "type": "object", "required": false },
+              "args": { "type": "object", "required": false },
+              "cacheTimeout": { "type": "number", "required": false }
+            }
+          },
+          "tickersFrom": { "type": "string", "required": false }
+        }
+      }
+    },
+    "url-list": {
+      "detect": { "field": "url-list" },
+      "flow": "./source-def-flows/url-list.flow.json",
+      "manifest": {
+        "description": "Fan-out URL fetch over _projections.url_list.",
+        "inputSchema": {
+          "url-list": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "method": { "type": "string", "required": false },
+              "headers": { "type": "object", "required": false },
+              "cacheTimeout": { "type": "number", "required": false }
+            }
+          }
+        }
+      }
+    },
+    "copilot": {
+      "detect": { "anyOfFields": ["copilot", "prompt_template"] },
+      "flow": "./source-def-flows/copilot.flow.json",
+      "manifest": {
+        "description": "Invoke Copilot with prompt interpolation.",
+        "inputSchema": {
+          "copilot": { "type": "object", "required": false },
+          "prompt_template": { "type": "string", "required": false }
+        }
+      }
+    },
+    "workiq": {
+      "detect": { "field": "workiq" },
+      "flow": "./source-def-flows/workiq.flow.json",
+      "manifest": {
+        "description": "Invoke WorkIQ via demo-server HTTP proxy endpoint.",
+        "inputSchema": {
+          "workiq": { "type": "object", "required": true }
+        }
+      }
+    },
+    "mock": {
+      "detect": { "field": "mock" },
+      "flow": "./source-def-flows/mock.flow.json",
+      "manifest": {
+        "description": "Look up values from demo MOCK_DB map.",
+        "inputSchema": {
+          "mock": { "type": "string", "required": true }
+        }
+      }
+    }
+  },
+  "resolveOrder": ["url", "url-list", "copilot", "workiq", "mock"]
+}
