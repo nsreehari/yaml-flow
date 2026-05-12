@@ -1,5 +1,5 @@
-import { ExecutionRef } from './execution-refs.cjs';
-import { f as GraphEvent, G as GraphConfig } from './types-BBhqYGhE.cjs';
+import { ExecutionRef } from './execution-refs.js';
+import { f as GraphEvent, G as GraphConfig } from './types-BBhqYGhE.js';
 
 /**
  * storage-interface.ts
@@ -430,8 +430,8 @@ interface BoardLiveCardsNonCorePublic {
     probeTmpSource(input: CommandInput): CommandResult;
     /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
     probeSourcePreflight(input: CommandInput): CommandResult;
-    /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — runs compute expressions with mocked data; no board state needed */
-    mockCardComputePreflight(input: CommandInput): CommandResult<{
+    /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — evaluates compute expressions with supplied data; no board state needed */
+    evalCardCompute(input: CommandInput): CommandResult<{
         cardId: string;
         ok: boolean;
         computed_values: Record<string, unknown>;
@@ -440,6 +440,8 @@ interface BoardLiveCardsNonCorePublic {
             error: string;
         }>;
     }>;
+    /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — full cycle: validate → resolve projections → probe sources → compute */
+    simulateCardCycle(input: CommandInput): CommandResult;
     /** no params needed */
     describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
     /**

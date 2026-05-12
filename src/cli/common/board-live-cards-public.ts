@@ -928,8 +928,11 @@ export interface BoardLiveCardsNonCorePublic {
   /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
   probeSourcePreflight(input: CommandInput): CommandResult;
 
-  /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — runs compute expressions with mocked data; no board state needed */
-  mockCardComputePreflight(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
+  /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — evaluates compute expressions with supplied data; no board state needed */
+  evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
+
+  /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — full cycle: validate → resolve projections → probe sources → compute */
+  simulateCardCycle(input: CommandInput): CommandResult;
 
   /** no params needed */
   describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
@@ -1235,12 +1238,12 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e) as CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }>; }
   }
 
-  type MockComputeResult = { cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> };
+  type EvalComputeResult = { cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> };
 
-  function mockCardComputePreflight(input: CommandInput): CommandResult<MockComputeResult> {
+  function evalCardCompute(input: CommandInput): CommandResult<EvalComputeResult> {
     try {
       if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
-        return fail('mockCardComputePreflight requires a JSON object in body') as CommandResult<MockComputeResult>;
+        return fail('evalCardCompute requires a JSON object in body') as CommandResult<EvalComputeResult>;
       }
       const body = input.body as Record<string, unknown>;
       const card = (body['card-content'] ?? body) as Record<string, unknown>;
@@ -1250,7 +1253,7 @@ export function createBoardLiveCardsNonCorePublic(
 
       const computeSteps = card['compute'] as Array<{ bindTo: string; expr: string }> | undefined;
       if (!computeSteps || !Array.isArray(computeSteps) || computeSteps.length === 0) {
-        return ok({ cardId, ok: true, computed_values: {}, errors: [] }) as CommandResult<MockComputeResult>;
+        return ok({ cardId, ok: true, computed_values: {}, errors: [] }) as CommandResult<EvalComputeResult>;
       }
 
       const node: ComputeNode = {
@@ -1264,14 +1267,130 @@ export function createBoardLiveCardsNonCorePublic(
       const result = CardCompute.runSync(node, { sourcesData: mockFetchedSources });
       const computed = result.node.computed_values ?? {};
       const errors = result.errors ?? [];
-      return ok({ cardId, ok: errors.length === 0, computed_values: computed, errors }) as CommandResult<MockComputeResult>;
-    } catch (e) { return err(e) as CommandResult<MockComputeResult>; }
+      return ok({ cardId, ok: errors.length === 0, computed_values: computed, errors }) as CommandResult<EvalComputeResult>;
+    } catch (e) { return err(e) as CommandResult<EvalComputeResult>; }
+  }
+
+  // ---------------------------------------------------------------------------
+  // simulateCardCycle — full pipeline simulation with mock data
+  //
+  // 1. Structural validation (validateCardObject)
+  // 2. Resolve projections from card_data + mock-requires via enrichSourcesSync
+  // 3. Probe each source (probeSourcePreflight with resolved projections)
+  // 4. Run compute expressions with mock-fetched-sources via CardCompute.runSync
+  // ---------------------------------------------------------------------------
+  type SimulateResult = {
+    cardId: string;
+    ok: boolean;
+    validation: { isValid: boolean; issues: string[] };
+    source_probes: Array<{ bindTo: string; reachable?: boolean; latencyMs?: number; error?: string; skipped?: boolean }>;
+    projection_errors: Array<{ bindTo: string; key: string; error: string }>;
+    computed_values: Record<string, unknown>;
+    compute_errors: Array<{ bindTo: string; error: string }>;
+  };
+
+  function simulateCardCycle(input: CommandInput): CommandResult<SimulateResult> {
+    try {
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('simulateCardCycle requires a JSON object in body') as CommandResult<SimulateResult>;
+      }
+      const body = input.body as Record<string, unknown>;
+      const card = (body['card-content'] ?? body) as Record<string, unknown>;
+      const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
+      const mockFetchedSources = (body['mock-fetched-sources'] ?? {}) as Record<string, unknown>;
+      const mockRequires = (body['mock-requires'] ?? {}) as Record<string, unknown>;
+
+      // 1. Structural validation
+      const structResult = validateCardObject(cardId, card);
+      const validation = structResult.status === 'success'
+        ? { isValid: structResult.data.isValid, issues: structResult.data.issues }
+        : { isValid: false, issues: [structResult.status === 'fail' ? structResult.error : 'internal error'] };
+
+      // 2. Resolve projections via enrichSourcesSync
+      const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
+      const cardData = (card['card_data'] ?? {}) as Record<string, unknown>;
+      let enrichedSources: Array<Record<string, unknown>> = [];
+      const projectionErrors: Array<{ bindTo: string; key: string; error: string }> = [];
+      if (sourceDefs.length > 0) {
+        enrichedSources = CardCompute.enrichSourcesSync(
+          sourceDefs as any,
+          { card_data: cardData, requires: mockRequires },
+        );
+        // Detect projection resolution failures (undefined values for declared projections)
+        for (const src of enrichedSources) {
+          const projections = src['projections'] as Record<string, string> | undefined;
+          const resolved = src['_projections'] as Record<string, unknown> | undefined;
+          if (projections && resolved) {
+            for (const key of Object.keys(projections)) {
+              if (resolved[key] === undefined) {
+                const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : '(unknown)';
+                projectionErrors.push({ bindTo, key, error: `Projection "${key}" resolved to undefined` });
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Probe each source (if executor is registered)
+      const sourceProbes: SimulateResult['source_probes'] = [];
+      const teRef = configStore().readTaskExecutorRef();
+      for (let i = 0; i < enrichedSources.length; i++) {
+        const src = enrichedSources[i];
+        const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : `source_${i}`;
+        if (!teRef) {
+          sourceProbes.push({ bindTo, skipped: true, error: 'No task-executor registered' });
+          continue;
+        }
+        try {
+          const inPayload = { ...src };
+          const stdout = adapter.invokeExecutorSync(teRef, 'probe-source-preflight', [],
+            { timeout: (src['timeout'] as number | undefined) ?? 10_000, input: JSON.stringify(inPayload) });
+          const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string };
+          sourceProbes.push({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, error: result.ok ? undefined : result.error });
+        } catch {
+          sourceProbes.push({ bindTo, skipped: true, error: 'Executor does not support probe-source-preflight' });
+        }
+      }
+
+      // 4. Run compute expressions
+      const computeSteps = card['compute'] as Array<{ bindTo: string; expr: string }> | undefined;
+      let computedValues: Record<string, unknown> = {};
+      let computeErrors: Array<{ bindTo: string; error: string }> = [];
+      if (computeSteps && Array.isArray(computeSteps) && computeSteps.length > 0) {
+        const node: ComputeNode = {
+          id: cardId,
+          card_data: cardData,
+          requires: mockRequires,
+          source_defs: card['source_defs'] as ComputeNode['source_defs'],
+          compute: computeSteps,
+        };
+        const result = CardCompute.runSync(node, { sourcesData: mockFetchedSources });
+        computedValues = result.node.computed_values ?? {};
+        computeErrors = result.errors ?? [];
+      }
+
+      const allOk = validation.isValid
+        && projectionErrors.length === 0
+        && computeErrors.length === 0
+        && sourceProbes.every(p => p.reachable !== false);
+
+      return ok({
+        cardId,
+        ok: allOk,
+        validation,
+        source_probes: sourceProbes,
+        projection_errors: projectionErrors,
+        computed_values: computedValues,
+        compute_errors: computeErrors,
+      }) as CommandResult<SimulateResult>;
+    } catch (e) { return err(e) as CommandResult<SimulateResult>; }
   }
 
   return {
     validateCard, validateCardPreflight,
     probeSource, probeTmpSource, probeSourcePreflight,
-    mockCardComputePreflight,
+    evalCardCompute,
+    simulateCardCycle,
     describeTaskExecutorCapabilities,
     updatesInCardStore,
     readFromCardStore,

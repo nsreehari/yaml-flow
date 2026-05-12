@@ -113,10 +113,10 @@ probe-source-preflight --source-idx <n>
   # subcommand (if registered). Falls back to full source execution otherwise.
 ```
 
-## Compute preflight
+## Compute evaluation
 
 ```
-mock-card-compute-preflight
+eval-card-compute
   body: {                                                              # stdin
     "card-content": <card object>,
     "mock-fetched-sources"?: { "<bindTo>": <data>, ... },
@@ -126,6 +126,24 @@ mock-card-compute-preflight
             "computed_values": { ... },
             "errors": [{ "bindTo": "<key>", "error": "<msg>" }, ...] }
   # Pure in-process expression evaluation — no executor, no board state.
+```
+
+## Full cycle simulation
+
+```
+simulate-card-cycle
+  body: {                                                              # stdin
+    "card-content": <card object>,
+    "mock-fetched-sources"?: { "<bindTo>": <data>, ... },
+    "mock-requires"?: { "<cardId>": <computed_values>, ... }
+  }
+  → data: { "cardId": "<id>", "ok": true|false,
+            "validation": { "isValid": true|false, "issues": [...] },
+            "source_probes": [{ "bindTo": "...", "reachable": true|false, ... }],
+            "projection_errors": [{ "bindTo": "...", "key": "...", "error": "..." }],
+            "computed_values": { ... },
+            "compute_errors": [{ "bindTo": "<key>", "error": "<msg>" }, ...] }
+  # Full pipeline: validate → resolve projections → probe sources → run compute.
 ```
 
 ## Task executor introspection

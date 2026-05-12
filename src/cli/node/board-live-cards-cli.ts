@@ -122,12 +122,21 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── mock-card-compute-preflight — card + mock data arrive via stdin, no board state needed ────
-  if (cmd === 'mock-card-compute-preflight') {
+  // ── eval-card-compute — card + mock data arrive via stdin, no board state needed ────
+  if (cmd === 'eval-card-compute') {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
     const body = await readStdinBody();
-    printResult(nonCore.mockCardComputePreflight({ body }));
+    printResult(nonCore.evalCardCompute({ body }));
+    return;
+  }
+
+  // ── simulate-card-cycle — full pipeline simulation with mocks via stdin ────
+  if (cmd === 'simulate-card-cycle') {
+    const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const body = await readStdinBody();
+    printResult(nonCore.simulateCardCycle({ body }));
     return;
   }
 

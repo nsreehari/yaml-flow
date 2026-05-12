@@ -122,10 +122,10 @@ probeSourcePreflight(input: CommandInput): CommandResult
   // Falls back to full runSourceProbe (same as probeSource) if unsupported.
 ```
 
-### Compute preflight
+### Compute evaluation
 
 ```ts
-mockCardComputePreflight(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>
+evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>
   body:   {
     "card-content": <card object>,        // card with card_data, compute[], source_defs
     "mock-fetched-sources"?: <object>,     // keyed by source_defs[].bindTo
@@ -134,6 +134,20 @@ mockCardComputePreflight(input: CommandInput): CommandResult<{ cardId: string; o
   // Evaluates the card's compute[] expressions against the supplied mock data.
   // Returns the resulting computed_values and any per-step errors.
   // Pure in-process — no executor, no board state, no real fetches.
+```
+
+### Full cycle simulation
+
+```ts
+simulateCardCycle(input: CommandInput): CommandResult<SimulateResult>
+  body:   {
+    "card-content": <card object>,
+    "mock-fetched-sources"?: <object>,     // keyed by source_defs[].bindTo
+    "mock-requires"?: <object>             // keyed by dependency card id
+  }
+  // Full pipeline: validate structure → resolve projections (from card_data + mock-requires)
+  // → probe each source (if executor registered) → run compute expressions.
+  // Returns: { cardId, ok, validation, source_probes[], projection_errors[], computed_values, compute_errors[] }
 ```
 
 ### Task executor introspection
