@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const _REPO_ROOT = path.resolve(__dirname, '..', '..');
+const _CLI_DIR = path.join(_REPO_ROOT, 'cli', 'node');
 
 // ── Library imports ────────────────────────────────────────────────────────────
 const _adapterPath = path.join(_REPO_ROOT, 'cli', 'node', 'fs-board-adapter.js');
@@ -134,7 +135,7 @@ function assert(condition, message) {
 
 function makeBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, _REPO_ROOT, {
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, _CLI_DIR, {
     onWarn: console.warn,
     notifyChannel: NOTIFY_CHANNEL,
   }));
@@ -142,12 +143,12 @@ function makeBoard() {
 
 function makeNonCoreBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, _REPO_ROOT, { onWarn: console.warn }));
+  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, _CLI_DIR, { onWarn: console.warn }));
 }
 
 function makeCardStore() {
   const ref = parseRef(CARDSTORE_REF);
-  const adapter = createFsBoardPlatformAdapter(ref, _REPO_ROOT, { onWarn: console.warn });
+  const adapter = createFsBoardPlatformAdapter(ref, _CLI_DIR, { onWarn: console.warn });
   const kv = adapter.kvStorageForRef(CARDSTORE_REF);
   const cardAdapterObj = {
     readIndex: () => kv.read('_index'),

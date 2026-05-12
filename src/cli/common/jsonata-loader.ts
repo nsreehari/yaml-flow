@@ -24,7 +24,7 @@ function _loadJsonata(): (expr: string) => JsonataExpression {
   try {
     return _require('./jsonata-sync.cjs');
   } catch {
-    return _require('../../card-compute/jsonata-sync.cjs');
+    return _require('../../lib/card-compute/jsonata-sync.cjs');
   }
 }
 
