@@ -1,5 +1,5 @@
-import { a as BoardPlatformAdapter, K as KindValueRef, e as CommandResult } from './board-live-cards-public-CdEgQEoa.cjs';
-import { ExecutionRef } from './execution-refs.cjs';
+import { a as BoardPlatformAdapter, K as KindValueRef, e as CommandResult } from './board-live-cards-public-DBIsUOKI.js';
+import { ExecutionRef } from './execution-refs.js';
 
 /**
  * server-runtime/types.ts

@@ -122,6 +122,15 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
+  // ── mock-card-compute-preflight — card + mock data arrive via stdin, no board state needed ────
+  if (cmd === 'mock-card-compute-preflight') {
+    const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const body = await readStdinBody();
+    printResult(nonCore.mockCardComputePreflight({ body }));
+    return;
+  }
+
   // ── probe-tmp-source — source-def + mock-projections arrive via stdin ──────
   if (cmd === 'probe-tmp-source') {
     const outRef  = requireFlag(rest, '--out-ref', 'probe-tmp-source --out-ref <ref>');

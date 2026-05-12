@@ -122,6 +122,20 @@ probeSourcePreflight(input: CommandInput): CommandResult
   // Falls back to full runSourceProbe (same as probeSource) if unsupported.
 ```
 
+### Compute preflight
+
+```ts
+mockCardComputePreflight(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>
+  body:   {
+    "card-content": <card object>,        // card with card_data, compute[], source_defs
+    "mock-fetched-sources"?: <object>,     // keyed by source_defs[].bindTo
+    "mock-requires"?: <object>             // keyed by dependency card id
+  }
+  // Evaluates the card's compute[] expressions against the supplied mock data.
+  // Returns the resulting computed_values and any per-step errors.
+  // Pure in-process — no executor, no board state, no real fetches.
+```
+
 ### Task executor introspection
 
 ```ts

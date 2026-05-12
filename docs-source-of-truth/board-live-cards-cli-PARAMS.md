@@ -113,6 +113,21 @@ probe-source-preflight --source-idx <n>
   # subcommand (if registered). Falls back to full source execution otherwise.
 ```
 
+## Compute preflight
+
+```
+mock-card-compute-preflight
+  body: {                                                              # stdin
+    "card-content": <card object>,
+    "mock-fetched-sources"?: { "<bindTo>": <data>, ... },
+    "mock-requires"?: { "<cardId>": <computed_values>, ... }
+  }
+  → data: { "cardId": "<id>", "ok": true|false,
+            "computed_values": { ... },
+            "errors": [{ "bindTo": "<key>", "error": "<msg>" }, ...] }
+  # Pure in-process expression evaluation — no executor, no board state.
+```
+
 ## Task executor introspection
 
 ```

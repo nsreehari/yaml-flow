@@ -1024,3 +1024,157 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 });
+
+// ============================================================================
+// BoardLiveCardsNonCorePublic — mockCardComputePreflight
+// ============================================================================
+
+describe('BoardLiveCardsNonCorePublic — mockCardComputePreflight', () => {
+  let tmpDir = '';
+
+  function freshNonCore() {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-mccp-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
+    return { nonCore };
+  }
+
+  afterEach(() => {
+    if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
+  });
+
+  it('fails when body is absent', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.mockCardComputePreflight({});
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/body/);
+  });
+
+  it('fails when body is a string', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.mockCardComputePreflight({ body: 'bad' });
+    expect(result.status).toBe('fail');
+  });
+
+  it('returns success with empty computed_values when card has no compute steps', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('no-compute');
+    const result = nonCore.mockCardComputePreflight({ body: { 'card-content': card } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cardId).toBe('no-compute');
+      expect(result.data.ok).toBe(true);
+      expect(result.data.computed_values).toEqual({});
+      expect(result.data.errors).toEqual([]);
+    }
+  });
+
+  it('evaluates a simple card_data expression', () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('simple'),
+      card_data: { items: [{ v: 10 }, { v: 20 }] },
+      compute: [{ bindTo: 'total', expr: '$sum(card_data.items.v)' }],
+    };
+    const result = nonCore.mockCardComputePreflight({ body: { 'card-content': card } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.ok).toBe(true);
+      expect(result.data.computed_values.total).toBe(30);
+      expect(result.data.errors).toEqual([]);
+    }
+  });
+
+  it('evaluates expressions referencing mock-fetched-sources', () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('with-sources'),
+      source_defs: [{ bindTo: 'prices', outputFile: 'prices.json', mock: 'quotes' }],
+      compute: [{ bindTo: 'first_price', expr: 'fetched_sources.prices.items[0].price' }],
+    };
+    const result = nonCore.mockCardComputePreflight({
+      body: {
+        'card-content': card,
+        'mock-fetched-sources': { prices: { items: [{ ticker: 'AAPL', price: 150 }] } },
+      },
+    });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.ok).toBe(true);
+      expect(result.data.computed_values.first_price).toBe(150);
+    }
+  });
+
+  it('evaluates expressions referencing mock-requires', () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('with-requires'),
+      compute: [{ bindTo: 'dep_value', expr: 'requires.other_card.total' }],
+    };
+    const result = nonCore.mockCardComputePreflight({
+      body: {
+        'card-content': card,
+        'mock-requires': { other_card: { total: 42 } },
+      },
+    });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.ok).toBe(true);
+      expect(result.data.computed_values.dep_value).toBe(42);
+    }
+  });
+
+  it('reports per-step errors for bad expressions', () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('bad-expr'),
+      compute: [
+        { bindTo: 'good', expr: '1 + 1' },
+        { bindTo: 'bad', expr: '$nosuchfunction()' },
+      ],
+    };
+    const result = nonCore.mockCardComputePreflight({ body: { 'card-content': card } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.ok).toBe(false);
+      expect(result.data.computed_values.good).toBe(2);
+      expect(result.data.errors.length).toBeGreaterThan(0);
+      expect(result.data.errors[0].bindTo).toBe('bad');
+      expect(typeof result.data.errors[0].error).toBe('string');
+    }
+  });
+
+  it('later compute steps can reference earlier ones via computed_values', () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('chained'),
+      card_data: { x: 5 },
+      compute: [
+        { bindTo: 'doubled', expr: 'card_data.x * 2' },
+        { bindTo: 'quadrupled', expr: 'computed_values.doubled * 2' },
+      ],
+    };
+    const result = nonCore.mockCardComputePreflight({ body: { 'card-content': card } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.ok).toBe(true);
+      expect(result.data.computed_values.doubled).toBe(10);
+      expect(result.data.computed_values.quadrupled).toBe(20);
+    }
+  });
+
+  it('accepts flat card body (no card-content wrapper)', () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('flat'),
+      compute: [{ bindTo: 'val', expr: '42' }],
+    };
+    const result = nonCore.mockCardComputePreflight({ body: card });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cardId).toBe('flat');
+      expect(result.data.computed_values.val).toBe(42);
+    }
+  });
+});

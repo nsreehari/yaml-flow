@@ -37,6 +37,8 @@ import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
 import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
 import type { GraphEvent } from '../../event-graph/types.js';
+import { CardCompute } from '../../card-compute/index.js';
+import type { ComputeNode } from '../../card-compute/index.js';
 import {
   createCardStore,
   createJournalStore,
@@ -926,6 +928,9 @@ export interface BoardLiveCardsNonCorePublic {
   /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
   probeSourcePreflight(input: CommandInput): CommandResult;
 
+  /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — runs compute expressions with mocked data; no board state needed */
+  mockCardComputePreflight(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
+
   /** no params needed */
   describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
 
@@ -1230,9 +1235,43 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e) as CommandResult<{ cards: Array<{ id: string; 'card-content': LiveCard | null }> }>; }
   }
 
+  type MockComputeResult = { cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> };
+
+  function mockCardComputePreflight(input: CommandInput): CommandResult<MockComputeResult> {
+    try {
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('mockCardComputePreflight requires a JSON object in body') as CommandResult<MockComputeResult>;
+      }
+      const body = input.body as Record<string, unknown>;
+      const card = (body['card-content'] ?? body) as Record<string, unknown>;
+      const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
+      const mockFetchedSources = (body['mock-fetched-sources'] ?? {}) as Record<string, unknown>;
+      const mockRequires = (body['mock-requires'] ?? {}) as Record<string, unknown>;
+
+      const computeSteps = card['compute'] as Array<{ bindTo: string; expr: string }> | undefined;
+      if (!computeSteps || !Array.isArray(computeSteps) || computeSteps.length === 0) {
+        return ok({ cardId, ok: true, computed_values: {}, errors: [] }) as CommandResult<MockComputeResult>;
+      }
+
+      const node: ComputeNode = {
+        id: cardId,
+        card_data: (card['card_data'] ?? {}) as Record<string, unknown>,
+        requires: mockRequires,
+        source_defs: card['source_defs'] as ComputeNode['source_defs'],
+        compute: computeSteps,
+      };
+
+      const result = CardCompute.runSync(node, { sourcesData: mockFetchedSources });
+      const computed = result.node.computed_values ?? {};
+      const errors = result.errors ?? [];
+      return ok({ cardId, ok: errors.length === 0, computed_values: computed, errors }) as CommandResult<MockComputeResult>;
+    } catch (e) { return err(e) as CommandResult<MockComputeResult>; }
+  }
+
   return {
     validateCard, validateCardPreflight,
     probeSource, probeTmpSource, probeSourcePreflight,
+    mockCardComputePreflight,
     describeTaskExecutorCapabilities,
     updatesInCardStore,
     readFromCardStore,

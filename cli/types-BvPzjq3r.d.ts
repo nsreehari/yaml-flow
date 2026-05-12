@@ -297,6 +297,16 @@ interface BoardLiveCardsNonCorePublic {
     probeTmpSource(input: CommandInput): CommandResult;
     /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
     probeSourcePreflight(input: CommandInput): CommandResult;
+    /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — runs compute expressions with mocked data; no board state needed */
+    mockCardComputePreflight(input: CommandInput): CommandResult<{
+        cardId: string;
+        ok: boolean;
+        computed_values: Record<string, unknown>;
+        errors: Array<{
+            bindTo: string;
+            error: string;
+        }>;
+    }>;
     /** no params needed */
     describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
     /**

@@ -1,4 +1,4 @@
-import { B as BoardPlatformAdapter, N as NotificationTransport } from '../types-DgyDftQ1.js';
+import { B as BoardPlatformAdapter, N as NotificationTransport } from '../types-BvPzjq3r.js';
 import { E as ExecutionRef } from '../execution-interface-87BHR8LJ.js';
 import '../board-live-cards-lib-tjYsPt5U.js';
 
