@@ -5,8 +5,8 @@ Generated from npm pack --dry-run.
 ## Summary
 filename: yaml-flow-7.1.0.tgz
 package size: 1.3 MB
-unpacked size: 5.4 MB
-total files: 137
+unpacked size: 5.6 MB
+total files: 166
 
 ## Browser files (published)
 - browser/asset-integrity.json
@@ -144,6 +144,35 @@ total files: 137
 - lib/validate-Dbu7ygys.d.cts
 
 ## Examples (published)
-Total examples files: 1
+Total examples files: 30
 
 - examples/board-local/demo-shell-localstorage.html
+- examples/board/cards/card-concentration.json
+- examples/board/cards/card-my-identity.json
+- examples/board/cards/card-portfolio-action.json
+- examples/board/cards/card-portfolio-intelligence.json
+- examples/board/cards/card-portfolio-risks.json
+- examples/board/cards/card-rebalance-impact.json
+- examples/board/cards/card-rebalance-sim.json
+- examples/board/cards/cardT-market-prices.json
+- examples/board/cards/cardT-portfolio-value.json
+- examples/board/cards/cardT-portfolio.json
+- examples/board/demo-chat-handler.js
+- examples/board/demo-server-config.json
+- examples/board/demo-server.js
+- examples/board/demo-shell-with-server.html
+- examples/board/demo-task-executor.js
+- examples/board/gandalf-cards/card-source-kinds.json
+- examples/board/gandalf-cards/cards/_index.json
+- examples/board/gandalf-cards/cards/card-source-kinds.json
+- examples/board/scripts/copilot_wrapper.bat
+- examples/board/scripts/copilot_wrapper_helper.ps1
+- examples/board/scripts/workiq_wrapper.mjs
+- examples/board/source-def-flows/copilot.flow.json
+- examples/board/source-def-flows/mock.flow.json
+- examples/board/source-def-flows/url-list.flow.json
+- examples/board/source-def-flows/url.flow.json
+- examples/board/source-def-flows/workiq.flow.json
+- examples/board/source_def_flows.json
+- examples/portfolio-tracker/handlers/portfolio-tracker-fetch-prices.js
+- examples/portfolio-tracker/portfolio-tracker.js
