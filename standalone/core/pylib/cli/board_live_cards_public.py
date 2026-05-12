@@ -926,6 +926,44 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             except Exception as e:
                 return _err(e)
 
+        def mock_card_compute_preflight(self, input_data: dict | None = None) -> dict:
+            """Port of mockCardComputePreflight — run compute steps with mock data, no board state needed.
+
+            Body shape:
+              { "card-content": <card>, "mock-fetched-sources": {...}, "mock-requires": {...} }
+            Returns:
+              { cardId, ok, computed_values, errors }
+            """
+            try:
+                body = (input_data or {}).get("body")
+                if not body or not isinstance(body, dict):
+                    return _fail("mockCardComputePreflight requires a JSON object in body")
+                card = body.get("card-content", body)
+                if not isinstance(card, dict):
+                    return _fail("mockCardComputePreflight requires a JSON object in body")
+                card_id = card.get("id", "(unknown)")
+                mock_fetched_sources = body.get("mock-fetched-sources") or {}
+                mock_requires = body.get("mock-requires") or {}
+
+                compute_steps = card.get("compute")
+                if not compute_steps or not isinstance(compute_steps, list) or len(compute_steps) == 0:
+                    return _ok({"cardId": card_id, "ok": True, "computed_values": {}, "errors": []})
+
+                node = {
+                    "id": card_id,
+                    "card_data": card.get("card_data") or {},
+                    "requires": mock_requires,
+                    "source_defs": card.get("source_defs"),
+                    "compute": compute_steps,
+                }
+
+                result = CardCompute.run_sync(node, {"sourcesData": mock_fetched_sources})
+                computed = result["node"].get("computed_values") or {}
+                errors = result.get("errors") or []
+                return _ok({"cardId": card_id, "ok": len(errors) == 0, "computed_values": computed, "errors": errors})
+            except Exception as e:
+                return _err(e)
+
         def describe_task_executor_capabilities(self, input_data: dict | None = None) -> dict:
             """Port of describeTaskExecutorCapabilities — query the executor's capability manifest."""
             try:

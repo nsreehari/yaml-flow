@@ -353,6 +353,7 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
         "probeSource": board.probe_source,
         "probeSourcePreflight": board.probe_source_preflight,
         "probeTmpSource": board.probe_tmp_source,
+        "mockCardComputePreflight": board.mock_card_compute_preflight,
         "describeTaskExecutorCapabilities": board.describe_task_executor_capabilities,
     }
 

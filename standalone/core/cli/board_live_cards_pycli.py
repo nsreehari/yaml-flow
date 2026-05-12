@@ -256,7 +256,7 @@ def _board_handler(command: str):
                 token = getattr(args, "token", None)
                 if isinstance(token, str) and token:
                     base_ref = _decode_board_ref_from_token(token)
-            if not base_ref and command in ("validateCardPreflight", "probeSourcePreflight", "probeTmpSource"):
+            if not base_ref and command in ("validateCardPreflight", "probeSourcePreflight", "mockCardComputePreflight", "probeTmpSource"):
                 base_ref = serialize_storage_ref({"kind": "fs-path", "value": os.path.abspath('.')})
 
             input_obj: Dict[str, Any] = {"params": {}, "body": None}
@@ -647,6 +647,11 @@ def build_parser() -> argparse.ArgumentParser:
     probe_tmp_cmd.add_argument("--out-ref", required=True, help="Output ref")
     _add_notify_channel_arg(probe_tmp_cmd)
     probe_tmp_cmd.set_defaults(handler=_board_handler("probeTmpSource"))
+
+    mock_compute_cmd = sub.add_parser("mock-card-compute-preflight", help="Run compute steps with mock data")
+    mock_compute_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
+    _add_notify_channel_arg(mock_compute_cmd)
+    mock_compute_cmd.set_defaults(handler=_board_handler("mockCardComputePreflight"))
 
     return parser
 
