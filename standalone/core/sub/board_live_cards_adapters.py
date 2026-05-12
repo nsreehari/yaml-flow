@@ -239,6 +239,7 @@ class PythonCommandExecutor:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
         shell: bool = False,
+        input_data: Optional[str] = None,
     ) -> str:
         run_kwargs: Dict[str, Any] = {
             "cwd": cwd,
@@ -249,6 +250,8 @@ class PythonCommandExecutor:
             "timeout": timeout / 1000 if timeout else None,
             "check": False,
         }
+        if input_data is not None:
+            run_kwargs["input"] = input_data
         if os.name == "nt":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW

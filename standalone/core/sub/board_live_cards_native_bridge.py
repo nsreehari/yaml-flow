@@ -175,6 +175,7 @@ class NativeBoardPlatformAdapter:
         how = ref.get("howToRun", "")
         what = ref.get("whatToRun", "")
         timeout = (opts or {}).get("timeout", 30_000)
+        input_data = (opts or {}).get("input")
         if what.startswith("b64:"):
             parsed = parse_ref(what)
             target = parsed["value"]
@@ -187,11 +188,11 @@ class NativeBoardPlatformAdapter:
             node = _shutil.which("node")
             if not node:
                 raise RuntimeError("invoke_executor_sync: node not found on PATH")
-            return executor.execute_sync(node, [target, *call_args], timeout=timeout)
+            return executor.execute_sync(node, [target, *call_args], timeout=timeout, input_data=input_data)
         if how in ("local-python",):
-            return executor.execute_sync(sys.executable, [target, *call_args], timeout=timeout)
+            return executor.execute_sync(sys.executable, [target, *call_args], timeout=timeout, input_data=input_data)
         if how == "local-process":
-            return executor.execute_sync(target, call_args, timeout=timeout)
+            return executor.execute_sync(target, call_args, timeout=timeout, input_data=input_data)
         raise RuntimeError(f"invoke_executor_sync: unsupported howToRun={how!r}")
 
     def make_temp_file_path(self, label: str, ext: str = "") -> str:
@@ -350,6 +351,7 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
         "validateCard": board.validate_card,
         "validateCardPreflight": board.validate_card_preflight,
         "probeSource": board.probe_source,
+        "probeSourcePreflight": board.probe_source_preflight,
         "probeTmpSource": board.probe_tmp_source,
         "describeTaskExecutorCapabilities": board.describe_task_executor_capabilities,
     }

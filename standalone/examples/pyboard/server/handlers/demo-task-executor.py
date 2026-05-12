@@ -502,15 +502,206 @@ def _describe_capabilities() -> int:
     payload = {
         "ok": True,
         "kinds": ["url", "url-list", "copilot", "workiq", "mock"],
+        "subcommands": [
+            "run-source-fetch",
+            "describe-capabilities",
+            "validate-source-def",
+            "validate-card-preflight",
+            "probe-source-preflight",
+        ],
         "python_only": True,
     }
     print(json.dumps(payload, ensure_ascii=True))
     return 0
 
 
+def _validate_source_def_from_stdin() -> int:
+    """Structural validation of a source definition passed via stdin."""
+    raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+    if not raw:
+        print(json.dumps({"ok": False, "errors": ["No input provided on stdin"]}))
+        return 1
+
+    try:
+        source_def = json.loads(raw)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "errors": [f"Cannot parse input: {exc}"]}))
+        return 1
+
+    if not isinstance(source_def, dict):
+        print(json.dumps({"ok": False, "errors": ["Input must be a JSON object"]}))
+        return 1
+
+    errors: list[str] = []
+    try:
+        _detect_kind(source_def)
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    kind = None
+    try:
+        kind = _detect_kind(source_def)
+    except ValueError:
+        pass
+
+    if kind == "url":
+        cfg = source_def.get("url")
+        if not isinstance(cfg, dict):
+            errors.append("url must be an object.")
+        elif not isinstance(cfg.get("url"), str) or not cfg.get("url"):
+            errors.append("url.url is required and must be a string.")
+
+    if kind == "url-list":
+        cfg = source_def.get("url-list")
+        if not isinstance(cfg, dict):
+            errors.append("url-list must be an object.")
+
+    if kind == "copilot":
+        if not isinstance(source_def.get("copilot"), dict):
+            if not isinstance(source_def.get("prompt_template"), str):
+                errors.append("copilot must be an object when prompt_template is not provided at top level.")
+        else:
+            if not source_def["copilot"].get("prompt_template") and not isinstance(source_def.get("prompt_template"), str):
+                errors.append("copilot.prompt_template is required (or use top-level prompt_template).")
+
+    if kind == "workiq":
+        cfg = source_def.get("workiq")
+        if not isinstance(cfg, dict):
+            errors.append("workiq must be an object.")
+        elif not isinstance(cfg.get("query_template"), str) or not cfg.get("query_template"):
+            errors.append("workiq.query_template is required and must be a string.")
+
+    if kind == "mock":
+        if not isinstance(source_def.get("mock"), str):
+            errors.append("mock must be a string key.")
+
+    result = {"ok": len(errors) == 0, "errors": errors}
+    print(json.dumps(result, ensure_ascii=True))
+    return 0 if not errors else 1
+
+
+def _validate_card_preflight_from_stdin() -> int:
+    """Validate a card JSON object passed via stdin.
+
+    Returns JSON: { ok: boolean, errors: string[] }
+    Mirrors the executor-side hook called by board-live-cards-public
+    validateCardPreflight.
+    """
+    raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+    if not raw:
+        print(json.dumps({"ok": True, "errors": []}))
+        return 0
+
+    try:
+        card = json.loads(raw)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "errors": [f"Cannot parse card JSON: {exc}"]}))
+        return 1
+
+    if not isinstance(card, dict):
+        print(json.dumps({"ok": False, "errors": ["Card must be a JSON object"]}))
+        return 1
+
+    errors: list[str] = []
+
+    # Validate source_defs structurally (each must be a recognised kind).
+    source_defs = card.get("source_defs")
+    if isinstance(source_defs, list):
+        for idx, sd in enumerate(source_defs):
+            if not isinstance(sd, dict):
+                errors.append(f"source_defs[{idx}]: must be an object")
+                continue
+            bind_to = sd.get("bindTo", "(unknown)")
+            try:
+                _detect_kind(sd)
+            except ValueError as exc:
+                errors.append(f'source "{bind_to}": {exc}')
+
+    result = {"ok": len(errors) == 0, "errors": errors}
+    print(json.dumps(result, ensure_ascii=True))
+    return 0 if not errors else 1
+
+
+def _probe_source_preflight_from_stdin() -> int:
+    """Lightweight preflight probe for a source definition passed via stdin.
+
+    Input (stdin JSON): source def object with _projections already merged.
+    Output: { ok: boolean, reachable: boolean, latencyMs?: number, note?: string, error?: string }
+
+    For url sources, this does a HEAD request to check reachability.
+    For mock sources, it checks the key exists.
+    For other kinds, returns a generic success.
+    """
+    raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+    if not raw:
+        print(json.dumps({"ok": False, "error": "No input provided on stdin"}))
+        return 1
+
+    try:
+        source_def = json.loads(raw)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"Cannot parse input: {exc}"}))
+        return 1
+
+    if not isinstance(source_def, dict):
+        print(json.dumps({"ok": False, "error": "Input must be a JSON object"}))
+        return 1
+
+    try:
+        kind = _detect_kind(source_def)
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "reachable": False, "error": str(exc)}))
+        return 0
+
+    start_ms = int(time.time() * 1000)
+
+    if kind == "mock":
+        mock_key = source_def.get("mock", "")
+        reachable = mock_key in MOCK_DB
+        latency_ms = int(time.time() * 1000) - start_ms
+        note = f"mock key '{mock_key}' {'found' if reachable else 'not found'} in MOCK_DB"
+        print(json.dumps({"ok": True, "reachable": reachable, "latencyMs": latency_ms, "note": note}))
+        return 0
+
+    if kind == "url":
+        cfg = source_def.get("url", {})
+        url_tpl = cfg.get("url", "") if isinstance(cfg, dict) else ""
+        if not url_tpl:
+            print(json.dumps({"ok": False, "reachable": False, "error": "url source missing url template"}))
+            return 0
+        projections = source_def.get("_projections") or {}
+        fetch_args = dict((cfg if isinstance(cfg, dict) else {}).get("args") or {})
+        context = {**projections, **fetch_args}
+        url = _interpolate(url_tpl, context)
+        try:
+            req = urllib.request.Request(url=url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                latency_ms = int(time.time() * 1000) - start_ms
+                print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"HTTP {resp.status}"}))
+                return 0
+        except Exception as exc:
+            latency_ms = int(time.time() * 1000) - start_ms
+            print(json.dumps({"ok": True, "reachable": False, "latencyMs": latency_ms, "note": str(exc)}))
+            return 0
+
+    # For copilot, workiq, url-list — we can't do a lightweight probe, just report reachable
+    latency_ms = int(time.time() * 1000) - start_ms
+    print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"kind '{kind}': no lightweight probe available"}))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Python demo task executor")
-    parser.add_argument("subcommand", choices=["run-source-fetch", "describe-capabilities"])
+    parser.add_argument(
+        "subcommand",
+        choices=[
+            "run-source-fetch",
+            "describe-capabilities",
+            "validate-source-def",
+            "validate-card-preflight",
+            "probe-source-preflight",
+        ],
+    )
     parser.add_argument("--in-ref", dest="in_ref")
     parser.add_argument("--out-ref", dest="out_ref")
     parser.add_argument("--err-ref", dest="err_ref")
@@ -519,6 +710,12 @@ def main() -> int:
 
     if args.subcommand == "describe-capabilities":
         return _describe_capabilities()
+    if args.subcommand == "validate-source-def":
+        return _validate_source_def_from_stdin()
+    if args.subcommand == "validate-card-preflight":
+        return _validate_card_preflight_from_stdin()
+    if args.subcommand == "probe-source-preflight":
+        return _probe_source_preflight_from_stdin()
     if not args.in_ref or not args.out_ref:
         print("run-source-fetch requires --in-ref and --out-ref", file=sys.stderr)
         return 2
