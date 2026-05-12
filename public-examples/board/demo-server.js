@@ -24,6 +24,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const _require = createRequire(import.meta.url);
+const cliArgs = process.argv.slice(2);
 
 function resolveYamlFlowDir() {
   try {
@@ -38,7 +39,9 @@ const _yamlFlowDir = resolveYamlFlowDir();
 // cliDir must point to the yaml-flow root so buildBoardCliInvocation finds
 // board-live-cards-cli.js for task-executor completion callbacks.
 // demo-src/example-board is 2 levels below the yaml-flow root.
-const YAML_FLOW_CLI_DIR = _yamlFlowDir || path.resolve(__dirname, '..', '..');
+const YAML_FLOW_CLI_DIR = _yamlFlowDir
+  ? path.join(_yamlFlowDir, 'cli', 'node')
+  : path.resolve(__dirname, '..', '..', 'cli', 'node');
 const _pkgStepMachineCli = _yamlFlowDir ? path.join(_yamlFlowDir, 'cli', 'node', 'step-machine-cli.js') : null;
 
 function loadServerConfig() {
@@ -97,7 +100,10 @@ if (!process.env.DEMO_INFERENCE_ADAPTER_PATH && configuredInferenceAdapterPath) 
 }
 
 const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
-const RESET_ON_START = process.argv.includes('--reset');
+const RESET_ON_START = cliArgs.includes('--reset');
+const cardsPatternArgIndex = cliArgs.indexOf('--cards-pattern');
+const cliCardsPattern = cardsPatternArgIndex !== -1 ? cliArgs[cardsPatternArgIndex + 1] : null;
+const selectedCardsPattern = (process.env.DEMO_CARDS_PATTERN || cliCardsPattern || '').trim() || null;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -132,12 +138,23 @@ const defaultGandalfInferenceAdapterPath = process.env.DEMO_GANDALF_INFERENCE_AD
 // platform-free server runtime.
 // ---------------------------------------------------------------------------
 
-function createFsCardSource(cardsDir) {
+function wildcardToRegExp(pattern) {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped.replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+}
+
+function createFsCardSource(cardsDir, cardPattern = null) {
+  const cardRegex = cardPattern ? wildcardToRegExp(cardPattern) : null;
   return {
     listCards() {
       if (!fs.existsSync(cardsDir)) return [];
       return fs.readdirSync(cardsDir)
-        .filter(f => f.endsWith('.json'))
+        .filter(f => {
+          if (!f.endsWith('.json')) return false;
+          if (!cardRegex) return true;
+          const cardId = path.basename(f, '.json');
+          return cardRegex.test(cardId);
+        })
         .map(f => {
           try { return JSON.parse(fs.readFileSync(path.join(cardsDir, f), 'utf-8')); }
           catch { return null; }
@@ -390,7 +407,7 @@ const runtime = createMultiBoardServerRuntime({
     const existing = singleBoardRuntime.cardStore.get({});
     const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
     if (isEmpty) {
-      const cards = createFsCardSource(sourceCardsDir).listCards();
+      const cards = createFsCardSource(sourceCardsDir, selectedCardsPattern).listCards();
       if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
     }
     // Seed gandalf board if present
