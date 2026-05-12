@@ -923,6 +923,9 @@ export interface BoardLiveCardsNonCorePublic {
   /** body: { sourceDef, mockProjections }; params: outRef? */
   probeTmpSource(input: CommandInput): CommandResult;
 
+  /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
+  probeSourcePreflight(input: CommandInput): CommandResult;
+
   /** no params needed */
   describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
 
@@ -1122,6 +1125,25 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
+  function probeSourcePreflight(input: CommandInput): CommandResult {
+    try {
+      const sourceIdx = input.params?.['sourceIdx'] as number | undefined;
+      const outRef    = input.params?.['outRef']    as string | undefined;
+      if (sourceIdx === undefined) return fail('probeSourcePreflight requires params.sourceIdx');
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('probeSourcePreflight requires card JSON object in body');
+      }
+      const body = input.body as Record<string, unknown>;
+      const card = (body['card-content'] ?? body) as Record<string, unknown>;
+      const mockProjections = (body['mock-projections'] ?? {}) as Record<string, unknown>;
+      const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
+      if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
+        return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
+      }
+      return runSourceProbe(sourceDefs[sourceIdx], mockProjections, outRef);
+    } catch (e) { return err(e); }
+  }
+
   function describeTaskExecutorCapabilities(_input: CommandInput): CommandResult {
     try {
       const teRef = configStore().readTaskExecutorRef();
@@ -1168,7 +1190,7 @@ export function createBoardLiveCardsNonCorePublic(
 
   return {
     validateCard, validateCardPreflight,
-    probeSource, probeTmpSource,
+    probeSource, probeTmpSource, probeSourcePreflight,
     describeTaskExecutorCapabilities,
     updatesInCardStore,
     readFromCardStore,

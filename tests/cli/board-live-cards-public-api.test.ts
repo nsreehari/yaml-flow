@@ -880,3 +880,74 @@ describe('BoardLiveCardsNonCorePublic — probeTmpSource', () => {
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 });
+
+describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
+  let tmpDir = '';
+
+  function freshNonCore() {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-psp-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
+    return { nonCore };
+  }
+
+  afterEach(() => {
+    if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
+  });
+
+  it('fails when params.sourceIdx is missing', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.probeSourcePreflight({ body: minCard('c') });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/params\.sourceIdx/);
+  });
+
+  it('fails when body is absent', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 } });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/card JSON/);
+  });
+
+  it('fails when body is not an object', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: 'bad' });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/card JSON/);
+  });
+
+  it('fails when sourceIdx is out of range (no source_defs)', () => {
+    const { nonCore } = freshNonCore();
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: minCard('c') });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/out of range/);
+  });
+
+  it('fails when sourceIdx is out of range (too high)', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw' }] });
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 5 }, body: card });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/out of range/);
+  });
+
+  it('accepts card-content wrapper and fails with no-executor when source is valid', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
+    const result = nonCore.probeSourcePreflight({
+      params: { sourceIdx: 0 },
+      body: { 'card-content': card, 'mock-projections': {} },
+    });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
+  });
+
+  it('accepts flat card body and fails with no-executor when source is valid', () => {
+    const { nonCore } = freshNonCore();
+    const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
+  });
+});

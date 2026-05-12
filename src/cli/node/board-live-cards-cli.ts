@@ -109,6 +109,19 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
+  // ── probe-source-preflight — card JSON + sourceIdx arrive via stdin, no board state needed ────
+  if (cmd === 'probe-source-preflight') {
+    const idxRaw  = requireFlag(rest, '--source-idx', 'probe-source-preflight --source-idx <n>');
+    const outRef  = optFlag(rest, '--out-ref');
+    const tmpRef  = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const body    = await readStdinBody();
+    const params: Record<string, string | number | boolean> = { sourceIdx: parseInt(idxRaw, 10) };
+    if (outRef) params['outRef'] = outRef;
+    printResult(nonCore.probeSourcePreflight({ params, body }));
+    return;
+  }
+
   // ── probe-tmp-source — source-def + mock-projections arrive via stdin ──────
   if (cmd === 'probe-tmp-source') {
     const outRef  = requireFlag(rest, '--out-ref', 'probe-tmp-source --out-ref <ref>');
