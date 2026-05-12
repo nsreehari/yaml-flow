@@ -18,10 +18,14 @@ import type { NormalizedHandlerResult } from '../../step-machine-public/types.js
 export interface MassagedArgs {
   /** Resolved argv tail for local transports. */
   cmdArgs?: string[];
-  /** Resolved request body for http transports (or stdin payload for local). */
-  body?: unknown;
+  /** Resolved stdin payload for local transports. */
+  stdin?: unknown;
   /** Resolved final URL string for http transports. */
   url?: string;
+  /** Resolved request headers for http transports. */
+  headers?: Record<string, string>;
+  /** Resolved request body for http transports. */
+  body?: unknown;
 }
 
 /**
@@ -39,6 +43,8 @@ export function resolveArgsMassaging(
 
   const out: MassagedArgs = {};
 
+  // ── Local transport fields ──────────────────────────────────────────────
+
   if (Array.isArray(argsMassaging.cmdTemplate)) {
     const resolved: string[] = [];
     for (const expr of argsMassaging.cmdTemplate) {
@@ -54,16 +60,18 @@ export function resolveArgsMassaging(
     out.cmdArgs = resolved;
   }
 
-  if (typeof argsMassaging.bodyTemplate === 'string') {
+  if (typeof argsMassaging.stdinTemplate === 'string') {
     try {
-      out.body = jsonata(argsMassaging.bodyTemplate).evaluate(context);
+      out.stdin = jsonata(argsMassaging.stdinTemplate).evaluate(context);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `[${label}] argsMassaging.bodyTemplate failed: ${msg}`,
+        `[${label}] argsMassaging.stdinTemplate failed: ${msg}`,
       );
     }
   }
+
+  // ── HTTP transport fields ───────────────────────────────────────────────
 
   if (typeof argsMassaging.urlTemplate === 'string') {
     try {
@@ -72,6 +80,32 @@ export function resolveArgsMassaging(
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
         `[${label}] argsMassaging.urlTemplate failed: ${msg}`,
+      );
+    }
+  }
+
+  if (typeof argsMassaging.headerTemplate === 'string') {
+    try {
+      const evaluated = jsonata(argsMassaging.headerTemplate).evaluate(context);
+      if (typeof evaluated !== 'object' || evaluated === null) {
+        throw new Error(`headerTemplate must produce an object, got: ${JSON.stringify(evaluated)}`);
+      }
+      out.headers = evaluated as Record<string, string>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `[${label}] argsMassaging.headerTemplate failed: ${msg}`,
+      );
+    }
+  }
+
+  if (typeof argsMassaging.bodyTemplate === 'string') {
+    try {
+      out.body = jsonata(argsMassaging.bodyTemplate).evaluate(context);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `[${label}] argsMassaging.bodyTemplate failed: ${msg}`,
       );
     }
   }

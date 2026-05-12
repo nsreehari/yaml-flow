@@ -132,19 +132,6 @@ export type {
 } from './board-livegraph-runtime/index.js';
 
 // ============================================================================
-// Inference
-// ============================================================================
-export {
-  buildInferencePrompt, inferCompletions, applyInferences, inferAndApply,
-  createCliAdapter, createHttpAdapter,
-} from './inference/index.js';
-export type {
-  InferenceAdapter, InferenceHints, InferenceOptions,
-  InferenceResult, InferredCompletion, InferAndApplyResult,
-  CliAdapterOptions, HttpAdapterOptions,
-} from './inference/index.js';
-
-// ============================================================================
 // Card Compute
 // ============================================================================
 export {

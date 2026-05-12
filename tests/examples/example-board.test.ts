@@ -8,14 +8,9 @@ import type { ComputeNode } from '../../src/card-compute/index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 function resolveExampleBoardDir(): string {
-  const candidates = [
-    path.join(repoRoot, 'standalone', 'examples', 'pyboard', 'data'),
-    path.join(repoRoot, 'examples', 'example-board'),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, 'cards'))) return candidate;
-  }
-  throw new Error(`Could not resolve example-board cards directory from: ${candidates.join(', ')}`);
+  const candidate = path.join(repoRoot, 'py-standalone', 'examples', 'pyboard', 'data');
+  if (fs.existsSync(path.join(candidate, 'cards'))) return candidate;
+  throw new Error(`Could not resolve cards directory at: ${candidate}`);
 }
 
 const exampleBoardDir = resolveExampleBoardDir();
@@ -85,7 +80,7 @@ const CARD_SOURCE_MOCKS: Record<string, Record<string, unknown>> = {
   },
 };
 
-// ── orders-domain seed data (used by example-board1 stable-outputs test) ────
+// ── orders-domain seed data (used by stable-outputs test) ────
 const ORDER_SEED = [
   { id: 'ORD-1001', product: 'Widget A', quantity: 3, amount: 12400, region: 'North' },
   { id: 'ORD-1002', product: 'Widget B', quantity: 2, amount: 8700,  region: 'South' },
@@ -171,8 +166,8 @@ function resolvePath(obj: unknown, pathValue: string): unknown {
   }, obj);
 }
 
-describe('example-board', () => {
-  it('keeps all example-board card definitions valid', () => {
+describe('board card definitions', () => {
+  it('keeps all card definitions valid', () => {
     for (const file of listCardFiles()) {
       const node = readCard(file);
       const result = validateLiveCardDefinition(node);
@@ -180,7 +175,7 @@ describe('example-board', () => {
     }
   });
 
-  it('smoke-runs compute for every example-board card with compute steps', async () => {
+  it('smoke-runs compute for every card with compute steps', async () => {
     for (const file of listCardFiles()) {
       const node = readCard(file);
       if (!Array.isArray(node.compute) || node.compute.length === 0) continue;

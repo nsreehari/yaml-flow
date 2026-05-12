@@ -74,7 +74,8 @@ export type HandlerSpec = ComputeJsonataSpec | RefSpec;
  * actually invoke the ref and normalizes the outcome to {result, data, error?}.
  *
  * `args` is the flat flow context for the step. The adapter is responsible
- * for honoring `ref.argsMassaging` (cmdTemplate / urlTemplate / bodyTemplate)
+ * for honoring `ref.argsMassaging` (cmdTemplate / stdinTemplate for local,
+ * urlTemplate / headerTemplate / bodyTemplate for HTTP)
  * before performing the transport.
  *
  * May return synchronously (sync transports) or as a Promise (async transports).
@@ -115,4 +116,12 @@ export interface StepConfigForFactory {
   produces_data?: string[];
   input_validations?: string[];
   config?: Record<string, unknown>;
+  forEach?: ForEachConfig;
+}
+
+export interface ForEachConfig {
+  items: string;
+  as: string;
+  concurrency?: number;
+  collectAs?: string;
 }

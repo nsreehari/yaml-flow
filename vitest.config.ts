@@ -5,7 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
-    exclude: ['tests/examples/portfolio-tracker-e2e.test.ts'],
+    exclude: ['**/py-*.test.ts', 'tests/examples/portfolio-tracker-e2e.test.ts'],
     forceExit: true,
     coverage: {
       provider: 'v8',

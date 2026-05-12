@@ -49,7 +49,6 @@ export default defineConfig({
     'config/index': 'src/config/index.ts',
     'continuous-event-graph/index': 'src/continuous-event-graph/index.ts',
     'board-livegraph-runtime/index': 'src/board-livegraph-runtime/index.ts',
-    'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'card-validation': 'src/card-validation.ts',
     'board-live-cards-node': 'src/cli/node/fs-board-adapter.ts',

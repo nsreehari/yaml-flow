@@ -1,0 +1,118 @@
+{
+  "id": "mixed-handlers-demo",
+  "settings": {
+    "start_step": "step1_compute",
+    "max_total_steps": 15,
+    "timeout_ms": 15000
+  },
+  "steps": {
+    "step1_compute": {
+      "description": "Inline compute — adds two numbers using JSONata",
+      "expects_data": ["a", "b"],
+      "produces_data": ["sum"],
+      "input_validations": [
+        "$type(a) = \"number\"",
+        "$type(b) = \"number\""
+      ],
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.sum = expects_data.a + expects_data.b",
+          "result = \"success\""
+        ]
+      },
+      "transitions": {
+        "success": "step2_ref",
+        "failure": "failed_state"
+      }
+    },
+    "step2_ref": {
+      "description": "Ref handler — doubles the sum via an external Node script",
+      "expects_data": ["sum"],
+      "produces_data": ["doubled"],
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-node",
+        "whatToRun": { "kind": "fs-path", "value": "./double-handler.js" }
+      },
+      "transitions": {
+        "success": "step3_scale_each",
+        "failure": "failed_state"
+      }
+    },
+    "step3_scale_each": {
+      "description": "forEach + compute-jsonata — scale doubled value by each multiplier",
+      "expects_data": ["doubled", "multipliers"],
+      "produces_data": ["scaled_values"],
+      "forEach": {
+        "items": "multipliers",
+        "as": "multiplier",
+        "concurrency": 3,
+        "collectAs": "scaled_values"
+      },
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.value = expects_data.doubled * expects_data.multiplier",
+          "result = \"success\""
+        ]
+      },
+      "transitions": {
+        "success": "step4_ref_each",
+        "failure": "failed_state"
+      }
+    },
+    "step4_ref_each": {
+      "description": "forEach + ref — re-scale each value via an external Node script",
+      "expects_data": ["scaled_values"],
+      "produces_data": ["final_values"],
+      "forEach": {
+        "items": "scaled_values",
+        "as": "item",
+        "concurrency": 3,
+        "collectAs": "final_values"
+      },
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-node",
+        "whatToRun": { "kind": "fs-path", "value": "./scale-handler.js" },
+        "argsMassaging": {
+          "cmdTemplate": [
+            "$string(item.value)",
+            "'2'"
+          ]
+        }
+      },
+      "transitions": {
+        "success": "step5_grade",
+        "failure": "failed_state"
+      }
+    },
+    "step5_grade": {
+      "description": "Inline compute — classifies whether any final value exceeds 200",
+      "expects_data": ["final_values"],
+      "produces_data": ["grade"],
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.grade = $max(expects_data.final_values.scaled) >= 200 ? \"large\" : \"small\"",
+          "result = \"success\""
+        ]
+      },
+      "transitions": {
+        "success": "success_state",
+        "failure": "failed_state"
+      }
+    }
+  },
+  "terminal_states": {
+    "success_state": {
+      "return_intent": "success",
+      "return_artifacts": ["a", "b", "sum", "doubled", "scaled_values", "final_values", "grade"]
+    },
+    "failed_state": {
+      "return_intent": "failure",
+      "return_artifacts": ["error"]
+    }
+  }
+}

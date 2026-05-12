@@ -32,8 +32,7 @@ import { createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapte
 import { serializeRef, parseRef } from '../../src/cli/common/storage-interface.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const exampleBoardDir = path.join(repoRoot, 'demo-src', 'example-board');
-const SOURCE_CARDS_DIR = path.join(exampleBoardDir, 'cards');
+const SOURCE_CARDS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cards');
 
 const TEST_PORT = 7900 + Math.floor(Math.random() * 100);
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-srt-'));

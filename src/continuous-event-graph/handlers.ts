@@ -229,7 +229,7 @@ export interface ProcessHandlerOptions extends CommandSpec {
  * command and each arg string.
  *
  * Prefer this over createShellHandler for all programmatic invocations
- * (task-executors, source fetchers, inference adapters).
+ * (task-executors, source fetchers).
  *
  * @example
  * ```ts

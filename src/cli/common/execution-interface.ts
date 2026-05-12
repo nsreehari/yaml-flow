@@ -42,9 +42,14 @@
  *  Each field is a JSONata expression evaluated against the caller's logical args object.
  *  If argsMassaging is omitted, the adapter uses its default mapping for the howToRun kind.
  *
- *  cmdTemplate  — array of JSONata exprs, each producing one argv string (local transports)
- *  urlTemplate  — JSONata expr producing the final URL string (http transports)
- *  bodyTemplate — JSONata expr producing the request body object (http transports)
+ *  Local transports (local-node, local-python, local-process):
+ *    cmdTemplate   — array of JSONata exprs, each producing one argv string
+ *    stdinTemplate — JSONata expr producing the stdin payload object
+ *
+ *  HTTP transports (http:post, http:get, azure-function, firebase, etc.):
+ *    urlTemplate    — JSONata expr producing the final URL string
+ *    headerTemplate — JSONata expr producing the request headers object
+ *    bodyTemplate   — JSONata expr producing the request body object
  *
  * ────────────────────────────────────────────────────────────────────────────
  * SERIALIZATION
@@ -79,7 +84,8 @@
  *    whatToRun: 'b64:<base64url({"kind":"http-url","value":"https://myfn.azurewebsites.net/api/task-executor"})>',
  *    argsMassaging: {
  *      urlTemplate: "whatToRun & '?op=' & subcommand",
- *      bodyTemplate: "{ 'inRef': inRef, 'outRef': outRef, 'token': token }",
+ *      headerTemplate: "{ 'Authorization': 'Bearer ' & token }",
+ *      bodyTemplate: "{ 'inRef': inRef, 'outRef': outRef }",
  *    },
  *  };
  *
@@ -139,13 +145,13 @@ export interface OutputTransforms {
  * mapping for the given howToRun kind.
  */
 export interface ArgsMassaging {
+  // ── Local transports: local-node, local-python, local-process ──────────
+
   /**
-   * For local transports ('local-node', 'local-python', 'local-process').
    * Array of JSONata expressions — each evaluates to one argv string.
    * The resolved strings are appended after the base command.
    *
    * @example
-   * // Standard task-executor protocol:
    * cmdTemplate: [
    *   "'run-source-fetch'",
    *   "'--in-ref'",  "inRef",
@@ -156,7 +162,18 @@ export interface ArgsMassaging {
   cmdTemplate?: string[];
 
   /**
-   * For http transports ('http:post', 'http:get').
+   * JSONata expression that produces the stdin payload object.
+   * Evaluated against the logical args.
+   * If omitted, `JSON.stringify(args)` is sent on stdin.
+   *
+   * @example
+   * stdinTemplate: "{ 'X': x, 'multiplier': 2 }"
+   */
+  stdinTemplate?: string;
+
+  // ── HTTP transports: http:post, http:get, azure-function, firebase ────
+
+  /**
    * JSONata expression that produces the final URL string.
    * The input context includes 'whatToRun' (the base URL from the ref)
    * plus all logical args.
@@ -167,12 +184,20 @@ export interface ArgsMassaging {
   urlTemplate?: string;
 
   /**
-   * For http transports.
+   * JSONata expression that produces the request headers object.
+   * Merged on top of the default headers (`Content-Type: application/json`).
+   *
+   * @example
+   * headerTemplate: "{ 'Authorization': 'Bearer ' & token }"
+   */
+  headerTemplate?: string;
+
+  /**
    * JSONata expression that produces the request body object.
    * Evaluated against the logical args object.
    *
    * @example
-   * bodyTemplate: "{ 'inRef': inRef, 'outRef': outRef, 'token': token }"
+   * bodyTemplate: "{ 'inRef': inRef, 'outRef': outRef }"
    */
   bodyTemplate?: string;
 }
@@ -238,7 +263,7 @@ export interface ExecutionRef {
   /**
    * Opaque executor-specific configuration.
    * For local transports, base64-encoded and passed as --extra <base64-json> in the argv.
-   * For HTTP transports, available in argsMassaging.bodyTemplate as the `extra` binding.
+   * For HTTP transports, available in argsMassaging templates as the `extra` binding.
    * Stored with the ref so it travels as a single unit with the invocation descriptor.
    */
   extra?: Record<string, unknown>;

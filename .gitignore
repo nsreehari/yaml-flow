@@ -3,6 +3,12 @@ node_modules/
 
 # Build output
 dist/
+lib/
+cli/
+browser/
+
+# Generated examples (built from public-examples/ by npm run build:public-examples)
+examples/
 
 # IDE
 .idea/
@@ -30,7 +36,6 @@ npm-debug.log*
 .env.local
 .demo-surface/
 runtime-out/
-examples/cli/step-machine-cli/portfolio-tracker/runtime/
 .venv312/
 
 # Local temp/cache artifacts
@@ -38,10 +43,9 @@ examples/cli/step-machine-cli/portfolio-tracker/runtime/
 **/__pycache__/
 
 # Example board artifacts are generated content — do not track
-examples/example-board/
 **/.demo-setup/**
 pydist/
 
 metafile-iife.json
-standalone/examples/pyboard/server/.server-meta/
-standalone/examples/pyboard/server/.demo-setup/
+py-standalone/examples/pyboard/server/.server-meta/
+py-standalone/examples/pyboard/server/.demo-setup/

@@ -31,6 +31,7 @@ export interface StepConfig {
   failure_transitions?: Record<string, string>;
   retry?: RetryConfig;
   circuit_breaker?: CircuitBreakerConfig;
+  forEach?: ForEachConfig;
 }
 
 export interface RetryConfig {
@@ -42,6 +43,17 @@ export interface RetryConfig {
 export interface CircuitBreakerConfig {
   max_iterations: number;
   on_open: string;
+}
+
+export interface ForEachConfig {
+  /** Data key containing the array to iterate over */
+  items: string;
+  /** Variable name for the current item in each iteration */
+  as: string;
+  /** Max concurrent iterations. @default 1 */
+  concurrency?: number;
+  /** Data key to collect results into. Defaults to `<items>_results` */
+  collectAs?: string;
 }
 
 export interface TerminalStateConfig {

@@ -36,6 +36,7 @@ function copyJsonataSyncToCliDirs() {
 export default defineConfig({
   entry: {
     'node/step-machine-cli': 'src/cli/node/step-machine-cli.ts',
+    'node/batch-runner-cli': 'src/cli/node/batch-runner-cli.ts',
     'node/board-live-cards-cli': 'src/cli/node/board-live-cards-cli.ts',
     'node/fs-board-adapter': 'src/cli/node/fs-board-adapter.ts',
     'node/execution-adapter': 'src/cli/node/execution-adapter.ts',

@@ -298,9 +298,9 @@ function _parseStdoutAsJson(stdout: string): unknown {
  *   - any utility that needs sync request/reply against an ExecutionRef
  *
  * Behavior:
- *   1. Resolve `ref.argsMassaging` against `args` to get cmdArgs / body.
+ *   1. Resolve `ref.argsMassaging` against `args` to get cmdArgs / stdin / body.
  *   2. Build the local base spec (node/python/process + script path).
- *   3. Spawn synchronously with `JSON.stringify(body ?? args)` on stdin.
+ *   3. Spawn synchronously with `JSON.stringify(stdin ?? args)` on stdin.
  *   4. Map exit code into envelope:
  *        exit 0 → { result: 'success', data: parsed-stdout-or-{stdout: raw} }
  *        non-0  → { result: 'failure', data: { error: stderr-or-exit-detail } }
@@ -332,7 +332,7 @@ export function invokeRefSync(
   }
 
   const argv = [...baseSpec.baseArgs, ...(massaged.cmdArgs ?? [])];
-  const stdinPayload = JSON.stringify(massaged.body ?? args);
+  const stdinPayload = JSON.stringify(massaged.stdin ?? args);
   const executor = createNodeCommandExecutor();
 
   let stdout: string;
@@ -465,32 +465,25 @@ async function _invokeTaskExecutorHttp(
   ref: ExecutionRef,
   args: TaskExecutorArgs,
 ): Promise<ExecutionResult> {
-  let url: string;
-  let body: Record<string, unknown>;
-
   const context: Record<string, unknown> = { ...args, whatToRun: ref.whatToRun };
+  const massaged = resolveArgsMassaging(ref.argsMassaging, context, '_invokeTaskExecutorHttp');
 
-  if (ref.argsMassaging?.urlTemplate) {
-    url = await evalJsonataString(ref.argsMassaging.urlTemplate, context);
-  } else {
-    // Resolve whatToRun as a KindValueRef (object or b64 string)
-    url = typeof ref.whatToRun === 'object' ? ref.whatToRun.value : parseRef(ref.whatToRun).value;
-  }
+  const url = massaged.url
+    ?? (typeof ref.whatToRun === 'object' ? ref.whatToRun.value : parseRef(ref.whatToRun).value);
 
-  if (ref.argsMassaging?.bodyTemplate) {
-    const evaluated = await evalJsonata(ref.argsMassaging.bodyTemplate, context);
-    if (typeof evaluated !== 'object' || evaluated === null) {
-      throw new Error(`bodyTemplate must produce an object, got: ${JSON.stringify(evaluated)}`);
-    }
-    body = evaluated as Record<string, unknown>;
-  } else {
-    body = buildDefaultTaskExecutorBody(args, ref.extra);
-  }
+  const body = massaged.body
+    ? massaged.body as Record<string, unknown>
+    : buildDefaultTaskExecutorBody(args, ref.extra);
 
   // Use native fetch (Node 18+)
+  const defaultHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers = massaged.headers
+    ? { ...defaultHeaders, ...massaged.headers }
+    : defaultHeaders;
+
   const response = await fetch(url, {
     method: ref.howToRun === 'http:get' ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
 

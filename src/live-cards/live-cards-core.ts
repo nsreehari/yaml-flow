@@ -232,6 +232,7 @@ var LiveCard = (function () {
       chartLib:     config.chartLib     || null,
       onAction:     config.onAction     || function () {},
       getChatMessages: config.getChatMessages || null,
+      fileUrlBase:  config.fileUrlBase  || '/api/boards/default',
     };
 
     const _cleanup = {};    // nodeId → { ac, timers, charts, unsubs }
@@ -747,7 +748,7 @@ var LiveCard = (function () {
         const sizeText = f && typeof f.size === 'number' ? ('size: ' + f.size + ' bytes') : '';
         const stored = f && f.stored_name ? String(f.stored_name) : '';
         const dl = stored
-          ? '/api/example-board/server/cards/' + encodeURIComponent(nodeId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
+          ? cfg.fileUrlBase + '/cards/' + encodeURIComponent(nodeId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
           : null;
         h += '<div class="list-group-item d-flex align-items-center justify-content-between gap-2">';
         h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
@@ -1636,7 +1637,7 @@ var LiveCard = (function () {
           if (!file || !file.stored_name) return;
           const name = file.name || file.stored_name;
           const cardId = elemDef.data && elemDef.data.cardId ? elemDef.data.cardId : 'unknown';
-          const downloadUrl = `/api/example-board/server/cards/${encodeURIComponent(cardId)}/files/${idx}?sn=${encodeURIComponent(file.stored_name)}`;
+          const downloadUrl = `${cfg.fileUrlBase}/cards/${encodeURIComponent(cardId)}/files/${idx}?sn=${encodeURIComponent(file.stored_name)}`;
           const size = file.size ? ` (${Math.round(file.size / 1024)}KB)` : '';
           htmlParts.push(`<div class="mb-2"><a href="${downloadUrl}" class="btn btn-sm btn-outline-secondary">${_esc(name)}${_esc(size)}</a></div>`);
         });

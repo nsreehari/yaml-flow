@@ -20,6 +20,7 @@ import { resolveOutputTransforms } from '../cli/common/args-massaging.js';
 import { serializeRef } from '../cli/common/storage-interface.js';
 import type {
   ComputeJsonataSpec,
+  ForEachConfig,
   HandlerSpec,
   InvokeRefFn,
   NormalizedHandlerResult,
@@ -223,6 +224,80 @@ export function createPassthroughHandler(): StepHandler {
 }
 
 // ============================================================================
+// forEach wrapper — iterates a handler over an array with concurrency control
+// ============================================================================
+
+function wrapWithForEach(
+  handler: StepHandler,
+  forEach: ForEachConfig,
+  stepName: string,
+): StepHandler {
+  return async (input, context) => {
+    const rawArr = input?.[forEach.items];
+    if (!Array.isArray(rawArr)) {
+      return {
+        result: 'failure',
+        data: {},
+        error: `[${stepName}] forEach: "${forEach.items}" is not an array (got ${typeof rawArr})`,
+      };
+    }
+    const arr = rawArr as unknown[];
+
+    const dataKey = forEach.collectAs ?? `${forEach.items}_results`;
+    if (arr.length === 0) {
+      return { result: 'success', data: { [dataKey]: [] } };
+    }
+
+    const { [forEach.items]: _arr, ...restInput } = input;
+    const concurrency = Math.max(1, forEach.concurrency ?? 1);
+    const results = new Array<NormalizedHandlerResult>(arr.length);
+
+    // Slot-based concurrency limiter (inline — no external dependency)
+    let active = 0;
+    let nextIdx = 0;
+    let failCount = 0;
+
+    await new Promise<void>((resolve) => {
+      function startNext() {
+        while (active < concurrency && nextIdx < arr.length) {
+          const i = nextIdx++;
+          active++;
+          const itemInput = { ...restInput, [forEach.as]: arr[i] };
+          handler(itemInput, context)
+            .then((r) => { results[i] = r; })
+            .catch((err) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              results[i] = { result: 'failure', data: {}, error: msg };
+            })
+            .finally(() => {
+              active--;
+              if (results[i]?.result === 'failure') failCount++;
+              if (nextIdx >= arr.length && active === 0) resolve();
+              else startNext();
+            });
+        }
+        if (active === 0 && nextIdx >= arr.length) resolve();
+      }
+      startNext();
+    });
+
+    if (failCount > 0) {
+      const errors = results.filter(r => r.result === 'failure').map(r => r.error);
+      return {
+        result: 'failure',
+        data: { errors },
+        error: `[${stepName}] forEach: ${failCount}/${arr.length} items failed`,
+      };
+    }
+
+    return {
+      result: 'success',
+      data: { [dataKey]: results.map(r => r.data) },
+    };
+  };
+}
+
+// ============================================================================
 // resolveStepHandler — pick + decorate the right handler for a step
 // ============================================================================
 
@@ -250,6 +325,11 @@ export function resolveStepHandler(
     base = createRefStepHandler(spec, stepName, options.invoke, config);
   } else {
     base = createPassthroughHandler();
+  }
+
+  // forEach wraps before output filtering so collected results flow through produces_data
+  if (stepConfig?.forEach) {
+    base = wrapWithForEach(base, stepConfig.forEach, stepName);
   }
 
   return wrapWithInputValidations(

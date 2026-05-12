@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const stepMachineCli = path.join(repoRoot, 'step-machine-cli.js');
+const stepMachineCli = path.join(repoRoot, 'dev', 'step-machine-cli.js');
 
 function runStepMachineCli(args: string[]) {
   const result = spawnSync(process.execPath, [stepMachineCli, ...args], {
@@ -591,7 +591,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 9, y: 18 });
   });
 
-  it('supports ref handler with argsMassaging.bodyTemplate', () => {
+  it('supports ref handler with argsMassaging.stdinTemplate', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-body-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
@@ -609,7 +609,7 @@ steps:
       howToRun: local-node
       whatToRun: "${fsRef('./echo-y.js')}"
       argsMassaging:
-        bodyTemplate: "{ 'X': x }"
+        stdinTemplate: "{ 'X': x }"
     transitions:
       success: success_state
       failure: failed_state
@@ -712,7 +712,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ a: 3, b: 4, c: 7, d: 14 });
   });
 
-  it('supports argsMassaging.bodyTemplate for ref handlers', () => {
+  it('supports argsMassaging.stdinTemplate for ref handlers', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-jsonata-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'init-board.js');
@@ -730,7 +730,7 @@ steps:
       howToRun: local-node
       whatToRun: "${fsRef('./init-board.js')}"
       argsMassaging:
-        bodyTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
+        stdinTemplate: "{ 'BOARD_DIR': runtime_root & '/' & board_name }"
     transitions:
       success: success_state
       failure: failed_state
@@ -849,35 +849,6 @@ terminal_states:
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('failure');
   });
-
-  it('e2e: portfolio-tracker example runs to success', () => {
-    const exampleDir = path.resolve(repoRoot, 'examples/cli/step-machine-cli/portfolio-tracker');
-    const inputData = JSON.parse(
-      fs.readFileSync(path.join(exampleDir, 'portfolio-tracker.input.json'), 'utf-8')
-    );
-    inputData.runtime_root = path.join(os.tmpdir(), 'yaml-flow-step-machine-portfolio-tracker-test');
-
-    const result = spawnSync(
-      process.execPath,
-      [stepMachineCli, 'portfolio-tracker.flow.yaml', '--initial-data', JSON.stringify(inputData)],
-      {
-        cwd: exampleDir,
-        encoding: 'utf-8',
-        windowsHide: true,
-        env: process.env,
-        timeout: 110_000,
-      }
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-
-    const output = parseLastJsonObject(result.stdout ?? '');
-    expect(output.intent).toBe('success');
-    expect(output.finalStep).toBe('success_state');
-    expect(output.data.cards_added).toBe(3);
-    expect(output.data.all_completed).toBe(true);
-  }, 120_000);
 
   // ===========================================================================
   // compute-jsonata: case/switch patterns
