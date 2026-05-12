@@ -1,14 +1,27 @@
 import { defineConfig } from 'tsup';
-import { cpSync, readdirSync, statSync, existsSync } from 'fs';
+import { cpSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 
-/** After build, copy jsonata-sync.cjs next to every dist bundle that references it. */
-function copyJsonataSyncToDistDirs() {
+/** After build, copy jsonata-sync.cjs next to every lib bundle that references it. */
+function copyJsonataSyncToLibDirs() {
   const src = 'src/card-compute/jsonata-sync.cjs';
+  const outDir = 'lib';
   if (!existsSync(src)) return;
-  // Find all .js/.cjs bundles that contain the require reference
-  const out = execSync('grep -rl "jsonata-sync.cjs" dist/ --include="*.js" --include="*.cjs"', { encoding: 'utf-8' }).trim();
+  if (!existsSync(outDir)) return;
+
+  let out = '';
+  try {
+    out = execSync(`grep -rl "jsonata-sync.cjs" ${outDir}/ --include="*.js" --include="*.cjs"`, { encoding: 'utf-8' }).trim();
+  } catch {
+    out = '';
+  }
+
+  if (!out) {
+    console.log('No lib bundles require jsonata-sync.cjs');
+    return;
+  }
+
   const dirs = new Set(out.split('\n').filter(Boolean).map(f => dirname(f)));
   for (const dir of dirs) {
     const dest = join(dir, 'jsonata-sync.cjs');
@@ -16,7 +29,7 @@ function copyJsonataSyncToDistDirs() {
       cpSync(src, dest);
     }
   }
-  console.log(`Copied jsonata-sync.cjs to ${dirs.size} dist directories`);
+  console.log(`Copied jsonata-sync.cjs to ${dirs.size} lib directories`);
 }
 
 export default defineConfig({
@@ -34,14 +47,6 @@ export default defineConfig({
     'board-livegraph-runtime/index': 'src/board-livegraph-runtime/index.ts',
     'inference/index': 'src/inference/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
-    'cli/node/board-live-cards-cli': 'src/cli/node/board-live-cards-cli.ts',
-    'cli/node/fs-board-adapter': 'src/cli/node/fs-board-adapter.ts',
-    'cli/node/execution-adapter': 'src/cli/node/execution-adapter.ts',
-    'cli/node/card-store-cli': 'src/cli/node/card-store-cli.ts',
-    'cli/node/artifacts-store-cli': 'src/cli/node/artifacts-store-cli.ts',
-    'cli/node/source-cli-task-executor': 'src/cli/node/source-cli-task-executor.ts',
-    'cli/browser-api/board-live-cards-browser-adapter': 'src/cli/browser-api/board-live-cards-browser-adapter.ts',
-    'cli/browser-api/card-store-browser-api': 'src/cli/browser-api/card-store-browser-api.ts',
     'stores/file': 'src/stores/file.ts',
     'storage-refs': 'src/cli/node/public-storage-adapter.ts',
     'execution-refs': 'src/cli/common/execution-interface.ts',
@@ -55,6 +60,6 @@ export default defineConfig({
   minify: true,
   treeshake: true,
   target: 'es2022',
-  outDir: 'dist',
-  onSuccess: async () => { copyJsonataSyncToDistDirs(); },
+  outDir: 'lib',
+  onSuccess: async () => { copyJsonataSyncToLibDirs(); },
 });

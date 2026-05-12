@@ -5,110 +5,105 @@
   "author": "",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./lib/index.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
   "bin": {
-    "board-live-cards-cli": "./board-live-cards-cli.js",
-    "card-store": "./card-store.js",
-    "step-machine-cli": "./step-machine-cli.js"
+    "board-live-cards-cli": "./cli/node/board-live-cards-cli.js",
+    "card-store": "./cli/node/card-store-cli.js",
+    "step-machine-cli": "./cli/node/step-machine-cli.js"
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
     },
     "./step-machine": {
-      "types": "./dist/step-machine/index.d.ts",
-      "import": "./dist/step-machine/index.js",
-      "require": "./dist/step-machine/index.cjs"
+      "types": "./lib/step-machine/index.d.ts",
+      "import": "./lib/step-machine/index.js",
+      "require": "./lib/step-machine/index.cjs"
     },
     "./event-graph": {
-      "types": "./dist/event-graph/index.d.ts",
-      "import": "./dist/event-graph/index.js",
-      "require": "./dist/event-graph/index.cjs"
+      "types": "./lib/event-graph/index.d.ts",
+      "import": "./lib/event-graph/index.js",
+      "require": "./lib/event-graph/index.cjs"
     },
     "./stores": {
-      "types": "./dist/stores/index.d.ts",
-      "import": "./dist/stores/index.js",
-      "require": "./dist/stores/index.cjs"
+      "types": "./lib/stores/index.d.ts",
+      "import": "./lib/stores/index.js",
+      "require": "./lib/stores/index.cjs"
     },
     "./stores/memory": {
-      "types": "./dist/stores/memory.d.ts",
-      "import": "./dist/stores/memory.js",
-      "require": "./dist/stores/memory.cjs"
+      "types": "./lib/stores/memory.d.ts",
+      "import": "./lib/stores/memory.js",
+      "require": "./lib/stores/memory.cjs"
     },
     "./stores/localStorage": {
-      "types": "./dist/stores/localStorage.d.ts",
-      "import": "./dist/stores/localStorage.js",
-      "require": "./dist/stores/localStorage.cjs"
+      "types": "./lib/stores/localStorage.d.ts",
+      "import": "./lib/stores/localStorage.js",
+      "require": "./lib/stores/localStorage.cjs"
     },
     "./stores/file": {
-      "types": "./dist/stores/file.d.ts",
-      "import": "./dist/stores/file.js",
-      "require": "./dist/stores/file.cjs"
+      "types": "./lib/stores/file.d.ts",
+      "import": "./lib/stores/file.js",
+      "require": "./lib/stores/file.cjs"
     },
     "./batch": {
-      "types": "./dist/batch/index.d.ts",
-      "import": "./dist/batch/index.js",
-      "require": "./dist/batch/index.cjs"
+      "types": "./lib/batch/index.d.ts",
+      "import": "./lib/batch/index.js",
+      "require": "./lib/batch/index.cjs"
     },
     "./config": {
-      "types": "./dist/config/index.d.ts",
-      "import": "./dist/config/index.js",
-      "require": "./dist/config/index.cjs"
+      "types": "./lib/config/index.d.ts",
+      "import": "./lib/config/index.js",
+      "require": "./lib/config/index.cjs"
     },
     "./continuous-event-graph": {
-      "types": "./dist/continuous-event-graph/index.d.ts",
-      "import": "./dist/continuous-event-graph/index.js",
-      "require": "./dist/continuous-event-graph/index.cjs"
+      "types": "./lib/continuous-event-graph/index.d.ts",
+      "import": "./lib/continuous-event-graph/index.js",
+      "require": "./lib/continuous-event-graph/index.cjs"
     },
     "./board-livegraph-runtime": {
-      "types": "./dist/board-livegraph-runtime/index.d.ts",
-      "import": "./dist/board-livegraph-runtime/index.js",
-      "require": "./dist/board-livegraph-runtime/index.cjs"
+      "types": "./lib/board-livegraph-runtime/index.d.ts",
+      "import": "./lib/board-livegraph-runtime/index.js",
+      "require": "./lib/board-livegraph-runtime/index.cjs"
     },
     "./inference": {
-      "types": "./dist/inference/index.d.ts",
-      "import": "./dist/inference/index.js",
-      "require": "./dist/inference/index.cjs"
+      "types": "./lib/inference/index.d.ts",
+      "import": "./lib/inference/index.js",
+      "require": "./lib/inference/index.cjs"
     },
     "./card-compute": {
-      "types": "./dist/card-compute/index.d.ts",
-      "import": "./dist/card-compute/index.js",
-      "require": "./dist/card-compute/index.cjs"
-    },
-    "./runtime-artifacts": {
-      "types": "./dist/runtime-artifacts/index.d.ts",
-      "import": "./dist/runtime-artifacts/index.js",
-      "require": "./dist/runtime-artifacts/index.cjs"
+      "types": "./lib/card-compute/index.d.ts",
+      "import": "./lib/card-compute/index.js",
+      "require": "./lib/card-compute/index.cjs"
     },
     "./storage-refs": {
-      "types": "./dist/storage-refs.d.ts",
-      "import": "./dist/storage-refs.js",
-      "require": "./dist/storage-refs.cjs"
+      "types": "./lib/storage-refs.d.ts",
+      "import": "./lib/storage-refs.js",
+      "require": "./lib/storage-refs.cjs"
     },
     "./execution-refs": {
-      "types": "./dist/execution-refs.d.ts",
-      "import": "./dist/execution-refs.js",
-      "require": "./dist/execution-refs.cjs"
+      "types": "./lib/execution-refs.d.ts",
+      "import": "./lib/execution-refs.js",
+      "require": "./lib/execution-refs.cjs"
     },
     "./board-live-cards-browser": {
-      "types": "./dist/cli/browser-api/board-live-cards-browser-adapter.d.ts",
-      "import": "./dist/cli/browser-api/board-live-cards-browser-adapter.js"
+      "types": "./cli/browser-api/board-live-cards-browser-adapter.d.ts",
+      "import": "./cli/browser-api/board-live-cards-browser-adapter.js"
     },
     "./board-live-cards-node": {
-      "types": "./dist/cli/node/fs-board-adapter.d.ts",
-      "import": "./dist/cli/node/fs-board-adapter.js"
+      "types": "./cli/node/fs-board-adapter.d.ts",
+      "import": "./cli/node/fs-board-adapter.js"
     },
     "./card-store-browser": {
-      "types": "./dist/cli/browser-api/card-store-browser-api.d.ts",
-      "import": "./dist/cli/browser-api/card-store-browser-api.js"
+      "types": "./cli/browser-api/card-store-browser-api.d.ts",
+      "import": "./cli/browser-api/card-store-browser-api.js"
     },
     "./server-runtime": {
-      "types": "./dist/server-runtime/index.d.ts",
-      "import": "./dist/server-runtime/index.js"
+      "types": "./lib/server-runtime/index.d.ts",
+      "import": "./lib/server-runtime/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -116,15 +111,20 @@
     "./stores/file": false
   },
   "files": [
-    "board-live-cards-cli.js",
-    "storage-refs.js",
-    "step-machine-cli.js",
-    "dist",
+    "lib",
+    "cli",
+    "examples",
+    "!examples/**/runtime/**",
+    "!examples/**/--base-ref/**",
+    "!examples/**/cards/**/chats/**",
+    "!examples/**/cards/**/files/**",
     "schema",
     "browser"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "npm run -s build:lib && npm run -s build:cli",
+    "build:lib": "tsup --config tsup.config.ts",
+    "build:cli": "tsup --config tsup.cli.config.ts",
     "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",

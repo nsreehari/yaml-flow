@@ -6,10 +6,10 @@ import path from 'node:path';
 const root = process.cwd();
 
 const budgets = [
-  { file: 'dist/index.js', maxBytes: 280_000 },
-  { file: 'dist/index.cjs', maxBytes: 280_000 },
-  { file: 'dist/cli/node/board-live-cards-cli.js', maxBytes: 240_000 },
-  { file: 'dist/cli/node/fs-board-adapter.js', maxBytes: 240_000 },
+  { file: 'lib/index.js', maxBytes: 280_000 },
+  { file: 'lib/index.cjs', maxBytes: 280_000 },
+  { file: 'cli/node/board-live-cards-cli.js', maxBytes: 240_000 },
+  { file: 'cli/node/fs-board-adapter.js', maxBytes: 240_000 },
   { file: 'browser/board-livegraph-engine.js', maxBytes: 60_000 },
   { file: 'browser/board-livecards-localstorage.js', maxBytes: 85_000 },
 ];

@@ -1,12 +1,18 @@
-# Source files (use dist)
+# Source files (use lib/cli)
 src/
 tsconfig.json
 tsup.config.ts
+tsup.cli.config.ts
 vitest.config.ts
 
-# Examples (keep in repo, not in package)
-examples/
+# Standalone Python tree is excluded from npm package
 standalone/
+
+# Keep examples, but exclude generated runtime/state artifacts
+examples/**/runtime/**
+examples/**/--base-ref/**
+examples/**/cards/**/chats/**
+examples/**/cards/**/files/**
 
 # Python cache artifacts
 **/__pycache__/
