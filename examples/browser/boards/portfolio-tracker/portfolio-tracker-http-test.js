@@ -363,8 +363,10 @@ function applyFrame(payload) {
     console.log('\n=== All tests passed ✓ ===\n');
 
   } finally {
-    sseWorker?.terminate();
+    // Kill server first so the SSE connection closes, then await worker termination.
+    // (Terminating the worker while the SSE socket is still open leaves dangling handles.)
     serverProc.kill();
-    await new Promise(r => serverProc.on('exit', r));
+    await new Promise(r => serverProc.once('exit', r));
+    if (sseWorker) await sseWorker.terminate();
     console.log(`[portfolio-tracker-http-test] server stopped (${SERVER_TYPE})`);
   }

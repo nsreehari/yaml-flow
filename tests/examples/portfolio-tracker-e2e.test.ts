@@ -40,6 +40,7 @@ function runScript(scriptName: string, timeoutMs = 120_000, extraArgs: string[] 
       maxBuffer: 10 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       const exitCode = error ? ((error as any).status ?? (typeof (error as any).code === 'number' ? (error as any).code : 1)) : 0;
+      proc.unref();
       resolve({
         stdout: stdout ?? '',
         stderr: stderr ?? '',
@@ -58,6 +59,7 @@ function runPythonScript(scriptName: string, timeoutMs = 120_000): Promise<{ std
       maxBuffer: 10 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       const exitCode = error ? ((error as any).status ?? (typeof (error as any).code === 'number' ? (error as any).code : 1)) : 0;
+      proc.unref();
       resolve({
         stdout: stdout ?? '',
         stderr: stderr ?? '',
