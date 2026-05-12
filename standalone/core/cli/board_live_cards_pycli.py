@@ -256,7 +256,7 @@ def _board_handler(command: str):
                 token = getattr(args, "token", None)
                 if isinstance(token, str) and token:
                     base_ref = _decode_board_ref_from_token(token)
-            if not base_ref and command in ("validateCardPreflight", "probeSourcePreflight", "mockCardComputePreflight", "probeTmpSource"):
+            if not base_ref and command in ("validateCardPreflight", "probeSourcePreflight", "evalCardCompute", "simulateCardCycle", "probeTmpSource"):
                 base_ref = serialize_storage_ref({"kind": "fs-path", "value": os.path.abspath('.')})
 
             input_obj: Dict[str, Any] = {"params": {}, "body": None}
@@ -648,10 +648,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_notify_channel_arg(probe_tmp_cmd)
     probe_tmp_cmd.set_defaults(handler=_board_handler("probeTmpSource"))
 
-    mock_compute_cmd = sub.add_parser("mock-card-compute-preflight", help="Run compute steps with mock data")
-    mock_compute_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
-    _add_notify_channel_arg(mock_compute_cmd)
-    mock_compute_cmd.set_defaults(handler=_board_handler("mockCardComputePreflight"))
+    eval_compute_cmd = sub.add_parser("eval-card-compute", help="Run compute steps with mock data")
+    eval_compute_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
+    _add_notify_channel_arg(eval_compute_cmd)
+    eval_compute_cmd.set_defaults(handler=_board_handler("evalCardCompute"))
+
+    sim_cycle_cmd = sub.add_parser("simulate-card-cycle", help="Full pipeline simulation with mock data")
+    sim_cycle_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
+    _add_notify_channel_arg(sim_cycle_cmd)
+    sim_cycle_cmd.set_defaults(handler=_board_handler("simulateCardCycle"))
 
     return parser
 

@@ -926,8 +926,8 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             except Exception as e:
                 return _err(e)
 
-        def mock_card_compute_preflight(self, input_data: dict | None = None) -> dict:
-            """Port of mockCardComputePreflight — run compute steps with mock data, no board state needed.
+        def eval_card_compute(self, input_data: dict | None = None) -> dict:
+            """Port of evalCardCompute — run compute steps with mock data, no board state needed.
 
             Body shape:
               { "card-content": <card>, "mock-fetched-sources": {...}, "mock-requires": {...} }
@@ -937,10 +937,10 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             try:
                 body = (input_data or {}).get("body")
                 if not body or not isinstance(body, dict):
-                    return _fail("mockCardComputePreflight requires a JSON object in body")
+                    return _fail("evalCardCompute requires a JSON object in body")
                 card = body.get("card-content", body)
                 if not isinstance(card, dict):
-                    return _fail("mockCardComputePreflight requires a JSON object in body")
+                    return _fail("evalCardCompute requires a JSON object in body")
                 card_id = card.get("id", "(unknown)")
                 mock_fetched_sources = body.get("mock-fetched-sources") or {}
                 mock_requires = body.get("mock-requires") or {}
@@ -961,6 +961,120 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 computed = result["node"].get("computed_values") or {}
                 errors = result.get("errors") or []
                 return _ok({"cardId": card_id, "ok": len(errors) == 0, "computed_values": computed, "errors": errors})
+            except Exception as e:
+                return _err(e)
+
+        def simulate_card_cycle(self, input_data: dict | None = None) -> dict:
+            """Port of simulateCardCycle — full pipeline simulation with mock data.
+
+            Steps: validate → resolve projections → probe sources → compute.
+
+            Body shape:
+              { "card-content": <card>, "mock-fetched-sources": {...}, "mock-requires": {...} }
+            Returns:
+              { cardId, ok, validation, source_probes, projection_errors, computed_values, compute_errors }
+            """
+            try:
+                body = (input_data or {}).get("body")
+                if not body or not isinstance(body, dict):
+                    return _fail("simulateCardCycle requires a JSON object in body")
+                card = body.get("card-content", body)
+                if not isinstance(card, dict):
+                    return _fail("simulateCardCycle requires a JSON object in body")
+                card_id = card.get("id", "(unknown)")
+                mock_fetched_sources = body.get("mock-fetched-sources") or {}
+                mock_requires = body.get("mock-requires") or {}
+
+                # 1. Structural validation
+                struct_result = self._validate_card_object(card_id, card)
+                if struct_result.get("status") == "success":
+                    validation = {
+                        "isValid": struct_result["data"]["isValid"],
+                        "issues": struct_result["data"]["issues"],
+                    }
+                else:
+                    err_msg = struct_result.get("error", "internal error") if struct_result.get("status") == "fail" else "internal error"
+                    validation = {"isValid": False, "issues": [err_msg]}
+
+                # 2. Resolve projections via enrich_sources_sync
+                source_defs = card.get("source_defs") or []
+                card_data = card.get("card_data") or {}
+                enriched_sources: list[dict] = []
+                projection_errors: list[dict] = []
+                if source_defs:
+                    enriched_sources = CardCompute.enrich_sources_sync(
+                        source_defs,
+                        {"card_data": card_data, "requires": mock_requires},
+                    )
+                    for src in enriched_sources:
+                        projections = src.get("projections")
+                        resolved = src.get("_projections")
+                        if isinstance(projections, dict) and isinstance(resolved, dict):
+                            for key in projections:
+                                if resolved.get(key) is None:
+                                    bind_to = src.get("bindTo", "(unknown)") if isinstance(src.get("bindTo"), str) else "(unknown)"
+                                    projection_errors.append({
+                                        "bindTo": bind_to,
+                                        "key": key,
+                                        "error": f'Projection "{key}" resolved to undefined',
+                                    })
+
+                # 3. Probe each source (if executor is registered)
+                source_probes: list[dict] = []
+                te_ref = config_store().read_task_executor_ref()
+                for i, src in enumerate(enriched_sources):
+                    bind_to = src.get("bindTo", f"source_{i}") if isinstance(src.get("bindTo"), str) else f"source_{i}"
+                    if not te_ref:
+                        source_probes.append({"bindTo": bind_to, "skipped": True, "error": "No task-executor registered"})
+                        continue
+                    try:
+                        in_payload = {**src}
+                        stdout = adapter.invoke_executor_sync(
+                            te_ref, "probe-source-preflight", [],
+                            {"timeout": src.get("timeout", 10_000), "input": json.dumps(in_payload)},
+                        )
+                        result = json.loads(stdout.strip())
+                        source_probes.append({
+                            "bindTo": bind_to,
+                            "reachable": result.get("reachable"),
+                            "latencyMs": result.get("latencyMs"),
+                            "error": None if result.get("ok") else result.get("error"),
+                        })
+                    except Exception:
+                        source_probes.append({"bindTo": bind_to, "skipped": True, "error": "Executor does not support probe-source-preflight"})
+
+                # 4. Run compute expressions
+                compute_steps = card.get("compute")
+                computed_values: dict = {}
+                compute_errors: list[dict] = []
+                if compute_steps and isinstance(compute_steps, list) and len(compute_steps) > 0:
+                    node = {
+                        "id": card_id,
+                        "card_data": card_data,
+                        "requires": mock_requires,
+                        "source_defs": card.get("source_defs"),
+                        "compute": compute_steps,
+                    }
+                    result = CardCompute.run_sync(node, {"sourcesData": mock_fetched_sources})
+                    computed_values = result["node"].get("computed_values") or {}
+                    compute_errors = result.get("errors") or []
+
+                all_ok = (
+                    validation["isValid"]
+                    and len(projection_errors) == 0
+                    and len(compute_errors) == 0
+                    and all(p.get("reachable") is not False for p in source_probes)
+                )
+
+                return _ok({
+                    "cardId": card_id,
+                    "ok": all_ok,
+                    "validation": validation,
+                    "source_probes": source_probes,
+                    "projection_errors": projection_errors,
+                    "computed_values": computed_values,
+                    "compute_errors": compute_errors,
+                })
             except Exception as e:
                 return _err(e)
 
