@@ -114,12 +114,15 @@
     "lib",
     "cli",
     "examples",
+    "schema",
+    "browser",
+    "!lib/**/*.map",
+    "!cli/**/*.map",
+    "!browser/**/*.map",
     "!examples/**/runtime/**",
     "!examples/**/--base-ref/**",
     "!examples/**/cards/**/chats/**",
-    "!examples/**/cards/**/files/**",
-    "schema",
-    "browser"
+    "!examples/**/cards/**/files/**"
   ],
   "scripts": {
     "build": "npm run -s build:lib && npm run -s build:cli",
