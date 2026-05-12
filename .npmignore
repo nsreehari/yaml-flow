@@ -6,6 +6,11 @@ vitest.config.ts
 
 # Examples (keep in repo, not in package)
 examples/
+standalone/
+
+# Python cache artifacts
+**/__pycache__/
+**/*.pyc
 
 # Tests
 **/*.test.ts

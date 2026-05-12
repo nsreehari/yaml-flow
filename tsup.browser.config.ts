@@ -114,6 +114,13 @@ const sharedBrowserOptions = {
 };
 
 export default defineConfig([
+  // ── live-cards — browser UI runtime exposed as globalThis.LiveCard ───────────────────
+  {
+    ...sharedBrowserOptions,
+    entry: { 'live-cards': 'src/live-cards/browser-entry.ts' },
+    globalName: 'LiveCardBundle',
+    esbuildPlugins: [browserStubPlugin],
+  },
   // ── compute-jsonata — vendored jsonata-sync, sets globalThis.jsonataSync ─────────────
   // Load this before board-livecards-localstorage.js. No other globals exposed.
   {

@@ -121,8 +121,7 @@
     "step-machine-cli.js",
     "dist",
     "schema",
-    "browser",
-    "standalone"
+    "browser"
   ],
   "scripts": {
     "build": "tsup",
