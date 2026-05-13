@@ -263,6 +263,7 @@ def wait_for_status_completed_all(timeout_seconds: float, label: str) -> dict:
             card_count = int(summary.get("card_count") or 0)
             completed = int(summary.get("completed") or 0)
             if card_count > 0 and completed == card_count:
+                time.sleep(2.0)
                 return summary
         time.sleep(0.15)
 

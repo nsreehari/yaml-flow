@@ -161,7 +161,9 @@ def wait_for_all_completed(timeout_s: float = 60.0, label: str = "all completed"
             return s
         return False
 
-    return wait_until(_pred, timeout_s, label)
+    result = wait_until(_pred, timeout_s, label)
+    time.sleep(2.0)
+    return result
 
 
 def wait_for_price_symbols(expected_symbols: list[str], timeout_s: float = 30.0, label: str = "price symbols"):
