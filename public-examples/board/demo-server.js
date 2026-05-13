@@ -7,42 +7,22 @@ import os from 'node:os';
 import net from 'node:net';
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 
 import {
   createMultiBoardServerRuntime,
   createSingleBoardServerRuntime,
-} from '../../lib/board-live-cards-server-runtime.js';
+} from 'yaml-flow/board-live-cards-server-runtime';
 
 import {
   createFsBoardPlatformAdapter,
   createArtifactsStore,
   parseRef,
   serializeRef,
-} from '../../cli/node/fs-board-adapter.js';
+} from 'yaml-flow/board-live-cards-node';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const _require = createRequire(import.meta.url);
 const cliArgs = process.argv.slice(2);
-
-function resolveYamlFlowDir() {
-  try {
-    return path.dirname(_require.resolve('yaml-flow/package.json'));
-  } catch {
-    return null;
-  }
-}
-
-const _yamlFlowDir = resolveYamlFlowDir();
-
-// cliDir must point to the yaml-flow root so buildBoardCliInvocation finds
-// board-live-cards-cli.js for task-executor completion callbacks.
-// demo-src/example-board is 2 levels below the yaml-flow root.
-const YAML_FLOW_CLI_DIR = _yamlFlowDir
-  ? path.join(_yamlFlowDir, 'cli', 'node')
-  : path.resolve(__dirname, '..', '..', 'cli', 'node');
-const _pkgStepMachineCli = _yamlFlowDir ? path.join(_yamlFlowDir, 'cli', 'node', 'step-machine-cli.js') : null;
 
 function loadServerConfig() {
   const configPath = path.join(__dirname, 'demo-server-config.json');
@@ -80,7 +60,7 @@ function resolveKindRefFromConfig(configValue) {
 const serverConfig = loadServerConfig();
 const configuredCardsDir = resolveFromConfig(serverConfig.cardsDir);
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
-const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath) || _pkgStepMachineCli;
+const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath);
 const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
 const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
 const configuredGandalfCardsDir = resolveFromConfig(serverConfig.gandalfCardsDir);
@@ -291,7 +271,7 @@ function createNamedPipeNotificationTransport() {
 
 const serverMetaRef = process.env.DEMO_SERVER_META_STORE_REF || configuredServerMetaStoreRef || serializeRef({ kind: 'fs-path', value: setupDir });
 const serverMetaAdapter = createFsBoardPlatformAdapter(
-  parseRef(serverMetaRef), YAML_FLOW_CLI_DIR, { suppressSpawn: true },
+  parseRef(serverMetaRef), { suppressSpawn: true },
 );
 const serverMetaStore = createArtifactsStore(serverMetaAdapter.blobStorage('server-meta'));
 
@@ -320,7 +300,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerPath,
 
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
-  const boardAdapter = createFsBoardPlatformAdapter(baseRef, YAML_FLOW_CLI_DIR, {
+  const boardAdapter = createFsBoardPlatformAdapter(baseRef, {
     notifyChannel,
   });
   // In the server context the drain loop is driven in-process; suppress the
@@ -328,7 +308,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerPath,
   boardAdapter.requestProcessAccumulated = () => {};
   // Artifacts adapter rooted at runtimeCardsDir so chats/ and files/ are siblings of store/.
   const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: runtimeCardsDir }));
-  const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, YAML_FLOW_CLI_DIR, { suppressSpawn: true });
+  const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, { suppressSpawn: true });
 
   const cardStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardStoreDir });
 

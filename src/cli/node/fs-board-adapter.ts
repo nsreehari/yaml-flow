@@ -15,6 +15,7 @@ import type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/t
 import {
   makeBoardTempFilePath,
   resolveBoardCliCallbackTarget,
+  resolveModuleDir,
   genUUID,
   getHash,
   joinPath,
@@ -150,6 +151,51 @@ export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
 
 const BOARD_LOCK_FILE = '.board.lock';
 
+type FsBoardAdapterOpts = { onWarn?: (msg: string) => void; suppressSpawn?: boolean; notifyChannel?: string };
+type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void };
+
+function normalizeFsBoardAdapterArgs(
+  cliDirOrOpts?: string | FsBoardAdapterOpts,
+  opts?: FsBoardAdapterOpts,
+): { cliDir?: string; opts?: FsBoardAdapterOpts } {
+  return typeof cliDirOrOpts === 'string'
+    ? { cliDir: cliDirOrOpts, opts }
+    : { cliDir: undefined, opts: cliDirOrOpts };
+}
+
+function normalizeFsBoardNonCoreAdapterArgs(
+  cliDirOrOpts?: string | FsBoardNonCoreAdapterOpts,
+  opts?: FsBoardNonCoreAdapterOpts,
+): { cliDir?: string; opts?: FsBoardNonCoreAdapterOpts } {
+  return typeof cliDirOrOpts === 'string'
+    ? { cliDir: cliDirOrOpts, opts }
+    : { cliDir: undefined, opts: cliDirOrOpts };
+}
+
+function resolveDefaultCliDir(cliDir?: string): string {
+  if (cliDir) return cliDir;
+
+  const moduleDir = resolveModuleDir(import.meta.url);
+  const candidates = [
+    moduleDir,
+    joinPath(moduleDir, '..', 'cli', 'node'),
+    joinPath(moduleDir, '..', '..', 'cli', 'node'),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      resolveBoardCliCallbackTarget(candidate);
+      return candidate;
+    } catch {
+      // Keep trying candidates until one resolves to the public CLI callback target.
+    }
+  }
+
+  throw new Error(
+    `createFsBoardPlatformAdapter: could not resolve a public CLI directory from module dir ${moduleDir}`,
+  );
+}
+
 // ============================================================================
 // createFsBoardPlatformAdapter — wires FS adapters into BoardPlatformAdapter
 //
@@ -164,14 +210,16 @@ const BOARD_LOCK_FILE = '.board.lock';
 
 export function createFsBoardPlatformAdapter(
   baseRef: KindValueRef,
-  cliDir: string,
-  opts?: { onWarn?: (msg: string) => void; suppressSpawn?: boolean; notifyChannel?: string },
+  cliDirOrOpts?: string | FsBoardAdapterOpts,
+  maybeOpts?: FsBoardAdapterOpts,
 ): BoardPlatformAdapter {
+  const { cliDir, opts } = normalizeFsBoardAdapterArgs(cliDirOrOpts, maybeOpts);
+  const resolvedCliDir = resolveDefaultCliDir(cliDir);
   const dir = baseRef.value;
 
   // Resolve selfRef once for callback-style invocations (node <script> ...).
   // When suppressSpawn is set, skip path resolution because spawning is disabled.
-  const callbackScriptPath = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(cliDir);
+  const callbackScriptPath = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(resolvedCliDir);
   const selfRef = {
     meta: 'board-live-cards',
     howToRun: 'local-node' as const,
@@ -204,7 +252,7 @@ export function createFsBoardPlatformAdapter(
         const outRef  = serializeRef({ kind: 'fs-path', value: outFile });
         const errRef  = serializeRef({ kind: 'fs-path', value: errFile });
         blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(args, null, 2));
-        dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, cliDir);
+        dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, resolvedCliDir);
         return { dispatched: true };
       } catch (e) {
         return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
@@ -227,7 +275,7 @@ export function createFsBoardPlatformAdapter(
 
     requestProcessAccumulated() {
       if (opts?.suppressSpawn) return;
-      requestProcessAccumulatedDetached(cliDir, baseRef, opts?.notifyChannel);
+      requestProcessAccumulatedDetached(resolvedCliDir, baseRef, opts?.notifyChannel);
     },
 
     publishBoardChangeNotifications(notifications) {
@@ -258,15 +306,17 @@ export function createFsBoardPlatformAdapter(
 
 export function createFsBoardNonCorePlatformAdapter(
   baseRef: KindValueRef,
-  cliDir: string,
-  opts?: { onWarn?: (msg: string) => void },
+  cliDirOrOpts?: string | FsBoardNonCoreAdapterOpts,
+  maybeOpts?: FsBoardNonCoreAdapterOpts,
 ): BoardNonCorePlatformAdapter {
-  const base = createFsBoardPlatformAdapter(baseRef, cliDir, opts);
+  const { cliDir, opts } = normalizeFsBoardNonCoreAdapterArgs(cliDirOrOpts, maybeOpts);
+  const resolvedCliDir = resolveDefaultCliDir(cliDir);
+  const base = createFsBoardPlatformAdapter(baseRef, resolvedCliDir, opts);
   const executor = createNodeCommandExecutor();
   return {
     ...base,
     invokeExecutorSync(ref, subcommand, args, execOpts) {
-      const { command, baseArgs } = buildLocalBaseSpec(ref, cliDir);
+      const { command, baseArgs } = buildLocalBaseSpec(ref, resolvedCliDir);
       return executor.executeSync(command, [...baseArgs, subcommand, ...args], {
         timeout: execOpts?.timeout ?? 30_000,
         encoding: 'utf-8',

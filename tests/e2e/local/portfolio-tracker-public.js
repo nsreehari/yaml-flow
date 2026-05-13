@@ -16,14 +16,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import net from 'node:net';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const _REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-
-// ── Library imports ────────────────────────────────────────────────────────────
-const _adapterPath = path.join(_REPO_ROOT, 'dist', 'cli', 'node', 'fs-board-adapter.js');
-const {
+import { fileURLToPath } from 'node:url';
+import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
   createFsBoardPlatformAdapter,
@@ -32,7 +26,10 @@ const {
   createCardStore,
   parseRef,
   serializeRef,
-} = await import(pathToFileURL(_adapterPath).href);
+} from 'yaml-flow/board-live-cards-node';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const _REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 const FETCH_PRICES_JS = path.join(__dirname, 'portfolio-tracker-fetch-prices.js');
 
@@ -135,7 +132,7 @@ function assert(condition, message) {
 
 function makeBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, path.join(_REPO_ROOT, 'dist', 'cli', 'node'), {
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, {
     onWarn: console.warn,
     notifyChannel: NOTIFY_CHANNEL,
   }));
@@ -143,12 +140,12 @@ function makeBoard() {
 
 function makeNonCoreBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, path.join(_REPO_ROOT, 'dist', 'cli', 'node'), { onWarn: console.warn }));
+  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, { onWarn: console.warn }));
 }
 
 function makeCardStore() {
   const ref = parseRef(CARDSTORE_REF);
-  const adapter = createFsBoardPlatformAdapter(ref, path.join(_REPO_ROOT, 'dist', 'cli', 'node'), { onWarn: console.warn });
+  const adapter = createFsBoardPlatformAdapter(ref, { onWarn: console.warn });
   const kv = adapter.kvStorageForRef(CARDSTORE_REF);
   const cardAdapterObj = {
     readIndex: () => kv.read('_index'),
@@ -425,7 +422,7 @@ for (const card of [
   CARD_HOLDINGS_TABLE,
   CARD_PORTFOLIO_VALUE,
 ]) {
-  const vr = makeNonCoreBoard().validateTmpCard({ body: card });
+  const vr = makeNonCoreBoard().validateCardPreflight({ body: card });
   if (!vr.data?.isValid) {
     console.error(`[VALIDATE FAILED] card ${card.id}:`, JSON.stringify(vr.data?.issues ?? vr.error));
     process.exit(1);

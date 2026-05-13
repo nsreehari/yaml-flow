@@ -216,11 +216,8 @@ function createNamedPipeNotificationTransport() {
 }
 
 // ── Board adapter ──────────────────────────────────────────────────────────────
-// cliDir must point to the directory containing board-live-cards-cli.js.
-const YAML_FLOW_ROOT = path.resolve(__dirname, '..', '..', '..');
-const YAML_FLOW_CLI_DIR = path.join(YAML_FLOW_ROOT, 'dist', 'cli', 'node');
 const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: RUNTIME_DIR }));
-const boardAdapter = createFsBoardPlatformAdapter(baseRef, YAML_FLOW_CLI_DIR, { notifyChannel: NOTIFY_CHANNEL });
+const boardAdapter = createFsBoardPlatformAdapter(baseRef, { notifyChannel: NOTIFY_CHANNEL });
 // In the server context the drain loop is driven in-process.
 boardAdapter.requestProcessAccumulated = () => {};
 
