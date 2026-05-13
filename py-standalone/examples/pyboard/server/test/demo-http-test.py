@@ -305,22 +305,26 @@ def swait_for_completion(timeout_seconds: float, label: str) -> dict:
     )
 
 
-def get_holdings_and_positions_counts() -> tuple[int, int]:
+def get_positions_count() -> int:
     status, body = http_json("GET", f"{BASE}/board-status")
     assert_true(status == 200, f"board-status returned {status}")
     assert_true(isinstance(body, dict), "board-status body is not JSON")
 
     runtime = body.get("cardRuntimeById") if isinstance(body.get("cardRuntimeById"), dict) else {}
 
-    portfolio_rt = runtime.get("card-portfolio") if isinstance(runtime.get("card-portfolio"), dict) else {}
-    holdings = (portfolio_rt.get("card_data") or {}).get("holdings")
-    holdings_count = len(holdings) if isinstance(holdings, list) else 0
-
     value_rt = runtime.get("card-portfolio-value") if isinstance(runtime.get("card-portfolio-value"), dict) else {}
     positions = (value_rt.get("computed_values") or {}).get("positions")
-    positions_count = len(positions) if isinstance(positions, list) else 0
+    return len(positions) if isinstance(positions, list) else 0
 
-    return holdings_count, positions_count
+
+def get_holdings_count_from_card() -> int:
+    status, body = http_json("GET", f"{BASE}/cards/card-portfolio")
+    assert_true(status == 200, f"GET card-portfolio returned {status}")
+    assert_true(isinstance(body, dict), "card-portfolio response is not JSON")
+
+    holdings = (body.get("card_data") or {}).get("holdings")
+    assert_true(isinstance(holdings, list), "card-portfolio.card_data.holdings missing")
+    return len(holdings)
 
 
 def kill_stale_listener(port: int) -> None:
@@ -379,20 +383,15 @@ def run() -> None:
         t0_summary = wait_for_status_completed_all(2.0, "T0 init/bootstrap")
         print(f"[T0] ok: completed-all, card_count={t0_summary.get('card_count')}")
 
-        # Allow card_data to settle before reading T0 baseline
+        # Allow state to settle before reading T0 baseline
         time.sleep(1.0)
-        t0_holdings_count, t0_positions_count = get_holdings_and_positions_counts()
+        t0_holdings_count = get_holdings_count_from_card()
+        t0_positions_count = get_positions_count()
 
         print("\n=== T1: patch holdings (+1 row) ===")
-        status, body = http_json("GET", f"{BASE}/board-status")
-        assert_true(status == 200 and isinstance(body, dict), "Cannot read board-status for patch baseline")
-
-        runtime = body.get("cardRuntimeById") if isinstance(body.get("cardRuntimeById"), dict) else {}
-        portfolio_rt = runtime.get("card-portfolio") if isinstance(runtime.get("card-portfolio"), dict) else {}
-        existing_holdings = (portfolio_rt.get("card_data") or {}).get("holdings")
-        if not isinstance(existing_holdings, list):
-            print(f"[debug] card-portfolio runtime keys: {list(portfolio_rt.keys())}")
-            print(f"[debug] card_data: {json.dumps(portfolio_rt.get('card_data'))[:500]}")
+        status, body = http_json("GET", f"{BASE}/cards/card-portfolio")
+        assert_true(status == 200 and isinstance(body, dict), "Cannot read card-portfolio for patch baseline")
+        existing_holdings = (body.get("card_data") or {}).get("holdings")
         assert_true(isinstance(existing_holdings, list), "card-portfolio.card_data.holdings missing")
 
         existing_tickers = {
@@ -424,7 +423,8 @@ def run() -> None:
         t1_summary = wait_for_status_completed_all(30.0, "T1 holdings patch")
         assert_true(int(t1_summary.get("failed") or 0) == 0, f"T1 failed={t1_summary.get('failed')}")
 
-        after_holdings, after_positions = get_holdings_and_positions_counts()
+        after_holdings = get_holdings_count_from_card()
+        after_positions = get_positions_count()
         assert_true(
             after_holdings == t0_holdings_count + 1,
             f"Expected holdings rows +1 from T0 baseline (before={t0_holdings_count}, after={after_holdings})",

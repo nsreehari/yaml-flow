@@ -1374,6 +1374,16 @@ def create_single_board_server_runtime(options: Dict[str, Any]):
 
             # PATCH /cards/:id
             card_match = re.match(f"^{_escape_regexp(api_base_path)}/cards/([^/]+)$", p)
+            if method == "GET" and card_match:
+                bootstrap_board()
+                card_id = unquote(card_match.group(1))
+                card = read_card_from_store(card_id)
+                if not card:
+                    json_response(res, 404, {"error": f"card not found: {card_id}"})
+                    return True
+                json_response(res, 200, card)
+                return True
+
             if method == "PATCH" and card_match:
                 bootstrap_board()
                 card_id = unquote(card_match.group(1))
