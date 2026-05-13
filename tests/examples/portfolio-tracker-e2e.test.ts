@@ -5,7 +5,9 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const portfolioDir = path.join(repoRoot, 'tests', 'e2e', 'portfolio-tracker');
+const portfolioLocalDir = path.join(repoRoot, 'tests', 'e2e', 'local');
+const portfolioHttpDir = path.join(repoRoot, 'tests', 'e2e', 'http');
+const portfolioPyDir = path.join(repoRoot, 'py-standalone', 'examples', 'portfolio-tracker');
 
 /**
  * Probe for a working Python interpreter.
@@ -32,7 +34,8 @@ const PYTHON_CMD = findPython();
 const DEEP = process.env.DEEP === 'true';
 
 function runScript(scriptName: string, timeoutMs = 120_000, extraArgs: string[] = []): Promise<{ stdout: string; stderr: string; code: number }> {
-  const scriptPath = path.join(portfolioDir, scriptName);
+  const baseDir = scriptName.includes('http') ? portfolioHttpDir : portfolioLocalDir;
+  const scriptPath = path.join(baseDir, scriptName);
   return new Promise((resolve) => {
     const proc = execFile('node', [scriptPath, ...extraArgs], {
       cwd: repoRoot,
@@ -51,7 +54,7 @@ function runScript(scriptName: string, timeoutMs = 120_000, extraArgs: string[] 
 }
 
 function runPythonScript(scriptName: string, timeoutMs = 120_000): Promise<{ stdout: string; stderr: string; code: number }> {
-  const scriptPath = path.join(portfolioDir, scriptName);
+  const scriptPath = path.join(portfolioPyDir, scriptName);
   return new Promise((resolve) => {
     const proc = execFile(PYTHON_CMD!, [scriptPath], {
       cwd: repoRoot,
@@ -102,7 +105,7 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toMatch(/"qty": 60/);   // TSLA
   }, 120_000);
 
-  it.skipIf(!PYTHON_CMD || !DEEP)('portfolio-tracker.py — CLI-based full board lifecycle (T0–T5)', async () => {
+  it('portfolio-tracker.py — CLI-based full board lifecycle (T0–T5)', async () => {
     console.log(`[python] using: ${PYTHON_CMD}`);
     const { stdout, stderr, code } = await runPythonScript('portfolio-tracker.py', 170_000);
     const combined = stdout + stderr;
@@ -114,6 +117,15 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toContain('[T5] totals assertion passed');
   }, 180_000);
 
+  it('portfolio-tracker-http-test.py — native Python HTTP+SSE E2E (T1–T5)', async () => {
+    console.log(`[python] using: ${PYTHON_CMD}`);
+    const { stdout, stderr, code } = await runPythonScript('portfolio-tracker-http-test.py', 240_000);
+    const combined = stdout + stderr;
+
+    expect(code, `exit code non-zero\nstdout: ${stdout}\nstderr: ${stderr}`).toBe(0);
+    expect(combined).toContain('All tests passed');
+  }, 240_000);
+
   it('portfolio-tracker-http-test.js — HTTP + SSE E2E (T1–T5, two-track worker architecture)', async () => {
     const { stdout, stderr, code } = await runScript('portfolio-tracker-http-test.js', 240_000);
     const combined = stdout + stderr;
@@ -122,9 +134,9 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toContain('=== All tests passed ✓ ===');
   }, 240_000);
 
-  it.skipIf(!PYTHON_CMD || !DEEP)('portfolio-tracker-http-test.js --server py — HTTP+SSE E2E against Python server (T1–T5)', async () => {
+  it('portfolio-tracker-http-test.js --server py — HTTP+SSE E2E against Python server (T1–T5)', async () => {
     console.log(`[python] using: ${PYTHON_CMD}`);
-    const { stdout, stderr, code } = await runScript('portfolio-tracker-http-test.js', 300_000, ['--server', 'py', '--port', '7801']);
+    const { stdout, stderr, code } = await runScript('portfolio-tracker-http-test.js', 300_000, ['--server', 'py']);
     const combined = stdout + stderr;
 
     expect(code, `exit code non-zero\nstdout: ${stdout}\nstderr: ${stderr}`).toBe(0);

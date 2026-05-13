@@ -14,13 +14,35 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
 import fs from 'node:fs';
+import net from 'node:net';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const cliArgs = process.argv.slice(2);
 const portArg = cliArgs.indexOf('--port');
-const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : 7799;
+const cliPort = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : NaN;
+const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+
+async function pickFreePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      const port = addr && typeof addr === 'object' ? addr.port : 0;
+      server.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+const PORT = Number.isInteger(cliPort) && cliPort > 0 ? cliPort : await pickFreePort();
 
 const BOARD_ID = 'default';
 const BASE = `http://127.0.0.1:${PORT}/api/boards/${BOARD_ID}`;
@@ -32,7 +54,7 @@ const CARD_PATTERN = 'cardT*';
 // Resolve and wipe the setup directory before starting the server so each
 // test run begins from a clean slate.  The location is read from
 // demo-server-config.json (setupDir key) with the same fallback the server uses.
-function resolveSetupDir() {
+function resolveSetupDirRoot() {
   const configPath = path.join(SERVER_DIR, 'demo-server-config.json');
   try {
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -43,7 +65,7 @@ function resolveSetupDir() {
   return path.join(SERVER_DIR, '.demo-setup');
 }
 
-const SETUP_DIR = resolveSetupDir();
+const SETUP_DIR = path.join(resolveSetupDirRoot(), RUN_ID);
 if (fs.existsSync(SETUP_DIR)) {
   fs.rmSync(SETUP_DIR, { recursive: true, force: true });
   console.log(`[demo-http-test] wiped setup dir: ${SETUP_DIR}`);
@@ -170,7 +192,7 @@ function startServer(port) {
     const proc = spawn(process.execPath, [SERVER_SCRIPT, '--cards-pattern', CARD_PATTERN], {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...process.env, DEMO_SERVER_PORT: String(port) },
+      env: { ...process.env, DEMO_SERVER_PORT: String(port), DEMO_SETUP_DIR: SETUP_DIR },
     });
     let ready = false;
 

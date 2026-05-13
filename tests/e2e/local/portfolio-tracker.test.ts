@@ -26,7 +26,7 @@ describe('portfolio-tracker e2e', () => {
   it('portfolio-t4.js completes successfully', () => {
     const r = run(process.execPath, [
       '--experimental-vm-modules',
-      path.join('tests', 'e2e', 'portfolio-tracker', 'portfolio-t4.js'),
+      path.join('tests', 'e2e', 'local', 'portfolio-t4.js'),
     ]);
 
     if (r.error) throw r.error;
@@ -41,7 +41,7 @@ describe('portfolio-tracker e2e', () => {
   it('portfolio-tracker-public.js completes successfully', () => {
     const r = run(process.execPath, [
       '--experimental-vm-modules',
-      path.join('tests', 'e2e', 'portfolio-tracker', 'portfolio-tracker-public.js'),
+      path.join('tests', 'e2e', 'local', 'portfolio-tracker-public.js'),
     ]);
 
     if (r.error) throw r.error;
@@ -56,8 +56,7 @@ describe('portfolio-tracker e2e', () => {
   it('portfolio-tracker-http-test.js completes successfully', () => {
     const r = run(process.execPath, [
       '--experimental-vm-modules',
-      path.join('tests', 'e2e', 'portfolio-tracker', 'portfolio-tracker-http-test.js'),
-      '--port', '7812',
+      path.join('tests', 'e2e', 'http', 'portfolio-tracker-http-test.js'),
     ]);
 
     if (r.error) throw r.error;

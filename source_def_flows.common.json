@@ -1,7 +1,6 @@
 {
   "version": "1.0",
-  "description": "Self-contained source-def registry for demo-task-executor runtimes.",
-  "executor": "demo-task-executor",
+  "description": "Common source-def registry for demo-task-executor runtimes.",
   "subcommands": [
     "run-source-fetch",
     "describe-capabilities",

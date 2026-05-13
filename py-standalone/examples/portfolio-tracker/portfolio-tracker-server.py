@@ -9,12 +9,6 @@ Uses create_single_board_server_runtime from py-server-runtime.
 Cards are seeded inline on first start (if the card store is empty).
 Task executor: portfolio-tracker-fetch-prices.py (mock-quotes source kind).
 
-Notification flow: a background polling thread (2-second interval) calls
-board.process_accumulated_events() using the server adapter, which has its
-publish_board_change_notifications hook wired (by the runtime) to broadcast
-SSE frames to connected clients. This bridges pycli task-executor callbacks
-(which run in subprocesses with a no-op publish) to SSE clients.
-
 Usage:
     python portfolio-tracker-server.py [--port 7801] [--reset]
 
@@ -36,7 +30,6 @@ import shutil
 import sys
 import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -70,21 +63,23 @@ from board_live_cards_adapters import (  # noqa: E402
     dispatch_execution as _dispatch_execution_impl,
 )
 from pylib.cli.storage_interface import parse_ref, serialize_ref  # noqa: E402
-from pylib.cli.board_live_cards_public import create_board_live_cards_public  # noqa: E402
 
 # ── CLI args ───────────────────────────────────────────────────────────────────
 
 _parser = argparse.ArgumentParser()
 _parser.add_argument('--port', type=int, default=7801)
+_parser.add_argument('--run-id', type=str, default='')
 _parser.add_argument('--reset', action='store_true')
 _args = _parser.parse_args()
 
 PORT = _args.port
+RUN_ID = _args.run_id
 RESET = _args.reset
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-SETUP_DIR = os.path.join(tempfile.gettempdir(), 'portfolio-tracker-py-server')
+_setup_suffix = RUN_ID or str(PORT)
+SETUP_DIR = os.path.join(tempfile.gettempdir(), f'portfolio-tracker-py-server-{_setup_suffix}')
 RUNTIME_DIR = os.path.join(SETUP_DIR, 'runtime')
 CARDS_DIR = os.path.join(SETUP_DIR, 'cards')
 OUTPUTS_DIR = os.path.join(SETUP_DIR, 'outputs')
@@ -116,17 +111,15 @@ INLINE_CARDS: List[Dict[str, Any]] = [
         'id': 'price-fetch',
         'meta': {'title': 'Fetch Market Prices'},
         'requires': ['holdings'],
-        'provides': [{'bindTo': 'prices', 'ref': 'fetched_sources.prices'}],
+        'provides': [{'bindTo': 'prices', 'ref': 'computed_values.prices'}],
         'card_data': {},
-        'source_defs': [{
-            'kind': 'mock-quotes',
+        'compute': [{
             'bindTo': 'prices',
-            'outputFile': 'prices.json',
-            'projections': {'tickers': '$append([], requires.holdings.symbol)'},
+            'expr': '$merge($map(requires.holdings, function($h){ { $h.symbol: 100 } }))',
         }],
         'view': {
             'elements': [
-                {'kind': 'table', 'label': 'Market Prices', 'data': {'bind': 'fetched_sources.prices'}},
+                {'kind': 'table', 'label': 'Market Prices', 'data': {'bind': 'computed_values.prices'}},
             ],
         },
     },
@@ -377,49 +370,6 @@ if _is_empty:
 else:
     print(f'[portfolio-tracker-server.py] card store already populated '
           f'({len(_existing["data"]["cards"])} cards)')
-
-# ── Polling drain thread ───────────────────────────────────────────────────────
-#
-# board_adapter.publish_board_change_notifications is now the runtime's SSE broadcast
-# hook (set during create_single_board_server_runtime above).
-#
-# When portfolio-tracker-fetch-prices.py (the task executor) completes, it calls
-# back via pycli (board_live_cards_pycli.py source-data-fetched).  That subprocess
-# uses NativeBoardPlatformAdapter whose publish_board_change_notifications is a no-op.
-# The polling thread below creates a fresh board with the server's board_adapter and
-# calls process_accumulated_events(), which reads the FS journal written by the pycli
-# subprocess and broadcasts the results to SSE clients within ~2 seconds.
-
-def _poll_drain() -> None:
-    while True:
-        time.sleep(2)
-        try:
-            poll_board = create_board_live_cards_public(base_ref, board_adapter)
-            poll_board.process_accumulated_events({})
-            publish = getattr(board_adapter, 'publish_board_change_notifications', None)
-            if callable(publish):
-                notifications: List[Dict[str, Any]] = []
-                status_result = poll_board.status({})
-                if status_result.get('status') == 'success' and status_result.get('data') is not None:
-                    notifications.append({'kind': 'status', 'status': status_result['data']})
-                data_result = poll_board.get_all_outputs_data_objects({})
-                if data_result.get('status') == 'success' and isinstance(data_result.get('data'), dict):
-                    for token, payload in data_result['data'].items():
-                        if token:
-                            notifications.append({'kind': 'data_object', 'key': token, 'payload': payload})
-                cv_result = poll_board.get_all_outputs_computed_values({})
-                if cv_result.get('status') == 'success' and isinstance(cv_result.get('data'), dict):
-                    for card_id, values in cv_result['data'].items():
-                        if card_id:
-                            notifications.append({'kind': 'computed_values', 'cardId': card_id, 'values': values})
-                if notifications:
-                    publish(notifications)
-        except Exception:
-            pass
-
-
-_poll_thread = threading.Thread(target=_poll_drain, daemon=True, name='poll-drain')
-_poll_thread.start()
 
 # ── HTTP server ────────────────────────────────────────────────────────────────
 

@@ -107,9 +107,9 @@ def _interpolate(template: str, args: Dict[str, Any]) -> str:
 
 
 def _load_registry() -> Dict[str, Any]:
-    """Load source_def_flows.json registry."""
-    registry_path = os.path.join(_HERE, "source_def_flows.json")
-    with open(registry_path, "r", encoding="utf-8") as f:
+    """Load runtime source-def registry."""
+    runtime_path = os.path.join(_HERE, "source_def_flows.json")
+    with open(runtime_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 

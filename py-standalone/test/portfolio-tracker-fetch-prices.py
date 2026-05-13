@@ -124,9 +124,18 @@ def cmd_run_source_fetch(args: argparse.Namespace) -> int:
         return 1
 
     envelope = json.loads(raw_in)
-    callback = envelope.get("callback") if isinstance(envelope, dict) else None
+    callback = (
+        envelope.get("callback")
+        if isinstance(envelope, dict) and isinstance(envelope.get("source_def"), dict)
+        else None
+    )
+    did_report = False
 
     def safe_fail(msg: str) -> int:
+        nonlocal did_report
+        if did_report:
+            return 0
+        did_report = True
         try:
             err_storage.write(err_ref.value, msg)
         except Exception:
@@ -163,6 +172,7 @@ def cmd_run_source_fetch(args: argparse.Namespace) -> int:
         print(f"[portfolio-tracker-fetch-prices] wrote prices for: {', '.join([str(t) for t in tickers])}")
 
         if isinstance(callback, dict):
+            did_report = True
             report_complete(callback, out_ref)
         return 0
     except Exception as e:

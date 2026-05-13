@@ -211,7 +211,9 @@ function loadSourceDefFlowsConfig() {
   try {
     return readJson(SOURCE_DEF_FLOWS_FILE);
   } catch (err) {
-    fail(`Cannot read source flow registry at ${SOURCE_DEF_FLOWS_FILE}: ${String(err && err.message || err)}`);
+    fail(
+      `Cannot read source flow registry (${SOURCE_DEF_FLOWS_FILE}): ${String(err && err.message || err)}`,
+    );
   }
 }
 

@@ -39,14 +39,17 @@ const __dirname = path.dirname(__filename);
 const args = process.argv.slice(2);
 const portIdx = args.indexOf('--port');
 const PORT = portIdx >= 0 ? Number(args[portIdx + 1]) : 7800;
+const runIdIdx = args.indexOf('--run-id');
+const RUN_ID = runIdIdx >= 0 ? String(args[runIdIdx + 1]) : '';
 const RESET = args.includes('--reset');
 
 // ── Paths ──────────────────────────────────────────────────────────────────────
-const SETUP_DIR = path.join(os.tmpdir(), `portfolio-tracker-server-${PORT}`);
+const setupSuffix = RUN_ID || String(PORT);
+const SETUP_DIR = path.join(os.tmpdir(), `portfolio-tracker-server-${setupSuffix}`);
 const RUNTIME_DIR = path.join(SETUP_DIR, 'runtime');
 const CARDS_DIR = path.join(SETUP_DIR, 'cards');
 const OUTPUTS_DIR = path.join(SETUP_DIR, 'outputs');
-const FETCH_PRICES_JS = path.join(__dirname, 'portfolio-tracker-fetch-prices.js');
+const FETCH_PRICES_JS = path.join(__dirname, '..', 'local', 'portfolio-tracker-fetch-prices.js');
 
 if (RESET && fs.existsSync(SETUP_DIR)) {
   fs.rmSync(SETUP_DIR, { recursive: true, force: true });

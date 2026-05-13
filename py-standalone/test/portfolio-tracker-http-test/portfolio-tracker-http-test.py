@@ -8,7 +8,7 @@ Architecture mirrors portfolio-tracker-http-test.js:
   - main thread drives HTTP PATCH/GET and polls NS for waits
 
 Usage:
-  python portfolio-tracker-http-test.py [--port 7801] [--server node|py]
+    python portfolio-tracker-http-test.py [--port PORT] [--server node|py]
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -29,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SERVER_SCRIPT = HERE / "portfolio-tracker-server.js"
 PY_SERVER_SCRIPT = HERE / "portfolio-tracker-server.py"
+SSE_WORKER_SCRIPT = HERE / "portfolio-tracker-sse-worker.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,7 +41,17 @@ def parse_args() -> argparse.Namespace:
 
 
 ARGS = parse_args()
-PORT = ARGS.port if ARGS.port is not None else (7801 if ARGS.server == "py" else 7800)
+
+
+def pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return int(sock.getsockname()[1])
+
+
+PORT = ARGS.port if ARGS.port is not None else pick_free_port()
+RUN_ID = f"run-{int(time.time() * 1000)}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 BASE = f"http://127.0.0.1:{PORT}/api/board"
 
 
@@ -59,6 +71,8 @@ NS = {
     "statusGeneration": 0,
     "dataObjects": {},
     "computedValues": {},
+    "cardRefreshedCount": 0,
+    "cardRefreshedByCardId": {},
 }
 
 
@@ -101,6 +115,11 @@ def apply_frame(payload: dict) -> None:
                     NS["dataObjects"][note["key"]] = note.get("payload")
                 elif kind == "computed_values" and isinstance(note.get("cardId"), str):
                     NS["computedValues"][note["cardId"]] = note.get("values")
+                elif kind == "card_refreshed":
+                    NS["cardRefreshedCount"] += 1
+                    card_id = note.get("cardId")
+                    if isinstance(card_id, str) and card_id:
+                        NS["cardRefreshedByCardId"][card_id] = NS["cardRefreshedByCardId"].get(card_id, 0) + 1
 
 
 def get_ns_snapshot() -> dict:
@@ -111,6 +130,8 @@ def get_ns_snapshot() -> dict:
             "statusGeneration": NS["statusGeneration"],
             "dataObjects": dict(NS["dataObjects"]),
             "computedValues": dict(NS["computedValues"]),
+            "cardRefreshedCount": NS["cardRefreshedCount"],
+            "cardRefreshedByCardId": dict(NS["cardRefreshedByCardId"]),
         }
 
 
@@ -199,7 +220,7 @@ def make_holdings_patch(holdings_map: dict[str, int]) -> dict:
 def start_server() -> subprocess.Popen:
     if ARGS.server == "py":
         python = sys.executable or "python"
-        cmd = [python, str(PY_SERVER_SCRIPT), "--port", str(PORT), "--reset"]
+        cmd = [python, str(PY_SERVER_SCRIPT), "--port", str(PORT), "--run-id", RUN_ID, "--reset"]
     else:
         cmd = ["node", str(SERVER_SCRIPT), "--port", str(PORT), "--reset"]
 
@@ -244,56 +265,61 @@ def start_server() -> subprocess.Popen:
     return proc
 
 
-def start_sse_consumer(stop_event: threading.Event) -> threading.Thread:
-    def _run():
-        req = urllib.request.Request(f"{BASE}/sse", headers={"Accept": "text/event-stream"})
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                block_lines: list[str] = []
-                while not stop_event.is_set():
-                    raw = resp.readline()
-                    if not raw:
-                        break
-                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                    if line == "":
-                        data_lines = [l[6:] for l in block_lines if l.startswith("data: ")]
-                        block_lines = []
-                        if not data_lines:
-                            continue
-                        data_text = "\n".join(data_lines)
-                        try:
-                            payload = json.loads(data_text)
-                        except json.JSONDecodeError:
-                            continue
-                        apply_frame(payload)
-                    else:
-                        block_lines.append(line)
-        except Exception as err:
-            if not stop_event.is_set():
-                print(f"[sse] error: {err}", file=sys.stderr)
+def start_sse_worker() -> subprocess.Popen:
+    proc = subprocess.Popen(
+        [sys.executable, str(SSE_WORKER_SCRIPT), "--sse-url", f"{BASE}/sse"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
 
-    th = threading.Thread(target=_run, daemon=True)
-    th.start()
-    return th
+    def _pump_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                msg = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            msg_type = msg.get("type")
+            if msg_type == "frame" and isinstance(msg.get("payload"), dict):
+                apply_frame(msg["payload"])
+            elif msg_type == "error":
+                print(f"[sse-worker] {msg.get('message')}", file=sys.stderr)
+            elif msg_type == "closed":
+                print("[sse-worker] SSE stream closed by server")
+
+    def _pump_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            print(f"[sse-worker:err] {line}", end="", file=sys.stderr)
+
+    threading.Thread(target=_pump_stdout, daemon=True).start()
+    threading.Thread(target=_pump_stderr, daemon=True).start()
+    return proc
 
 
 def run() -> None:
     print("\n=== portfolio-tracker HTTP E2E test (python) ===")
     print(f"target: {BASE}  [server: {ARGS.server}]")
-    print("architecture: main-thread (driver) + background SSE consumer\n")
+    print("architecture: main-thread (driver) + worker-process (SSE consumer)\n")
 
     server_proc = start_server()
     time.sleep(0.3)
 
-    sse_stop = threading.Event()
+    sse_worker_proc = None
     try:
         print("\n=== Step 1: init-board ===")
         status, _ = http_json("GET", "/init-board")
         assert_true(status == 200, f"init-board returned {status}")
         print("[step1] ok")
 
-        print("\n=== Step 2: Start SSE consumer ===")
-        start_sse_consumer(sse_stop)
+        print("\n=== Step 2: Start SSE consumer worker ===")
+        sse_worker_proc = start_sse_worker()
         initial_payload = wait_for_initial_payload(15.0)
         snap = get_ns_snapshot()
         print(f"[step2] SSE online — initial payload ({len(initial_payload.get('cardDefinitions', []))} cards)")
@@ -313,6 +339,7 @@ def run() -> None:
         print(f"[T1] passed: prices=[AAPL,MSFT], rows=2, totalValue={float(t1_total):.2f}")
 
         print("\n=== T2a: Update holdings — add GOOG ===")
+        t2_card_refreshed_before = get_ns_snapshot()["cardRefreshedCount"]
         status, _ = http_json("PATCH", "/cards/portfolio-form", make_holdings_patch({"AAPL": 50, "MSFT": 30, "GOOG": 100}))
         assert_true(status == 200, f"PATCH portfolio-form returned {status}")
         print("[T2a] PATCH ok — consumer will receive SSE notifications")
@@ -322,6 +349,14 @@ def run() -> None:
         print(f"[T2b] completed — {json.dumps(t2_summary)}")
 
         wait_for_price_symbols(["AAPL", "GOOG", "MSFT"], 30.0, "T2b prices")
+        t2_card_refreshed_after = get_ns_snapshot()["cardRefreshedCount"]
+        assert_true(
+            t2_card_refreshed_after > t2_card_refreshed_before,
+            (
+                "T2b: expected at least one card_refreshed notification after PATCH "
+                f"(before={t2_card_refreshed_before}, after={t2_card_refreshed_after})"
+            ),
+        )
         t2_table = (get_ns_snapshot()["computedValues"].get("holdings-table") or {}).get("table")
         assert_true(isinstance(t2_table, dict) and isinstance(t2_table.get("rows"), list) and len(t2_table["rows"]) == 3,
                     f"T2b: expected 3 rows, got {len(t2_table.get('rows', [])) if isinstance(t2_table, dict) else 'n/a'}")
@@ -377,7 +412,13 @@ def run() -> None:
         print("\n=== All tests passed ===\n")
 
     finally:
-        sse_stop.set()
+        if sse_worker_proc is not None:
+            sse_worker_proc.terminate()
+            try:
+                sse_worker_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                sse_worker_proc.kill()
+                sse_worker_proc.wait(timeout=5)
         server_proc.terminate()
         try:
             server_proc.wait(timeout=10)

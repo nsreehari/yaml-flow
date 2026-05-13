@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -26,16 +27,19 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 
 HERE = Path(__file__).resolve().parent
 SERVER_DIR = HERE.parent
 SERVER_SCRIPT = SERVER_DIR / "py-demo-server.py"
+SSE_WORKER_SCRIPT = HERE / "demo-sse-worker.py"
 
 
 class TestFailure(RuntimeError):
@@ -49,13 +53,33 @@ def assert_true(condition: bool, message: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=7804)
+    parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--board-id", default="demo-http-test")
     parser.add_argument("--testing-pattern", default="cardT*.json")
     return parser.parse_args()
 
 
 ARGS = parse_args()
+RUN_ID = f"run-{int(time.time() * 1000)}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+
+
+def pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return int(sock.getsockname()[1])
+
+
+def serialize_ref(ref: dict[str, str]) -> str:
+    payload = json.dumps({"kind": ref["kind"], "value": ref["value"]}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return f"b64:{encoded}"
+
+
+RUN_ROOT_DIR = Path(tempfile.gettempdir()) / "py-demo-http-test" / RUN_ID
+DEMO_SETUP_DIR = RUN_ROOT_DIR / "setup"
+DEMO_SERVER_META_DIR = RUN_ROOT_DIR / "server-meta"
+ARGS.port = ARGS.port if ARGS.port is not None else pick_free_port()
 BASE = f"http://127.0.0.1:{ARGS.port}/api/boards/{ARGS.board_id}"
 BOARDS_BASE = f"http://127.0.0.1:{ARGS.port}/api/boards"
 
@@ -127,47 +151,53 @@ def http_json(method: str, url: str, payload: dict | None = None) -> tuple[int, 
         return e.code, body
 
 
-def start_sse_consumer(stop_event: threading.Event) -> threading.Thread:
-    def _run() -> None:
-        req = urllib.request.Request(f"{BASE}/sse", headers={"Accept": "text/event-stream"})
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                block_lines: list[str] = []
-                while not stop_event.is_set():
-                    raw = resp.readline()
-                    if not raw:
-                        break
-                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                    if line == "":
-                        data_lines = [l[6:] for l in block_lines if l.startswith("data: ")]
-                        block_lines = []
-                        if not data_lines:
-                            continue
-                        data_text = "\n".join(data_lines)
-                        try:
-                            payload = json.loads(data_text)
-                        except json.JSONDecodeError:
-                            continue
-                        apply_frame(payload)
-                    else:
-                        block_lines.append(line)
-        except Exception:
-            if not stop_event.is_set():
-                return
+def start_sse_worker() -> subprocess.Popen:
+    proc = subprocess.Popen(
+        [sys.executable, str(SSE_WORKER_SCRIPT), "--sse-url", f"{BASE}/sse"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
 
-    th = threading.Thread(target=_run, daemon=True)
-    th.start()
-    return th
+    def _pump_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                msg = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            msg_type = msg.get("type")
+            if msg_type == "frame" and isinstance(msg.get("payload"), dict):
+                apply_frame(msg["payload"])
+            elif msg_type == "error":
+                print(f"[sse-worker] {msg.get('message')}", file=sys.stderr)
+            elif msg_type == "closed":
+                print("[sse-worker] SSE stream closed by server")
+
+    def _pump_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            print(f"[sse-worker:err] {line}", end="", file=sys.stderr)
+
+    threading.Thread(target=_pump_stdout, daemon=True).start()
+    threading.Thread(target=_pump_stderr, daemon=True).start()
+    return proc
 
 
 def reset_server_state_dirs() -> None:
-    for dirname in (".demo-setup", ".server-meta"):
-        shutil.rmtree(SERVER_DIR / dirname, ignore_errors=True)
+    shutil.rmtree(RUN_ROOT_DIR, ignore_errors=True)
 
 
 def start_demo_server() -> subprocess.Popen:
     env = os.environ.copy()
     env["DEMO_SERVER_PORT"] = str(ARGS.port)
+    env["DEMO_SETUP_DIR"] = str(DEMO_SETUP_DIR)
+    env["DEMO_SERVER_META_STORE_REF"] = serialize_ref({"kind": "fs-path", "value": str(DEMO_SERVER_META_DIR)})
     env["PYTHONUNBUFFERED"] = "1"
 
     proc = subprocess.Popen(
@@ -333,13 +363,13 @@ def run() -> None:
 
     print(f"[setup] starting demo server on port {ARGS.port}")
     server_proc = start_demo_server()
-    sse_stop = threading.Event()
+    sse_worker_proc = None
 
     try:
         status, _ = http_json("POST", BOARDS_BASE, {"id": ARGS.board_id, "label": "Demo HTTP Test"})
         assert_true(status in (200, 409), f"board register returned {status}")
 
-        start_sse_consumer(sse_stop)
+        sse_worker_proc = start_sse_worker()
 
         print("\n=== T0: init/bootstrap ===")
         status, _ = http_json("GET", f"{BASE}/init-board")
@@ -412,7 +442,13 @@ def run() -> None:
         print("\n=== all assertions passed ===\n")
 
     finally:
-        sse_stop.set()
+        if sse_worker_proc is not None:
+            sse_worker_proc.terminate()
+            try:
+                sse_worker_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                sse_worker_proc.kill()
+                sse_worker_proc.wait(timeout=5)
         stop_demo_server(server_proc)
 
 

@@ -24,13 +24,35 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const cliArgs = process.argv.slice(2);
 const portArg = cliArgs.indexOf('--port');
-const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : 7810;
+const cliPort = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : NaN;
+const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+
+async function pickFreePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      const port = addr && typeof addr === 'object' ? addr.port : 0;
+      server.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+const PORT = Number.isInteger(cliPort) && cliPort > 0 ? cliPort : await pickFreePort();
 const BASE = `http://127.0.0.1:${PORT}/api/board`;
 const SERVER_SCRIPT = path.join(__dirname, 'portfolio-tracker-server.js');
 const SSE_WORKER_SCRIPT = path.join(__dirname, 'portfolio-tracker-sse-worker.js');
@@ -186,7 +208,7 @@ function applyFrame(payload) {
 
   function startServer(port) {
     const cmd = process.execPath;
-    const cmdArgs = [SERVER_SCRIPT, '--port', String(port), '--reset'];
+    const cmdArgs = [SERVER_SCRIPT, '--port', String(port), '--run-id', RUN_ID, '--reset'];
     return new Promise((resolve, reject) => {
       const proc = spawn(cmd, cmdArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
