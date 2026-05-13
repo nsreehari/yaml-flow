@@ -36,6 +36,7 @@ or adapting it to different infrastructure.
 To move from Node+FS to Azure Functions+Cosmos DB:
 - Implement your own `BoardPlatformAdapter` backed by Cosmos/Azure Blob
 - Write a thin host shim that maps Azure `HttpRequest` → `RuntimeRequest`
+- Extend ref dispatch for new `howToRun` kinds via `createExecutionRefInvoker({ transports, syncTransports })` — no layer replacement needed
 - Everything else — server runtime, core logic, client bundles — is unchanged
 
 ---

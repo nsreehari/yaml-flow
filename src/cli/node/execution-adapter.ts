@@ -46,7 +46,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { jsonata } from '../common/jsonata-loader.js';
-import type { ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
+import type { ArgsMassaging, ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
 import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.js';
 
@@ -255,6 +255,7 @@ export function buildLocalBaseSpec(
 // ============================================================================
 
 import { resolveArgsMassaging } from '../common/args-massaging.js';
+import type { MassagedArgs } from '../common/args-massaging.js';
 import { createNodeCommandExecutor } from './process-runner.js';
 
 /** Normalized envelope returned by invokeRefSync. */
@@ -278,6 +279,32 @@ export interface InvokeRefSyncOptions {
   label?: string;
 }
 
+export interface InvokeExecutionRefOptions extends InvokeRefSyncOptions {
+  /** Extra async transport handlers keyed by `ExecutionRef.howToRun`. */
+  transports?: Record<string, TransportInvoker>;
+  /** Extra synchronous transport handlers keyed by `ExecutionRef.howToRun`. */
+  syncTransports?: Record<string, SyncTransportInvoker>;
+}
+
+export type TransportInvoker = (
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+) => Promise<InvokeRefResult>;
+
+export type SyncTransportInvoker = (
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+) => InvokeRefResult;
+
+export interface CreateExecutionRefInvokerOptions extends InvokeExecutionRefOptions {}
+
+export interface ExecutionRefInvoker {
+  invoke(ref: ExecutionRef, args: Record<string, unknown>): Promise<InvokeRefResult>;
+  invokeSync(ref: ExecutionRef, args: Record<string, unknown>): InvokeRefResult;
+}
+
 function _parseStdoutAsJson(stdout: string): unknown {
   const trimmed = stdout.trim();
   if (!trimmed) throw new Error('empty stdout');
@@ -288,6 +315,219 @@ function _parseStdoutAsJson(stdout: string): unknown {
     const last = lines[lines.length - 1];
     return JSON.parse(last);
   }
+}
+
+function resolveWhatToRunValue(ref: ExecutionRef): string {
+  const raw = ref.whatToRun;
+  return typeof raw === 'object' ? raw.value : parseRef(raw).value;
+}
+
+function buildMassagingContext(ref: ExecutionRef, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...args,
+    whatToRun: resolveWhatToRunValue(ref),
+    ...(ref.extra ? { extra: ref.extra } : {}),
+  };
+}
+
+export function evaluateArgsMassaging(
+  argsMassaging: ArgsMassaging | undefined,
+  args: Record<string, unknown>,
+  label = 'invokeExecutionRef',
+): MassagedArgs {
+  return resolveArgsMassaging(argsMassaging, args, label);
+}
+
+function normalizeSuccessPayload(payload: unknown): InvokeRefResult {
+  if (
+    payload
+    && typeof payload === 'object'
+    && !Array.isArray(payload)
+    && typeof (payload as { result?: unknown }).result === 'string'
+    && (payload as { data?: unknown }).data
+    && typeof (payload as { data?: unknown }).data === 'object'
+    && !Array.isArray((payload as { data?: unknown }).data)
+  ) {
+    return payload as InvokeRefResult;
+  }
+
+  const data: Record<string, unknown> =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : { stdout: payload };
+
+  return { result: 'success', data };
+}
+
+function normalizeFailure(message: string): InvokeRefResult {
+  return { result: 'failure', data: { error: message } };
+}
+
+function invokeLocalExecutionRefSync(
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+): InvokeRefResult {
+  const label = options?.label ?? 'invokeExecutionRefSync';
+  const cliDir = options?.cliDir ?? options?.cwd ?? process.cwd();
+
+  let massaged: MassagedArgs;
+  try {
+    massaged = evaluateArgsMassaging(ref.argsMassaging, buildMassagingContext(ref, args), label);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return normalizeFailure(msg);
+  }
+
+  let baseSpec;
+  try {
+    baseSpec = buildLocalBaseSpec(ref, cliDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return normalizeFailure(`[${label}] ref resolution failed: ${msg}`);
+  }
+
+  const argv = [...baseSpec.baseArgs, ...(massaged.cmdArgs ?? [])];
+  const stdinPayload = JSON.stringify(massaged.stdin ?? args);
+  const executor = createNodeCommandExecutor();
+
+  let stdout: string;
+  try {
+    stdout = executor.executeSync(baseSpec.command, argv, {
+      timeout: options?.timeoutMs ?? 30_000,
+      encoding: 'utf-8',
+      cwd: options?.cwd,
+      input: stdinPayload,
+    });
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stderr?: Buffer | string; status?: number | null };
+    const stderr = (e.stderr ? String(e.stderr) : '').trim();
+    const status = typeof e.status === 'number' ? e.status : 'unknown';
+    const detail = stderr || e.message;
+    return normalizeFailure(`[${label}] ref exited with status ${status}${detail ? `: ${detail}` : ''}`);
+  }
+
+  try {
+    return normalizeSuccessPayload(_parseStdoutAsJson(stdout));
+  } catch {
+    return { result: 'success', data: { stdout: stdout.trim() } };
+  }
+}
+
+async function invokeHttpExecutionRef(
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+): Promise<InvokeRefResult> {
+  const label = options?.label ?? 'invokeExecutionRef';
+
+  let massaged: MassagedArgs;
+  try {
+    massaged = evaluateArgsMassaging(ref.argsMassaging, buildMassagingContext(ref, args), label);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return normalizeFailure(msg);
+  }
+
+  const baseUrl = resolveWhatToRunValue(ref);
+  const headers = massaged.headers
+    ? { 'Content-Type': 'application/json', ...massaged.headers }
+    : { 'Content-Type': 'application/json' };
+
+  let url = massaged.url ?? baseUrl;
+  let body: string | undefined;
+
+  if (ref.howToRun === 'http:get') {
+    const querySource = massaged.body && typeof massaged.body === 'object' && !Array.isArray(massaged.body)
+      ? massaged.body as Record<string, unknown>
+      : args;
+    const params = new URLSearchParams(
+      Object.entries(querySource)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => [key, String(value)]),
+    );
+    if (params.size > 0) {
+      url = `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
+    }
+  } else {
+    body = JSON.stringify(massaged.body ?? args);
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: ref.howToRun === 'http:get' ? 'GET' : 'POST',
+      headers,
+      body,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      return normalizeFailure(`[${label}] HTTP ${response.status}${text ? `: ${text}` : ''}`);
+    }
+
+    const text = await response.text();
+    if (!text.trim()) return { result: 'success', data: {} };
+
+    try {
+      return normalizeSuccessPayload(_parseStdoutAsJson(text));
+    } catch {
+      return { result: 'success', data: { stdout: text.trim() } };
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return normalizeFailure(`[${label}] ${msg}`);
+  }
+}
+
+const defaultAsyncTransportInvokers: Record<string, TransportInvoker> = {
+  'local-node': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
+  'local-python': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
+  'local-process': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
+  'built-in': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
+  'http:post': invokeHttpExecutionRef,
+  'http:get': invokeHttpExecutionRef,
+};
+
+const defaultSyncTransportInvokers: Record<string, SyncTransportInvoker> = {
+  'local-node': invokeLocalExecutionRefSync,
+  'local-python': invokeLocalExecutionRefSync,
+  'local-process': invokeLocalExecutionRefSync,
+  'built-in': invokeLocalExecutionRefSync,
+};
+
+export async function invokeExecutionRef(
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+): Promise<InvokeRefResult> {
+  const transport = options?.transports?.[ref.howToRun] ?? defaultAsyncTransportInvokers[ref.howToRun];
+  if (!transport) {
+    return normalizeFailure(`[${options?.label ?? 'invokeExecutionRef'}] unsupported howToRun: ${ref.howToRun}`);
+  }
+  return transport(ref, args, options);
+}
+
+export function invokeExecutionRefSync(
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+): InvokeRefResult {
+  const transport = options?.syncTransports?.[ref.howToRun] ?? defaultSyncTransportInvokers[ref.howToRun];
+  if (!transport) {
+    return normalizeFailure(`[${options?.label ?? 'invokeExecutionRefSync'}] unsupported sync howToRun: ${ref.howToRun}`);
+  }
+  return transport(ref, args, options);
+}
+
+export function createExecutionRefInvoker(options?: CreateExecutionRefInvokerOptions): ExecutionRefInvoker {
+  return {
+    invoke(ref: ExecutionRef, args: Record<string, unknown>): Promise<InvokeRefResult> {
+      return invokeExecutionRef(ref, args, options);
+    },
+    invokeSync(ref: ExecutionRef, args: Record<string, unknown>): InvokeRefResult {
+      return invokeExecutionRefSync(ref, args, options);
+    },
+  };
 }
 
 /**
@@ -312,60 +552,7 @@ export function invokeRefSync(
   args: Record<string, unknown>,
   options?: InvokeRefSyncOptions,
 ): InvokeRefResult {
-  const label = options?.label ?? 'invokeRefSync';
-  const cliDir = options?.cliDir ?? options?.cwd ?? process.cwd();
-
-  let massaged;
-  try {
-    massaged = resolveArgsMassaging(ref.argsMassaging, args, label);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { result: 'failure', data: { error: msg } };
-  }
-
-  let baseSpec;
-  try {
-    baseSpec = buildLocalBaseSpec(ref, cliDir);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { result: 'failure', data: { error: `[${label}] ref resolution failed: ${msg}` } };
-  }
-
-  const argv = [...baseSpec.baseArgs, ...(massaged.cmdArgs ?? [])];
-  const stdinPayload = JSON.stringify(massaged.stdin ?? args);
-  const executor = createNodeCommandExecutor();
-
-  let stdout: string;
-  try {
-    stdout = executor.executeSync(baseSpec.command, argv, {
-      timeout: options?.timeoutMs ?? 30_000,
-      encoding: 'utf-8',
-      cwd: options?.cwd,
-      input: stdinPayload,
-    });
-  } catch (err) {
-    // execFileSync throws on non-zero exit / spawn error / timeout.
-    const e = err as NodeJS.ErrnoException & { stderr?: Buffer | string; status?: number | null };
-    const stderr = (e.stderr ? String(e.stderr) : '').trim();
-    const status = typeof e.status === 'number' ? e.status : 'unknown';
-    const detail = stderr || e.message;
-    return {
-      result: 'failure',
-      data: { error: `[${label}] ref exited with status ${status}${detail ? `: ${detail}` : ''}` },
-    };
-  }
-
-  // Transport succeeded (exit 0). Wrap stdout as data unconditionally.
-  try {
-    const parsed = _parseStdoutAsJson(stdout);
-    const data: Record<string, unknown> =
-      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : { stdout: parsed };
-    return { result: 'success', data };
-  } catch {
-    return { result: 'success', data: { stdout: stdout.trim() } };
-  }
+  return invokeExecutionRefSync(ref, args, options);
 }
 
 // ============================================================================

@@ -202,6 +202,17 @@ export interface ArgsMassaging {
   bodyTemplate?: string;
 }
 
+export type KnownExecutionTransport =
+  | 'local-node'
+  | 'local-python'
+  | 'local-process'
+  | 'http:post'
+  | 'http:get'
+  | 'built-in'
+  | 'in-browser';
+
+export type ExecutionTransportKind = KnownExecutionTransport | (string & {});
+
 // ============================================================================
 // ExecutionRef
 // ============================================================================
@@ -225,7 +236,7 @@ export interface ExecutionRef {
    * Transport and runtime kind — determines how whatToRun is invoked.
    * @see module JSDoc for the full list of supported values.
    */
-  howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in' | 'in-browser';
+  howToRun: ExecutionTransportKind;
 
   /**
     * Address of the artifact to run. Two valid forms:

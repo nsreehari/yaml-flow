@@ -67,7 +67,21 @@ export { createCardStore } from '../common/board-live-cards-lib.js';
 export { createArtifactsStore, createChatArtifactsStore, createFileArtifactsStore, createCardFileMetadataStore } from '../common/artifacts-store-lib.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
-export { invokeRefSync } from './execution-adapter.js';
+export {
+  createExecutionRefInvoker,
+  evaluateArgsMassaging,
+  invokeExecutionRef,
+  invokeExecutionRefSync,
+  invokeRefSync,
+} from './execution-adapter.js';
+export type {
+  CreateExecutionRefInvokerOptions,
+  ExecutionRefInvoker,
+  InvokeExecutionRefOptions,
+  InvokeRefResult,
+  SyncTransportInvoker,
+  TransportInvoker,
+} from './execution-adapter.js';
 
 // ============================================================================
 // createNodeSpawnInvocationAdapter

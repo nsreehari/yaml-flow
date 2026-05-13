@@ -3,7 +3,7 @@
 Generated from npm pack --dry-run.
 
 ## Summary
-filename: yaml-flow-8.0.0.tgz
+filename: yaml-flow-8.0.1.tgz
 package size: 1.6 MB
 unpacked size: 6.5 MB
 total files: 195
