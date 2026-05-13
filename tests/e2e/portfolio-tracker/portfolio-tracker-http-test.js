@@ -16,7 +16,7 @@
  *     All "wait for X" helpers poll NS with setInterval — no callbacks needed.
  *
  * Usage:
- *   node portfolio-tracker-http-test.js [--port 7800]
+ *   node portfolio-tracker-http-test.js [--port 7810]
  */
 
 import { Worker } from 'node:worker_threads';
@@ -30,7 +30,7 @@ const __dirname = path.dirname(__filename);
 
 const cliArgs = process.argv.slice(2);
 const portArg = cliArgs.indexOf('--port');
-const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : 7800;
+const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : 7810;
 const BASE = `http://127.0.0.1:${PORT}/api/board`;
 const SERVER_SCRIPT = path.join(__dirname, 'portfolio-tracker-server.js');
 const SSE_WORKER_SCRIPT = path.join(__dirname, 'portfolio-tracker-sse-worker.js');

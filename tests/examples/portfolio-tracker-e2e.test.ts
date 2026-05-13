@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const portfolioDir = path.join(repoRoot, 'examples', 'browser', 'boards', 'portfolio-tracker');
+const portfolioDir = path.join(repoRoot, 'tests', 'e2e', 'portfolio-tracker');
 
 /**
  * Probe for a working Python interpreter.
