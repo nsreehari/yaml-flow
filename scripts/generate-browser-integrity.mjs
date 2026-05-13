@@ -6,8 +6,16 @@ import { createHash } from 'node:crypto';
 
 const root = process.cwd();
 const browserDir = path.join(root, 'browser');
+
+const schemaSource = path.join(root, 'schema', 'live-cards.schema.json');
+const schemaTarget = path.join(browserDir, 'live-cards.schema.json');
+
+fs.mkdirSync(browserDir, { recursive: true });
+fs.copyFileSync(schemaSource, schemaTarget);
+
 const targets = [
   'board-livecards-localstorage.js',
+  'live-cards.schema.json',
 ];
 
 const files = {};

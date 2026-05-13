@@ -3,84 +3,125 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const jsonata = require('../../src/card-compute/jsonata-sync.cjs');
 
-import { CardCompute as ServerCardCompute } from '../../src/card-compute/index.js';
-import type { ComputeNode, ValidationResult } from '../../src/card-compute/index.js';
+import {
+  applyNotification as applyNotificationSource,
+  buildBoardState as buildBoardStateSource,
+} from '../../src/cli/common/board-state-reducer.js';
+import {
+  selectAllLiveCardModels as selectAllLiveCardModelsSource,
+  selectLiveCardModel as selectLiveCardModelSource,
+  type BoardRuntimeArtifactsPayload,
+} from '../../src/board-livegraph-runtime/index.js';
 
-type BrowserCardComputeApi = {
-  run: (node: ComputeNode, options?: { sourcesData?: Record<string, unknown> }) => Promise<ComputeNode>;
-  eval: (expr: string, node: ComputeNode) => Promise<unknown>;
-  resolve: (node: ComputeNode, path: string) => unknown;
-  validate: (node: unknown) => ValidationResult;
+type BrowserBoardLiveCardsClientApi = {
+  buildBoardState: typeof buildBoardStateSource;
+  applyNotification: typeof applyNotificationSource;
+  selectLiveCardModel: typeof selectLiveCardModelSource;
+  selectAllLiveCardModels: typeof selectAllLiveCardModelsSource;
+  createBoardRuntimeClient: (options: Record<string, unknown>) => unknown;
 };
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const browserCardComputePath = path.join(repoRoot, 'browser', 'card-compute.js');
+const browserClientPath = path.join(repoRoot, 'browser', 'board-livecards-client.js');
 
-function loadBrowserCardCompute(): BrowserCardComputeApi {
-  // Browser bundle expects jsonataSync as a global; mirror browser runtime in Node tests.
-  (globalThis as Record<string, unknown>).jsonataSync = jsonata;
-  delete (globalThis as Record<string, unknown>).CardCompute;
+let _cachedBrowserApi: BrowserBoardLiveCardsClientApi | null = null;
 
-  const source = fs.readFileSync(browserCardComputePath, 'utf-8');
-  vm.runInThisContext(source, { filename: browserCardComputePath });
+const PAYLOAD: BoardRuntimeArtifactsPayload = {
+  cardDefinitions: [
+    { id: 'card-a', card_data: { title: 'Card A' }, requires: ['prices'] },
+    { id: 'card-b', card_data: { title: 'Card B' } },
+  ],
+  cardRuntimeById: {
+    'card-a': {
+      schema_version: 'v1',
+      card_id: 'card-a',
+      card_data: { subtitle: 'Runtime value' },
+      computed_values: { score: 99 },
+    },
+  },
+  dataObjectsByToken: {
+    prices: { AAPL: 201.1 },
+  },
+  statusSnapshot: {
+    cards: [
+      {
+        name: 'card-a',
+        status: 'completed',
+        runtime: { last_transition_at: '2026-05-13T00:00:00.000Z' },
+      },
+      {
+        name: 'card-b',
+        status: 'in-progress',
+        runtime: { last_transition_at: '2026-05-13T00:01:00.000Z' },
+      },
+    ],
+  },
+};
 
-  const browserApi = (globalThis as Record<string, unknown>).CardCompute;
+function loadBrowserClient(): BrowserBoardLiveCardsClientApi {
+  if (_cachedBrowserApi) return _cachedBrowserApi;
+
+  const source = fs.readFileSync(browserClientPath, 'utf-8');
+  vm.runInThisContext(source, { filename: browserClientPath });
+
+  const browserApi = (globalThis as Record<string, unknown>).BoardLiveCardsClient;
   if (!browserApi || typeof browserApi !== 'object') {
-    throw new Error('Failed to load browser CardCompute API');
+    throw new Error('Failed to load browser BoardLiveCardsClient API');
   }
-  return browserApi as BrowserCardComputeApi;
+  _cachedBrowserApi = browserApi as BrowserBoardLiveCardsClientApi;
+  return _cachedBrowserApi;
 }
 
-function deepClone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
+describe('board-livecards-client parity', () => {
+  it('exports the supported public client surface', () => {
+    const api = loadBrowserClient();
+    expect(typeof api.createBoardRuntimeClient).toBe('function');
+    expect(typeof api.buildBoardState).toBe('function');
+    expect(typeof api.applyNotification).toBe('function');
+    expect(typeof api.selectLiveCardModel).toBe('function');
+    expect(typeof api.selectAllLiveCardModels).toBe('function');
+  });
 
-describe('card-compute parity', () => {
-  it('keeps server and browser run/eval/resolve/validate behavior in sync', async () => {
-    const BrowserCardCompute = loadBrowserCardCompute();
-
-    const baseNode: ComputeNode = {
-      id: 'parity-card',
-      card_data: { prices: [{ p: 100 }, { p: 50 }], qty: 3 },
-      requires: { fee: 2 },
-      compute: [
-        { bindTo: 'subtotal', expr: '$sum(card_data.prices.p)' },
-        { bindTo: 'total', expr: 'computed_values.subtotal * card_data.qty + requires.fee + $sum(fetched_sources.adjustments)' },
-      ],
-    };
-    const options = { sourcesData: { adjustments: [1, 4] } };
-
-    const serverNode = deepClone(baseNode);
-    const browserNode = deepClone(baseNode);
-
-    await ServerCardCompute.run(serverNode, options);
-    await BrowserCardCompute.run(browserNode, options);
-
-    expect(browserNode.computed_values).toEqual(serverNode.computed_values);
-    expect(BrowserCardCompute.resolve(browserNode, 'computed_values.total')).toEqual(
-      ServerCardCompute.resolve(serverNode, 'computed_values.total'),
+  it('keeps browser and source selector exports in sync', () => {
+    const api = loadBrowserClient();
+    expect(api.selectLiveCardModel(PAYLOAD, 'card-a')).toEqual(
+      selectLiveCardModelSource(PAYLOAD, 'card-a'),
     );
-    expect(BrowserCardCompute.resolve(browserNode, 'fetched_sources.adjustments')).toEqual(
-      ServerCardCompute.resolve(serverNode, 'fetched_sources.adjustments'),
+    expect(api.selectAllLiveCardModels(PAYLOAD)).toEqual(
+      selectAllLiveCardModelsSource(PAYLOAD),
     );
+  });
 
-    const expr = 'computed_values.total - requires.fee';
-    expect(BrowserCardCompute.eval(expr, browserNode)).toEqual(
-      await ServerCardCompute.eval(expr, serverNode),
+  it('keeps browser and source board-state reducer behavior in sync', () => {
+    const api = loadBrowserClient();
+    const serverState = buildBoardStateSource(PAYLOAD, null, selectLiveCardModelSource);
+    const browserState = api.buildBoardState(PAYLOAD, null, api.selectLiveCardModel);
+
+    expect(browserState).toEqual(serverState);
+
+    const notifications = [
+      { kind: 'computed_values', cardId: 'card-a', values: { score: 101 } },
+      { kind: 'data_object', key: 'prices', payload: { AAPL: 205.5 } },
+      {
+        kind: 'status',
+        status: {
+          cards: [
+            {
+              name: 'card-b',
+              status: 'failed',
+              runtime: { last_transition_at: '2026-05-13T00:02:00.000Z' },
+              error: { message: 'network issue' },
+            },
+          ],
+        },
+      },
+    ];
+
+    expect(
+      api.applyNotification(browserState, notifications, api.selectLiveCardModel, () => PAYLOAD),
+    ).toEqual(
+      applyNotificationSource(serverState, notifications, selectLiveCardModelSource, () => PAYLOAD),
     );
-
-    const invalidNode = {
-      id: '',
-      card_data: { status: 'invalid-status' },
-      compute: [{ bindTo: '', expr: '' }],
-      view: { elements: [{ kind: 'not-a-real-kind' }] },
-      unknown_field: true,
-    };
-
-    expect(BrowserCardCompute.validate(invalidNode)).toEqual(ServerCardCompute.validate(invalidNode));
   });
 });

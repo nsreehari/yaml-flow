@@ -28,9 +28,6 @@ jobs:
       - name: Run release gate
         run: npm run release:gate
 
-      - name: Build example board
-        run: npm run build:example
-
       - name: Publish to npm
         run: npm publish --provenance --access public
         env:
