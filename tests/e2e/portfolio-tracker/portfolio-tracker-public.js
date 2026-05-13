@@ -45,7 +45,8 @@ const OUTPUTS_DIR     = path.join(_TMP_BASE, 'outputs');
 const CARDSTORE_REF    = serializeRef({ kind: 'fs-path', value: CARDSTORE_DIR });
 const BOARDRUNTIME_REF = serializeRef({ kind: 'fs-path', value: BOARDRUNTIME_DIR });
 const OUTPUTS_REF      = serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR });
-const NOTIFY_CHANNEL   = 'yaml-flow-board-notify-portfolio-tracker-public';
+const notifySuffix     = Math.floor(Math.random() * 10000);
+const NOTIFY_CHANNEL   = `yaml-flow-board-notify-portfolio-tracker-public-${notifySuffix}`;
 
 // ── Card definitions ───────────────────────────────────────────────────────────
 const CARD_PORTFOLIO_FORM = {
