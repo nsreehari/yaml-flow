@@ -57,6 +57,7 @@ describe('portfolio-tracker e2e', () => {
     const r = run(process.execPath, [
       '--experimental-vm-modules',
       path.join('tests', 'e2e', 'portfolio-tracker', 'portfolio-tracker-http-test.js'),
+      '--port', '7812',
     ]);
 
     if (r.error) throw r.error;

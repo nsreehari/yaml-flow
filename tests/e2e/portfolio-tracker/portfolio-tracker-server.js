@@ -42,7 +42,7 @@ const PORT = portIdx >= 0 ? Number(args[portIdx + 1]) : 7800;
 const RESET = args.includes('--reset');
 
 // ── Paths ──────────────────────────────────────────────────────────────────────
-const SETUP_DIR = path.join(os.tmpdir(), 'portfolio-tracker-server');
+const SETUP_DIR = path.join(os.tmpdir(), `portfolio-tracker-server-${PORT}`);
 const RUNTIME_DIR = path.join(SETUP_DIR, 'runtime');
 const CARDS_DIR = path.join(SETUP_DIR, 'cards');
 const OUTPUTS_DIR = path.join(SETUP_DIR, 'outputs');

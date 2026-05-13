@@ -32,7 +32,7 @@ const {
 const FETCH_PRICES_JS = path.join(__dirname, 'portfolio-tracker-fetch-prices.js');
 
 // ── Runtime directories ────────────────────────────────────────────────────────
-const _TMP_BASE        = path.join(os.tmpdir(), 'experiment-js-t4');
+const _TMP_BASE        = path.join(os.tmpdir(), `experiment-js-t4-${process.pid}`);
 const CARDSTORE_DIR    = path.join(_TMP_BASE, 'cardstore');
 const BOARDRUNTIME_DIR = path.join(_TMP_BASE, 'boardruntime');
 const OUTPUTS_DIR      = path.join(_TMP_BASE, 'outputs');

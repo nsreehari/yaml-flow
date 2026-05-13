@@ -1331,27 +1331,23 @@ export function createBoardLiveCardsNonCorePublic(
         }
       }
 
-      // 3. Probe each source — requires a task executor.
+      // 3. Probe each source using a task executor when available.
       //    Resolved from (in priority order):
       //      a) body['task-executor-ref']  — passed inline by the caller
       //      b) configStore()              — written when --base-ref points at an
       //                                     initialised board runtime directory
-      //    If the card has source_defs but no executor can be found, the call fails
-      //    so the caller gets an explicit error rather than silently skipped probes.
+      //    If no executor is available, probes are marked as skipped.
       const sourceProbes: SimulateResult['source_probes'] = [];
       const bodyTeRef = body['task-executor-ref'] as ExecutionRef | undefined;
       const teRef = (bodyTeRef?.howToRun && bodyTeRef?.whatToRun ? bodyTeRef : undefined)
         ?? configStore().readTaskExecutorRef();
-      if (enrichedSources.length > 0 && !teRef) {
-        return fail(
-          'simulateCardCycle: card has source_defs but no task executor is available. ' +
-          'Supply "task-executor-ref" in the request body or pass --base-ref pointing at ' +
-          'an initialised board runtime directory.',
-        ) as CommandResult<SimulateResult>;
-      }
       for (let i = 0; i < enrichedSources.length; i++) {
         const src = enrichedSources[i];
         const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : `source_${i}`;
+        if (!teRef) {
+          sourceProbes.push({ bindTo, skipped: true, error: 'No task executor configured' });
+          continue;
+        }
         try {
           const inPayload = { ...src };
           const stdout = adapter.invokeExecutorSync(teRef!, 'probe-source-preflight', [],
