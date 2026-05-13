@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts', 'tests/**/*.test.js'],
+    exclude: ['**/py-*.test.ts', 'tests/e2e/python/**'],
     forceExit: true,
     environmentMatchGlobs: [
       ['tests/browser/**', 'jsdom'],

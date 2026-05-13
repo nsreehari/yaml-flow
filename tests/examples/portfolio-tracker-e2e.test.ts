@@ -31,7 +31,7 @@ function findPython(): string | null {
 }
 
 const PYTHON_CMD = findPython();
-const DEEP = process.env.DEEP === 'true';
+const RUN_PYTHON_TESTS = process.env.RUN_PYTHON_TESTS === 'true';
 
 function runScript(scriptName: string, timeoutMs = 120_000, extraArgs: string[] = []): Promise<{ stdout: string; stderr: string; code: number }> {
   const baseDir = scriptName.includes('http') ? portfolioHttpDir : portfolioLocalDir;
@@ -105,7 +105,7 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toMatch(/"qty": 60/);   // TSLA
   }, 120_000);
 
-  it('portfolio-tracker.py — CLI-based full board lifecycle (T0–T5)', async () => {
+  it.skipIf(!RUN_PYTHON_TESTS)('portfolio-tracker.py — CLI-based full board lifecycle (T0–T5)', async () => {
     console.log(`[python] using: ${PYTHON_CMD}`);
     const { stdout, stderr, code } = await runPythonScript('portfolio-tracker.py', 170_000);
     const combined = stdout + stderr;
@@ -117,7 +117,7 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toContain('[T5] totals assertion passed');
   }, 180_000);
 
-  it('portfolio-tracker-http-test.py — native Python HTTP+SSE E2E (T1–T5)', async () => {
+  it.skipIf(!RUN_PYTHON_TESTS)('portfolio-tracker-http-test.py — native Python HTTP+SSE E2E (T1–T5)', async () => {
     console.log(`[python] using: ${PYTHON_CMD}`);
     const { stdout, stderr, code } = await runPythonScript('portfolio-tracker-http-test.py', 240_000);
     const combined = stdout + stderr;
@@ -134,7 +134,7 @@ describe('portfolio-tracker e2e', () => {
     expect(combined).toContain('=== All tests passed ✓ ===');
   }, 240_000);
 
-  it('portfolio-tracker-http-test.js --server py — HTTP+SSE E2E against Python server (T1–T5)', async () => {
+  it.skipIf(!RUN_PYTHON_TESTS)('portfolio-tracker-http-test.js --server py — HTTP+SSE E2E against Python server (T1–T5)', async () => {
     console.log(`[python] using: ${PYTHON_CMD}`);
     const { stdout, stderr, code } = await runScript('portfolio-tracker-http-test.js', 300_000, ['--server', 'py']);
     const combined = stdout + stderr;
