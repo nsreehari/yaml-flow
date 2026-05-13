@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 const root = process.cwd();
 const browserDir = path.join(root, 'browser');
 const targets = [
-  'board-livegraph-engine.js',
+  'board-livecards-localstorage.js',
 ];
 
 const files = {};

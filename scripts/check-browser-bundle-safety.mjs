@@ -3,10 +3,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const bundlePath = path.join(process.cwd(), 'browser', 'board-livegraph-engine.js');
+const bundlePath = path.join(process.cwd(), 'browser', 'board-livecards-localstorage.js');
 
 if (!fs.existsSync(bundlePath)) {
-  console.error('[browser-safety] missing browser bundle: browser/board-livegraph-engine.js');
+  console.error('[browser-safety] missing browser bundle: browser/board-livecards-localstorage.js');
   process.exit(1);
 }
 
