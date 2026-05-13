@@ -293,12 +293,43 @@ def get_holdings_and_positions_counts() -> tuple[int, int]:
     return holdings_count, positions_count
 
 
+def kill_stale_listener(port: int) -> None:
+    """If anything is already listening on `port`, try to connect and close it."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            pass
+    except OSError:
+        return  # nothing listening — good
+    # Something is listening; on Windows use netstat+taskkill, on Unix use fuser/lsof
+    import platform
+    if platform.system() == "Windows":
+        import re
+        out = subprocess.check_output(
+            ["netstat", "-ano", "-p", "TCP"], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            if f":{port}" in line and "LISTENING" in line:
+                parts = line.split()
+                pid = parts[-1]
+                if pid.isdigit() and int(pid) != os.getpid():
+                    print(f"[setup] killing stale process on port {port} (PID {pid})")
+                    subprocess.run(["taskkill", "/F", "/PID", pid],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(0.5)
+    else:
+        subprocess.run(["fuser", "-k", f"{port}/tcp"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+
+
 def run() -> None:
     print("\n=== demo HTTP+SSE test (standalone) ===")
     print(f"target: {BASE}")
 
     print("[setup] removing server state dirs: .demo-setup, .server-meta")
     reset_server_state_dirs()
+
+    kill_stale_listener(ARGS.port)
 
     print(f"[setup] starting demo server on port {ARGS.port}")
     server_proc = start_demo_server()
@@ -318,6 +349,8 @@ def run() -> None:
         t0_summary = wait_for_status_completed_all(2.0, "T0 init/bootstrap")
         print(f"[T0] ok: completed-all, card_count={t0_summary.get('card_count')}")
 
+        # Allow card_data to settle before reading T0 baseline
+        time.sleep(1.0)
         t0_holdings_count, t0_positions_count = get_holdings_and_positions_counts()
 
         print("\n=== T1: patch holdings (+1 row) ===")
@@ -327,6 +360,9 @@ def run() -> None:
         runtime = body.get("cardRuntimeById") if isinstance(body.get("cardRuntimeById"), dict) else {}
         portfolio_rt = runtime.get("card-portfolio") if isinstance(runtime.get("card-portfolio"), dict) else {}
         existing_holdings = (portfolio_rt.get("card_data") or {}).get("holdings")
+        if not isinstance(existing_holdings, list):
+            print(f"[debug] card-portfolio runtime keys: {list(portfolio_rt.keys())}")
+            print(f"[debug] card_data: {json.dumps(portfolio_rt.get('card_data'))[:500]}")
         assert_true(isinstance(existing_holdings, list), "card-portfolio.card_data.holdings missing")
 
         existing_tickers = {
@@ -354,7 +390,7 @@ def run() -> None:
         )
         assert_true(status == 200, f"PATCH card-portfolio returned {status}")
 
-        time.sleep(2.0)
+        time.sleep(4.0)
         t1_summary = wait_for_status_completed_all(30.0, "T1 holdings patch")
         assert_true(int(t1_summary.get("failed") or 0) == 0, f"T1 failed={t1_summary.get('failed')}")
 

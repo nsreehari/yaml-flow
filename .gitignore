@@ -2,13 +2,13 @@
 node_modules/
 
 # Build output
-dist/
-lib/
-cli/
-browser/
+/dist/
+/lib/
+/cli/
+/browser/
 
 # Generated examples (built from public-examples/ by npm run build:public-examples)
-examples/
+/examples/
 
 # IDE
 .idea/
@@ -44,8 +44,7 @@ runtime-out/
 
 # Example board artifacts are generated content — do not track
 **/.demo-setup/**
+**/.server-meta/**
 pydist/
 
 metafile-iife.json
-py-standalone/examples/pyboard/server/.server-meta/
-py-standalone/examples/pyboard/server/.demo-setup/

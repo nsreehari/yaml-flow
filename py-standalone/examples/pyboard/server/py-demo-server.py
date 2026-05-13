@@ -983,6 +983,7 @@ class DemoRequestHandler(http.server.BaseHTTPRequestHandler):
 # ============================================================================
 
 def main():
+    http.server.ThreadingHTTPServer.allow_reuse_address = True
     server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), DemoRequestHandler)
     print(f"[py-demo-server] listening on http://127.0.0.1:{PORT}")
     if TESTING_PATTERN:

@@ -11,7 +11,7 @@
       "handler": {
         "type": "ref",
         "howToRun": "demo-local-module",
-        "whatToRun": { "kind": "fs-path", "value": "./source-def-handlers/copilot-source-handler.py" }
+        "whatToRun": { "kind": "fs-path", "value": "./source-def-handlers/copilot-source-handler.js" }
       },
       "transitions": {
         "success": "completed",

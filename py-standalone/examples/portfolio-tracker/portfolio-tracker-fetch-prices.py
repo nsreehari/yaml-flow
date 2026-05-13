@@ -10,7 +10,7 @@ Subcommands:
   validate-source-def   --in <source.json>
   describe-capabilities
 
-Uses the public storage adapter for all storage and callback operations.
+Uses the board worker adapter for all storage and callback operations.
 The executor does NOT contain transport-specific callback logic.
 """
 
@@ -24,12 +24,12 @@ import sys
 import time
 from typing import Any
 
-# Add pycli to path so we can import the public storage adapter.
+# Add pycli to path so we can import the board worker adapter.
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'core'))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from sub.public_storage_adapter import (  # noqa: E402
+from sub.board_worker_adapter import (  # noqa: E402
     parse_ref,
     serialize_ref,
     blob_storage_for_ref,

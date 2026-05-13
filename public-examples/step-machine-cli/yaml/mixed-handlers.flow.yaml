@@ -79,7 +79,7 @@ steps:
     handler:
       type: compute-jsonata
       expr:
-        - data.grade = $max(expects_data.final_values.scaled) >= 200 ? "large" : "small"
+        - 'data.grade = $max(expects_data.final_values.scaled) >= 200 ? "large" : "small"'
         - result = "success"
     transitions:
       success: success_state

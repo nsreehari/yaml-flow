@@ -15,6 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
+from pylib.cli.args_massaging import resolve_args_massaging
+
 
 def serialize_ref(kind: str, value: str) -> str:
     payload = json.dumps({"kind": kind, "value": value}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -263,13 +265,17 @@ class PythonCommandExecutor:
             raise RuntimeError(proc.stderr.strip() or f"Command failed with exit code {proc.returncode}")
         return proc.stdout
 
-    def spawn_detached(self, cmd: str, args: List[str], cwd: Optional[str] = None) -> None:
+    def spawn_detached(self, cmd: str, args: List[str], cwd: Optional[str] = None, input_data: Optional[str] = None) -> None:
         kwargs: Dict[str, Any] = {
             "cwd": cwd,
-            "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
         }
+        if input_data is not None:
+            kwargs["stdin"] = subprocess.PIPE
+            kwargs["text"] = True
+        else:
+            kwargs["stdin"] = subprocess.DEVNULL
         if os.name == "nt":
             # Ensure detached callbacks do not create visible cmd windows on Windows.
             kwargs["creationflags"] = (
@@ -279,12 +285,23 @@ class PythonCommandExecutor:
             )
         else:
             kwargs["start_new_session"] = True
-        subprocess.Popen([cmd, *args], **kwargs)
+        proc = subprocess.Popen([cmd, *args], **kwargs)
+        if input_data is not None and proc.stdin is not None:
+            try:
+                proc.stdin.write(input_data)
+                proc.stdin.close()
+            except Exception:
+                pass
 
 
 def _dispatch_execution_impl(ref: ExecutionRef, args: Dict[str, Any], cwd: Optional[str], detached: bool) -> Dict[str, Any]:
     try:
         executor = PythonCommandExecutor()
+        massaging_context: Dict[str, Any] = {**args, "whatToRun": ref.whatToRun}
+        try:
+            massaged = resolve_args_massaging(ref.argsMassaging, massaging_context, "dispatch_execution")
+        except Exception as ex:
+            return {"dispatched": False, "error": str(ex)}
 
         def _target_from_ref(ref_value: str) -> str:
             kind, value = parse_ref(ref_value) if ref_value.startswith("b64:") else ("raw", ref_value)
@@ -311,21 +328,23 @@ def _dispatch_execution_impl(ref: ExecutionRef, args: Dict[str, Any], cwd: Optio
                 argv.extend(["--extra", encoded])
             return argv
 
+        call_argv = list(massaged.get("cmdArgs") or _task_executor_argv(args, ref.extra))
+        stdin_payload_obj = massaged["stdin"] if "stdin" in massaged else args
+        stdin_payload = json.dumps(stdin_payload_obj, ensure_ascii=True)
+
         if ref.howToRun == "local-node":
             node_cmd = shutil.which("node")
             if not node_cmd:
                 return {"dispatched": False, "error": "local-node requested but node executable is unavailable"}
             target = _target_from_ref(ref.whatToRun)
-            call_argv = _task_executor_argv(args, ref.extra)
             if detached:
-                executor.spawn_detached(node_cmd, [target, *call_argv], cwd=cwd)
+                executor.spawn_detached(node_cmd, [target, *call_argv], cwd=cwd, input_data=stdin_payload)
             else:
-                executor.execute_sync(node_cmd, [target, *call_argv], cwd=cwd)
+                executor.execute_sync(node_cmd, [target, *call_argv], cwd=cwd, input_data=stdin_payload)
             return {"dispatched": True}
 
         if ref.howToRun in ("local-python", "local-process"):
             target = _target_from_ref(ref.whatToRun)
-            call_argv = _task_executor_argv(args, ref.extra)
             if ref.howToRun == "local-python":
                 cmd = sys.executable
                 cmd_args = [target, *call_argv]
@@ -333,27 +352,35 @@ def _dispatch_execution_impl(ref: ExecutionRef, args: Dict[str, Any], cwd: Optio
                 cmd = target
                 cmd_args = call_argv
             if detached:
-                executor.spawn_detached(cmd, cmd_args, cwd=cwd)
+                executor.spawn_detached(cmd, cmd_args, cwd=cwd, input_data=stdin_payload)
             else:
-                executor.execute_sync(cmd, cmd_args, cwd=cwd)
+                executor.execute_sync(cmd, cmd_args, cwd=cwd, input_data=stdin_payload)
             return {"dispatched": True}
 
         if ref.howToRun in ("http:post", "http:get"):
-            url = parse_ref(ref.whatToRun)[1] if ref.whatToRun.startswith("b64:") else ref.whatToRun
+            url = str(massaged.get("url") or (parse_ref(ref.whatToRun)[1] if ref.whatToRun.startswith("b64:") else ref.whatToRun))
+            headers: Dict[str, str] = {"Content-Type": "application/json"}
+            raw_headers = massaged.get("headers")
+            if isinstance(raw_headers, dict):
+                headers.update({str(k): str(v) for k, v in raw_headers.items()})
             if ref.howToRun == "http:get":
-                req = Request(url=url, method="GET")
+                req = Request(url=url, method="GET", headers=headers)
             else:
-                payload_obj: Dict[str, Any] = {
-                    "subcommand": args.get("subcommand"),
-                }
-                for key in ("inRef", "outRef", "errRef"):
-                    value = args.get(key)
-                    if isinstance(value, str) and value:
-                        payload_obj[key] = value
-                if ref.extra:
-                    payload_obj["extra"] = ref.extra
+                payload_obj: Dict[str, Any]
+                if "body" in massaged:
+                    payload_obj = massaged["body"] if isinstance(massaged["body"], dict) else {"body": massaged["body"]}
+                else:
+                    payload_obj = {
+                        "subcommand": args.get("subcommand"),
+                    }
+                    for key in ("inRef", "outRef", "errRef"):
+                        value = args.get(key)
+                        if isinstance(value, str) and value:
+                            payload_obj[key] = value
+                    if ref.extra:
+                        payload_obj["extra"] = ref.extra
                 payload = json.dumps(payload_obj, ensure_ascii=True).encode("utf-8")
-                req = Request(url=url, data=payload, method="POST", headers={"Content-Type": "application/json"})
+                req = Request(url=url, data=payload, method="POST", headers=headers)
             with urlopen(req, timeout=20) as resp:
                 if resp.status < 200 or resp.status >= 300:
                     return {"dispatched": False, "error": f"HTTP {resp.status}"}

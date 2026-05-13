@@ -1,17 +1,24 @@
 /**
  * step-machine-public — public API
  *
- * Platform-free declarative handler model for the pure step machine.
+ * Platform-free step machine: load flows, run them, persist state via KVStorage.
  *
  * Usage:
- *   import { buildStepHandlersForFlow } from 'step-machine-public';
- *   import { invokeRefSync } from '../cli/node/execution-adapter.js';
+ *   import { loadStepFlow, createStepMachine, buildStepHandlersForFlow,
+ *            KVStorageStore, MemoryStore } from 'yaml-flow/step-machine-public';
+ *   import { invokeRefSync } from 'yaml-flow/board-live-cards-node';
  *
  *   const invoke = (ref, args) => invokeRefSync(ref, args, { cliDir: flowDir });
  *   const handlers = buildStepHandlersForFlow(flow, { invoke });
- *   const machine = createStepMachine(flow, handlers, { store });
+ *   const machine = createStepMachine(flow, handlers, { store: new MemoryStore() });
  *   await machine.run(initialData);
  */
+
+export { createStepMachine } from '../step-machine/index.js';
+export { loadStepFlow } from '../step-machine/index.js';
+export type { StepMachineStore } from '../step-machine/types.js';
+export { MemoryStore } from '../stores/memory.js';
+export { KVStorageStore } from '../stores/kv.js';
 
 export {
   buildStepHandlersForFlow,

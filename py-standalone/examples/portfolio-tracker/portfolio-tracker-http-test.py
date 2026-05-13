@@ -274,7 +274,7 @@ def start_sse_consumer(stop_event: threading.Event) -> threading.Thread:
 
 def run() -> None:
     print("\n=== portfolio-tracker HTTP E2E test (python) ===")
-    print(f"target: {BASE}  [server: {ARGS.server}]")
+    print(f"target: {BASE}")
     print("architecture: main-thread (driver) + background SSE consumer\n")
 
     server_proc = start_server()
@@ -379,7 +379,7 @@ def run() -> None:
         except subprocess.TimeoutExpired:
             server_proc.kill()
             server_proc.wait(timeout=5)
-        print(f"[portfolio-tracker-http-test.py] server stopped ({ARGS.server})")
+        print("[portfolio-tracker-http-test.py] server stopped")
 
 
 if __name__ == "__main__":

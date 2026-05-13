@@ -13,6 +13,7 @@ import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
+import fs from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,14 +25,36 @@ const PORT = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : 7799;
 const BOARD_ID = 'default';
 const BASE = `http://127.0.0.1:${PORT}/api/boards/${BOARD_ID}`;
 const SERVER_SCRIPT = path.join(__dirname, '..', 'demo-server.js');
+const SERVER_DIR = path.dirname(SERVER_SCRIPT);
 const SSE_WORKER_SCRIPT = path.join(__dirname, 'portfolio-tracker-sse-worker.js');
 const CARD_PATTERN = 'cardT*';
+
+// Resolve and wipe the setup directory before starting the server so each
+// test run begins from a clean slate.  The location is read from
+// demo-server-config.json (setupDir key) with the same fallback the server uses.
+function resolveSetupDir() {
+  const configPath = path.join(SERVER_DIR, 'demo-server-config.json');
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (cfg && typeof cfg.setupDir === 'string' && cfg.setupDir.trim()) {
+      return path.resolve(SERVER_DIR, cfg.setupDir.trim());
+    }
+  } catch { /* ignore */ }
+  return path.join(SERVER_DIR, '.demo-setup');
+}
+
+const SETUP_DIR = resolveSetupDir();
+if (fs.existsSync(SETUP_DIR)) {
+  fs.rmSync(SETUP_DIR, { recursive: true, force: true });
+  console.log(`[demo-http-test] wiped setup dir: ${SETUP_DIR}`);
+}
 
 
 const NS = {
   initialPayload: null,
   statusSummary: null,
   statusGeneration: 0,
+  computedValues: {},
 };
 
 function applyFrame(payload) {
@@ -44,6 +67,13 @@ function applyFrame(payload) {
       NS.statusSummary = summary;
       NS.statusGeneration += 1;
     }
+    if (payload.cardRuntimeById) {
+      for (const [cardId, runtime] of Object.entries(payload.cardRuntimeById)) {
+        if (runtime?.computed_values && Object.keys(runtime.computed_values).length > 0) {
+          NS.computedValues[cardId] = runtime.computed_values;
+        }
+      }
+    }
     return;
   }
 
@@ -53,6 +83,9 @@ function applyFrame(payload) {
       if (summary) {
         NS.statusSummary = summary;
         NS.statusGeneration += 1;
+      }
+      if (n && n.kind === 'computed_values' && n.cardId) {
+        NS.computedValues[n.cardId] = n.values;
       }
     }
   }
@@ -90,13 +123,7 @@ const waitForInitialPayload = (ms = 15_000) =>
 const waitForAllCompleted = (ms = 60_000, label = 'all completed') =>
   waitUntil(() => {
     const s = NS.statusSummary;
-    const sseCardCount = Array.isArray(NS.initialPayload?.cardDefinitions)
-      ? NS.initialPayload.cardDefinitions.length
-      : 0;
-    if (sseCardCount > 0) {
-      if (s && s.card_count > 0 && s.completed === s.card_count) return s;
-      return { card_count: sseCardCount, completed: sseCardCount, failed: 0, mode: 'sse-initial-only' };
-    }
+    if (s && s.card_count > 0 && s.completed === s.card_count) return s;
     return false;
   }, ms, label);
 
@@ -113,9 +140,34 @@ function httpGet(url) {
   });
 }
 
+function httpJson(method, url, payload) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const data = payload != null ? JSON.stringify(payload) : null;
+    const opts = {
+      hostname: u.hostname,
+      port: u.port,
+      path: u.pathname,
+      method,
+      headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
+    };
+    const req = http.request(opts, (res) => {
+      let body = '';
+      res.on('data', c => { body += c; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(body) }); }
+        catch { resolve({ status: res.statusCode, data: body }); }
+      });
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
 function startServer(port) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [SERVER_SCRIPT, '--reset', '--cards-pattern', CARD_PATTERN], {
+    const proc = spawn(process.execPath, [SERVER_SCRIPT, '--cards-pattern', CARD_PATTERN], {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       env: { ...process.env, DEMO_SERVER_PORT: String(port) },
@@ -182,10 +234,62 @@ try {
   assert(httpSummary, 'statusSnapshot.summary missing from board-status');
   console.log(`[step4] board-status summary: ${JSON.stringify(httpSummary)}`);
 
+  // ── T1: PATCH holdings (+1 row) and verify recomputation ──
+  console.log('\n=== T1: patch holdings (+1 row) ===');
+
+  // Read current holdings from card store via GET /cards/:id
+  const portfolioCardRes = await httpGet(`${BASE}/cards/card-portfolio`);
+  assert(portfolioCardRes.status === 200, `GET card-portfolio returned ${portfolioCardRes.status}`);
+  const existingHoldings = (portfolioCardRes.data.card_data || {}).holdings;
+  assert(Array.isArray(existingHoldings), 'card-portfolio.card_data.holdings missing');
+  const t0HoldingsCount = existingHoldings.length;
+
+  // Read current positions count from computed_values captured via SSE
+  const t0Positions = (NS.computedValues['card-portfolio-value'] || {}).positions;
+  const t0PositionsCount = Array.isArray(t0Positions) ? t0Positions.length : 0;
+
+  // Pick a ticker not already in holdings
+  const candidates = ['AAPL', 'MSFT', 'AMZN', 'TSLA', 'META', 'GOOG', 'NVDA', 'NFLX', 'INTC', 'AMD',
+    'IBM', 'ORCL', 'ADBE', 'CRM', 'QCOM'];
+  const existingTickers = new Set(existingHoldings.map(r => r.ticker));
+  const available = candidates.filter(t => !existingTickers.has(t));
+  assert(available.length > 0, 'No available ticker to add');
+  const newTicker = available[0];
+
+  const newHoldings = [...existingHoldings, { ticker: newTicker, quantity: 1, cost_basis: 100 }];
+  const patchRes = await httpJson('PATCH', `${BASE}/cards/card-portfolio`, { card_data: { holdings: newHoldings } });
+  assert(patchRes.status === 200, `PATCH card-portfolio returned ${patchRes.status}`);
+
+  // Wait for re-completion
+  NS.statusSummary = null;
+  await new Promise(r => setTimeout(r, 4000));
+  const t1Summary = await waitForAllCompleted(30_000, 'T1 holdings patch');
+  assert(t1Summary.failed === 0, `T1 failed=${t1Summary.failed}`);
+
+  // Verify holdings +1 from card store
+  const t1PortfolioRes = await httpGet(`${BASE}/cards/card-portfolio`);
+  assert(t1PortfolioRes.status === 200, `GET card-portfolio after patch returned ${t1PortfolioRes.status}`);
+  const afterHoldings = (t1PortfolioRes.data.card_data || {}).holdings;
+  const afterHoldingsCount = Array.isArray(afterHoldings) ? afterHoldings.length : 0;
+
+  // Verify positions +1 from computed_values captured via SSE
+  const afterPositions = (NS.computedValues['card-portfolio-value'] || {}).positions;
+  const afterPositionsCount = Array.isArray(afterPositions) ? afterPositions.length : 0;
+
+  assert(afterHoldingsCount === t0HoldingsCount + 1,
+    `Expected holdings rows +1 (before=${t0HoldingsCount}, after=${afterHoldingsCount})`);
+  assert(afterPositionsCount === t0PositionsCount + 1,
+    `Expected portfolio value rows +1 (before=${t0PositionsCount}, after=${afterPositionsCount})`);
+
+  console.log(`[T1] ok: holdings ${t0HoldingsCount}->${afterHoldingsCount}, ` +
+    `positions ${t0PositionsCount}->${afterPositionsCount}, added=${newTicker}`);
+
   console.log('\n=== All smoke checks passed ===\n');
 } finally {
-  sseWorker?.terminate();
+  // Kill server first so the SSE connection closes, then await worker termination.
+  // (Terminating the worker while the SSE socket is still open leaves dangling handles.)
   serverProc.kill();
   await new Promise((r) => serverProc.on('exit', r));
+  if (sseWorker) await sseWorker.terminate();
   console.log('[demo-http-test] server stopped');
 }

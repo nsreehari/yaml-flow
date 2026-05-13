@@ -912,12 +912,14 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                         result = json.loads(stdout.strip())
                         if not result.get("ok"):
                             return _fail(result.get("error", "Preflight probe failed"))
-                        return _ok({
+                        payload = {
                             "bindTo": bind_to,
                             "reachable": result.get("reachable"),
                             "latencyMs": result.get("latencyMs"),
-                            "note": result.get("note"),
-                        })
+                        }
+                        if result.get("note") is not None:
+                            payload["note"] = result.get("note")
+                        return _ok(payload)
                     except Exception:
                         pass  # executor doesn't support subcommand — fall through
 
@@ -969,8 +971,13 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
 
             Steps: validate → resolve projections → probe sources → compute.
 
-            Body shape:
-              { "card-content": <card>, "mock-fetched-sources": {...}, "mock-requires": {...} }
+                        Body shape:
+                            {
+                                "card-content": <card>,
+                                "mock-fetched-sources"?: {...},
+                                "mock-requires"?: {...},
+                                "task-executor-ref"?: {...}
+                            }
             Returns:
               { cardId, ok, validation, source_probes, projection_errors, computed_values, compute_errors }
             """
@@ -1021,12 +1028,30 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
 
                 # 3. Probe each source (if executor is registered)
                 source_probes: list[dict] = []
-                te_ref = config_store().read_task_executor_ref()
+                te_from_body = body.get("task-executor-ref")
+                te_ref = (
+                    te_from_body
+                    if isinstance(te_from_body, dict)
+                    and isinstance(te_from_body.get("howToRun"), str)
+                    and te_from_body.get("whatToRun") is not None
+                    else config_store().read_task_executor_ref()
+                )
+
+                # Accept object whatToRun refs inline in request body.
+                if isinstance(te_ref, dict):
+                    wtr = te_ref.get("whatToRun")
+                    if isinstance(wtr, dict) and isinstance(wtr.get("kind"), str) and isinstance(wtr.get("value"), str):
+                        te_ref = {**te_ref, "whatToRun": serialize_ref(wtr)}
+
+                if len(enriched_sources) > 0 and not te_ref:
+                    return _fail(
+                        'simulateCardCycle: card has source_defs but no task executor is available. '
+                        'Supply "task-executor-ref" in the request body or pass --base-ref '
+                        'pointing at an initialised board runtime directory.'
+                    )
+
                 for i, src in enumerate(enriched_sources):
                     bind_to = src.get("bindTo", f"source_{i}") if isinstance(src.get("bindTo"), str) else f"source_{i}"
-                    if not te_ref:
-                        source_probes.append({"bindTo": bind_to, "skipped": True, "error": "No task-executor registered"})
-                        continue
                     try:
                         in_payload = {**src}
                         stdout = adapter.invoke_executor_sync(
@@ -1034,12 +1059,14 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                             {"timeout": src.get("timeout", 10_000), "input": json.dumps(in_payload)},
                         )
                         result = json.loads(stdout.strip())
-                        source_probes.append({
+                        probe_item = {
                             "bindTo": bind_to,
                             "reachable": result.get("reachable"),
                             "latencyMs": result.get("latencyMs"),
-                            "error": None if result.get("ok") else result.get("error"),
-                        })
+                        }
+                        if not result.get("ok"):
+                            probe_item["error"] = result.get("error")
+                        source_probes.append(probe_item)
                     except Exception:
                         source_probes.append({"bindTo": bind_to, "skipped": True, "error": "Executor does not support probe-source-preflight"})
 

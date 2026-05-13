@@ -1,25 +1,47 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { cli, CliExitError } from '../../src/cli/node/step-machine-cli.js';
+import { KVStorageStore } from '../../src/stores/kv.js';
+import { createFsKvStorage } from '../../src/cli/node/storage-fs-adapters.js';
 import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const stepMachineCli = path.join(repoRoot, 'dev', 'step-machine-cli.js');
 
-function runStepMachineCli(args: string[]) {
-  const result = spawnSync(process.execPath, [stepMachineCli, ...args], {
-    cwd: repoRoot,
-    encoding: 'utf-8',
-    windowsHide: true,
-  });
+async function runCli(args: string[]): Promise<{ status: number; stdout: string; stderr: string; combinedOutput: string }> {
+  const outLines: string[] = [];
+  const errLines: string[] = [];
 
-  return {
-    ...result,
-    combinedOutput: `${result.stdout ?? ''}\n${result.stderr ?? ''}`,
-  };
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((...a) => { outLines.push(a.map(String).join(' ')); });
+  const errSpy = vi.spyOn(console, 'error').mockImplementation((...a) => { errLines.push(a.map(String).join(' ')); });
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation((...a) => { errLines.push(a.map(String).join(' ')); });
+
+  let exitCode = 0;
+  let unexpected: unknown;
+  try {
+    await cli(args);
+  } catch (e) {
+    if (e instanceof CliExitError) {
+      exitCode = e.code;
+    } else if (e instanceof Error) {
+      errLines.push(e.stack ?? e.message);
+      exitCode = 1;
+    } else {
+      unexpected = e;
+    }
+  } finally {
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    warnSpy.mockRestore();
+  }
+
+  if (unexpected !== undefined) throw unexpected;
+
+  const stdout = outLines.join('\n');
+  const stderr = errLines.join('\n');
+  return { status: exitCode, stdout, stderr, combinedOutput: `${stdout}\n${stderr}` };
 }
 
 function parseLastJsonObject(text: string) {
@@ -38,26 +60,46 @@ function writeFile(filePath: string, content: string) {
   fs.writeFileSync(filePath, content.trimStart());
 }
 
+/** b64url-encode a string the same way KVStorageStore does. */
+function b64url(s: string): string {
+  return Buffer.from(s).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+/** Seed a KV file directly, bypassing the store API, for test setup. */
+function seedKVFile(kvDir: string, key: string, value: unknown): void {
+  const filePath = path.join(kvDir, `${key}.json`);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
+}
+
+function seedRunState(storeDir: string, runId: string, state: object): void {
+  seedKVFile(storeDir, `state_${b64url(runId)}`, state);
+}
+
+function seedRunData(storeDir: string, runId: string, data: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(data)) {
+    seedKVFile(storeDir, `data_${b64url(runId)}_${b64url(key)}`, value);
+  }
+}
+
 const fsRef = (p: string) => serializeRef({ kind: 'fs-path', value: p });
 
-describe('step-machine-cli', () => {
-  it('prints usage with --help', () => {
-    const run = runStepMachineCli(['--help']);
+describe('step-machine-cli', async () => {
+  it('prints usage with --help', async () => {
+    const run = await runCli(['--help']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
     expect(run.combinedOutput).toContain('Usage: step-machine-cli');
   });
 
-  it('fails when no flow file is provided', () => {
-    const run = runStepMachineCli([]);
+  it('fails when no flow file is provided', async () => {
+    const run = await runCli([]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(1);
     expect(run.combinedOutput).toContain('Usage: step-machine-cli');
   });
 
-  it('fails fast for invalid --initial-data json', () => {
+  it('fails fast for invalid --initial-data json', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-data-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -74,14 +116,13 @@ terminal_states:
     return_intent: success
 `);
 
-    const run = runStepMachineCli([flowPath, '--initial-data', '{bad-json']);
+    const run = await runCli([flowPath, '--initial-data', '{bad-json']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(1);
     expect(run.combinedOutput).toContain('Invalid --initial-data value');
   });
 
-  it('fails fast for invalid --store value', () => {
+  it('fails fast for invalid --store value', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-store-invalid-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -98,14 +139,13 @@ terminal_states:
     return_intent: success
 `);
 
-    const run = runStepMachineCli([flowPath, '--store', 'redis']);
+    const run = await runCli([flowPath, '--store', 'redis']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(1);
     expect(run.combinedOutput).toContain('Invalid --store value');
   });
 
-  it('requires --store-dir when --store file is used', () => {
+  it('requires --store-dir when --store file is used', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-store-dir-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -122,14 +162,13 @@ terminal_states:
     return_intent: success
 `);
 
-    const run = runStepMachineCli([flowPath, '--store', 'file']);
+    const run = await runCli([flowPath, '--store', 'file']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(1);
     expect(run.combinedOutput).toContain('--store file requires --store-dir');
   });
 
-  it('persists run state when using --store file', () => {
+  it('persists run state when using --store file', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-file-store-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const storeDir = path.join(tmpRoot, 'runs');
@@ -150,7 +189,7 @@ terminal_states:
     return_artifacts: [x]
 `);
 
-    const run = runStepMachineCli([
+    const run = await runCli([
       flowPath,
       '--store',
       'file',
@@ -160,20 +199,20 @@ terminal_states:
       '{"x":42}',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('success');
     expect(output.data).toEqual({ x: 42 });
 
-    const runStatePath = path.join(storeDir, `${output.runId}.run.json`);
-    const runDataPath = path.join(storeDir, `${output.runId}.data.json`);
-    expect(fs.existsSync(runStatePath)).toBe(true);
-    expect(fs.existsSync(runDataPath)).toBe(true);
+    // Verify the run state was actually persisted via the KVStorage store
+    const kvStore = new KVStorageStore(createFsKvStorage(storeDir));
+    const savedState = await kvStore.loadRunState(output.runId);
+    expect(savedState).not.toBeNull();
+    expect(savedState?.status).toBe('completed');
   });
 
-  it('resumes the latest paused run when using --resume with --store file', () => {
+  it('resumes the latest paused run when using --resume with --store file', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-resume-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const storeDir = path.join(tmpRoot, 'runs');
@@ -198,28 +237,21 @@ terminal_states:
     return_artifacts: [x]
 `);
 
-    writeFile(path.join(storeDir, `${runId}.run.json`), `
-{
-  "runId": "${runId}",
-  "flowId": "resume-flow",
-  "currentStep": "s1",
-  "status": "paused",
-  "stepHistory": [],
-  "iterationCounts": {},
-  "retryCounts": {},
-  "startedAt": ${startedAt},
-  "updatedAt": ${startedAt},
-  "pausedAt": ${startedAt}
-}
-`);
+    seedRunState(storeDir, runId, {
+      runId,
+      flowId: 'resume-flow',
+      currentStep: 's1',
+      status: 'paused',
+      stepHistory: [],
+      iterationCounts: {},
+      retryCounts: {},
+      startedAt,
+      updatedAt: startedAt,
+      pausedAt: startedAt,
+    });
+    seedRunData(storeDir, runId, { x: 7 });
 
-    writeFile(path.join(storeDir, `${runId}.data.json`), `
-{
-  "x": 7
-}
-`);
-
-    const run = runStepMachineCli([
+    const run = await runCli([
       flowPath,
       '--store',
       'file',
@@ -228,7 +260,6 @@ terminal_states:
       '--resume',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -237,7 +268,7 @@ terminal_states:
     expect(output.data).toEqual({ x: 7 });
   });
 
-  it('writes a pause request marker when using --pause with --store file', () => {
+  it('writes a pause request marker when using --pause with --store file', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pause-'));
     const storeDir = path.join(tmpRoot, 'runs');
     const runId = 'pause-run-1';
@@ -245,25 +276,20 @@ terminal_states:
 
     fs.mkdirSync(storeDir, { recursive: true });
 
-    writeFile(path.join(storeDir, `${runId}.run.json`), `
-{
-  "runId": "${runId}",
-  "flowId": "pause-flow",
-  "currentStep": "s1",
-  "status": "running",
-  "stepHistory": [],
-  "iterationCounts": {},
-  "retryCounts": {},
-  "startedAt": ${startedAt},
-  "updatedAt": ${startedAt}
-}
-`);
+    seedRunState(storeDir, runId, {
+      runId,
+      flowId: 'pause-flow',
+      currentStep: 's1',
+      status: 'running',
+      stepHistory: [],
+      iterationCounts: {},
+      retryCounts: {},
+      startedAt,
+      updatedAt: startedAt,
+    });
+    seedRunData(storeDir, runId, {});
 
-    writeFile(path.join(storeDir, `${runId}.data.json`), `
-{}
-`);
-
-    const run = runStepMachineCli([
+    const run = await runCli([
       '--store',
       'file',
       '--store-dir',
@@ -271,7 +297,6 @@ terminal_states:
       '--pause',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -279,7 +304,7 @@ terminal_states:
     expect(fs.existsSync(path.join(storeDir, '.pause'))).toBe(true);
   });
 
-  it('shows store status with --status for file store directory', () => {
+  it('shows store status with --status for file store directory', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-status-'));
     const storeDir = path.join(tmpRoot, 'runs');
     const runId = 'status-run-1';
@@ -287,26 +312,20 @@ terminal_states:
 
     fs.mkdirSync(storeDir, { recursive: true });
 
-    writeFile(path.join(storeDir, `${runId}.run.json`), `
-{
-  "runId": "${runId}",
-  "flowId": "status-flow",
-  "currentStep": "s1",
-  "status": "paused",
-  "stepHistory": [],
-  "iterationCounts": {},
-  "retryCounts": {},
-  "startedAt": ${startedAt},
-  "updatedAt": ${startedAt},
-  "pausedAt": ${startedAt}
-}
-`);
+    seedRunState(storeDir, runId, {
+      runId,
+      flowId: 'status-flow',
+      currentStep: 's1',
+      status: 'paused',
+      stepHistory: [],
+      iterationCounts: {},
+      retryCounts: {},
+      startedAt,
+      updatedAt: startedAt,
+      pausedAt: startedAt,
+    });
 
-    writeFile(path.join(storeDir, `${runId}.data.json`), `
-{}
-`);
-
-    const run = runStepMachineCli([
+    const run = await runCli([
       '--store',
       'file',
       '--store-dir',
@@ -314,7 +333,6 @@ terminal_states:
       '--status',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -324,7 +342,7 @@ terminal_states:
 
   });
 
-  it('uses passthrough when no step handler is configured', () => {
+  it('uses passthrough when no step handler is configured', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pass-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -344,13 +362,12 @@ terminal_states:
     return_artifacts: [x]
 `);
 
-    const run = runStepMachineCli([
+    const run = await runCli([
       flowPath,
       '--initial-data',
       '{"x":7}',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -358,7 +375,7 @@ terminal_states:
     expect(output.data).toEqual({ x: 7 });
   });
 
-  it('runs ref steps and filters by produces_data', () => {
+  it('runs ref steps and filters by produces_data', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
@@ -392,7 +409,7 @@ terminal_states:
 let raw = '';
 process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   const input = JSON.parse(raw || '{}');
   const x = Number(input.x);
   process.stdout.write(JSON.stringify({ y: x + 10, z: 999 }));
@@ -400,9 +417,8 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":7}']);
+    const run = await runCli([flowPath, '--initial-data', '{"x":7}']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -410,7 +426,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 7, y: 17 });
   });
 
-  it('runs compute-jsonata handler with input_validations', () => {
+  it('runs compute-jsonata handler with input_validations', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -443,22 +459,21 @@ terminal_states:
 `);
 
     // Success case
-    const run = runStepMachineCli([flowPath, '--initial-data', '{"a":5,"b":3}']);
-    expect(run.error).toBeUndefined();
+    const run = await runCli([flowPath, '--initial-data', '{"a":5,"b":3}']);
     expect(run.status).toBe(0);
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('success');
     expect(output.data).toEqual({ a: 5, b: 3, c: 8 });
 
     // Validation failure case
-    const failRun = runStepMachineCli([flowPath, '--initial-data', '{"a":"bad","b":3}']);
+    const failRun = await runCli([flowPath, '--initial-data', '{"a":"bad","b":3}']);
     expect(failRun.error).toBeUndefined();
     expect(failRun.status).toBe(0);
     const failOutput = parseLastJsonObject(failRun.stdout ?? '');
     expect(failOutput.intent).toBe('failure');
   });
 
-  it('maps non-zero ref exit into failure transition', () => {
+  it('maps non-zero ref exit into failure transition', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-exit-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'fail.js');
@@ -490,16 +505,15 @@ process.stderr.write('boom');
 process.exit(23);
 `);
 
-    const run = runStepMachineCli([flowPath]);
+    const run = await runCli([flowPath]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('failure');
   });
 
-  it('treats non-JSON stdout from ref handler as success with stdout fallback', () => {
+  it('treats non-JSON stdout from ref handler as success with stdout fallback', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-json-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'bad-json.js');
@@ -530,16 +544,15 @@ terminal_states:
 process.stdout.write('not-json-output');
 `);
 
-    const run = runStepMachineCli([flowPath]);
+    const run = await runCli([flowPath]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('success');
   });
 
-  it('supports ref handler with script path containing spaces', () => {
+  it('supports ref handler with script path containing spaces', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-space-path-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'double value.js');
@@ -573,7 +586,7 @@ terminal_states:
 let raw = '';
 process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   const input = JSON.parse(raw || '{}');
   const x = Number(input.x);
   process.stdout.write(JSON.stringify({ y: x * 2 }));
@@ -581,9 +594,8 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":9}']);
+    const run = await runCli([flowPath, '--initial-data', '{"x":9}']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -591,7 +603,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 9, y: 18 });
   });
 
-  it('supports ref handler with argsMassaging.stdinTemplate', () => {
+  it('supports ref handler with argsMassaging.stdinTemplate', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-ref-body-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'echo-y.js');
@@ -627,16 +639,15 @@ terminal_states:
 let raw = '';
 process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   const input = JSON.parse(raw || '{}');
   process.stdout.write(JSON.stringify({ y: Number(input.X) + 5 }));
 });
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":10}']);
+    const run = await runCli([flowPath, '--initial-data', '{"x":10}']);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -644,7 +655,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ x: 10, y: 15 });
   });
 
-  it('supports mixed compute-jsonata and ref handlers with produces_data filtering', () => {
+  it('supports mixed compute-jsonata and ref handlers with produces_data filtering', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-mixed-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'double.js');
@@ -689,7 +700,7 @@ terminal_states:
 let raw = '';
 process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   const input = JSON.parse(raw || '{}');
   const c = Number(input.c);
   process.stdout.write(JSON.stringify({ d: c * 2 }));
@@ -697,13 +708,12 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([
+    const run = await runCli([
       flowPath,
       '--initial-data',
       '{"a":3,"b":4}',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -712,7 +722,7 @@ process.stdin.resume();
     expect(output.data).toEqual({ a: 3, b: 4, c: 7, d: 14 });
   });
 
-  it('supports argsMassaging.stdinTemplate for ref handlers', () => {
+  it('supports argsMassaging.stdinTemplate for ref handlers', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-jsonata-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const cliScriptPath = path.join(tmpRoot, 'init-board.js');
@@ -748,7 +758,7 @@ terminal_states:
 let raw = '';
 process.stdin.setEncoding('utf-8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   const input = JSON.parse(raw || '{}');
   if (!input.BOARD_DIR) {
     process.stderr.write('BOARD_DIR missing');
@@ -764,13 +774,12 @@ process.stdin.on('end', () => {
 process.stdin.resume();
 `);
 
-    const run = runStepMachineCli([
+    const run = await runCli([
       flowPath,
       '--initial-data',
       '{"runtime_root":"/tmp/runtime","board_name":"board-a"}',
     ]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -781,7 +790,7 @@ process.stdin.resume();
     });
   });
 
-  it('routes to failed_state when ref has invalid whatToRun kindref', () => {
+  it('routes to failed_state when ref has invalid whatToRun kindref', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-bad-kindref-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -807,16 +816,15 @@ terminal_states:
     return_artifacts: [error]
 `);
 
-    const run = runStepMachineCli([flowPath, '--initial-data', '{"x":1}']);
+    const run = await runCli([flowPath, '--initial-data', '{"x":1}']);
 
-    expect(run.error).toBeUndefined();
     // parseKindRef throws inside handler, step machine catches and routes to failure
     expect(run.status).toBe(0);
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.intent).toBe('failure');
   });
 
-  it('routes to failed_state when compute-jsonata expression throws', () => {
+  it('routes to failed_state when compute-jsonata expression throws', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-compute-fail-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -841,9 +849,8 @@ terminal_states:
     return_artifacts: [error]
 `);
 
-    const run = runStepMachineCli([flowPath]);
+    const run = await runCli([flowPath]);
 
-    expect(run.error).toBeUndefined();
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
@@ -854,7 +861,7 @@ terminal_states:
   // compute-jsonata: case/switch patterns
   // ===========================================================================
 
-  it('compute-jsonata: object-lookup switch routes to correct transition', () => {
+  it('compute-jsonata: object-lookup switch routes to correct transition', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-switch-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -920,8 +927,7 @@ terminal_states:
     ];
 
     for (const [risk, label, outcome, track] of cases) {
-      const run = runStepMachineCli([flowPath, '--initial-data', JSON.stringify({ risk_level: risk })]);
-      expect(run.error).toBeUndefined();
+      const run = await runCli([flowPath, '--initial-data', JSON.stringify({ risk_level: risk })]);
       const out = parseLastJsonObject(run.stdout ?? '');
       expect(out.intent).toBe('success');
       expect(out.data.label).toBe(label);
@@ -930,12 +936,12 @@ terminal_states:
     }
 
     // Unknown value falls through to unknown -> failed_state
-    const unknownRun = runStepMachineCli([flowPath, '--initial-data', '{"risk_level":"critical"}']);
+    const unknownRun = await runCli([flowPath, '--initial-data', '{"risk_level":"critical"}']);
     const unknownOut = parseLastJsonObject(unknownRun.stdout ?? '');
     expect(unknownOut.intent).toBe('failure');
   });
 
-  it('compute-jsonata: chained ternary grading with local binding', () => {
+  it('compute-jsonata: chained ternary grading with local binding', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-grade-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -974,33 +980,33 @@ terminal_states:
 `);
 
     // A — distinction
-    const runA = runStepMachineCli([flowPath, '--initial-data', '{"score":95}']);
+    const runA = await runCli([flowPath, '--initial-data', '{"score":95}']);
     const outA = parseLastJsonObject(runA.stdout ?? '');
     expect(outA.intent).toBe('success');
     expect(outA.data).toEqual({ score: 95, grade: 'A', band: 'distinction' });
 
     // B — pass
-    const runB = runStepMachineCli([flowPath, '--initial-data', '{"score":82}']);
+    const runB = await runCli([flowPath, '--initial-data', '{"score":82}']);
     const outB = parseLastJsonObject(runB.stdout ?? '');
     expect(outB.intent).toBe('success');
     expect(outB.data).toEqual({ score: 82, grade: 'B', band: 'pass' });
 
     // F — routes to remediation (failure intent but not an error)
-    const runF = runStepMachineCli([flowPath, '--initial-data', '{"score":45}']);
+    const runF = await runCli([flowPath, '--initial-data', '{"score":45}']);
     const outF = parseLastJsonObject(runF.stdout ?? '');
     expect(outF.intent).toBe('failure');
     expect(outF.data.grade).toBe('F');
     expect(outF.data.band).toBe('fail');
 
     // input_validation: out-of-range score
-    const runBad = runStepMachineCli([flowPath, '--initial-data', '{"score":150}']);
+    const runBad = await runCli([flowPath, '--initial-data', '{"score":150}']);
     const outBad = parseLastJsonObject(runBad.stdout ?? '');
     expect(outBad.intent).toBe('failure');
   });
 
   // ─── outputTransforms ──────────────────────────────────────────────────────
 
-  it('outputTransforms: reshapes raw ref output with resultExpr and dataTemplate (success)', () => {
+  it('outputTransforms: reshapes raw ref output with resultExpr and dataTemplate (success)', async () => {
     // Script echoes a raw payload. outputTransforms reshapes it via JSONata.
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-out-xform-ok-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
@@ -1036,14 +1042,14 @@ process.stdout.write(JSON.stringify({ code: 200, payload: { value: 42 } }));
 process.exit(0);
 `);
 
-    const run = runStepMachineCli([flowPath]);
+    const run = await runCli([flowPath]);
     const out = parseLastJsonObject(run.stdout ?? '');
     expect(out.intent).toBe('success');
     expect(out.data.value).toBe(42);
     expect(out.data.code).toBeUndefined(); // dataTemplate replaced the whole data object
   });
 
-  it('outputTransforms: errorExpr populates error field and routes to failure', () => {
+  it('outputTransforms: errorExpr populates error field and routes to failure', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-out-xform-err-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const scriptPath = path.join(tmpRoot, 'script.js');
@@ -1079,7 +1085,7 @@ process.stdout.write(JSON.stringify({ code: 500, error_message: "boom" }));
 process.exit(0);
 `);
 
-    const run = runStepMachineCli([flowPath]);
+    const run = await runCli([flowPath]);
     const out = parseLastJsonObject(run.stdout ?? '');
     expect(out.intent).toBe('failure');
     expect(out.data.error).toBe('boom');

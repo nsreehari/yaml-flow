@@ -15,6 +15,7 @@ if _PYCLI_ROOT not in sys.path:
     sys.path.insert(0, _PYCLI_ROOT)
 
 from sub.step_machine_native_bridge import invoke_step_machine_native
+from pylib.stores.kv import FsKvStorage, KVStorageStore
 
 PAUSE_FILE_NAME = ".pause"
 
@@ -87,10 +88,13 @@ def _list_run_states(store_dir: str) -> list[Dict[str, Any]]:
     p = Path(store_dir)
     if not p.exists():
         return []
+
+    store = KVStorageStore(FsKvStorage(store_dir))
     states: list[Dict[str, Any]] = []
-    for run_file in p.glob("*.run.json"):
+
+    for run_id in store.list_runs():
         try:
-            value = json.loads(run_file.read_text(encoding="utf-8"))
+            value = store.load_run_state(run_id)
             if isinstance(value, dict):
                 states.append(value)
         except Exception:

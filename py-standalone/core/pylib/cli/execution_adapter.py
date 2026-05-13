@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 from typing import Any, Dict, Optional
+from urllib.request import Request, urlopen
 
 from .args_massaging import resolve_args_massaging
 from .storage_interface import parse_ref
@@ -35,15 +36,16 @@ def _resolve_local_base_spec(ref: Dict[str, Any], cwd: str) -> Dict[str, Any]:
     how_to_run = ref.get("howToRun")
     what_to_run = ref.get("whatToRun", "")
 
-    # Try to parse as KindValueRef; fall back to bare path.
-    try:
-        parsed = parse_ref(what_to_run)
-        script_path = parsed.get("value", what_to_run)
-    except Exception:
-        script_path = what_to_run
-
-    if not os.path.isabs(script_path):
-        script_path = os.path.normpath(os.path.join(cwd, script_path))
+    # TS parity: support both object refs ({kind,value}) and b64 wire strings.
+    # If parsing fails, treat whatToRun as a raw executable/path string.
+    if isinstance(what_to_run, dict):
+        script_path = what_to_run.get("value", "")
+    else:
+        try:
+            parsed = parse_ref(what_to_run)
+            script_path = parsed.get("value", what_to_run)
+        except Exception:
+            script_path = what_to_run
 
     if how_to_run == "local-node":
         return {"command": "node", "baseArgs": [script_path], "cwd": cwd}
@@ -70,6 +72,17 @@ def _parse_stdout_as_json(stdout: str) -> Any:
     except json.JSONDecodeError:
         lines = [ln for ln in trimmed.splitlines() if ln]
         return json.loads(lines[-1])
+
+
+def _resolve_http_url(ref: Dict[str, Any]) -> str:
+    what_to_run = ref.get("whatToRun", "")
+    if isinstance(what_to_run, dict):
+        return str(what_to_run.get("value", ""))
+    try:
+        parsed = parse_ref(what_to_run)
+        return str(parsed.get("value", what_to_run))
+    except Exception:
+        return str(what_to_run)
 
 
 # ============================================================================
@@ -104,10 +117,57 @@ def invoke_ref_sync(
     timeout_ms = opts.get("timeoutMs", 30_000)
 
     # Step 1: argsMassaging
+    massaging_context: Dict[str, Any] = {**args, "whatToRun": ref.get("whatToRun")}
     try:
-        massaged = resolve_args_massaging(ref.get("argsMassaging"), args, label)
+        massaged = resolve_args_massaging(ref.get("argsMassaging"), massaging_context, label)
     except Exception as ex:
         return {"result": "failure", "data": {"error": str(ex)}}
+
+    how_to_run = ref.get("howToRun")
+
+    if how_to_run in ("http:post", "http:get"):
+        try:
+            url = str(massaged.get("url") or _resolve_http_url(ref))
+            if not url:
+                raise ValueError(f"[{label}] missing URL for HTTP invocation")
+
+            method = "GET" if how_to_run == "http:get" else "POST"
+            headers: Dict[str, str] = {}
+            default_headers: Dict[str, str] = {"Content-Type": "application/json"}
+            raw_headers = massaged.get("headers")
+            if isinstance(raw_headers, dict):
+                headers = {str(k): str(v) for k, v in raw_headers.items()}
+            headers = {**default_headers, **headers}
+
+            request_data = None
+            if method == "POST":
+                body_obj = massaged["body"] if "body" in massaged else args
+                request_data = json.dumps(body_obj, ensure_ascii=True).encode("utf-8")
+
+            req = Request(url=url, method=method, data=request_data, headers=headers)
+            with urlopen(req, timeout=max(1, timeout_ms // 1000)) as resp:
+                status = getattr(resp, "status", 200)
+                raw = resp.read().decode("utf-8", errors="replace").strip()
+                if status < 200 or status >= 300:
+                    detail = raw or f"HTTP {status}"
+                    return {
+                        "result": "failure",
+                        "data": {"error": f"[{label}] HTTP {status}: {detail}"},
+                    }
+                if not raw:
+                    return {"result": "success", "data": {}}
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        return {"result": "success", "data": parsed}
+                    return {"result": "success", "data": {"response": parsed}}
+                except Exception:
+                    return {"result": "success", "data": {"response": raw}}
+        except Exception as ex:
+            return {
+                "result": "failure",
+                "data": {"error": f"[{label}] HTTP invocation failed: {ex}"},
+            }
 
     # Step 2: build base spec
     try:

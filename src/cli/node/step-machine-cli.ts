@@ -1,51 +1,33 @@
-#!/usr/bin/env node
-
-// @ts-nocheck
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { loadStepFlow, createStepMachine, buildStepHandlersForFlow } from '../../step-machine-public/index.js';
+import { MemoryStore, KVStorageStore } from '../../stores/index.js';
+import { invokeRefSync } from './execution-adapter.js';
+import { createFsKvStorage } from './storage-fs-adapters.js';
+import type { StepMachineStore, StepMachineState } from '../../step-machine/types.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const srcCli = path.join(__dirname, '..', '..', '..', 'src', 'cli', 'node', 'step-machine-cli.ts');
-const tsxCli = path.join(__dirname, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-
-if (fs.existsSync(srcCli)) {
-  const result = spawnSync(process.execPath, [tsxCli, srcCli, ...process.argv.slice(2)], {
-    stdio: 'inherit',
-    shell: false,
-    windowsHide: true,
-  });
-
-  if (result.error) {
-    console.error(`[step-machine-cli] Failed to launch dev fallback: ${result.error.message}`);
-    process.exit(1);
+export class CliExitError extends Error {
+  constructor(public readonly code: number, message?: string) {
+    super(message);
+    this.name = 'CliExitError';
   }
-
-  process.exit(result.status ?? 0);
 }
 
-const libIndexPath = path.join(__dirname, '..', '..', 'lib', 'index.js');
-const stepPublicPath = path.join(__dirname, '..', '..', 'lib', 'step-machine-public', 'index.js');
-const executionAdapterPath = path.join(__dirname, 'execution-adapter.js');
-
-const { loadStepFlow, createStepMachine, MemoryStore, FileStore } = await import(pathToFileUrl(libIndexPath).href);
-const { buildStepHandlersForFlow } = await import(pathToFileUrl(stepPublicPath).href);
-const { invokeRefSync } = await import(pathToFileUrl(executionAdapterPath).href);
 const PAUSE_FILE_NAME = '.pause';
 
-function pathToFileUrl(filePath) {
-  const resolved = path.resolve(filePath).replace(/\\/g, '/');
-  return new URL(`file:///${resolved.startsWith('/') ? resolved.slice(1) : resolved}`);
-}
+type StoreContext = {
+  storeType: 'memory' | 'file';
+  storeDir: string | undefined;
+  pauseFilePath: string | undefined;
+  store: StepMachineStore;
+};
 
-async function main() {
-  const args = process.argv.slice(2);
+export async function cli(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args);
 
   if (parsed.help || args.length === 0) {
     printUsage();
-    process.exit(args.length === 0 ? 1 : 0);
+    throw new CliExitError(args.length === 0 ? 1 : 0);
   }
 
   const {
@@ -140,7 +122,7 @@ async function main() {
   if (result.status !== 'completed') {
     const reason = result.error?.message ?? result.intent ?? result.status;
     console.error(`[step-machine-cli] Run failed: ${reason}`);
-    process.exit(1);
+    throw new CliExitError(1);
   }
 
   console.log(JSON.stringify({
@@ -153,9 +135,9 @@ async function main() {
   }, null, 2));
 }
 
-function parseCliArgs(args) {
+function parseCliArgs(args: string[]) {
   const valueFlags = new Set(['--initial-data', '--store', '--store-dir']);
-  const values = {};
+  const values: Record<string, string> = {};
   const positionals = [];
   let help = false;
   let resumeRequested = false;
@@ -217,13 +199,13 @@ function parseCliArgs(args) {
   };
 }
 
-function resolveInputPath(inputPath) {
+function resolveInputPath(inputPath: string): string {
   return path.isAbsolute(inputPath)
     ? inputPath
     : path.resolve(process.cwd(), inputPath);
 }
 
-function createStoreContext(storeType, storeDirArg) {
+function createStoreContext(storeType: string, storeDirArg: string | undefined): StoreContext {
   if (storeType !== 'memory' && storeType !== 'file') {
     throw new Error(`[step-machine-cli] Invalid --store value "${storeType}". Expected "memory" or "file".`);
   }
@@ -246,11 +228,11 @@ function createStoreContext(storeType, storeDirArg) {
     storeType,
     storeDir,
     pauseFilePath: path.join(storeDir, PAUSE_FILE_NAME),
-    store: new FileStore({ directory: storeDir }),
+    store: new KVStorageStore(createFsKvStorage(storeDir)),
   };
 }
 
-async function listRunStates(store) {
+async function listRunStates(store: StepMachineStore): Promise<StepMachineState[]> {
   if (!store.listRuns) {
     return [];
   }
@@ -268,21 +250,21 @@ async function listRunStates(store) {
   return states;
 }
 
-function hasPauseRequest(storeContext) {
+function hasPauseRequest(storeContext: StoreContext): boolean {
   if (storeContext.storeType !== 'file' || !storeContext.pauseFilePath) {
     return false;
   }
   return fs.existsSync(storeContext.pauseFilePath);
 }
 
-function clearPauseRequest(storeContext) {
+function clearPauseRequest(storeContext: StoreContext): void {
   if (!hasPauseRequest(storeContext)) {
     return;
   }
-  fs.unlinkSync(storeContext.pauseFilePath);
+  fs.unlinkSync(storeContext.pauseFilePath!);
 }
 
-async function requestPause(storeContext) {
+async function requestPause(storeContext: StoreContext): Promise<void> {
   if (storeContext.storeType !== 'file' || !storeContext.pauseFilePath) {
     throw new Error('[step-machine-cli] --pause requires --store file --store-dir <directory>.');
   }
@@ -301,12 +283,12 @@ async function requestPause(storeContext) {
     return;
   }
 
-  fs.mkdirSync(storeContext.storeDir, { recursive: true });
+  fs.mkdirSync(storeContext.storeDir!, { recursive: true });
   fs.writeFileSync(storeContext.pauseFilePath, JSON.stringify({ requestedAt: Date.now() }), 'utf-8');
   console.log(JSON.stringify({ status: 'pause-requested', storeDir: storeContext.storeDir }, null, 2));
 }
 
-async function resolveRunIdToResume(storeContext) {
+async function resolveRunIdToResume(storeContext: StoreContext): Promise<string | undefined> {
   const states = await listRunStates(storeContext.store);
   const pausedStates = states.filter((s) => s.status === 'paused');
   if (pausedStates.length === 0) {
@@ -318,14 +300,14 @@ async function resolveRunIdToResume(storeContext) {
   return pausedStates[0].runId;
 }
 
-async function markRunPaused(store, runId) {
+async function markRunPaused(store: StepMachineStore, runId: string): Promise<StepMachineState | null> {
   const state = await store.loadRunState(runId);
   if (!state) {
     return null;
   }
-  const pausedState = {
+  const pausedState: StepMachineState = {
     ...state,
-    status: 'paused',
+    status: 'paused' as const,
     pausedAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -333,7 +315,7 @@ async function markRunPaused(store, runId) {
   return pausedState;
 }
 
-async function printStoreStatus(storeContext) {
+async function printStoreStatus(storeContext: StoreContext): Promise<void> {
   if (storeContext.storeType !== 'file') {
     throw new Error('[step-machine-cli] --status requires --store file --store-dir <directory>.');
   }
@@ -357,7 +339,7 @@ async function printStoreStatus(storeContext) {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-function parseInitialData(dataArg) {
+function parseInitialData(dataArg: string | undefined): Record<string, unknown> | undefined {
   if (!dataArg) {
     return undefined;
   }
@@ -374,27 +356,30 @@ function parseInitialData(dataArg) {
   }
 }
 
-function normalizeExecutionRef(ref) {
+function normalizeExecutionRef(ref: unknown): unknown {
   if (!ref || typeof ref !== 'object') return ref;
-  if (typeof ref.whatToRun !== 'string' || !ref.whatToRun.startsWith('b64:')) return ref;
+  const r = ref as Record<string, unknown>;
+  if (typeof r['whatToRun'] !== 'string' || !(r['whatToRun'] as string).startsWith('b64:')) return ref;
 
   try {
-    const payload = ref.whatToRun.slice(4);
+    const payload = (r['whatToRun'] as string).slice(4);
     const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
     const json = Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
     const decoded = JSON.parse(json);
     if (!decoded || typeof decoded !== 'object' || typeof decoded.value !== 'string') {
       return ref;
     }
-    return { ...ref, whatToRun: decoded };
+    return { ...r, whatToRun: decoded };
   } catch {
     return ref;
   }
 }
 
-function buildStepHandlers(flow, flowDir) {
-  const invoke = (ref, args) => invokeRefSync(normalizeExecutionRef(ref), args, { cliDir: flowDir, cwd: flowDir });
-  return buildStepHandlersForFlow(flow, { invoke });
+function buildStepHandlers(flow: unknown, flowDir: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoke = (ref: unknown, args: unknown) => invokeRefSync(normalizeExecutionRef(ref) as any, args as any, { cliDir: flowDir, cwd: flowDir });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return buildStepHandlersForFlow(flow as any, { invoke });
 }
 
 function printUsage() {
@@ -410,8 +395,4 @@ function printUsage() {
   console.error('  step-machine-cli --store file --store-dir ./.runs --status');
 }
 
-main().catch((error) => {
-  const msg = error instanceof Error ? error.stack ?? error.message : String(error);
-  console.error(msg);
-  process.exit(1);
-});
+

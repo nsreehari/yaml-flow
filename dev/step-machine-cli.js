@@ -1,38 +1,23 @@
 #!/usr/bin/env node
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const distCli = path.join(repoRoot, 'dist', 'cli', 'node', 'step-machine-cli.js');
-const srcCli = path.join(repoRoot, 'src', 'cli', 'node', 'step-machine-cli.ts');
-const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const distCli = path.join(repoRoot, 'lib', 'cli', 'node', 'step-machine-cli.js');
 
-if (fs.existsSync(srcCli)) {
-  const result = spawnSync(process.execPath, [tsxCli, srcCli, ...process.argv.slice(2)], {
-    stdio: 'inherit',
-    shell: false,
-    windowsHide: true,
-  });
+const distUrl = new URL(`file:///${path.resolve(distCli).replace(/\\/g, '/').replace(/^\//, '')}`);
+const { cli, CliExitError } = await import(distUrl.href);
 
-  if (result.error) {
-    console.error(`[step-machine-cli] Failed to launch dev fallback: ${result.error.message}`);
-    process.exit(1);
-  }
-
-  process.exit(result.status ?? 0);
-} else if (fs.existsSync(distCli)) {
-  const { cli } = await import(pathToFileUrl(distCli).href);
+try {
   await cli(process.argv.slice(2));
-} else {
-  console.error('[step-machine-cli] Could not find dist or src CLI entrypoint.');
+} catch (err) {
+  if (err instanceof CliExitError) {
+    process.exit(err.code);
+  }
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error(msg);
   process.exit(1);
 }
 
-function pathToFileUrl(filePath) {
-  const resolved = path.resolve(filePath).replace(/\\/g, '/');
-  return new URL(`file:///${resolved.startsWith('/') ? resolved.slice(1) : resolved}`);
-}

@@ -1,7 +1,7 @@
 """
-public_storage_adapter.py
+board_worker_adapter.py
 
-Standalone file — copy this to your task-executor project.
+Standalone file — copy this to your board worker project.
 Zero dependencies on the rest of yaml-flow internals.
 
 Provides:
@@ -11,8 +11,8 @@ Provides:
   - BlobStorage         read/write interface (protocol class)
   - blob_storage_for_ref()  resolve a ref to its BlobStorage backend
   - TaskCallback        how to report task completion back to the board
-  - report_complete()   call from executor on success
-  - report_failed()     call from executor on failure
+  - report_complete()   call from worker on success
+  - report_failed()     call from worker on failure
 
 Supported storage kinds:
   fs-path   — ref.value is an absolute file path; reads/writes via os/pathlib
@@ -23,7 +23,7 @@ Supported callback transports (via ExecutionRef.howToRun):
   http:post      — HTTP POST to a board endpoint
 
 Usage:
-  from pycli.sub.public_storage_adapter import (
+  from pycli.sub.board_worker_adapter import (
       parse_ref, serialize_ref, blob_storage_for_ref,
       report_complete, report_failed,
   )
@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 from urllib.request import Request, urlopen
+
+from pylib.cli.args_massaging import resolve_args_massaging
 
 
 # ============================================================================
@@ -112,7 +114,7 @@ def blob_storage_for_ref(ref: KindValueRef) -> _FsPathBlobStorage:
 
 
 # ============================================================================
-# TaskCallback — how a task-executor reports results back to the board
+# TaskCallback — how a worker reports results back to the board
 # ============================================================================
 
 @dataclass
@@ -121,6 +123,7 @@ class ExecutionRef:
     howToRun: str
     whatToRun: str
     meta: Optional[str] = None
+    argsMassaging: Optional[dict[str, Any]] = None
     extra: Optional[dict[str, Any]] = None
 
 
@@ -140,6 +143,7 @@ def _parse_task_callback(raw: dict[str, Any]) -> TaskCallback:
             howToRun=str(via_raw.get("howToRun", "")),
             whatToRun=str(via_raw.get("whatToRun", "")),
             meta=via_raw.get("meta"),
+            argsMassaging=via_raw.get("argsMassaging"),
             extra=via_raw.get("extra"),
         ),
     )
@@ -160,13 +164,15 @@ def _notify_channel_from_via(via: ExecutionRef) -> Optional[str]:
     return None
 
 
-def _run_subprocess_hidden(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_subprocess_hidden(cmd: list[str], input_data: Optional[str] = None) -> subprocess.CompletedProcess[str]:
     """Run a subprocess without popping a cmd window on Windows."""
     kwargs: dict[str, Any] = {
         "capture_output": True,
         "text": True,
         "shell": False,
     }
+    if input_data is not None:
+        kwargs["input"] = input_data
     if os.name == "nt":
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -175,26 +181,47 @@ def _run_subprocess_hidden(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, **kwargs)
 
 
+def _resolve_callback_massaging(via: ExecutionRef, context: dict[str, Any], label: str) -> dict[str, Any]:
+    try:
+        return resolve_args_massaging(via.argsMassaging, context, label)
+    except Exception as ex:
+        raise RuntimeError(str(ex)) from ex
+
+
 def report_complete(callback: Any, out_ref: KindValueRef) -> None:
     """
     Report successful task completion back to the board.
-    Call this from a task-executor after writing the result to out_ref.
+    Call this from a worker after writing the result to out_ref.
 
     Accepts either a TaskCallback or a raw dict (from JSON envelope).
     """
     cb = callback if isinstance(callback, TaskCallback) else _parse_task_callback(callback)
     token = cb.token
     via = cb.via
+    notify_channel = _notify_channel_from_via(via)
+    out_ref_wire = serialize_ref(out_ref)
+    context = {
+        "command": "source-data-fetched",
+        "status": "complete",
+        "token": token,
+        "ref": out_ref_wire,
+        "notifyChannel": notify_channel,
+        "whatToRun": via.whatToRun,
+    }
+    massaged = _resolve_callback_massaging(via, context, "report_complete")
 
     if via.howToRun in ("local-node", "local-process"):
         script_path = _parse_what_to_run(via.whatToRun)
-        notify_channel = _notify_channel_from_via(via)
-        cmd = ["node", script_path, "source-data-fetched",
-               "--ref", serialize_ref(out_ref),
+        cmd = (["node", script_path] if via.howToRun == "local-node" else [script_path])
+        cmd_args = list(massaged.get("cmdArgs") or [
+               "source-data-fetched",
+               "--ref", out_ref_wire,
                "--token", token]
-        if notify_channel:
-            cmd.extend(["--notify-channel", notify_channel])
-        result = _run_subprocess_hidden(cmd)
+        )
+        if notify_channel and "cmdArgs" not in massaged:
+            cmd_args.extend(["--notify-channel", notify_channel])
+        stdin_payload = json.dumps(massaged["stdin"] if "stdin" in massaged else context, ensure_ascii=True)
+        result = _run_subprocess_hidden([*cmd, *cmd_args], input_data=stdin_payload)
         if result.returncode != 0:
             msg = (result.stderr or result.stdout or "callback failed").strip()
             raise RuntimeError(f"report_complete: board CLI exited {result.returncode}: {msg}")
@@ -202,23 +229,30 @@ def report_complete(callback: Any, out_ref: KindValueRef) -> None:
 
     if via.howToRun == "local-python":
         script_path = _parse_what_to_run(via.whatToRun)
-        notify_channel = _notify_channel_from_via(via)
-        # Use unprefixed command — board pycli decodes base_ref from token automatically.
-        cmd = [sys.executable, script_path, "source-data-fetched",
-               "--ref", serialize_ref(out_ref),
-               "--token", token]
-        if notify_channel:
-            cmd.extend(["--notify-channel", notify_channel])
-        result = _run_subprocess_hidden(cmd)
+        cmd = [sys.executable, script_path]
+        cmd_args = list(massaged.get("cmdArgs") or [
+               "source-data-fetched",
+               "--ref", out_ref_wire,
+               "--token", token,
+        ])
+        if notify_channel and "cmdArgs" not in massaged:
+            cmd_args.extend(["--notify-channel", notify_channel])
+        stdin_payload = json.dumps(massaged["stdin"] if "stdin" in massaged else context, ensure_ascii=True)
+        result = _run_subprocess_hidden([*cmd, *cmd_args], input_data=stdin_payload)
         if result.returncode != 0:
             msg = (result.stderr or result.stdout or "callback failed").strip()
             raise RuntimeError(f"report_complete: board pycli exited {result.returncode}: {msg}")
         return
 
     if via.howToRun == "http:post":
-        url = _parse_what_to_run(via.whatToRun)
-        body = json.dumps({"status": "complete", "ref": serialize_ref(out_ref), "token": token}).encode("utf-8")
-        req = Request(url, method="POST", data=body, headers={"Content-Type": "application/json"})
+        url = str(massaged.get("url") or _parse_what_to_run(via.whatToRun))
+        body_obj = massaged["body"] if "body" in massaged else {"status": "complete", "ref": out_ref_wire, "token": token}
+        headers = {"Content-Type": "application/json"}
+        raw_headers = massaged.get("headers")
+        if isinstance(raw_headers, dict):
+            headers.update({str(k): str(v) for k, v in raw_headers.items()})
+        body = json.dumps(body_obj, ensure_ascii=True).encode("utf-8")
+        req = Request(url, method="POST", data=body, headers=headers)
         with urlopen(req, timeout=30):
             return
 
@@ -228,23 +262,36 @@ def report_complete(callback: Any, out_ref: KindValueRef) -> None:
 def report_failed(callback: Any, reason: str) -> None:
     """
     Report task failure back to the board.
-    Call this from a task-executor instead of writing to out_ref.
+    Call this from a worker instead of writing to out_ref.
 
     Accepts either a TaskCallback or a raw dict (from JSON envelope).
     """
     cb = callback if isinstance(callback, TaskCallback) else _parse_task_callback(callback)
     token = cb.token
     via = cb.via
+    notify_channel = _notify_channel_from_via(via)
+    context = {
+        "command": "source-data-fetch-failure",
+        "status": "failed",
+        "token": token,
+        "reason": reason,
+        "notifyChannel": notify_channel,
+        "whatToRun": via.whatToRun,
+    }
+    massaged = _resolve_callback_massaging(via, context, "report_failed")
 
     if via.howToRun in ("local-node", "local-process"):
         script_path = _parse_what_to_run(via.whatToRun)
-        notify_channel = _notify_channel_from_via(via)
-        cmd = ["node", script_path, "source-data-fetch-failure",
+        cmd = (["node", script_path] if via.howToRun == "local-node" else [script_path])
+        cmd_args = list(massaged.get("cmdArgs") or [
+               "source-data-fetch-failure",
                "--token", token,
-               "--reason", reason]
-        if notify_channel:
-            cmd.extend(["--notify-channel", notify_channel])
-        result = _run_subprocess_hidden(cmd)
+               "--reason", reason,
+        ])
+        if notify_channel and "cmdArgs" not in massaged:
+            cmd_args.extend(["--notify-channel", notify_channel])
+        stdin_payload = json.dumps(massaged["stdin"] if "stdin" in massaged else context, ensure_ascii=True)
+        result = _run_subprocess_hidden([*cmd, *cmd_args], input_data=stdin_payload)
         if result.returncode != 0:
             msg = (result.stderr or result.stdout or "callback failed").strip()
             raise RuntimeError(f"report_failed: board CLI exited {result.returncode}: {msg}")
@@ -252,23 +299,30 @@ def report_failed(callback: Any, reason: str) -> None:
 
     if via.howToRun == "local-python":
         script_path = _parse_what_to_run(via.whatToRun)
-        notify_channel = _notify_channel_from_via(via)
-        # Use unprefixed command — board pycli decodes base_ref from token automatically.
-        cmd = [sys.executable, script_path, "source-data-fetch-failure",
+        cmd = [sys.executable, script_path]
+        cmd_args = list(massaged.get("cmdArgs") or [
+               "source-data-fetch-failure",
                "--token", token,
-               "--reason", reason]
-        if notify_channel:
-            cmd.extend(["--notify-channel", notify_channel])
-        result = _run_subprocess_hidden(cmd)
+               "--reason", reason,
+        ])
+        if notify_channel and "cmdArgs" not in massaged:
+            cmd_args.extend(["--notify-channel", notify_channel])
+        stdin_payload = json.dumps(massaged["stdin"] if "stdin" in massaged else context, ensure_ascii=True)
+        result = _run_subprocess_hidden([*cmd, *cmd_args], input_data=stdin_payload)
         if result.returncode != 0:
             msg = (result.stderr or result.stdout or "callback failed").strip()
             raise RuntimeError(f"report_failed: board pycli exited {result.returncode}: {msg}")
         return
 
     if via.howToRun == "http:post":
-        url = _parse_what_to_run(via.whatToRun)
-        body = json.dumps({"status": "failed", "reason": reason, "token": token}).encode("utf-8")
-        req = Request(url, method="POST", data=body, headers={"Content-Type": "application/json"})
+        url = str(massaged.get("url") or _parse_what_to_run(via.whatToRun))
+        body_obj = massaged["body"] if "body" in massaged else {"status": "failed", "reason": reason, "token": token}
+        headers = {"Content-Type": "application/json"}
+        raw_headers = massaged.get("headers")
+        if isinstance(raw_headers, dict):
+            headers.update({str(k): str(v) for k, v in raw_headers.items()})
+        body = json.dumps(body_obj, ensure_ascii=True).encode("utf-8")
+        req = Request(url, method="POST", data=body, headers=headers)
         with urlopen(req, timeout=30):
             return
 

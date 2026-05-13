@@ -110,6 +110,8 @@ class NativeBoardPlatformAdapter:
             meta=ref.get("meta"),
             howToRun=ref.get("howToRun", ""),
             whatToRun=ref.get("whatToRun", ""),
+            argsMassaging=ref.get("argsMassaging"),
+            extra=ref.get("extra"),
         )
 
         # Marshal high-level args into temp files (same as TS fs-board-adapter)

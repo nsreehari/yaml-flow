@@ -4,9 +4,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
-    exclude: ['**/py-*.test.ts', 'tests/examples/portfolio-tracker-e2e.test.ts'],
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.js'],
+    exclude: ['**/py-*.test.ts', 'tests/e2e/**/py*'],
     forceExit: true,
+    environmentMatchGlobs: [
+      ['tests/browser/**', 'jsdom'],
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

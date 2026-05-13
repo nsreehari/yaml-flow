@@ -67,8 +67,7 @@ export type {
 // Stores (shared)
 // ============================================================================
 export { MemoryStore } from './stores/memory.js';
-export { LocalStorageStore } from './stores/localStorage.js';
-export { FileStore } from './stores/file.js';
+export { KVStorageStore } from './stores/kv.js';
 
 // ============================================================================
 // Batch

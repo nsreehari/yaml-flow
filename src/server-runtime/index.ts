@@ -902,6 +902,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       }
 
       const cardMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)$`));
+      if (method === 'GET' && cardMatch) {
+        await bootstrapBoard();
+        const cardId = decodeURIComponent(cardMatch[1]);
+        const card = readCardFromStore(cardId);
+        if (!card) { json(res, 404, { error: `card not found: ${cardId}` }); return true; }
+        json(res, 200, card);
+        return true;
+      }
+
       if (method === 'PATCH' && cardMatch) {
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardMatch[1]);

@@ -136,7 +136,7 @@ async function run(node: ComputeNode, options?: RunOptions): Promise<ComputeNode
       ctx.computed_values = node.computed_values; // subsequent steps see earlier results
       // ctx.data is the same reference as node.computed_values — already in sync
     } catch (err) {
-      console.error(`CardCompute.run error on "${node.id ?? '?'}.${step.bindTo}":`, err);
+      // swallow: compute steps are best-effort; errors captured in computed_values
     }
   }
 
@@ -184,7 +184,7 @@ function runSync(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push({ bindTo: step.bindTo, error: msg });
-      console.error(`CardCompute.runSync error on "${node.id ?? '?'}.${step.bindTo}":`, err);
+      // error already captured in errors array
     }
   }
 

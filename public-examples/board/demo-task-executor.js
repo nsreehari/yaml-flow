@@ -61,10 +61,8 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/board-worker-adapter';
-import { loadStepFlow, createStepMachine } from '../../lib/step-machine/index.js';
-import { MemoryStore } from '../../lib/stores/memory.js';
-import { buildStepHandlersForFlow } from '../../lib/step-machine-public/index.js';
-import { invokeRefSync } from '../../cli/node/execution-adapter.js';
+import { loadStepFlow, createStepMachine, MemoryStore, buildStepHandlersForFlow } from 'yaml-flow/step-machine-public';
+import { invokeRefSync } from 'yaml-flow/board-live-cards-node';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_DEF_FLOWS_FILE = path.join(__dirname, 'source_def_flows.json');
@@ -357,6 +355,22 @@ async function executeStepMachineSourceFlow(context) {
   };
 }
 
+async function resolveAndExecuteSourceFlow(sourceDef, extra, refs = {}) {
+  const registry = loadSourceDefFlowsConfig();
+  const kind = resolveSourceKind(sourceDef, registry);
+  const flowResult = await executeStepMachineSourceFlow({
+    kind,
+    registry,
+    sourceDef,
+    extra,
+    inRef: refs.inRef,
+    outRef: refs.outRef,
+    errRef: refs.errRef,
+    mockDb: MOCK_DB,
+  });
+  return { kind, flowResult };
+}
+
 async function runSourceFetchSubcommand(argv) {
   const inIdx = argv.indexOf('--in-ref');
   const outIdx = argv.indexOf('--out-ref');
@@ -419,29 +433,15 @@ async function runSourceFetchSubcommand(argv) {
     failRef(`Cannot resolve source_def: ${String(err && err.message || err)}`, callback);
   }
 
-  const registry = loadSourceDefFlowsConfig();
   let kind;
-  try {
-    kind = resolveSourceKind(sourceDef, registry);
-  } catch (err) {
-    failRef(String(err && err.message || err), callback);
-  }
-
   let flowResult;
   try {
-    flowResult = await executeStepMachineSourceFlow({
-      kind,
-      registry,
-      sourceDef,
-      extra,
-      inRef,
-      outRef,
-      errRef,
-      mockDb: MOCK_DB,
-    });
+    const resolved = await resolveAndExecuteSourceFlow(sourceDef, extra, { inRef, outRef, errRef });
+    kind = resolved.kind;
+    flowResult = resolved.flowResult;
   } catch (err) {
     const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
-    failRef(`${kind} invocation failed: ${String(err && err.message || err)}${detail}`, callback);
+    failRef(`source invocation failed: ${String(err && err.message || err)}${detail}`, callback);
   }
 
   if (!flowResult?.wroteOutputDirectly) {
@@ -461,6 +461,46 @@ async function runSourceFetchSubcommand(argv) {
     }
   }
 
+}
+
+async function probeSourcePreflightSubcommand(argv) {
+  const extraIdx = argv.indexOf('--extra');
+  const extraB64 = extraIdx !== -1 ? argv[extraIdx + 1] : undefined;
+
+  let extra = {};
+  if (extraB64) {
+    try { extra = JSON.parse(Buffer.from(extraB64, 'base64').toString('utf-8')); }
+    catch { /* ignore malformed extra */ }
+  }
+
+  const startedAt = Date.now();
+  try {
+    const chunks = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const raw = Buffer.concat(chunks).toString('utf-8').trim();
+    if (!raw) {
+      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: 'Missing probe input JSON on stdin' }));
+      process.exit(0);
+    }
+
+    let sourceDef;
+    try {
+      sourceDef = JSON.parse(raw);
+    } catch (err) {
+      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `Invalid probe JSON: ${String(err && err.message || err)}` }));
+      process.exit(0);
+    }
+
+    await resolveAndExecuteSourceFlow(sourceDef, extra);
+    console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: Date.now() - startedAt }));
+    process.exit(0);
+  } catch (err) {
+    const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
+    console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `source invocation failed: ${String(err && err.message || err)}${detail}` }));
+    process.exit(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -548,7 +588,7 @@ function validateSourceDefSubcommand(argv) {
 const CAPABILITIES = {
   version: '1.0',
   executor: 'demo-task-executor',
-  subcommands: ['run-source-fetch', 'describe-capabilities', 'validate-source-def'],
+  subcommands: ['run-source-fetch', 'probe-source-preflight', 'describe-capabilities', 'validate-source-def'],
   sourceKinds: {
     mock: {
       description: 'Look up a key in a hardcoded MOCK_DB dictionary.',
@@ -657,6 +697,10 @@ async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {
     await runSourceFetchSubcommand(process.argv.slice(3));
+    return;
+  }
+  if (sub === 'probe-source-preflight') {
+    await probeSourcePreflightSubcommand(process.argv.slice(3));
     return;
   }
   if (sub === 'describe' || sub === 'describe-capabilities') {

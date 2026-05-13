@@ -19,15 +19,17 @@ if _PYCLI_ROOT not in sys.path:
 _PYCLI_SUB = os.path.join(_PYCLI_ROOT, "sub")
 
 from pylib.cli.storage_interface import parse_ref
+from pylib.cli.execution_adapter import invoke_ref_sync
+from pylib.step_machine.loader import load_step_flow
 
 
-def _public_storage_adapter():
-    """Lazy-load public_storage_adapter (sub/ in source, adapters/ in standalone)."""
-    mod_name = "_demo_psa"
+def _board_worker_adapter():
+    """Lazy-load board_worker_adapter (sub/ in source, adapters/ in standalone)."""
+    mod_name = "_demo_bwa"
     if mod_name in sys.modules:
         return sys.modules[mod_name]
     spec = importlib.util.spec_from_file_location(
-        mod_name, os.path.join(_PYCLI_SUB, "public_storage_adapter.py")
+        mod_name, os.path.join(_PYCLI_SUB, "board_worker_adapter.py")
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     sys.modules[mod_name] = mod  # register before exec so @dataclass can resolve __module__
@@ -148,7 +150,7 @@ def _execute_via_step_machine_flow(
     kind: str,
     registry: Dict[str, Any],
     source_def: Dict[str, Any],
-    out_ref: str,
+    out_ref: Optional[str],
     extra: Optional[Dict[str, Any]],
 ) -> Tuple[Any, bool]:
     """Run source def through the Python step machine using flow files + Python handler modules.
@@ -169,8 +171,7 @@ def _execute_via_step_machine_flow(
         raise ValueError(f"Invalid or missing flow for kind: {kind}")
 
     flow_path = os.path.normpath(os.path.join(_HERE, flow_ref))
-    with open(flow_path, "r", encoding="utf-8") as f:
-        flow = json.load(f)
+    flow = load_step_flow(flow_path)
 
     def invoke(ref: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
         how = ref.get("howToRun", "")
@@ -239,8 +240,11 @@ def _execute_via_step_machine_flow(
             if isinstance(what, dict):
                 what_value = str(what.get("value") or "")
             else:
-                parsed_what = parse_ref(what)
-                what_value = str(parsed_what.get("value") or "")
+                try:
+                    parsed_what = parse_ref(what)
+                    what_value = str(parsed_what.get("value") or "")
+                except Exception:
+                    what_value = str(what)
             # For Python standalone, fall back from .js to .py automatically
             py_what = what_value[:-3] + ".py" if what_value.endswith(".js") else what_value
             module_path = os.path.normpath(os.path.join(_HERE, py_what))
@@ -253,7 +257,8 @@ def _execute_via_step_machine_flow(
                 raise ValueError(f"Handler module {py_what} must define execute(context)")
             return mod.execute(args)
 
-        raise ValueError(f"[demo-task-executor.py] Unsupported howToRun for Python executor: {how!r}")
+        # JS parity: delegate all other transports to invokeRefSync.
+        return invoke_ref_sync(ref, args, {"cliDir": _HERE, "cwd": os.getcwd()})
 
     handlers = build_step_handlers_for_flow(flow, invoke)
     machine = StepMachine(flow, handlers, options={"store": MemoryStore()})
@@ -287,7 +292,7 @@ def _run_source_fetch(
     err_ref: Optional[str],
     extra: Optional[Dict[str, Any]] = None,
 ) -> int:
-    psa = _public_storage_adapter()
+    psa = _board_worker_adapter()
 
     # Read envelope via PSA storage and enforce envelope protocol.
     try:
@@ -297,14 +302,14 @@ def _run_source_fetch(
         print(f"[demo-task-executor.py] Cannot read input: {err}", file=sys.stderr)
         return 1
 
-    source_def = envelope.get("source_def")
+    # JS parity: accept both new envelope protocol and legacy raw source-def input.
+    callback = envelope.get("callback") if isinstance(envelope.get("source_def"), dict) else None
+    source_def = envelope.get("source_def") if isinstance(envelope.get("source_def"), dict) else envelope
     if not isinstance(source_def, dict):
-        msg = "Input must be an envelope with object field 'source_def'"
+        msg = "Input must be a source definition object or an envelope with object field 'source_def'"
         _write_err_psa(psa, err_ref, msg)
         print(f"[demo-task-executor.py] {msg}", file=sys.stderr)
         return 1
-
-    callback = envelope.get("callback")
 
     def _write_out(payload: Any) -> None:
         _write_json_file_psa(psa, out_ref, payload)
@@ -486,90 +491,67 @@ def _resolve_dot_path(obj: Any, path_str: str) -> Any:
     return val
 
 
-def _probe_source_preflight_from_stdin() -> int:
-    """Lightweight preflight probe — data-driven from registry probe config.
+def _probe_source_preflight_from_stdin(extra: Optional[Dict[str, Any]] = None) -> int:
+    """Preflight probe using the same flow execution path as run-source-fetch.
 
-    Input (stdin JSON): source def object with _projections already merged.
-    Output: { ok, reachable, latencyMs?, note?, error? }
-
-    Strategies from registry:
-      - http-head: HEAD request to the URL resolved from urlFrom
-      - mock-db-lookup: check key exists in MOCK_DB
-      - command-check: check command is available (always returns reachable in Python)
-      - (fallback): generic success
+    Input (stdin JSON): source def object with optional _projections.
+    Output: { ok, reachable, latencyMs, error? }
+    Always exits 0 (matches JS demo-task-executor behavior).
     """
     raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+    started_at_ms = int(time.time() * 1000)
     if not raw:
-        print(json.dumps({"ok": False, "error": "No input provided on stdin"}))
-        return 1
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": "Missing probe input JSON on stdin",
+        }, ensure_ascii=True))
+        return 0
 
     try:
         source_def = json.loads(raw)
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": f"Cannot parse input: {exc}"}))
-        return 1
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": f"Invalid probe JSON: {exc}",
+        }, ensure_ascii=True))
+        return 0
 
     if not isinstance(source_def, dict):
-        print(json.dumps({"ok": False, "error": "Input must be a JSON object"}))
-        return 1
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": "Invalid probe JSON: input must be a JSON object",
+        }, ensure_ascii=True))
+        return 0
 
-    registry = _load_registry()
     try:
+        registry = _load_registry()
         kind = _resolve_source_kind(source_def, registry)
-    except ValueError as exc:
-        print(json.dumps({"ok": False, "reachable": False, "error": str(exc)}))
+        _execute_via_step_machine_flow(kind, registry, source_def, None, extra)
+        print(json.dumps({
+            "ok": True,
+            "reachable": True,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+        }, ensure_ascii=True))
         return 0
-
-    spec = (registry.get("kinds") or {}).get(kind) or {}
-    probe_cfg = spec.get("probe") or {}
-    strategy = probe_cfg.get("strategy", "")
-
-    start_ms = int(time.time() * 1000)
-
-    if strategy == "mock-db-lookup":
-        mock_key = source_def.get("mock", "")
-        reachable = mock_key in MOCK_DB
-        latency_ms = int(time.time() * 1000) - start_ms
-        note = f"mock key '{mock_key}' {'found' if reachable else 'not found'} in MOCK_DB"
-        print(json.dumps({"ok": True, "reachable": reachable, "latencyMs": latency_ms, "note": note}))
+    except Exception as exc:
+        detail = ""
+        stderr_val = getattr(exc, "stderr", None)
+        stdout_val = getattr(exc, "stdout", None)
+        if stderr_val or stdout_val:
+            detail = f"\n{str(stderr_val or stdout_val).rstrip()}"
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": f"source invocation failed: {str(exc)}{detail}",
+        }, ensure_ascii=True))
         return 0
-
-    if strategy == "http-head":
-        url_from = probe_cfg.get("urlFrom", "")
-        # Resolve dot-path (e.g. "url.url" or "_projections.url_list[0]")
-        url = _resolve_dot_path(source_def, url_from)
-        if not url or not isinstance(url, str):
-            print(json.dumps({"ok": False, "reachable": False, "error": f"Cannot resolve probe URL from {url_from}"}))
-            return 0
-        # Interpolate template variables
-        projections = source_def.get("_projections") or {}
-        fetch_args = {}
-        cfg = source_def.get(kind)
-        if isinstance(cfg, dict):
-            fetch_args = dict(cfg.get("args") or {})
-        context = {**projections, **fetch_args}
-        url = _interpolate(url, context)
-        try:
-            req = urllib.request.Request(url=url, method="HEAD")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                latency_ms = int(time.time() * 1000) - start_ms
-                print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"HTTP {resp.status}"}))
-                return 0
-        except Exception as exc:
-            latency_ms = int(time.time() * 1000) - start_ms
-            print(json.dumps({"ok": True, "reachable": False, "latencyMs": latency_ms, "note": str(exc)}))
-            return 0
-
-    if strategy == "command-check":
-        # In Python standalone context, command-check probes report reachable generically
-        latency_ms = int(time.time() * 1000) - start_ms
-        print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"kind '{kind}': command-check (assumed available)"}))
-        return 0
-
-    # Fallback: no probe strategy defined
-    latency_ms = int(time.time() * 1000) - start_ms
-    print(json.dumps({"ok": True, "reachable": True, "latencyMs": latency_ms, "note": f"kind '{kind}': no lightweight probe available"}))
-    return 0
 
 
 def main() -> int:
@@ -597,7 +579,13 @@ def main() -> int:
     if args.subcommand == "validate-card-preflight":
         return _validate_card_preflight_from_stdin()
     if args.subcommand == "probe-source-preflight":
-        return _probe_source_preflight_from_stdin()
+        extra: Optional[Dict[str, Any]] = None
+        if args.extra:
+            try:
+                extra = json.loads(base64.b64decode(args.extra).decode("utf-8"))
+            except Exception:
+                extra = None
+        return _probe_source_preflight_from_stdin(extra)
     if not args.in_ref or not args.out_ref:
         print("run-source-fetch requires --in-ref and --out-ref", file=sys.stderr)
         return 2

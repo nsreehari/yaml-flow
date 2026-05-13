@@ -100,7 +100,6 @@ if (!process.env.DEMO_INFERENCE_ADAPTER_PATH && configuredInferenceAdapterPath) 
 }
 
 const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
-const RESET_ON_START = cliArgs.includes('--reset');
 const cardsPatternArgIndex = cliArgs.indexOf('--cards-pattern');
 const cliCardsPattern = cardsPatternArgIndex !== -1 ? cliArgs[cardsPatternArgIndex + 1] : null;
 const selectedCardsPattern = (process.env.DEMO_CARDS_PATTERN || cliCardsPattern || '').trim() || null;
@@ -427,27 +426,6 @@ const runtime = createMultiBoardServerRuntime({
   },
 });
 
-// ---------------------------------------------------------------------------
-// Reset
-// ---------------------------------------------------------------------------
-
-function resetRuntime() {
-  if (fs.existsSync(setupDir)) {
-    fs.rmSync(setupDir, { recursive: true, force: true });
-    console.log(`[demo-server] reset: wiped ${setupDir}`);
-  }
-  const chatSessionsDir = serverConfig.chatSessionsDir
-    ? path.resolve(__dirname, serverConfig.chatSessionsDir)
-    : path.join(os.tmpdir(), 'demo-chat-handler-sessions');
-  if (fs.existsSync(chatSessionsDir)) {
-    fs.rmSync(chatSessionsDir, { recursive: true, force: true });
-    console.log(`[demo-server] reset: wiped ${chatSessionsDir}`);
-  }
-}
-
-if (RESET_ON_START) {
-  resetRuntime();
-}
 
 // ---------------------------------------------------------------------------
 // Demo-setup — host-level concern (not a runtime concern).
