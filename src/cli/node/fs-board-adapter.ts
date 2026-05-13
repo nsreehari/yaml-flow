@@ -331,7 +331,8 @@ export function createFsBoardNonCorePlatformAdapter(
     ...base,
     invokeExecutorSync(ref, subcommand, args, execOpts) {
       const { command, baseArgs } = buildLocalBaseSpec(ref, resolvedCliDir);
-      return executor.executeSync(command, [...baseArgs, subcommand, ...args], {
+      const extraFlag = ref.extra ? ['--extra', Buffer.from(JSON.stringify(ref.extra)).toString('base64')] : [];
+      return executor.executeSync(command, [...baseArgs, subcommand, ...args, ...extraFlag], {
         timeout: execOpts?.timeout ?? 30_000,
         encoding: 'utf-8',
         input: execOpts?.input,

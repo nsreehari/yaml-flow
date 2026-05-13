@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "8.0.1",
+  "version": "8.0.3",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -69,9 +69,7 @@
   "files": [
     "lib",
     "cli",
-    "examples/board",
-    "examples/board-local",
-    "examples/portfolio-tracker",
+    "examples",
     "schema",
     "browser",
     "!browser/card-compute.js",
@@ -79,6 +77,8 @@
     "!lib/**/*.map",
     "!cli/**/*.map",
     "!browser/**/*.map",
+    "!examples/**/.demo-setup/**",
+    "!examples/**/.server-meta/**",
     "!examples/**/runtime/**",
     "!examples/**/--base-ref/**",
     "!examples/**/cards/**/chats/**",

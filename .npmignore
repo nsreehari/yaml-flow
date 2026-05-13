@@ -29,6 +29,9 @@ coverage/
 .eslintrc*
 .prettierrc*
 
+.demo-setup/
+.server-meta/
+
 # IDE
 .idea/
 .vscode/
