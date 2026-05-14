@@ -1367,7 +1367,7 @@ export function createBoardLiveCardsNonCorePublic(
         try {
           const inPayload = { ...src };
           const stdout = adapter.invokeExecutorSync(teRef!, 'probe-source-preflight', [],
-            { timeout: (src['timeout'] as number | undefined) ?? 10_000, input: JSON.stringify(inPayload) });
+            { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
           const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string };
           sourceProbes.push({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, error: result.ok ? undefined : result.error });
         } catch {
