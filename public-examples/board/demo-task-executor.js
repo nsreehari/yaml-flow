@@ -7,24 +7,23 @@
  *   run-source-fetch        — fetch data for one source entry
  *   describe-capabilities   — print supported source kinds + schemas to stdout (JSON)
  *
- * CLI args:
- *   --in    <source.json>   Required. Path to a temp JSON file containing the source definition.
- *   --out   <result.json>   Required. Path where this executor must write its JSON result.
- *   --err   <error.txt>     Optional. Path where this executor writes an error message on failure.
- *   --extra <base64json>    Optional. Base64-encoded JSON with board topology context
- *                           (baked into .task-executor at board init time, passed blindly by the CLI).
+ * Subcommand CLI args:
  *
- * --in payload (source definition):
- *   {
- *     "bindTo":  "token_name",
- *     "outputFile": "relative/path.json",
- *     "cwd":     "<card directory>",           // injected by CLI
- *     "boardDir":"<board runtime directory>",   // injected by CLI
- *     "_projections":   { "refKey": <resolvedValue> }, // named projections from card_data/requires,
- *                                               // declared in source_defs[].projections and resolved
- *                                               // by the engine before invoking the executor
- *     // ...plus any custom fields authored on the source entry (bindTo, outputFile, projections, etc.)
- *   }
+ *   run-source-fetch
+ *     --in-ref  <b64ref>     Required. Ref to a temp JSON envelope: { source_def, callback? }
+ *     --out-ref <b64ref>     Required. Ref where this executor writes its JSON result.
+ *     --err-ref <b64ref>     Optional. Ref where this executor writes an error message on failure.
+ *     --extra   <base64json> Optional. Base64-encoded JSON with board topology context.
+ *
+ *   validate-source-def     — source def JSON on stdin; stdout: { ok, errors[] }
+ *   validate-card-preflight — card JSON on stdin; stdout: { ok, errors[] }
+ *   probe-source-preflight  — source def JSON (with _projections) on stdin;
+ *                             stdout: { ok, reachable, latencyMs, error? }
+ *   describe-capabilities   — no stdin; stdout: capability manifest JSON
+ *
+ * run-source-fetch --in-ref envelope payload:
+ *   { "source_def": { ... }, "callback": { ... } }
+ *   or legacy: raw source_def object (no callback field)
  *
  * --extra (decoded):
  *   {
@@ -506,27 +505,25 @@ async function probeSourcePreflightSubcommand(argv) {
 }
 
 // ---------------------------------------------------------------------------
-// validate-source-def — structural validation of a source definition
+// validate-source-def — structural validation of a source definition.
+// Source def JSON arrives on stdin (board-live-cards-public sends it via input:).
 // ---------------------------------------------------------------------------
-function validateSourceDefSubcommand(argv) {
-  const inIdx = argv.indexOf('--in');
-  const inFile = inIdx !== -1 ? argv[inIdx + 1] : undefined;
-
-  if (!inFile) {
-    console.error('[demo-task-executor] Usage: validate-source-def --in <source.json>');
-    process.exit(1);
+async function validateSourceDefSubcommand() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-
-  if (!fs.existsSync(inFile)) {
-    console.log(JSON.stringify({ ok: false, errors: [`Input file not found: ${inFile}`] }));
+  const raw = Buffer.concat(chunks).toString('utf-8').trim();
+  if (!raw) {
+    console.log(JSON.stringify({ ok: false, errors: ['No input provided on stdin'] }));
     process.exit(1);
   }
 
   let sourceDef;
   try {
-    sourceDef = readJson(inFile);
+    sourceDef = JSON.parse(raw);
   } catch (err) {
-    console.log(JSON.stringify({ ok: false, errors: [`Cannot parse source file: ${err && err.message || err}`] }));
+    console.log(JSON.stringify({ ok: false, errors: [`Cannot parse input: ${err && err.message || err}`] }));
     process.exit(1);
   }
 
@@ -710,7 +707,7 @@ async function main() {
     return;
   }
   if (sub === 'validate-source-def') {
-    validateSourceDefSubcommand(process.argv.slice(3));
+    await validateSourceDefSubcommand();
     return;
   }
 

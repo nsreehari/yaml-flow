@@ -177,6 +177,14 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
     warn = getattr(adapter, "on_warn", None) or (lambda msg: None)
     board_path = serialize_ref(base_ref)
 
+    # Configurable executor timeouts — override via adapter.executor_timeouts dict.
+    # Per-source source_def['timeout'] still takes highest precedence for probe/preflight.
+    _etimeouts    = getattr(adapter, "executor_timeouts", None) or {}
+    _t_validation = _etimeouts.get("validationMs", 10_000)  # validate-source-def, validate-card-preflight
+    _t_preflight  = _etimeouts.get("preflightMs",  60_000)  # probe-source-preflight
+    _t_probe      = _etimeouts.get("probeMs",      60_000)  # run-source-fetch probe/simulation paths
+    _t_describe   = _etimeouts.get("describeMs",   10_000)  # describe-capabilities
+
     # ── Store helpers ──────────────────────────────────────────────────────────
 
     def config_store():
@@ -762,7 +770,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     try:
                         stdout = adapter.invoke_executor_sync(
                             te_ref, "validate-card-preflight", [],
-                            {"timeout": 10_000, "input": json.dumps(card)},
+                            {"timeout": _t_validation, "input": json.dumps(card)},
                         )
                         exec_result = json.loads(stdout.strip())
                         if not exec_result.get("ok") and isinstance(exec_result.get("errors"), list) and exec_result["errors"]:
@@ -808,7 +816,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     te_ref,
                     "run-source-fetch",
                     ["--in-ref", in_ref_str, "--out-ref", out_ref_str, "--err-ref", err_ref_str],
-                    {"timeout": src.get("timeout", 30_000)},
+                    {"timeout": src.get("timeout", _t_probe)},
                 )
                 result_text = adapter.absolute_blob.read(out_file)
                 if result_text is None:
@@ -907,7 +915,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                         in_payload = {**src, "_projections": mock_projections}
                         stdout = adapter.invoke_executor_sync(
                             te_ref, "probe-source-preflight", [],
-                            {"timeout": src.get("timeout", 10_000), "input": json.dumps(in_payload)},
+                            {"timeout": src.get("timeout", _t_preflight), "input": json.dumps(in_payload)},
                         )
                         result = json.loads(stdout.strip())
                         if not result.get("ok"):
@@ -1056,7 +1064,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                         in_payload = {**src}
                         stdout = adapter.invoke_executor_sync(
                             te_ref, "probe-source-preflight", [],
-                            {"timeout": src.get("timeout", 10_000), "input": json.dumps(in_payload)},
+                            {"timeout": src.get("timeout", _t_preflight), "input": json.dumps(in_payload)},
                         )
                         result = json.loads(stdout.strip())
                         probe_item = {
@@ -1111,7 +1119,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 te_ref = config_store().read_task_executor_ref()
                 if not te_ref:
                     return _fail("No task-executor registered for this board")
-                stdout = adapter.invoke_executor_sync(te_ref, "describe-capabilities", [], {"timeout": 10_000})
+                stdout = adapter.invoke_executor_sync(te_ref, "describe-capabilities", [], {"timeout": _t_describe})
                 return _ok(json.loads(stdout.strip()))
             except Exception as e:
                 return _err(e)

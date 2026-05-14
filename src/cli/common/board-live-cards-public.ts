@@ -906,6 +906,22 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
 
   /** Absolute-path blob I/O for temp files and card file references. */
   absoluteBlob: BlobStorage;
+
+  /**
+   * Default timeouts (ms) for synchronous executor invocations.
+   * Each field can also be overridden per-source via source_def.timeout.
+   *
+   *   validationMs — validate-source-def, validate-card-preflight (structural, fast). Default: 10_000.
+   *   preflightMs  — probe-source-preflight (runs a real source fetch). Default: 60_000.
+   *   probeMs      — run-source-fetch in probe/simulation paths. Default: 60_000.
+   *   describeMs   — describe-capabilities introspection. Default: 10_000.
+   */
+  executorTimeouts?: {
+    validationMs?: number;
+    preflightMs?: number;
+    probeMs?: number;
+    describeMs?: number;
+  };
 }
 
 // ============================================================================
@@ -992,7 +1008,7 @@ export function createBoardLiveCardsNonCorePublic(
           let stdout: string;
           try {
             // Pass source_def JSON via stdin; executor reads stdin, writes { ok, errors } to stdout.
-            stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', [], { timeout: 10_000, input: JSON.stringify(src) });
+            stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', [], { timeout: adapter.executorTimeouts?.validationMs ?? 10_000, input: JSON.stringify(src) });
           } catch (execErr: unknown) {
             const se = execErr as { stdout?: unknown };
             stdout = typeof se?.stdout === 'string' ? se.stdout : '';
@@ -1046,7 +1062,7 @@ export function createBoardLiveCardsNonCorePublic(
     try {
       adapter.invokeExecutorSync(teRef, 'run-source-fetch',
         ['--in-ref', inRefStr, '--out-ref', outRefStr, '--err-ref', errRefStr],
-        { timeout: (src['timeout'] as number | undefined) ?? 30_000 },
+        { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.probeMs ?? 60_000 },
       );
       result = adapter.absoluteBlob.read(outFile);
       if (result === null) return fail('Executor produced no output file');
@@ -1107,7 +1123,7 @@ export function createBoardLiveCardsNonCorePublic(
       if (teRef) {
         try {
           const stdout = adapter.invokeExecutorSync(teRef, 'validate-card-preflight', [],
-            { timeout: 10_000, input: JSON.stringify(card) });
+            { timeout: adapter.executorTimeouts?.validationMs ?? 10_000, input: JSON.stringify(card) });
           const execResult = JSON.parse(stdout.trim()) as { ok: boolean; errors: string[] };
           if (!execResult.ok && Array.isArray(execResult.errors) && execResult.errors.length > 0) {
             const mergedIssues = [
@@ -1180,7 +1196,7 @@ export function createBoardLiveCardsNonCorePublic(
         try {
           const inPayload = { ...src, _projections: mockProjections };
           const stdout = adapter.invokeExecutorSync(teRef, 'probe-source-preflight', [],
-            { timeout: (src['timeout'] as number | undefined) ?? 10_000, input: JSON.stringify(inPayload) });
+            { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
           const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; note?: string };
           if (!result.ok) return fail(result.error ?? 'Preflight probe failed');
           return ok({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, note: result.note });
@@ -1198,7 +1214,7 @@ export function createBoardLiveCardsNonCorePublic(
     try {
       const teRef = configStore().readTaskExecutorRef();
       if (!teRef) return fail('No task-executor registered for this board');
-      const stdout = adapter.invokeExecutorSync(teRef, 'describe-capabilities', [], { timeout: 10_000 });
+      const stdout = adapter.invokeExecutorSync(teRef, 'describe-capabilities', [], { timeout: adapter.executorTimeouts?.describeMs ?? 10_000 });
       return ok(JSON.parse(stdout.trim()) as Record<string, unknown>);
     } catch (e) { return err(e); }
   }
