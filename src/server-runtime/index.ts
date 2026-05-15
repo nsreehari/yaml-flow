@@ -146,7 +146,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const serverUrl = options.serverUrl || null;
   const executionExtra = options.executionExtra || {};
 
-  const sseClients = new Set<RuntimeResponse>();
+  const sseClients = new Map<string, { res: RuntimeResponse; subscribedChatCardIds: Set<string> }>();
+  const lastChatSignalByCardId = new Map<string, string>();
+  let chatSubscriptionScanTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Build board contexts from injected configs ───────────────────────────
 
@@ -461,12 +463,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (!cardDef?.id) continue;
       const id = cardDef.id as string;
       const raw = (rawArtifacts[id] || {}) as Record<string, unknown>;
-      const chatSignal = readChatSignal(id);
       const cardData: Record<string, unknown> = {
         ...((raw.card_data && typeof raw.card_data === 'object' ? raw.card_data
           : cardDef.card_data && typeof cardDef.card_data === 'object' ? cardDef.card_data
             : {}) as Record<string, unknown>),
-        __chat_signal: chatSignal,
       };
       cardRuntimeById[id] = {
         schema_version: raw.schema_version || 'v1',
@@ -476,12 +476,34 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       };
     }
 
+    const cardChatsByCardId: Record<string, unknown> = {};
+    for (const cardDef of cardDefinitions) {
+      if (!cardDef?.id) continue;
+      const id = cardDef.id as string;
+      try {
+        const chatSignal = readChatSignal(id);
+        const chatRecords = readChatRecords(id);
+        if (chatRecords.length > 0 || chatSignal.processing) {
+          cardChatsByCardId[id] = {
+            messages: chatRecords.map((r: Record<string, unknown>) => ({
+              role: String(r.role || 'system'),
+              text: String(r.text || ''),
+              files: Array.isArray(r.files) ? r.files : [],
+            })),
+            receiving: false,
+            processing: !!chatSignal.processing,
+          };
+        }
+      } catch { /* ignore errors reading chat records for this card */ }
+    }
+
     return {
       boardId,
       cardDefinitions,
       statusSnapshot: readStatusSnapshot(),
       dataObjectsByToken,
       cardRuntimeById,
+      cardChatsByCardId,
     };
   }
 
@@ -763,6 +785,22 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             if (!stored) continue;
             writeChatRecord(cardId, 'system', `File ${display} uploaded as ${stored}.`, []);
           }
+          // Emit SSE notification so connected clients receive updated chat state immediately
+          try {
+            const allRecords = readChatRecords(cardId);
+            const chatSignal = readChatSignal(cardId);
+            broadcastNotificationBatchToSseClients([{
+              kind: 'card_chats',
+              cardId,
+              messages: allRecords.map((r: Record<string, unknown>) => ({
+                role: String(r.role || 'system'),
+                text: String(r.text || ''),
+                files: Array.isArray(r.files) ? r.files : [],
+              })),
+              receiving: true,
+              processing: !!chatSignal.processing,
+            }]);
+          } catch { /* best-effort SSE broadcast */ }
         }
         return card;
       }
@@ -836,22 +874,142 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return `id: ${sseEventId}\ndata: ${jsonStr}\n\n`;
   }
 
-  function broadcastNotificationBatchToSseClients(notifications: unknown[]): void {
-    if (!notifications || notifications.length === 0) return;
-    const frame = buildSseFrame({ kind: 'notification-batch', notifications });
-    for (const client of sseClients) {
-      try { client.write(frame); } catch { sseClients.delete(client); }
+  function writeSseFrame(clientId: string, payload: unknown): void {
+    const client = sseClients.get(clientId);
+    if (!client) return;
+    const frame = buildSseFrame(payload);
+    try {
+      client.res.write(frame);
+    } catch {
+      sseClients.delete(clientId);
     }
   }
 
-  function handleSse(req: RuntimeRequest, res: RuntimeResponse): void {
+  function currentSubscribedChatCardIds(): string[] {
+    const ids = new Set<string>();
+    for (const client of sseClients.values()) {
+      for (const cardId of client.subscribedChatCardIds) ids.add(cardId);
+    }
+    return Array.from(ids);
+  }
+
+  function chatSignalKey(cardId: string): string {
+    const signal = readChatSignal(cardId);
+    return `${signal.count}:${signal.latest_mtime_ms}:${signal.processing ? 1 : 0}`;
+  }
+
+  function buildCardChatsNotification(cardId: string, receiving = true): Record<string, unknown> {
+    const records = readChatRecords(cardId);
+    const chatSignal = readChatSignal(cardId);
+    return {
+      kind: 'card_chats',
+      cardId,
+      messages: records.map((r: Record<string, unknown>) => ({
+        role: String(r.role || 'system'),
+        text: String(r.text || ''),
+        files: Array.isArray(r.files) ? r.files : [],
+      })),
+      receiving,
+      processing: !!chatSignal.processing,
+    };
+  }
+
+  function broadcastCardChatsToSubscribedSseClients(cardId: string, receiving = true): void {
+    const payload = { kind: 'notification-batch', notifications: [buildCardChatsNotification(cardId, receiving)] };
+    for (const [clientId, client] of sseClients.entries()) {
+      if (!client.subscribedChatCardIds.has(cardId)) continue;
+      writeSseFrame(clientId, payload);
+    }
+  }
+
+  function stopChatSubscriptionScanIfIdle(): void {
+    if (currentSubscribedChatCardIds().length > 0) return;
+    if (chatSubscriptionScanTimer) {
+      clearInterval(chatSubscriptionScanTimer);
+      chatSubscriptionScanTimer = null;
+    }
+    lastChatSignalByCardId.clear();
+  }
+
+  function ensureChatSubscriptionScan(): void {
+    if (chatSubscriptionScanTimer) return;
+    chatSubscriptionScanTimer = setInterval(() => {
+      const activeCardIds = currentSubscribedChatCardIds();
+      if (activeCardIds.length === 0) {
+        stopChatSubscriptionScanIfIdle();
+        return;
+      }
+      const activeSet = new Set(activeCardIds);
+      for (const cardId of Array.from(lastChatSignalByCardId.keys())) {
+        if (!activeSet.has(cardId)) lastChatSignalByCardId.delete(cardId);
+      }
+      for (const cardId of activeCardIds) {
+        const nextKey = chatSignalKey(cardId);
+        const prevKey = lastChatSignalByCardId.get(cardId);
+        if (prevKey !== nextKey) {
+          lastChatSignalByCardId.set(cardId, nextKey);
+          broadcastCardChatsToSubscribedSseClients(cardId, true);
+        }
+      }
+    }, 1000);
+  }
+
+  function subscribeClientToCardChats(clientId: string, cardId: string): boolean {
+    const client = sseClients.get(clientId);
+    if (!client) return false;
+    client.subscribedChatCardIds.add(cardId);
+    lastChatSignalByCardId.set(cardId, chatSignalKey(cardId));
+    ensureChatSubscriptionScan();
+    writeSseFrame(clientId, { kind: 'notification-batch', notifications: [buildCardChatsNotification(cardId, true)] });
+    return true;
+  }
+
+  function unsubscribeClientFromCardChats(clientId: string, cardId: string): boolean {
+    const client = sseClients.get(clientId);
+    if (!client) return false;
+    client.subscribedChatCardIds.delete(cardId);
+    if (!currentSubscribedChatCardIds().includes(cardId)) lastChatSignalByCardId.delete(cardId);
+    stopChatSubscriptionScanIfIdle();
+    return true;
+  }
+
+  function isChatScopedNotification(notification: unknown): notification is Record<string, unknown> {
+    if (!notification || typeof notification !== 'object') return false;
+    const kind = (notification as Record<string, unknown>).kind;
+    return kind === 'card_chats' || kind === 'chat_messages';
+  }
+
+  function broadcastNotificationBatchToSseClients(notifications: unknown[]): void {
+    if (!notifications || notifications.length === 0) return;
+    const generalNotifications: unknown[] = [];
+    const chatCardIds = new Set<string>();
+    for (const note of notifications) {
+      if (isChatScopedNotification(note) && typeof (note as Record<string, unknown>).cardId === 'string') {
+        chatCardIds.add(String((note as Record<string, unknown>).cardId));
+      } else {
+        generalNotifications.push(note);
+      }
+    }
+    if (generalNotifications.length > 0) {
+      const payload = { kind: 'notification-batch', notifications: generalNotifications };
+      for (const clientId of sseClients.keys()) writeSseFrame(clientId, payload);
+    }
+    for (const cardId of chatCardIds) broadcastCardChatsToSubscribedSseClients(cardId, true);
+  }
+
+  function handleSse(req: RuntimeRequest, res: RuntimeResponse, clientId: string): void {
+    const existing = sseClients.get(clientId);
+    const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
+    if (existing) {
+      try { existing.res.end(); } catch { /* ignore */ }
+    }
     res.writeHead(200, {
       ...corsHeaders,
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     });
-    sseClients.add(res);
+    sseClients.set(clientId, { res, subscribedChatCardIds });
 
     // On reconnect, Last-Event-ID tells us the client's last received id.
     // We always send the current full snapshot (replay = latest state).
@@ -864,7 +1022,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }, 15_000);
     req.on('close', () => {
       clearInterval(keepAlive);
-      sseClients.delete(res);
+      sseClients.delete(clientId);
+      stopChatSubscriptionScanIfIdle();
       res.end();
     });
   }
@@ -888,7 +1047,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         // This prevents a race where bootstrap emits early notifications before
         // the newly connected SSE client is added to sseClients.
         await initBoardAndSetup();
-        handleSse(req, res);
+        const clientId = String(url.searchParams.get('clientId') || '').trim();
+        if (!clientId) {
+          json(res, 400, { error: 'clientId query param is required for SSE' });
+          return true;
+        }
+        handleSse(req, res, clientId);
         for (let i = 0; i < boardContexts.length; i++) {
           publishPersistedStateSnapshot(boardContexts[i]);
           upsertCardsFromSource(boardContexts[i], i);
@@ -937,6 +1101,36 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardChatsMatch[1]);
         json(res, 200, { ok: true, messages: readChatRecords(cardId) });
+        return true;
+      }
+
+      const cardChatsSubscribeMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/chats/subscribe-sse$`));
+      if (method === 'POST' && cardChatsSubscribeMatch) {
+        await bootstrapBoard();
+        const cardId = decodeURIComponent(cardChatsSubscribeMatch[1]);
+        const body = await readJsonBody(req);
+        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
+        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
+        if (!subscribeClientToCardChats(clientId, cardId)) {
+          json(res, 404, { error: `SSE client not connected: ${clientId}` });
+          return true;
+        }
+        json(res, 200, { ok: true, clientId, cardId, subscribed: true });
+        return true;
+      }
+
+      const cardChatsUnsubscribeMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/chats/unsubscribe-sse$`));
+      if (method === 'POST' && cardChatsUnsubscribeMatch) {
+        await bootstrapBoard();
+        const cardId = decodeURIComponent(cardChatsUnsubscribeMatch[1]);
+        const body = await readJsonBody(req);
+        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
+        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
+        if (!unsubscribeClientFromCardChats(clientId, cardId)) {
+          json(res, 404, { error: `SSE client not connected: ${clientId}` });
+          return true;
+        }
+        json(res, 200, { ok: true, clientId, cardId, subscribed: false });
         return true;
       }
 

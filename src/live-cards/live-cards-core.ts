@@ -17,7 +17,7 @@
 // Uses Bootstrap 5 for layout/forms, optional Chart.js for charts.
 //
 // API:
-//   const engine = LiveCard.init({ resolve, onPatch, onPatchState, onRefresh, onAction, getChatMessages, markdown, sanitize, chartLib });
+//   const engine = LiveCard.init({ resolve, onPatch, onPatchState, onRefresh, onAction, markdown, sanitize, chartLib });
 //   engine.render(node, el, opts?)     — render a card node into a DOM element
 //   engine.update(nodeId, patch)       — in-place update (status, re-render)
 //   engine.destroy(nodeId)             — tear down one node
@@ -26,14 +26,25 @@
 //   engine.subscribe(nodeId, cb)       — listen for changes; returns unsub fn
 //   engine.appendChatMessage(nodeId, role, text)
 //   engine.registerRenderer(name, fn)
+//   LiveCard.registerCardRenderer(name, renderer)
+//   LiveCard.registerBoardTheme(name, theme)
+//   LiveCard.registerBoardRenderer(name, renderer)
 //
 //   Reactive board (preferred): state in, view out. No destructive re-renders.
-//   const board = LiveCard.Board(engine, el, { initialState, getNodeIds, selectNode, mode?, canvas? });
+//   const board = LiveCard.Board(engine, el, {
+//     initialState, getNodeIds, selectNode,
+//     mode?, canvas?, boardTheme?, boardRenderer?, boardSkin?,
+//     boardClass?, listClass?, styles?
+//   });
 //   board.setState(nextState)          — diff vs prev; per-node updates only
 //   board.destroy()
 //
 //   Imperative core (advanced): direct node-list manipulation.
-//   const core = LiveCard.BoardCore(engine, el, { nodes, positions?, mode, canvas });
+//   const core = LiveCard.BoardCore(engine, el, {
+//     nodes, positions?, mode, canvas?,
+//     boardTheme?, boardRenderer?, boardSkin?,
+//     boardClass?, listClass?, styles?
+//   });
 //   core.add(node), core.remove(id), core.reorder(ids), core.updateNode(id, model)
 //   core.setMode('board'|'canvas'), core.setDevMode(flag), core.autoLayout(), core.clear(), core.destroy()
 
@@ -143,6 +154,168 @@ var LiveCard = (function () {
     return String(str).replace(/[&<>"']/g, ch => _escMap[ch]);
   }
 
+  // ===========================================================================
+  // Global card renderer registry
+  // Custom renderers registered here are available to all Board instances.
+  // ===========================================================================
+
+  const _globalRenderers = {};
+  const _globalBoardThemes = {};
+  const _globalBoardRenderers = {};
+
+  function registerCardRenderer(name, renderer) {
+    if (!name || typeof name !== 'string') throw new Error('registerCardRenderer: name is required');
+    if (!renderer || typeof renderer !== 'object') throw new Error('registerCardRenderer: renderer must be an object');
+    _globalRenderers[name] = renderer;
+  }
+
+  function registerBoardTheme(name, theme) {
+    if (!name || typeof name !== 'string') throw new Error('registerBoardTheme: name is required');
+    if (!theme || typeof theme !== 'object') throw new Error('registerBoardTheme: theme must be an object');
+    _globalBoardThemes[name] = theme;
+  }
+
+  function registerBoardRenderer(name, renderer) {
+    if (!name || typeof name !== 'string') throw new Error('registerBoardRenderer: name is required');
+    if (!renderer || typeof renderer !== 'object') throw new Error('registerBoardRenderer: renderer must be an object');
+    _globalBoardRenderers[name] = renderer;
+  }
+
+  function _resolveRegistryEntry(ref, registry) {
+    if (!ref) return null;
+    if (typeof ref === 'string') return registry[ref] || null;
+    if (typeof ref === 'object') return ref;
+    return null;
+  }
+
+  function _joinClasses() {
+    return Array.prototype.slice.call(arguments)
+      .filter(function(v) { return typeof v === 'string' && v.trim(); })
+      .join(' ')
+      .trim();
+  }
+
+  function _mergeStyleValue(base, incoming) {
+    if (!incoming) return base || null;
+    if (!base) {
+      if (typeof incoming === 'string') return incoming;
+      if (incoming && typeof incoming === 'object') return Object.assign({}, incoming);
+      return null;
+    }
+    if (typeof base === 'string' || typeof incoming === 'string') {
+      return [base, incoming].filter(function(v) { return typeof v === 'string' && v.trim(); }).join('; ');
+    }
+    if (base && typeof base === 'object' && incoming && typeof incoming === 'object') {
+      return Object.assign({}, base, incoming);
+    }
+    return incoming || base || null;
+  }
+
+  function _mergeBoardPresentation() {
+    const out = {
+      boardClass: '',
+      listClass: '',
+      canvasClass: '',
+      canvasInnerClass: '',
+      styles: '',
+      boardStyle: null,
+      listStyle: null,
+      canvasStyle: null,
+      canvasInnerStyle: null,
+    };
+    Array.prototype.slice.call(arguments).forEach(function(item) {
+      if (!item || typeof item !== 'object') return;
+      out.boardClass = _joinClasses(out.boardClass, item.boardClass, item.rootClass);
+      out.listClass = _joinClasses(out.listClass, item.listClass, item.gridClass);
+      out.canvasClass = _joinClasses(out.canvasClass, item.canvasClass);
+      out.canvasInnerClass = _joinClasses(out.canvasInnerClass, item.canvasInnerClass);
+      if (typeof item.styles === 'string' && item.styles.trim()) {
+        out.styles += (out.styles ? '\n' : '') + item.styles;
+      }
+      out.boardStyle = _mergeStyleValue(out.boardStyle, item.boardStyle || item.rootStyle);
+      out.listStyle = _mergeStyleValue(out.listStyle, item.listStyle || item.gridStyle);
+      out.canvasStyle = _mergeStyleValue(out.canvasStyle, item.canvasStyle);
+      out.canvasInnerStyle = _mergeStyleValue(out.canvasInnerStyle, item.canvasInnerStyle);
+    });
+    return out;
+  }
+
+  function _applyElementPresentation(el, baseClass, extraClass, baseStyle, extraStyle) {
+    el.className = _joinClasses(baseClass, extraClass);
+    el.style.cssText = typeof baseStyle === 'string' ? baseStyle : '';
+    if (typeof extraStyle === 'string' && extraStyle.trim()) {
+      if (el.style.cssText && !/;\s*$/.test(el.style.cssText)) el.style.cssText += ';';
+      el.style.cssText += extraStyle;
+    } else if (extraStyle && typeof extraStyle === 'object') {
+      Object.keys(extraStyle).forEach(function(key) {
+        if (extraStyle[key] != null) el.style[key] = extraStyle[key];
+      });
+    }
+  }
+
+  function _isDomElement(value) {
+    return !!(value && typeof value === 'object' && value.nodeType === 1);
+  }
+
+  function _hasBoardPresentation(presentation) {
+    if (!presentation || typeof presentation !== 'object') return false;
+    return !!(
+      presentation.boardClass || presentation.listClass || presentation.canvasClass || presentation.canvasInnerClass ||
+      presentation.styles || presentation.boardStyle || presentation.listStyle || presentation.canvasStyle || presentation.canvasInnerStyle
+    );
+  }
+
+  function _boardPresentationFromCardRenderer(renderer) {
+    if (!renderer || typeof renderer !== 'object') return null;
+    const presentation = {
+      boardClass: renderer.boardClass,
+      listClass: renderer.listClass,
+      canvasClass: renderer.canvasClass,
+      canvasInnerClass: renderer.canvasInnerClass,
+      styles: renderer.styles,
+      boardStyle: renderer.boardStyle,
+      listStyle: renderer.listStyle,
+      canvasStyle: renderer.canvasStyle,
+      canvasInnerStyle: renderer.canvasInnerStyle,
+    };
+    return _hasBoardPresentation(presentation) ? presentation : null;
+  }
+
+  function _deriveBoardPresentationFromNodes(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const key = _rendererKey(list[i]);
+      const renderer = key ? _globalRenderers[key] : null;
+      const presentation = _boardPresentationFromCardRenderer(renderer);
+      if (presentation) return presentation;
+    }
+    return null;
+  }
+
+  function _rendererKey(model) {
+    const meta = model && model.card && model.card.meta;
+    if (!meta) return null;
+    return meta.cardRenderer || meta.card_renderer || null;
+  }
+
+  function _chatStateFromCardState(model) {
+    const cc = model && model.card_chats;
+    if (!cc || typeof cc !== 'object') return { messages: [], receiving: false, processing: false };
+    const rawMessages = Array.isArray(cc.messages) ? cc.messages
+      : Array.isArray(cc.items) ? cc.items // temporary tolerance
+      : [];
+    const messages = rawMessages.map(function (m) {
+      if (!m || typeof m !== 'object') return null;
+      return {
+        role: typeof m.role === 'string' ? m.role.toLowerCase() : 'system',
+        text: typeof m.text === 'string' ? m.text : (typeof m.message === 'string' ? m.message : ''),
+        files: Array.isArray(m.files) ? m.files : [],
+      };
+    }).filter(Boolean);
+    return { messages: messages, receiving: !!cc.receiving, processing: !!cc.processing };
+  }
+
+
   function _pathParts(path) {
     if (!path || typeof path !== 'string') return [];
     // Support both dot notation (a.b.c) and bracket notation (a.b[0].c).
@@ -231,7 +404,8 @@ var LiveCard = (function () {
       sanitize:     config.sanitize     || null,
       chartLib:     config.chartLib     || null,
       onAction:     config.onAction     || function () {},
-      getChatMessages: config.getChatMessages || null,
+      startReceivingChats:  config.startReceivingChats  || null,
+      stopReceivingChats:   config.stopReceivingChats   || null,
       fileUrlBase:  config.fileUrlBase  || '/api/boards/default',
     };
 
@@ -357,12 +531,15 @@ var LiveCard = (function () {
       }
 
       const close = function () {
+        const closingNodeId = _chatModal.currentNodeId;
         _chatModal.currentNodeId = null;
         _chatModal.stagedFiles = [];
         _chatModal.staged.innerHTML = '';
         _chatModal.input.value = '';
         resizeChatInput();
         _chatModal.backdrop.classList.remove('lc-open');
+        // Lifecycle hook: stop receiving chats
+        if (closingNodeId && typeof cfg.stopReceivingChats === 'function') cfg.stopReceivingChats(closingNodeId);
       };
 
       function renderStagedFiles() {
@@ -535,12 +712,10 @@ var LiveCard = (function () {
 
       const node = cfg.resolve(nodeId);
       let messages = [];
-      if (typeof cfg.getChatMessages === 'function') {
-        try {
-          messages = await Promise.resolve(cfg.getChatMessages(nodeId));
-        } catch {
-          messages = [];
-        }
+      // State-driven: chat history comes from card_chats, populated by the runtime/client.
+      if (node && node.card_chats) {
+        const chatState = _chatStateFromCardState(node);
+        messages = chatState.messages;
       } else if (node && node.card_data && Array.isArray(node.card_data.messages)) {
         messages = node.card_data.messages;
       }
@@ -559,7 +734,7 @@ var LiveCard = (function () {
     function _syncProcessingBar(nodeId) {
       if (!_chatModal.body) return;
       const node = nodeId ? cfg.resolve(nodeId) : null;
-      const isProcessing = !!(node && node.card_data && node.card_data.__chat_signal && node.card_data.__chat_signal.processing);
+      const isProcessing = !!_chatStateFromCardState(node).processing;
       let ind = _chatModal.body.querySelector('.lc-chat-processing');
       if (isProcessing) {
         if (!ind) {
@@ -592,6 +767,8 @@ var LiveCard = (function () {
       _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
 
       if (!chatDisabled) _chatModal.input.focus();
+      // Lifecycle hook: start receiving chats (drives state-driven refresh via onServerSseEvent)
+      if (typeof cfg.startReceivingChats === 'function') cfg.startReceivingChats(nodeId);
       await _refreshModalChatHistory(nodeId);
     }
 
@@ -2383,6 +2560,22 @@ var LiveCard = (function () {
       getElement,
       registerRenderer(name, fn) { _renderers[name] = fn; },
       renderers: _renderers,
+      // Chat lifecycle helpers — called by custom renderers and BoardCore
+      getChatStateForCard(cardId) {
+        const node = cfg.resolve(cardId);
+        return node ? _chatStateFromCardState(node) : { messages: [], receiving: false, processing: false };
+      },
+      startReceivingChatsForCard(cardId) {
+        if (typeof cfg.startReceivingChats === 'function') cfg.startReceivingChats(cardId);
+      },
+      stopReceivingChatsForCard(cardId) {
+        if (typeof cfg.stopReceivingChats === 'function') cfg.stopReceivingChats(cardId);
+      },
+      isReceivingChatsForCard(cardId) {
+        const node = cfg.resolve(cardId);
+        if (!node || !node.card_chats) return false;
+        return !!node.card_chats.receiving;
+      },
     };
   }
 
@@ -2400,6 +2593,22 @@ var LiveCard = (function () {
     const _positions = {};     // id → { x, y, w, h } for canvas mode
     const showChat  = opts.showChat || false;
     const defaultCol = opts.defaultCol || 6;
+    const registeredBoardTheme = _resolveRegistryEntry(opts.boardTheme, _globalBoardThemes);
+    const boardRenderer = _resolveRegistryEntry(opts.boardRenderer, _globalBoardRenderers);
+    const explicitBoardSkin = _mergeBoardPresentation(
+      opts.boardSkin,
+      {
+        boardClass: opts.boardClass,
+        listClass: opts.listClass,
+        canvasClass: opts.canvasClass,
+        canvasInnerClass: opts.canvasInnerClass,
+        styles: opts.styles,
+        boardStyle: opts.boardStyle,
+        listStyle: opts.listStyle,
+        canvasStyle: opts.canvasStyle,
+        canvasInnerStyle: opts.canvasInnerStyle,
+      },
+    );
 
     // Canvas config
     const co = opts.canvas || {};
@@ -2437,6 +2646,7 @@ var LiveCard = (function () {
     const root = document.createElement('div');
     root.className = 'lc-board';
     containerEl.appendChild(root);
+    let boardScopedStyleEl = null;
 
     const gridEl = document.createElement('div');
     gridEl.className = 'row g-3 lc-board-grid';
@@ -2457,6 +2667,163 @@ var LiveCard = (function () {
     defs.innerHTML = '<marker id="lc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 8 5 L 0 9 z" fill="rgba(108,117,125,0.55)"/></marker>';
     svgEl.appendChild(defs);
     canvasInner.appendChild(svgEl);
+
+    function _currentBoardPresentation() {
+      const compatSkin = _deriveBoardPresentationFromNodes(nodeList);
+      return _mergeBoardPresentation(compatSkin, registeredBoardTheme, explicitBoardSkin);
+    }
+
+    function _syncBoardScopedStyles(presentation) {
+      const cssText = [
+        presentation && presentation.styles,
+        boardRenderer && typeof boardRenderer.styles === 'string' ? boardRenderer.styles : '',
+      ].filter(function(v) { return typeof v === 'string' && v.trim(); }).join('\n');
+      if (!cssText) {
+        if (boardScopedStyleEl && boardScopedStyleEl.parentNode) boardScopedStyleEl.parentNode.removeChild(boardScopedStyleEl);
+        boardScopedStyleEl = null;
+        return;
+      }
+      if (!boardScopedStyleEl) {
+        boardScopedStyleEl = document.createElement('style');
+        boardScopedStyleEl.setAttribute('data-lc-board-scope', '1');
+        document.head.appendChild(boardScopedStyleEl);
+      }
+      boardScopedStyleEl.textContent = cssText;
+    }
+
+    function _boardRendererCtx(presentation, extra) {
+      return Object.assign({
+        root: root,
+        gridEl: gridEl,
+        canvasEl: canvasEl,
+        canvasInner: canvasInner,
+        appearance: presentation,
+        mode: mode.current,
+        engine: engine,
+        nodes: nodeList.slice(),
+        containerEl: containerEl,
+      }, extra || {});
+    }
+
+    function _resolveBoardHost(presentation) {
+      _applyElementPresentation(root, 'lc-board', presentation.boardClass, '', presentation.boardStyle);
+      _applyElementPresentation(gridEl, 'row g-3 lc-board-grid', presentation.listClass, '', presentation.listStyle);
+
+      let mountEl = gridEl;
+      let listEl = gridEl;
+      if (boardRenderer && typeof boardRenderer.createBoardHost === 'function') {
+        const custom = boardRenderer.createBoardHost(_boardRendererCtx(presentation, {
+          defaultMountEl: gridEl,
+          defaultListEl: gridEl,
+        }));
+        if (_isDomElement(custom)) {
+          mountEl = custom;
+          listEl = custom;
+        } else if (custom && typeof custom === 'object') {
+          mountEl = custom.mountEl || custom.hostEl || custom.containerEl || gridEl;
+          listEl = custom.listEl || custom.contentEl || custom.mountEl || mountEl;
+        }
+      }
+
+      root.innerHTML = '';
+      if (mountEl !== gridEl && listEl === gridEl && !mountEl.contains(gridEl)) {
+        mountEl.appendChild(gridEl);
+      }
+      if (mountEl !== root) {
+        if (listEl !== mountEl && !_isDomElement(listEl.parentNode)) mountEl.appendChild(listEl);
+        root.appendChild(mountEl);
+      } else if (listEl !== root && !root.contains(listEl)) {
+        root.appendChild(listEl);
+      }
+      return { mountEl: mountEl, listEl: listEl };
+    }
+
+    function _resolveCanvasHost(presentation) {
+      _applyElementPresentation(root, 'lc-board', presentation.boardClass, '', presentation.boardStyle);
+      _applyElementPresentation(canvasEl, 'lc-canvas', presentation.canvasClass, 'position:relative;overflow:auto;width:100%;', presentation.canvasStyle);
+      _applyElementPresentation(canvasInner, 'lc-canvas-inner', presentation.canvasInnerClass, 'position:relative;transform-origin:0 0;min-width:100%;min-height:100%;', presentation.canvasInnerStyle);
+
+      let mountEl = canvasEl;
+      let surfaceEl = canvasEl;
+      if (boardRenderer && typeof boardRenderer.createCanvasHost === 'function') {
+        const custom = boardRenderer.createCanvasHost(_boardRendererCtx(presentation, {
+          defaultMountEl: canvasEl,
+          defaultSurfaceEl: canvasEl,
+          defaultCanvasEl: canvasEl,
+        }));
+        if (_isDomElement(custom)) {
+          mountEl = custom;
+          surfaceEl = custom;
+        } else if (custom && typeof custom === 'object') {
+          mountEl = custom.mountEl || custom.hostEl || custom.containerEl || canvasEl;
+          surfaceEl = custom.surfaceEl || custom.canvasEl || custom.mountEl || mountEl;
+        }
+      }
+
+      root.innerHTML = '';
+      if (mountEl !== canvasEl && surfaceEl === canvasEl && !mountEl.contains(canvasEl)) {
+        mountEl.appendChild(canvasEl);
+      }
+      if (mountEl !== root) root.appendChild(mountEl);
+      else if (surfaceEl !== root && !root.contains(surfaceEl)) root.appendChild(surfaceEl);
+      return { mountEl: mountEl, surfaceEl: surfaceEl };
+    }
+
+    function _createBoardItemSlot(node, presentation, listEl) {
+      const defaultClassName = 'col-12 col-md-' + _colWidth(node);
+      let containerEl = document.createElement('div');
+      let bodyEl = null;
+      containerEl.className = defaultClassName;
+      containerEl.dataset.nodeId = node.id;
+      if (boardRenderer && typeof boardRenderer.createBoardItem === 'function') {
+        const custom = boardRenderer.createBoardItem(node, _boardRendererCtx(presentation, {
+          listEl: listEl,
+          defaultClassName: defaultClassName,
+          defaultContainerEl: containerEl,
+        }));
+        if (_isDomElement(custom)) {
+          containerEl = custom;
+        } else if (custom && typeof custom === 'object') {
+          containerEl = custom.containerEl || custom.colEl || custom.mountEl || containerEl;
+          bodyEl = custom.bodyEl || custom.contentEl || null;
+        }
+      }
+      if (!containerEl.dataset.nodeId) containerEl.dataset.nodeId = node.id;
+      if (!containerEl.className) containerEl.className = defaultClassName;
+      return { containerEl: containerEl, bodyEl: bodyEl };
+    }
+
+    function _createCanvasItemSlot(node, presentation, pos) {
+      const defaultClassName = 'lc-canvas-card card shadow-sm';
+      let containerEl = document.createElement('div');
+      let bodyEl = null;
+      containerEl.className = defaultClassName;
+      containerEl.dataset.nodeId = node.id;
+      containerEl.style.left = pos.x + 'px';
+      containerEl.style.top = pos.y + 'px';
+      if (pos.w) containerEl.style.width = pos.w + 'px';
+      if (pos.h) containerEl.style.height = pos.h + 'px';
+      if (boardRenderer && typeof boardRenderer.createCanvasItem === 'function') {
+        const custom = boardRenderer.createCanvasItem(node, _boardRendererCtx(presentation, {
+          defaultClassName: defaultClassName,
+          defaultContainerEl: containerEl,
+          position: pos,
+        }));
+        if (_isDomElement(custom)) {
+          containerEl = custom;
+        } else if (custom && typeof custom === 'object') {
+          containerEl = custom.containerEl || custom.cardEl || custom.mountEl || containerEl;
+          bodyEl = custom.bodyEl || custom.contentEl || null;
+        }
+      }
+      if (!containerEl.dataset.nodeId) containerEl.dataset.nodeId = node.id;
+      if (!containerEl.className) containerEl.className = defaultClassName;
+      containerEl.style.left = pos.x + 'px';
+      containerEl.style.top = pos.y + 'px';
+      if (pos.w) containerEl.style.width = pos.w + 'px';
+      if (pos.h) containerEl.style.height = pos.h + 'px';
+      return { containerEl: containerEl, bodyEl: bodyEl };
+    }
 
     // Board/canvas CSS
     if (!document.getElementById('lc-board-css')) {
@@ -2485,6 +2852,43 @@ var LiveCard = (function () {
       const view = node && node.card ? node.card.view : null;
       if (view && view.layout && view.layout.board && view.layout.board.col) return view.layout.board.col;
       return defaultCol;
+    }
+
+    // Delegate a single view element kind to the builtin element renderer.
+    function _renderBuiltin(model, kind, value, container, elemConfig) {
+      const r = engine.renderers && engine.renderers[kind];
+      if (!r) { container.innerHTML = '<div class="text-muted small">No builtin renderer for ' + _esc(kind) + '</div>'; return; }
+      try { r(value, container, elemConfig || { kind: kind }, model); } catch (e) {
+        container.innerHTML = '<div class="text-danger small">Builtin render error: ' + _esc(e && e.message) + '</div>';
+      }
+    }
+
+    // Build the renderer context passed to custom card renderers.
+    function _customRendererCtx(node) {
+      return {
+        chatState: _chatStateFromCardState(node),
+        get chatMessages() { return _chatStateFromCardState(cfg.resolve(node.id) || node).messages; },
+        get isReceivingChats() { return !!(cfg.resolve(node.id) || node).card_chats && !!(cfg.resolve(node.id) || node).card_chats.receiving; },
+        startReceivingChats: function () { engine.startReceivingChatsForCard && engine.startReceivingChatsForCard(node.id); },
+        stopReceivingChats:  function () { engine.stopReceivingChatsForCard && engine.stopReceivingChatsForCard(node.id); },
+        renderBuiltin: function (m, k, v, c, ec) { _renderBuiltin(m || node, k, v, c, ec); },
+      };
+    }
+
+    // Render a node using its custom renderer.  Returns the container element used.
+    function _renderCustomCard(node, parentEl, isCanvas) {
+      const rendererName = _rendererKey(node);
+      const customRenderer = rendererName ? _globalRenderers[rendererName] : null;
+      if (!customRenderer || !customRenderer.renderBody) return null;
+      const ctx = _customRendererCtx(node);
+      let shell = null;
+      if (customRenderer.createShell) {
+        shell = customRenderer.createShell(node, { container: parentEl, isCanvas: !!isCanvas });
+        if (shell) parentEl.appendChild(shell);
+      }
+      const target = shell || parentEl;
+      customRenderer.renderBody(node, target, ctx);
+      return target;
     }
 
     function _initPositions() {
@@ -2776,11 +3180,12 @@ var LiveCard = (function () {
     }
 
     function _renderBoard() {
+      const presentation = _currentBoardPresentation();
+      _syncBoardScopedStyles(presentation);
       _destroyEdges();
       document.body.style.overflow = '';
-      root.innerHTML = '';
-      root.appendChild(gridEl);
-      gridEl.innerHTML = '';
+      const boardHost = _resolveBoardHost(presentation);
+      boardHost.listEl.innerHTML = '';
 
       // Only card nodes in board mode, sorted by order
       const cards = nodeList.filter(n => n.card && n.card.view).slice();
@@ -2791,16 +3196,32 @@ var LiveCard = (function () {
       });
 
       cards.forEach(node => {
-        const col = document.createElement('div');
-        col.className = 'col-12 col-md-' + _colWidth(node);
-        col.dataset.nodeId = node.id;
-        const { wrap, body } = _buildCardWrapper(node);
-        col.appendChild(wrap);
-        gridEl.appendChild(col);
-        nodeMap[node.id] = { node, colEl: col, bodyEl: body };
-        engine.render(node, body, { showChat });
+        const slot = _createBoardItemSlot(node, presentation, boardHost.listEl);
+        const col = slot.containerEl;
+
+        const rendererName = _rendererKey(node);
+        const customRenderer = rendererName ? _globalRenderers[rendererName] : null;
+        if (customRenderer && customRenderer.renderBody) {
+          boardHost.listEl.appendChild(col);
+          const bodyEl = _renderCustomCard(node, slot.bodyEl || col, false);
+          nodeMap[node.id] = { node, colEl: col, bodyEl: bodyEl || col, isCustom: true };
+        } else {
+          const { wrap, body } = _buildCardWrapper(node);
+          (slot.bodyEl || col).appendChild(wrap);
+          boardHost.listEl.appendChild(col);
+          nodeMap[node.id] = { node, colEl: col, bodyEl: body };
+          engine.render(node, body, { showChat });
+        }
       });
       _updateTokenAvailability();
+      if (boardRenderer && typeof boardRenderer.afterRenderBoard === 'function') {
+        boardRenderer.afterRenderBoard(_boardRendererCtx(presentation, {
+          mountEl: boardHost.mountEl,
+          listEl: boardHost.listEl,
+          cards: cards.slice(),
+          nodeMap: nodeMap,
+        }));
+      }
     }
 
     // ---- Canvas mode ----
@@ -3029,10 +3450,11 @@ var LiveCard = (function () {
     }
 
     function _renderCanvas() {
+      const presentation = _currentBoardPresentation();
+      _syncBoardScopedStyles(presentation);
       _destroyEdges();
       document.body.style.overflow = 'hidden';
-      root.innerHTML = '';
-      root.appendChild(canvasEl);
+      const canvasHost = _resolveCanvasHost(presentation);
       // Fill remaining viewport height
       var top = canvasEl.getBoundingClientRect().top;
       canvasEl.style.height = co.height || ('calc(100vh - ' + top + 'px)');
@@ -3053,25 +3475,30 @@ var LiveCard = (function () {
           nodeMap[node.id] = { node, colEl: el, bodyEl: null };
           _makeDraggable(el, node);
         } else {
-          const el = document.createElement('div');
+          const slot = _createCanvasItemSlot(node, presentation, pos);
+          const el = slot.containerEl;
           const isSimCanvas   = node.card && node.card.meta && node.card.meta.simulation === true;
           const isGandalfCanvas = node.card && node.card.meta && node.card.meta._gandalfCard === true;
           const canvasExtra   = isSimCanvas ? ' lc-simulation-card' : (isGandalfCanvas ? ' lc-gandalf-card' : '');
-          el.className = 'lc-canvas-card card shadow-sm' + canvasExtra;
-          el.dataset.nodeId = node.id;
-          el.style.left = pos.x + 'px';
-          el.style.top  = pos.y + 'px';
-          if (pos.w) el.style.width = pos.w + 'px';
-          if (pos.h) el.style.height = pos.h + 'px';
+          el.className = _joinClasses(el.className || 'lc-canvas-card card shadow-sm', canvasExtra);
 
-          const { wrap, body } = _buildCardWrapper(node);
-          while (wrap.firstChild) el.appendChild(wrap.firstChild);
-          // Re-apply collapsed state: in canvas mode el is the card container, not wrap
-          const movedHeader = el.querySelector('.card-header');
-          if (movedHeader && movedHeader.dataset.gandalfCollapsed === '1') el.classList.add('lc-collapsed');
-          canvasInner.appendChild(el);
-          nodeMap[node.id] = { node, colEl: el, bodyEl: body };
-          engine.render(node, body, { showChat: false });
+          const rendererName = _rendererKey(node);
+          const customRenderer = rendererName ? _globalRenderers[rendererName] : null;
+          if (customRenderer && customRenderer.renderBody) {
+            canvasInner.appendChild(el);
+            const bodyEl = _renderCustomCard(node, slot.bodyEl || el, true);
+            nodeMap[node.id] = { node, colEl: el, bodyEl: bodyEl || el, isCustom: true };
+          } else {
+            const { wrap, body } = _buildCardWrapper(node);
+            const targetEl = slot.bodyEl || el;
+            while (wrap.firstChild) targetEl.appendChild(wrap.firstChild);
+            // Re-apply collapsed state: in canvas mode el is the card container, not wrap
+            const movedHeader = el.querySelector('.card-header');
+            if (movedHeader && movedHeader.dataset.gandalfCollapsed === '1') el.classList.add('lc-collapsed');
+            canvasInner.appendChild(el);
+            nodeMap[node.id] = { node, colEl: el, bodyEl: body };
+            engine.render(node, body, { showChat: false });
+          }
           _makeDraggable(el, node);
           _makeResizable(el, node);
         }
@@ -3084,6 +3511,13 @@ var LiveCard = (function () {
         _fitCanvasToContent();
         _drawEdges();
       });
+      if (boardRenderer && typeof boardRenderer.afterRenderCanvas === 'function') {
+        boardRenderer.afterRenderCanvas(_boardRendererCtx(presentation, {
+          mountEl: canvasHost.mountEl,
+          surfaceEl: canvasHost.surfaceEl,
+          nodeMap: nodeMap,
+        }));
+      }
 
       // Reposition LeaderLine edges on scroll
       canvasEl.addEventListener('scroll', function() { _repositionEdges(); }, { signal, passive: true });
@@ -3211,9 +3645,21 @@ var LiveCard = (function () {
         if (model.requires !== undefined) node.requires = model.requires;
         if (model.computed_values !== undefined) node.computed_values = model.computed_values;
         if (model.runtime_state !== undefined) node.runtime_state = model.runtime_state;
+        if (model.card_chats !== undefined) node.card_chats = model.card_chats;
+      }
+      if (boardRenderer) {
+        _render();
+        return;
       }
       engine.destroy(id);
-      if (mode.current === 'board') {
+      const rendererName = _rendererKey(node);
+      const customRenderer = rendererName ? _globalRenderers[rendererName] : null;
+      if (customRenderer && customRenderer.renderBody) {
+        const colEl = entry.colEl;
+        colEl.innerHTML = '';
+        const bodyEl = _renderCustomCard(node, colEl, mode.current === 'canvas');
+        nodeMap[id] = { node, colEl, bodyEl: bodyEl || colEl, isCustom: true };
+      } else if (mode.current === 'board') {
         const colEl = entry.colEl;
         colEl.innerHTML = '';
         const built = _buildCardWrapper(node);
@@ -3255,6 +3701,8 @@ var LiveCard = (function () {
       _destroyEdges();
       document.body.style.overflow = '';
       ac.abort();
+      if (boardScopedStyleEl && boardScopedStyleEl.parentNode) boardScopedStyleEl.parentNode.removeChild(boardScopedStyleEl);
+      boardScopedStyleEl = null;
       engine.destroyAll();
       nodeList.length = 0;
       Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
@@ -3317,6 +3765,7 @@ var LiveCard = (function () {
         requires: model.requires,
         computed_values: model.computed_values,
         runtime_state: model.runtime_state,
+        card_chats: model.card_chats,
       });
     }
 
@@ -3400,6 +3849,6 @@ var LiveCard = (function () {
   // Module export
   // ===========================================================================
 
-  return { init, Board, BoardCore };
+  return { init, Board, BoardCore, registerCardRenderer, registerBoardTheme, registerBoardRenderer };
 })();
 export default LiveCard;

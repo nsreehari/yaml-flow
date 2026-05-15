@@ -46,6 +46,8 @@ export interface BoardPaths {
   patchCard: (id: string) => string;
   cardAction: (id: string) => string;
   cardChats: (id: string) => string;
+  chatSubscribeSse: (id: string) => string;
+  chatUnsubscribeSse: (id: string) => string;
   cardFile: (id: string) => string;
 }
 
@@ -95,6 +97,8 @@ export function defaultBoardPaths(boardId: string, apiBase = '/api/boards'): Boa
     cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
     cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
     cardChats:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats`,
+    chatSubscribeSse:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/subscribe-sse`,
+    chatUnsubscribeSse: (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/unsubscribe-sse`,
   };
 }
 
@@ -108,6 +112,8 @@ export function singleBoardPaths(apiBase = '/api/board'): BoardPaths {
     cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
     cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
     cardChats:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats`,
+    chatSubscribeSse:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/subscribe-sse`,
+    chatUnsubscribeSse: (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/unsubscribe-sse`,
   };
 }
 
@@ -144,8 +150,75 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
   let sse: EventSource | null = null;
   let currentMode = String(options.initialMode || 'board');
 
+  const _activeChatSubscriptions: Record<string, true> = {};
+  const sseClientId = (
+    globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `lc-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  let _currentPaths: BoardPaths | null = null;
+
   function getFullPayload() {
     return stateRef.current ? stateRef.current.payload : null;
+  }
+
+  function _normalizeChatMessages(raw: Array<{ role?: string; text?: string; files?: unknown[] }>) {
+    return (Array.isArray(raw) ? raw : []).map((m) => ({
+      role: typeof m?.role === 'string' ? m.role : 'system',
+      text: typeof m?.text === 'string' ? m.text : '',
+      files: Array.isArray(m?.files) ? m.files : [],
+    }));
+  }
+
+  function _applyCardChatsUpdate(cardId: string, messages: unknown[], receiving: boolean) {
+    if (!board || !stateRef.current) return;
+    board.setState((prev: BoardState) => {
+      const next = applyNotification(
+        prev,
+        [{ kind: 'card_chats', cardId, messages, receiving }],
+        selectLiveCardModel as Parameters<typeof applyNotification>[2],
+        getFullPayload,
+      );
+      stateRef.current = next;
+      return next;
+    });
+    const eng = board && (board as { engine?: { onServerSseEvent?: () => void } }).engine;
+    if (eng && typeof (eng as { onServerSseEvent?: () => void }).onServerSseEvent === 'function') {
+      (eng as { onServerSseEvent: () => void }).onServerSseEvent();
+    }
+  }
+
+  async function _subscribeChatSse(cardId: string, paths: BoardPaths) {
+    _activeChatSubscriptions[cardId] = true;
+    _applyCardChatsUpdate(cardId, stateRef.current?.modelsById[cardId]?.card_chats?.messages ?? [], true);
+    try {
+      await fetchServer(paths.chatSubscribeSse(cardId), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: sseClientId }),
+      });
+    } catch { /* ignore subscribe errors; reconnect path retries */ }
+  }
+
+  async function _unsubscribeChatSse(cardId: string, paths: BoardPaths) {
+    delete _activeChatSubscriptions[cardId];
+    try {
+      await fetchServer(paths.chatUnsubscribeSse(cardId), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: sseClientId }),
+      });
+    } catch { /* ignore unsubscribe errors */ }
+  }
+
+  function _resubscribeActiveChats(paths: BoardPaths) {
+    Object.keys(_activeChatSubscriptions).forEach((cardId) => {
+      void fetchServer(paths.chatSubscribeSse(cardId), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: sseClientId }),
+      }).catch(() => { /* ignore re-subscribe errors */ });
+    });
   }
 
   // ── File upload helpers ───────────────────────────────────────────────────
@@ -218,6 +291,7 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
     if (!rootEl) throw new Error('bootstrapBoard requires params.rootElement');
 
     const paths = boardPaths(boardId);
+    _currentPaths = paths;
 
     const initBoardPath = taskExecutorPath
       ? `${paths.initBoard}?taskExecutorPath=${encodeURIComponent(taskExecutorPath)}`
@@ -233,7 +307,8 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
     // persisted state snapshot via the notification channel, then sends the
     // full runtime payload as the first SSE frame.
     const initialPayload = await new Promise<unknown>((resolve, reject) => {
-      const sseConn = new EventSource(`${origin}${paths.stream}`);
+      const streamUrl = `${origin}${paths.stream}${paths.stream.includes('?') ? '&' : '?'}clientId=${encodeURIComponent(sseClientId)}`;
+      const sseConn = new EventSource(streamUrl);
       sse = sseConn;
       let gotInitialPayload = false;
       const timeout = setTimeout(() => {
@@ -296,15 +371,10 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
           body: JSON.stringify({ actionType, payload: uploadedPayload || {} }),
         });
       },
-      getChatMessages: async (id: string) => {
-        const res = await fetchServer(paths.cardChats(id));
-        if (!res.ok) return [];
-        const chatPayload = await res.json() as { messages?: Array<{ role?: string; text?: string }> };
-        return (chatPayload?.messages ?? []).map((m) => ({
-          role: typeof m?.role === 'string' ? m.role : 'system',
-          text: typeof m?.text === 'string' ? m.text : '',
-          files: [],
-        }));
+      startReceivingChats: (id: string) => { void _subscribeChatSse(id, paths); },
+      stopReceivingChats:  (id: string) => {
+        void _unsubscribeChatSse(id, paths);
+        _applyCardChatsUpdate(id, stateRef.current?.modelsById[id]?.card_chats?.messages ?? [], false);
       },
     });
 
@@ -319,6 +389,9 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
     currentMode = mode;
 
     // Wire up the ongoing SSE message handler on the already-open connection.
+    sse!.onopen = () => {
+      _resubscribeActiveChats(paths);
+    };
     sse!.onmessage = (evt) => {
       try {
         const update = JSON.parse(evt.data || '{}') as {
@@ -365,8 +438,10 @@ export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): Bo
 
   function dispose() {
     if (sse) { sse.close(); sse = null; }
+    Object.keys(_activeChatSubscriptions).forEach((cardId) => delete _activeChatSubscriptions[cardId]);
     board = null;
     stateRef.current = null;
+    _currentPaths = null;
   }
 
   function setMode(mode: string) {

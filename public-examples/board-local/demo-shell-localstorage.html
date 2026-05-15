@@ -40,6 +40,70 @@
       reporting results via <code>reportSourceFetched</code>.
     </div>
 
+    <details class="card card-body shadow-sm small mb-3">
+      <summary class="fw-semibold">Renderer / Theme API Example</summary>
+      <p class="text-muted mt-2 mb-2">
+        Copy this pattern to register a card renderer, a board theme, a board renderer,
+        or lightweight board skin classes.
+      </p>
+      <pre class="bg-dark text-light rounded p-3 mb-0" style="white-space: pre-wrap;"><code>LiveCard.registerCardRenderer('portfolio-card', {
+  createShell: function (model) {
+    var wrap = document.createElement('div');
+    wrap.className = 'card shadow-sm h-100 border-success-subtle';
+
+    var body = document.createElement('div');
+    body.className = 'card-body p-3';
+    wrap.appendChild(body);
+
+    return body;
+  },
+  renderBody: function (model, body, ctx) {
+    body.innerHTML = '';
+
+    var title = document.createElement('h6');
+    title.textContent = (model.card.meta && model.card.meta.title) || model.id;
+    body.appendChild(title);
+
+    var metrics = document.createElement('div');
+    ctx.renderBuiltin(model, 'metric', model.computed_values.total_value, metrics, { label: 'Total value' });
+    body.appendChild(metrics);
+  },
+
+  // Back-compat board skin fields also work when this renderer is present.
+  boardClass: 'demo-board-shell',
+  listClass: 'demo-board-list',
+  styles: '.demo-board-list { row-gap: 1rem; }'
+});
+
+LiveCard.registerBoardTheme('soft-grid', {
+  boardClass: 'px-2 py-1',
+  listClass: 'align-items-stretch',
+  styles: '.lc-board-grid { --bs-gutter-x: 1rem; --bs-gutter-y: 1rem; }'
+});
+
+LiveCard.registerBoardRenderer('framed-board', {
+  createBoardHost: function (ctx) {
+    var host = document.createElement('section');
+    host.className = 'border rounded-3 p-3 bg-white';
+    host.appendChild(ctx.defaultListEl);
+    return { mountEl: host, listEl: ctx.defaultListEl };
+  }
+});
+
+board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
+  initialState: stateRef.current,
+  getNodeIds: function (s) { return s.cardIds; },
+  selectNode: function (s, id) { return s.modelsById[id]; },
+  boardTheme: 'soft-grid',
+  boardRenderer: 'framed-board',
+  boardSkin: {
+    boardClass: 'my-board-shell',
+    listClass: 'my-board-list',
+    styles: '.my-board-shell { background: #f8fafc; }'
+  }
+});</code></pre>
+    </details>
+
     <div id="boardRoot">
       <div class="d-flex align-items-center justify-content-center" style="height: 72vh;">
         <div class="text-center">
@@ -708,6 +772,11 @@
 
         document.getElementById('boardRoot').innerHTML = '';
 
+        // Example extension points for board/card presentation:
+        // - LiveCard.registerCardRenderer(name, renderer)
+        // - LiveCard.registerBoardTheme(name, theme)
+        // - LiveCard.registerBoardRenderer(name, renderer)
+        // - Board(..., { boardSkin, boardClass, listClass, styles })
         board = LiveCard.Board(engine, document.getElementById('boardRoot'), {
           initialState: stateRef.current,
           getNodeIds: function (s) { return s.cardIds; },

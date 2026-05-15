@@ -46,6 +46,18 @@ export interface BoardLiveGraphRuntimeOptions {
   executionId?: string;
 }
 
+export interface CardChatMessage {
+  role: string;
+  text: string;
+  files?: unknown[];
+}
+
+export interface CardChatState {
+  messages: CardChatMessage[];
+  receiving: boolean;
+  processing?: boolean;
+}
+
 export interface LiveCardRuntimeModel {
   id: string;
   card: LiveCard;
@@ -53,6 +65,7 @@ export interface LiveCardRuntimeModel {
   requires: Record<string, unknown>;
   computed_values: Record<string, unknown>;
   runtime_state: Record<string, unknown>;
+  card_chats?: CardChatState | null;
 }
 
 export interface BoardRuntimeView {
@@ -482,6 +495,7 @@ export interface BoardRuntimeArtifactsPayload {
   cardDefinitions: LiveCard[];
   cardRuntimeById?: Record<string, CardRuntimeArtifact>;
   dataObjectsByToken?: Record<string, unknown>;
+  cardChatsByCardId?: Record<string, { messages: Array<{ role: string; text: string; files?: unknown[] }>; receiving?: boolean; processing?: boolean }>;
   statusSnapshot?: {
     cards?: Array<{
       name: string;
@@ -594,6 +608,17 @@ export function selectLiveCardModel(
     }
   }
 
+  const cardChatsByCardId = payload.cardChatsByCardId && typeof payload.cardChatsByCardId === 'object'
+    ? payload.cardChatsByCardId : {};
+  const cardChatsRaw = cardChatsByCardId[cardId];
+  const card_chats: CardChatState | null = cardChatsRaw
+    ? {
+        messages: Array.isArray(cardChatsRaw.messages) ? cardChatsRaw.messages as CardChatMessage[] : [],
+        receiving: !!cardChatsRaw.receiving,
+        processing: !!cardChatsRaw.processing,
+      }
+    : null;
+
   return {
     id: cardId,
     card: card as LiveCard,
@@ -601,6 +626,7 @@ export function selectLiveCardModel(
     requires,
     computed_values: runtimeArtifact.computed_values,
     runtime_state,
+    card_chats,
   };
 }
 
