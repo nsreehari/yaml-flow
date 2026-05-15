@@ -367,7 +367,7 @@ describe('platform-free server runtime (Firebase-like host)', () => {
 
   it('streams SSE events', async () => {
     const controller = new AbortController();
-    const res = await fetch(`${API_BASE}/sse`, { signal: controller.signal });
+    const res = await fetch(`${API_BASE}/sse?clientId=test-firebase-sse`, { signal: controller.signal });
     expect(res.ok).toBe(true);
     expect(res.headers.get('content-type')).toBe('text/event-stream');
 

@@ -263,7 +263,7 @@ describe('platform-free server runtime (Node host)', () => {
 
   it('GET /api/board/sse returns event-stream', async () => {
     const controller = new AbortController();
-    const res = await fetch(`${API_BASE}/sse`, { signal: controller.signal });
+    const res = await fetch(`${API_BASE}/sse?clientId=test-sse-1`, { signal: controller.signal });
     expect(res.ok).toBe(true);
     expect(res.headers.get('content-type')).toBe('text/event-stream');
 
@@ -290,7 +290,7 @@ describe('platform-free server runtime (Node host)', () => {
 
   it('SSE frames include id: field for reconnection', async () => {
     const controller = new AbortController();
-    const res = await fetch(`${API_BASE}/sse`, { signal: controller.signal });
+    const res = await fetch(`${API_BASE}/sse?clientId=test-sse-2`, { signal: controller.signal });
     expect(res.ok).toBe(true);
 
     const reader = res.body!.getReader();
@@ -307,7 +307,7 @@ describe('platform-free server runtime (Node host)', () => {
   it('SSE reconnection with Last-Event-ID receives current snapshot', async () => {
     // First connection to get an event id
     const controller1 = new AbortController();
-    const res1 = await fetch(`${API_BASE}/sse`, { signal: controller1.signal });
+    const res1 = await fetch(`${API_BASE}/sse?clientId=test-sse-3a`, { signal: controller1.signal });
     const reader1 = res1.body!.getReader();
     const { value: v1 } = await reader1.read();
     const text1 = new TextDecoder().decode(v1);
@@ -318,7 +318,7 @@ describe('platform-free server runtime (Node host)', () => {
 
     // Simulate reconnection with Last-Event-ID header
     const controller2 = new AbortController();
-    const res2 = await fetch(`${API_BASE}/sse`, {
+    const res2 = await fetch(`${API_BASE}/sse?clientId=test-sse-3b`, {
       signal: controller2.signal,
       headers: { 'Last-Event-ID': firstId },
     });
