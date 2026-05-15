@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   applyNotification as applyNotificationSource,
   buildBoardState as buildBoardStateSource,
+  deriveBoardState as deriveBoardStateSource,
 } from '../../src/cli/common/board-state-reducer.js';
 import {
   selectAllLiveCardModels as selectAllLiveCardModelsSource,
@@ -17,6 +18,7 @@ import {
 type BrowserBoardLiveCardsClientApi = {
   buildBoardState: typeof buildBoardStateSource;
   applyNotification: typeof applyNotificationSource;
+  deriveBoardState: typeof deriveBoardStateSource;
   selectLiveCardModel: typeof selectLiveCardModelSource;
   selectAllLiveCardModels: typeof selectAllLiveCardModelsSource;
   createBoardRuntimeClient: (options: Record<string, unknown>) => unknown;
@@ -79,6 +81,7 @@ describe('board-livecards-client parity', () => {
     expect(typeof api.createBoardRuntimeClient).toBe('function');
     expect(typeof api.buildBoardState).toBe('function');
     expect(typeof api.applyNotification).toBe('function');
+    expect(typeof api.deriveBoardState).toBe('function');
     expect(typeof api.selectLiveCardModel).toBe('function');
     expect(typeof api.selectAllLiveCardModels).toBe('function');
   });
@@ -123,5 +126,32 @@ describe('board-livecards-client parity', () => {
     ).toEqual(
       applyNotificationSource(serverState, notifications, selectLiveCardModelSource, () => PAYLOAD),
     );
+  });
+
+  it('keeps browser and source derived board view behavior in sync', () => {
+    const api = loadBrowserClient();
+    const serverState = buildBoardStateSource(PAYLOAD, null, selectLiveCardModelSource);
+    const browserState = api.buildBoardState(PAYLOAD, null, api.selectLiveCardModel);
+
+    const sourceDerived = deriveBoardStateSource(serverState, {
+      includeCard: (model) => model.id === 'card-a',
+      mapCard: (model) => ({
+        ...model,
+        card_data: { ...(model.card_data as Record<string, unknown>), pane: 'ingest' },
+      }),
+      mapPayload: (payload) => ({ ...(payload as Record<string, unknown>), derivedView: 'ingest' }),
+    });
+    const browserDerived = api.deriveBoardState(browserState, {
+      includeCard: (model) => model.id === 'card-a',
+      mapCard: (model) => ({
+        ...model,
+        card_data: { ...(model.card_data as Record<string, unknown>), pane: 'ingest' },
+      }),
+      mapPayload: (payload) => ({ ...(payload as Record<string, unknown>), derivedView: 'ingest' }),
+    });
+
+    expect(browserDerived).toEqual(sourceDerived);
+    expect(browserDerived.cardIds).toEqual(['card-a']);
+    expect(browserDerived.modelsById['card-a']?.card_chats).toEqual(sourceDerived.modelsById['card-a']?.card_chats);
   });
 });

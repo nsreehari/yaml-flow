@@ -26,15 +26,15 @@
  */
 
 import { selectLiveCardModel, selectAllLiveCardModels, type BoardRuntimeArtifactsPayload } from '../board-livegraph-runtime/index.js';
-import { buildBoardState, applyNotification, type BoardState, type CardModel } from '../cli/common/board-state-reducer.js';
+import { buildBoardState, applyNotification, deriveBoardState, type BoardState, type CardModel, type DeriveBoardStateOptions } from '../cli/common/board-state-reducer.js';
 
 // ============================================================================
 // Platform-free state exports
 // Re-exported so consumers using any transport (Firebase, WS, SSE) can drive
 // the LiveCard UI without loading the full localstorage bundle.
 // ============================================================================
-export { buildBoardState, applyNotification, selectLiveCardModel, selectAllLiveCardModels };
-export type { BoardState, CardModel };
+export { buildBoardState, applyNotification, deriveBoardState, selectLiveCardModel, selectAllLiveCardModels };
+export type { BoardState, CardModel, DeriveBoardStateOptions };
 
 // ============================================================================
 // Public types

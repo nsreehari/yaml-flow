@@ -40,6 +40,15 @@ export interface BoardState {
   modelsById: Record<string, CardModel>;
 }
 
+export interface DeriveBoardStateOptions {
+  includeCard?: (model: CardModel, sourceState: BoardState) => boolean;
+  mapCard?: (model: CardModel, sourceState: BoardState) => CardModel;
+  mapPayload?: (
+    payload: unknown,
+    context: { sourceState: BoardState; cardIds: string[]; modelsById: Record<string, CardModel> },
+  ) => unknown;
+}
+
 export type SelectLiveCardModelFn = (payload: unknown, cardId: string) => CardModel;
 
 // ============================================================================
@@ -114,6 +123,51 @@ export function buildBoardState(
     ) ? prev : stab;
   }
 
+  return { payload, cardIds, modelsById };
+}
+
+export function deriveBoardState(
+  sourceState: BoardState,
+  options: DeriveBoardStateOptions = {},
+): BoardState {
+  if (!sourceState) return sourceState;
+
+  const includeCard = typeof options.includeCard === 'function'
+    ? options.includeCard
+    : (() => true);
+  const mapCard = typeof options.mapCard === 'function'
+    ? options.mapCard
+    : ((model: CardModel) => model);
+
+  let changed = false;
+  const cardIds: string[] = [];
+  const modelsById: Record<string, CardModel> = {};
+
+  for (const cardId of sourceState.cardIds) {
+    const model = sourceState.modelsById[cardId];
+    if (!model) {
+      changed = true;
+      continue;
+    }
+    if (!includeCard(model, sourceState)) {
+      changed = true;
+      continue;
+    }
+    const nextModel = mapCard(model, sourceState);
+    if (!nextModel || nextModel.id !== cardId) {
+      throw new Error(`deriveBoardState: mapped card must preserve id "${cardId}"`);
+    }
+    if (nextModel !== model) changed = true;
+    cardIds.push(cardId);
+    modelsById[cardId] = nextModel;
+  }
+
+  const payload = typeof options.mapPayload === 'function'
+    ? options.mapPayload(sourceState.payload, { sourceState, cardIds, modelsById })
+    : sourceState.payload;
+  if (payload !== sourceState.payload) changed = true;
+
+  if (!changed && cardIds.length === sourceState.cardIds.length) return sourceState;
   return { payload, cardIds, modelsById };
 }
 
