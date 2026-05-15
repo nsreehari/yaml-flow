@@ -231,7 +231,7 @@ try {
 
   console.log('\n=== Step 2: start SSE worker ===');
   sseWorker = new Worker(SSE_WORKER_SCRIPT, {
-    workerData: { sseUrl: `${BASE}/sse` },
+    workerData: { sseUrl: `${BASE}/sse?clientId=e2e-demo-sse` },
   });
   sseWorker.on('message', (msg) => {
     if (msg.type === 'frame') applyFrame(msg.payload);

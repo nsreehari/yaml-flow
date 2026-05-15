@@ -249,7 +249,7 @@ function applyFrame(payload) {
     // Main thread accumulates frames into NS via applyFrame().
     console.log('\n=== Step 2: Start SSE consumer worker ===');
     sseWorker = new Worker(SSE_WORKER_SCRIPT, {
-      workerData: { sseUrl: `${BASE}/sse` },
+      workerData: { sseUrl: `${BASE}/sse?clientId=e2e-portfolio-sse` },
     });
     sseWorker.on('message', (msg) => {
       if (msg.type === 'frame') {
