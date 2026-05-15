@@ -78,6 +78,27 @@ describe('BoardLiveCardsPublic — init and status', () => {
     }
   });
 
+  it('init stores chat-handler-flow and getConfig returns the full flow value', () => {
+    const { board, boardDir } = freshBoard();
+    const flow = {
+      steps: [
+        { id: 'append-chat', type: 'noop' },
+      ],
+      transitions: [],
+    };
+    const initResult = board.init({
+      params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) },
+      body: { 'chat-handler-flow': flow },
+    });
+    expect(initResult.status).toBe('success');
+
+    const result = board.getConfig({ params: { key: 'chat-handler-flow' } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.value).toEqual(flow);
+    }
+  });
+
   it('removeCard({}) fails — params.id is missing', () => {
     const { board, boardDir } = freshBoard();
     board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });

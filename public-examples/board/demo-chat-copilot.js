@@ -1,8 +1,8 @@
-﻿/**
- * demo-chat-handler.js - Chat handler for example-board.
+/**
+ * demo-chat-copilot.js - Copilot-backed chat handler example for example-board.
  *
  * Invoked by reusable-server-runtime after a user message is persisted:
- *   node demo-chat-handler.js --boardId <id> --cardId <id> --extraEncJson <base64json>
+ *   node demo-chat-copilot.js --boardId <id> --cardId <id> --extraEncJson <base64json>
  *
  * extraEncJson decodes to:
  *   boardSetupRoot  — absolute path to board root (parent of runtime/, surface/, runtime-out/)
@@ -15,7 +15,7 @@
  *   serverUrl       — base URL of hosting server (e.g. http://127.0.0.1:7799), optional
  *
  * Invokes copilot_wrapper.bat with a prompt built from conversation history.
- * Session dir is per-card: os.tmpdir()/demo-chat-handler-sessions/<boardId>_<cardId>
+ * Session dir is per-card: os.tmpdir()/demo-chat-copilot-sessions/<boardId>_<cardId>
  */
 
 import * as fs   from 'node:fs';
@@ -26,9 +26,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ---------------------------------------------------------------------------
-// Args
-// ---------------------------------------------------------------------------
 const args = process.argv.slice(2);
 function getArg(name) {
   const idx = args.indexOf(name);
@@ -39,25 +36,53 @@ const boardId     = getArg('--boardId') || '';
 const cardId      = getArg('--cardId') || '';
 const extraStr    = getArg('--extraEncJson') || '';
 
-let extra = {};
-try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
-catch { console.error('[demo-chat-handler] bad --extraEncJson'); process.exit(0); }
+function readJsonStdin() {
+  try {
+    const raw = fs.readFileSync(0, 'utf-8').trim();
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
-const { boardSetupRoot, boardRuntimeDir, runtimeStatusDir, cardsDir, chatDir, chatProcessingMarkerKey, lastChatFile, serverUrl } = extra;
-if (!boardSetupRoot || !chatDir || !lastChatFile) {
-  console.error('[demo-chat-handler] missing boardSetupRoot/chatDir/lastChatFile');
+let extra = {};
+if (extraStr) {
+  try { extra = JSON.parse(Buffer.from(extraStr, 'base64').toString('utf-8')); }
+  catch { console.error('[demo-chat-copilot] bad --extraEncJson'); process.exit(0); }
+} else {
+  extra = readJsonStdin();
+}
+
+const {
+  boardSetupRoot,
+  boardRuntimeDir,
+  runtimeStatusDir,
+  cardsDir,
+  chatDir,
+  chatsBlobBasePath,
+  chatsKeyPrefix,
+  chatProcessingMarkerKey,
+  lastChatFile,
+  serverUrl,
+} = extra;
+
+const chatDirAbs = chatDir || (
+  chatsBlobBasePath && chatsKeyPrefix
+    ? path.join(String(chatsBlobBasePath), String(chatsKeyPrefix).split('/')[0])
+    : null
+);
+
+if (!boardSetupRoot || !chatDirAbs || !lastChatFile) {
+  console.error('[demo-chat-copilot] missing boardSetupRoot/chatDir/lastChatFile');
   process.exit(0);
 }
 
-// Resolve absolute paths from the structured extra fields
 const boardRuntimeDirAbs  = path.join(boardSetupRoot, boardRuntimeDir  || 'runtime');
 const runtimeStatusDirAbs = path.join(boardSetupRoot, runtimeStatusDir || 'runtime-out');
 const cardsDirAbs         = path.join(boardSetupRoot, cardsDir         || path.join('surface', 'tmp-cards'));
-const chatDirAbs          = chatDir;
 
-// ---------------------------------------------------------------------------
-// Read conversation history
-// ---------------------------------------------------------------------------
 function readHistory(dir) {
   try {
     return fs.readdirSync(dir)
@@ -72,14 +97,11 @@ function readHistory(dir) {
   } catch { return []; }
 }
 
-// ---------------------------------------------------------------------------
-// Build prompt
-// ---------------------------------------------------------------------------
 function buildPrompt(cId, bId, history, responseFileRel) {
   const cardSetupDirRel  = path.join(cardsDir, cId).replace(/\\/g, '/');
   const runtimeDirRel    = boardRuntimeDir  || 'runtime';
   const statusDirRel     = runtimeStatusDir || 'runtime-out';
-  const chatDirRel       = path.relative(boardSetupRoot, chatDir).replace(/\\/g, '/');
+  const chatDirRel       = path.relative(boardSetupRoot, chatDirAbs).replace(/\\/g, '/');
   const lastQueryFileRel = path.join(chatDirRel, lastChatFile).replace(/\\/g, '/');
 
   const contextBlock = [
@@ -93,6 +115,7 @@ function buildPrompt(cId, bId, history, responseFileRel) {
     'The conversation history can be found in ' + chatDirRel + ' and the last query is in ' + lastQueryFileRel + '.',
     'Write your response to the user in ' + responseFileRel + ' (relative to your working directory).',
     'Give me only a bare minimum log line on what you did — the response in ' + responseFileRel + ' is what the user will see.',
+    serverUrl ? 'The host server is available at ' + serverUrl + '.' : '',
   ].join(' ');
 
   return [
@@ -103,15 +126,12 @@ function buildPrompt(cId, bId, history, responseFileRel) {
   ].join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// Invoke copilot_wrapper.bat
-// ---------------------------------------------------------------------------
 function runWrapper(prompt, sessionDir, workingDir) {
   const wrapperPath = path.join(__dirname, 'scripts', 'copilot_wrapper.bat');
   const tmpBase     = os.tmpdir();
   const ts          = Date.now();
-  const outFile     = path.join(tmpBase, 'dch-out-' + cardId + '-' + ts + '.txt');
-  const promptFile  = path.join(tmpBase, 'dch-prompt-' + cardId + '-' + ts + '.txt');
+  const outFile     = path.join(tmpBase, 'dcc-out-' + cardId + '-' + ts + '.txt');
+  const promptFile  = path.join(tmpBase, 'dcc-prompt-' + cardId + '-' + ts + '.txt');
 
   fs.mkdirSync(sessionDir, { recursive: true });
   fs.writeFileSync(promptFile, prompt, 'utf-8');
@@ -124,7 +144,7 @@ function runWrapper(prompt, sessionDir, workingDir) {
       workingDir,
       '@' + promptFile,
       'raw',
-      'demo-chat',
+      'demo-chat-copilot',
     ], { stdio: 'inherit', timeout: 120000 });
 
     return fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf-8').trim() : '';
@@ -134,30 +154,26 @@ function runWrapper(prompt, sessionDir, workingDir) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-const serialMatch    = String(lastChatFile).match(/^(\d+)/);
-const nextSerial     = serialMatch ? parseInt(serialMatch[1], 10) + 1 : 1;
-const nextName       = String(nextSerial).padStart(3, '0') + '-assistant.txt';
-const responseFileRel = path.relative(boardSetupRoot, path.join(chatDir, nextName)).replace(/\\/g, '/');
+const serialMatch     = String(lastChatFile).match(/^(\d+)/);
+const nextSerial      = serialMatch ? parseInt(serialMatch[1], 10) + 1 : 1;
+const nextName        = String(nextSerial).padStart(3, '0') + '-assistant.txt';
+const responseFileRel = path.relative(boardSetupRoot, path.join(chatDirAbs, nextName)).replace(/\\/g, '/');
 
 const history    = readHistory(chatDirAbs);
-const sessionDir = path.join(os.tmpdir(), 'demo-chat-handler-sessions', boardId + '_' + cardId);
+const sessionDir = path.join(os.tmpdir(), 'demo-chat-copilot-sessions', boardId + '_' + cardId);
 const workingDir = boardSetupRoot;
 const prompt     = buildPrompt(cardId, boardId, history, responseFileRel);
 
 try {
   runWrapper(prompt, sessionDir, workingDir);
-  console.log('[demo-chat-handler] cardId="' + cardId + '" copilot invoked, response expected at ' + responseFileRel);
+  console.log('[demo-chat-copilot] cardId="' + cardId + '" copilot invoked, response expected at ' + responseFileRel);
 } catch (err) {
-  console.error('[demo-chat-handler] wrapper failed: ' + (err?.message ?? err));
+  console.error('[demo-chat-copilot] wrapper failed: ' + (err?.message ?? err));
 } finally {
   cleanupProcessingMarker();
 }
+
 function cleanupProcessingMarker() {
-  // Prefer artifacts-style marker key from extra payload so runtime/handler contract
-  // does not rely on passing an absolute file path argument.
   if (chatProcessingMarkerKey) {
     try {
       const markerPath = path.join(cardsDirAbs, chatProcessingMarkerKey);

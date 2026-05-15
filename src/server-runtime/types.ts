@@ -39,6 +39,25 @@ export interface InvocationAdapter {
   describe?(ref: ExecutionRef): Promise<DescribeEnvelope | null>;
 }
 
+export interface ChatHandlerFlowRunner {
+  /**
+   * Execute a stored chat-handler flow using host-defined step-machine bindings.
+   * The runtime stays platform-free and delegates actual execution to the host.
+   */
+  run(
+    flow: unknown,
+    args: Record<string, unknown>,
+    context: {
+      boardId: string;
+      cardId: string;
+      label: string;
+      logger: RuntimeLogger;
+      serverUrl?: string | null;
+      executionExtra?: Record<string, unknown>;
+    },
+  ): Promise<{ dispatched: boolean; error?: string }>;
+}
+
 // ============================================================================
 // NotificationTransport — cross-process event channel
 // ============================================================================
@@ -92,7 +111,9 @@ export interface BoardContextConfig {
   /** Notification endpoint ref — e.g. ::named-pipe::<path> or ::firestore-watch::<path> */
   notifyRef?: KindValueRef;
   taskExecutorRef?: ExecutionRef;
+  /** Internal fallback only; public board config now uses chatHandlerFlow. */
   chatHandlerRef?: ExecutionRef;
+  chatHandlerFlow?: unknown;
   inferenceAdapterRef?: ExecutionRef;
 }
 
@@ -109,6 +130,7 @@ export interface SingleBoardRuntimeOptions {
   boards: BoardContextConfig[];
 
   invocationAdapter: InvocationAdapter;
+  chatFlowRunner?: ChatHandlerFlowRunner;
   notificationTransport?: NotificationTransport;
   logger?: RuntimeLogger;
   serverUrl?: string;

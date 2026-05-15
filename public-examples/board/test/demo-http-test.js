@@ -139,6 +139,36 @@ function waitUntil(predicate, timeoutMs, label) {
   });
 }
 
+function waitUntilAsync(predicate, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    let inFlight = false;
+    const interval = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const result = await predicate();
+        if (result !== undefined && result !== null && result !== false) {
+          clearInterval(interval);
+          resolve(result);
+          return;
+        }
+        if (Date.now() > deadline) {
+          clearInterval(interval);
+          reject(new Error(`Timeout (${timeoutMs}ms) waiting for: ${label}`));
+        }
+      } catch {
+        if (Date.now() > deadline) {
+          clearInterval(interval);
+          reject(new Error(`Timeout (${timeoutMs}ms) waiting for: ${label}`));
+        }
+      } finally {
+        inFlight = false;
+      }
+    }, 150);
+  });
+}
+
 const waitForInitialPayload = (ms = 15_000) =>
   waitUntil(() => NS.initialPayload || false, ms, 'initial SSE payload');
 
@@ -255,6 +285,21 @@ try {
   const httpSummary = statusRes.data && statusRes.data.statusSnapshot && statusRes.data.statusSnapshot.summary;
   assert(httpSummary, 'statusSnapshot.summary missing from board-status');
   console.log(`[step4] board-status summary: ${JSON.stringify(httpSummary)}`);
+
+  console.log('\n=== Step 5: echo chat flow ===');
+  const chatCardId = initialPayload.cardDefinitions[0].id;
+  const sendChatRes = await httpJson('POST', `${BASE}/cards/${encodeURIComponent(chatCardId)}/actions`, {
+    actionType: 'chat-send',
+    payload: { text: 'hello echo test' },
+  });
+  assert(sendChatRes.status === 200, `chat-send returned ${sendChatRes.status}`);
+  const chats = await waitUntilAsync(async () => {
+    const chatsRes = await httpGet(`${BASE}/cards/${encodeURIComponent(chatCardId)}/chats`);
+    const messages = chatsRes.data && Array.isArray(chatsRes.data.messages) ? chatsRes.data.messages : [];
+    return messages.some((m) => typeof m.text === 'string' && m.text.includes('Echo: hello echo test')) ? messages : false;
+  }, 10_000, 'echo chat response');
+  assert(chats.some((m) => typeof m.text === 'string' && m.text.includes('Echo: hello echo test')), 'echo chat response missing');
+  console.log('[step5] echo chat response received');
 
   // ── T1: PATCH holdings (+1 row) and verify recomputation ──
   console.log('\n=== T1: patch holdings (+1 row) ===');

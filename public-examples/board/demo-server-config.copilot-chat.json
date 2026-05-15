@@ -2,9 +2,9 @@
   "port": 7799,
   "cardsDir": "./cards",
   "taskExecutorPath": "./demo-task-executor.js",
-  "chatHandlerFlowPath": "./demo-chat-echo.flow.json",
+  "chatHandlerFlowPath": "./demo-chat-copilot.flow.json",
   "chatSessionsDir": "",
   "gandalfCardsDir": "./gandalf-cards",
   "gandalfTaskExecutorPath": "./demo-task-executor.js",
-  "gandalfChatHandlerFlowPath": "./demo-chat-echo.flow.json"
+  "gandalfChatHandlerFlowPath": "./demo-chat-copilot.flow.json"
 }

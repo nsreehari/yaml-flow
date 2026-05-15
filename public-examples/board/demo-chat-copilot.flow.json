@@ -1,0 +1,38 @@
+{
+  "id": "demo-chat-copilot",
+  "settings": {
+    "start_step": "respond",
+    "max_total_steps": 5,
+    "timeout_ms": 120000
+  },
+  "steps": {
+    "respond": {
+      "description": "Run the Copilot-backed chat responder example",
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-node",
+        "whatToRun": {
+          "kind": "fs-path",
+          "value": "./demo-chat-copilot.js"
+        },
+        "meta": "chat-handler"
+      },
+      "transitions": {
+        "success": "completed",
+        "failure": "failed"
+      }
+    }
+  },
+  "terminal_states": {
+    "completed": {
+      "description": "Copilot chat response completed",
+      "return_intent": "success",
+      "return_artifacts": false
+    },
+    "failed": {
+      "description": "Copilot chat response failed",
+      "return_intent": "failure",
+      "return_artifacts": false
+    }
+  }
+}

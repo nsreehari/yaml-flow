@@ -46,12 +46,17 @@ export {
 export { jsonata } from './jsonata-loader.js';
 export type { JsonataExpression } from './jsonata-loader.js';
 
+export { createStepMachineChatFlowRunner } from './chat-flow-runner.js';
+
 export type {
+  CreateStepMachineChatFlowRunnerOptions,
   ComputeJsonataSpec,
   RefSpec,
   HandlerSpec,
   InvokeRefFn,
   NormalizedHandlerResult,
   StepHandler,
+  StepMachineChatFlowRunner,
+  StepMachineChatFlowRunnerResult,
   StepConfigForFactory,
 } from './types.js';

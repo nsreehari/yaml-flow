@@ -16,9 +16,13 @@ import {
 import {
   createFsBoardPlatformAdapter,
   createArtifactsStore,
+  invokeRefSync,
   parseRef,
   serializeRef,
 } from 'yaml-flow/board-live-cards-node';
+import {
+  createStepMachineChatFlowRunner,
+} from 'yaml-flow/step-machine-public';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +43,40 @@ function loadServerConfig() {
 function resolveFromConfig(configValue) {
   if (typeof configValue !== 'string' || !configValue.trim()) return null;
   return path.resolve(__dirname, configValue);
+}
+
+function loadJsonFromConfig(configValue) {
+  const resolved = resolveFromConfig(configValue);
+  if (!resolved || !fs.existsSync(resolved)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(resolved, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function buildChatHandlerFlowFromScript(scriptPath) {
+  if (!scriptPath) return null;
+  const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(__dirname, scriptPath);
+  return {
+    id: 'demo-chat-script-handler',
+    settings: { start_step: 'respond', max_total_steps: 5, timeout_ms: 120000 },
+    steps: {
+      respond: {
+        description: 'Run the example board chat responder from a script path',
+        handler: {
+          type: 'ref',
+          howToRun: 'local-node',
+          whatToRun: { kind: 'fs-path', value: resolved },
+        },
+        transitions: { success: 'completed', failure: 'failed' },
+      },
+    },
+    terminal_states: {
+      completed: { description: 'Chat response completed', return_intent: 'success', return_artifacts: false },
+      failed: { description: 'Chat response failed', return_intent: 'failure', return_artifacts: false },
+    },
+  };
 }
 
 function resolveKindRefFromConfig(configValue) {
@@ -62,10 +100,12 @@ const configuredCardsDir = resolveFromConfig(serverConfig.cardsDir);
 const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath || serverConfig.demoTaskExecutorPath);
 const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath);
 const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
+const configuredChatHandlerFlow = loadJsonFromConfig(serverConfig.chatHandlerFlowPath) || buildChatHandlerFlowFromScript(configuredChatHandlerPath);
 const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
 const configuredGandalfCardsDir = resolveFromConfig(serverConfig.gandalfCardsDir);
 const configuredGandalfTaskExecutorPath = resolveFromConfig(serverConfig.gandalfTaskExecutorPath);
 const configuredGandalfChatHandlerPath = resolveFromConfig(serverConfig.gandalfChatHandlerPath);
+const configuredGandalfChatHandlerFlow = loadJsonFromConfig(serverConfig.gandalfChatHandlerFlowPath) || buildChatHandlerFlowFromScript(configuredGandalfChatHandlerPath);
 const configuredGandalfInferenceAdapterPath = resolveFromConfig(serverConfig.gandalfInferenceAdapterPath);
 const configuredServerMetaStoreRef = resolveKindRefFromConfig(serverConfig.serverMetaStoreRef);
 
@@ -104,12 +144,12 @@ const defaultCardsDir = path.resolve(
 );
 
 const defaultTaskExecutorPath = process.env.DEMO_TASK_EXECUTOR_PATH || configuredTaskExecutorPath || null;
-const defaultChatHandlerPath = process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || null;
+const defaultChatHandlerFlow = configuredChatHandlerFlow || buildChatHandlerFlowFromScript(process.env.DEMO_CHAT_HANDLER_PATH || configuredChatHandlerPath || null);
 const defaultInferenceAdapterPath = process.env.DEMO_INFERENCE_ADAPTER_PATH || configuredInferenceAdapterPath || null;
 const defaultStepMachineCliPath = process.env.DEMO_STEP_MACHINE_CLI_PATH || configuredStepMachineCliPath || null;
 const defaultGandalfCardsDir = process.env.DEMO_GANDALF_CARDS_DIR || configuredGandalfCardsDir || null;
 const defaultGandalfTaskExecutorPath = process.env.DEMO_GANDALF_TASK_EXECUTOR_PATH || configuredGandalfTaskExecutorPath || null;
-const defaultGandalfChatHandlerPath = process.env.DEMO_GANDALF_CHAT_HANDLER_PATH || configuredGandalfChatHandlerPath || null;
+const defaultGandalfChatHandlerFlow = configuredGandalfChatHandlerFlow || buildChatHandlerFlowFromScript(process.env.DEMO_GANDALF_CHAT_HANDLER_PATH || configuredGandalfChatHandlerPath || null);
 const defaultGandalfInferenceAdapterPath = process.env.DEMO_GANDALF_INFERENCE_ADAPTER_PATH || configuredGandalfInferenceAdapterPath || null;
 
 // ---------------------------------------------------------------------------
@@ -287,7 +327,7 @@ const logger = { info: console.log, warn: console.warn, error: console.error };
 // Track per-board host config for demo-setup (FS paths are host concerns, not runtime concerns)
 const boardHostConfig = new Map();
 
-function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerPath, infAdapterPath, boardId) {
+function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId) {
   fs.mkdirSync(boardDir, { recursive: true });
 
   // Runtime card store lives inside the board's setup dir, isolated from the source cards dir.
@@ -321,7 +361,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerPath,
     outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(path.dirname(boardDir), 'runtime-out', '.outputs') }),
     notifyRef: { kind: 'named-pipe', value: namedPipePath(notifyChannel) },
     taskExecutorRef: makeExecutionRef(taskExecPath, 'task-executor'),
-    chatHandlerRef: makeExecutionRef(chatHandlerPath, 'chat-handler'),
+    chatHandlerFlow,
     inferenceAdapterRef: makeExecutionRef(infAdapterPath, 'inference-adapter'),
   };
 }
@@ -335,24 +375,32 @@ const runtime = createMultiBoardServerRuntime({
     const sourceCardsDir = typeof entry.cardsDir === 'string' ? path.resolve(entry.cardsDir) : defaultCardsDir;
     const boardRoot = path.join(setupDir, `board-${boardId}`);
     const boardDir = path.join(boardRoot, 'runtime');
+    const flowRunner = createStepMachineChatFlowRunner({
+      invokeRef: (ref, stepArgs) => invokeRefSync(ref, stepArgs, {
+        cliDir: __dirname,
+        cwd: __dirname,
+        label: 'demo-chat-flow',
+        timeoutMs: 120000,
+      }),
+    });
 
     const taskExecPath = typeof entry.taskExecutorPath === 'string' ? entry.taskExecutorPath : defaultTaskExecutorPath;
-    const chatHandlerPath_ = typeof entry.chatHandlerPath === 'string' ? entry.chatHandlerPath : defaultChatHandlerPath;
+    const chatHandlerFlow = entry.chatHandlerFlow || loadJsonFromConfig(entry.chatHandlerFlowPath) || buildChatHandlerFlowFromScript(typeof entry.chatHandlerPath === 'string' ? entry.chatHandlerPath : null) || defaultChatHandlerFlow;
     const infAdapterPath = typeof entry.inferenceAdapterPath === 'string' ? entry.inferenceAdapterPath : defaultInferenceAdapterPath;
     const stepMachinePath = typeof entry.stepMachineCliPath === 'string' ? entry.stepMachineCliPath : defaultStepMachineCliPath;
 
     const sourceGandalfCardsDir = typeof entry.gandalfCardsDir === 'string' ? path.resolve(entry.gandalfCardsDir) : defaultGandalfCardsDir;
     const gandalfTaskExecPath = typeof entry.gandalfTaskExecutorPath === 'string' ? entry.gandalfTaskExecutorPath : defaultGandalfTaskExecutorPath;
-    const gandalfChatPath = typeof entry.gandalfChatHandlerPath === 'string' ? entry.gandalfChatHandlerPath : defaultGandalfChatHandlerPath;
+    const gandalfChatFlow = entry.gandalfChatHandlerFlow || loadJsonFromConfig(entry.gandalfChatHandlerFlowPath) || buildChatHandlerFlowFromScript(typeof entry.gandalfChatHandlerPath === 'string' ? entry.gandalfChatHandlerPath : null) || defaultGandalfChatHandlerFlow;
     const gandalfInfPath = typeof entry.gandalfInferenceAdapterPath === 'string' ? entry.gandalfInferenceAdapterPath : defaultGandalfInferenceAdapterPath;
 
-    const baseCfg = buildBoardContextConfig('base', boardDir, taskExecPath, chatHandlerPath_, infAdapterPath, boardId);
+    const baseCfg = buildBoardContextConfig('base', boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId);
 
     const boards = [baseCfg];
     let gandalfBoardDir = null;
     if (sourceGandalfCardsDir && gandalfTaskExecPath) {
       gandalfBoardDir = path.join(boardRoot, 'gandalf-runtime');
-      const gandalfCfg = buildBoardContextConfig('gandalf', gandalfBoardDir, gandalfTaskExecPath, gandalfChatPath, gandalfInfPath, boardId);
+      const gandalfCfg = buildBoardContextConfig('gandalf', gandalfBoardDir, gandalfTaskExecPath, gandalfChatFlow, gandalfInfPath, boardId);
       gandalfCfg.outputsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(boardRoot, 'gandalf-runtime-out', '.outputs') });
       boards.push(gandalfCfg);
     }
@@ -372,6 +420,7 @@ const runtime = createMultiBoardServerRuntime({
       boardId,
       boards,
       invocationAdapter,
+      chatFlowRunner: flowRunner,
       notificationTransport,
       logger,
       serverUrl: `http://127.0.0.1:${PORT}`,

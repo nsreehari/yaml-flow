@@ -85,6 +85,7 @@ interface BoardContext {
   notifyRef?: import('./types.js').KindValueRef;
   taskExecutorRef?: import('./types.js').ExecutionRef;
   chatHandlerRef?: import('./types.js').ExecutionRef;
+  chatHandlerFlow?: unknown;
   inferenceAdapterRef?: import('./types.js').ExecutionRef;
   notification: NotificationState;
   notificationTeardown: (() => void) | null;
@@ -142,6 +143,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const boardId = options.boardId || '';
   const logger: RuntimeLogger = options.logger || { info: console.log, warn: console.warn, error: console.error };
   const invocationAdapter = options.invocationAdapter;
+  const chatFlowRunner = options.chatFlowRunner || null;
   const notificationTransport = options.notificationTransport || null;
   const serverUrl = options.serverUrl || null;
   const executionExtra = options.executionExtra || {};
@@ -183,6 +185,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       notifyRef: cfg.notifyRef,
       taskExecutorRef: cfg.taskExecutorRef,
       chatHandlerRef: cfg.chatHandlerRef,
+      chatHandlerFlow: cfg.chatHandlerFlow,
       inferenceAdapterRef: cfg.inferenceAdapterRef,
       notification: makeNotificationState(),
       notificationTeardown: null,
@@ -257,7 +260,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
     const body: Record<string, unknown> = {};
     if (ctx.taskExecutorRef) body['task-executor-ref'] = ctx.taskExecutorRef;
-    if (ctx.chatHandlerRef) body['chat-handler-ref'] = ctx.chatHandlerRef;
+    if (ctx.chatHandlerFlow !== undefined) body['chat-handler-flow'] = ctx.chatHandlerFlow;
     if (ctx.inferenceAdapterRef) body['inference-adapter-ref'] = ctx.inferenceAdapterRef;
 
     const initResult = ctx.board.init({ params, body });
@@ -270,8 +273,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
     await ensureNotificationConsumer(ctx);
 
-    // Pre-init validation: describe chat-handler if adapter supports it
-    if (ctx.chatHandlerRef && invocationAdapter.describe) {
+    if (!ctx.chatHandlerFlow && ctx.chatHandlerRef && invocationAdapter.describe) {
       try {
         const desc = await invocationAdapter.describe(ctx.chatHandlerRef);
         if (desc && desc.kind !== 'chat-handler') {
@@ -711,10 +713,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const ctx = cardContextForCard(cardId);
     if (!ctx) return;
 
-    const cfgResult = ctx.board.getConfig({ params: { key: 'chat-handler' } });
-    if (cfgResult.status !== 'success') return;
-    const handlerRef = (cfgResult as any).data?.value;
-    if (!handlerRef || typeof handlerRef !== 'object') return;
+    const flowResult = ctx.board.getConfig({ params: { key: 'chat-handler-flow' } });
+    if (flowResult.status !== 'success') return;
+    const handlerFlow = (flowResult as any).data?.value;
+    const handlerRef = ctx.chatHandlerRef;
+    if (handlerFlow == null && (!handlerRef || typeof handlerRef !== 'object')) return;
 
     const sid = safeCardId(cardId);
     const stores = artifactsStores(cardId);
@@ -731,7 +734,44 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       ...(serverUrl ? { serverUrl } : {}),
     };
 
-    invocationAdapter.invoke(handlerRef, args).then(
+    if (!chatFlowRunner) {
+      if (handlerFlow != null) {
+        try { stores.chats?.remove(processingMarkerKey); } catch {}
+        logger.warn(`[chat-handler-flow] configured for card "${cardId}" but no chatFlowRunner was provided`);
+        return;
+      }
+    }
+
+    if (handlerFlow != null) {
+      const flowRunner = chatFlowRunner;
+      if (!flowRunner) return;
+      flowRunner.run(handlerFlow, args, {
+        boardId,
+        cardId: String(cardId),
+        label: ctx.label,
+        logger,
+        serverUrl,
+        executionExtra,
+      }).then(
+        (result) => {
+          if (result.dispatched) {
+            logger.info(`[chat-handler-flow] invoked for card "${cardId}" (boardId: "${boardId}")`);
+          } else {
+            try { stores.chats?.remove(processingMarkerKey); } catch {}
+            logger.warn(`[chat-handler-flow] dispatch failed for card "${cardId}": ${result.error || 'unknown'}`);
+          }
+        },
+        (err) => {
+          try { stores.chats?.remove(processingMarkerKey); } catch {}
+          logger.warn(`[chat-handler-flow] invoke failed for card "${cardId}": ${err?.message || String(err)}`);
+        },
+      );
+      return;
+    }
+
+    const executionRef = handlerRef;
+    if (!executionRef) return;
+    invocationAdapter.invoke(executionRef, args).then(
       (result) => {
         if (result.dispatched) {
           logger.info(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);

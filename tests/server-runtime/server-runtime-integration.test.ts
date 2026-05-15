@@ -22,7 +22,6 @@ import type {
   RuntimeRequest,
   RuntimeResponse,
   CardSourceAdapter,
-  InvocationAdapter,
 } from '../../src/server-runtime/types.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
@@ -58,11 +57,6 @@ function createFsCardSource(cardsDir: string): CardSourceAdapter {
   };
 }
 
-// ── Noop InvocationAdapter (no executors in this test) ─────────────────────
-const noopInvocation: InvocationAdapter = {
-  async invoke() { return { dispatched: false, error: 'noop' }; },
-};
-
 beforeAll(async () => {
   // Create directories
   fs.mkdirSync(BOARD_DIR, { recursive: true });
@@ -92,7 +86,6 @@ beforeAll(async () => {
       outputsStoreRef: serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR }),
       cardSource: createFsCardSource(testCardsDir),
     }],
-    invocationAdapter: noopInvocation,
     logger: {
       info: () => {},
       warn: () => {},
@@ -343,14 +336,13 @@ describe('platform-free server runtime (Node host)', () => {
   // ── Chat handler failure / .processing marker cleanup ────────────────────
 
   it('cleans up .processing marker when chat-handler dispatch fails', async () => {
-    // The test uses noopInvocation which returns { dispatched: false, error: 'noop' }
-    // This should trigger the marker cleanup path in invokeChatHandler.
+    // With no chat-handler-flow configured, chat-send should not leave processing behind.
     const statusRes = await fetch(`${API_BASE}/board-status`);
     const statusData = await statusRes.json() as Record<string, unknown>;
     const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
 
-    // Send a chat — the noop adapter will fail dispatch, runtime should clean up marker
+    // Send a chat — no chat flow is configured, runtime should still not leave processing behind
     const chatRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -375,5 +367,91 @@ describe('platform-free server runtime (Node host)', () => {
     if (chatSignal) {
       expect(chatSignal.processing).toBe(false);
     }
+  });
+
+  it('runs chat-handler-flow when a chatFlowRunner is provided', async () => {
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-srt-flow-'));
+    const isolatedBoardDir = path.join(isolatedRoot, 'runtime');
+    const isolatedCardStoreDir = path.join(isolatedRoot, 'card-store');
+    const isolatedOutputsDir = path.join(isolatedRoot, 'outputs');
+    fs.mkdirSync(isolatedBoardDir, { recursive: true });
+    fs.mkdirSync(isolatedCardStoreDir, { recursive: true });
+    fs.mkdirSync(isolatedOutputsDir, { recursive: true });
+
+    const isolatedCardsDir = path.join(isolatedRoot, 'cards');
+    fs.mkdirSync(isolatedCardsDir, { recursive: true });
+    for (const entry of fs.readdirSync(SOURCE_CARDS_DIR, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        fs.copyFileSync(path.join(SOURCE_CARDS_DIR, entry.name), path.join(isolatedCardsDir, entry.name));
+      }
+    }
+
+    const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: isolatedBoardDir }));
+    const boardAdapter = createFsBoardPlatformAdapter(baseRef, repoRoot, { suppressSpawn: true });
+    const cardStoreRef = serializeRef({ kind: 'fs-path', value: isolatedCardStoreDir });
+    const outputsStoreRef = serializeRef({ kind: 'fs-path', value: isolatedOutputsDir });
+    const preloadKv = boardAdapter.kvStorageForRef(cardStoreRef);
+    const preloadStore = createCardStorePublic(createCardStore({
+      readIndex: () => preloadKv.read('_index'),
+      writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+      readCard: (id: string) => preloadKv.read(id),
+      writeCard: (id: string, card: unknown) => {
+        preloadKv.write(id, card);
+        return id;
+      },
+      cardExists: (id: string) => preloadKv.read(id) !== null,
+      defaultCardKey: (id: string) => id,
+    } as any));
+    const preloadCards = createFsCardSource(isolatedCardsDir).listCards();
+    for (const card of preloadCards) {
+      const setResult = preloadStore.set({ body: card });
+      expect(setResult.status).toBe('success');
+    }
+
+    let flowRuns = 0;
+    const runtime = createSingleBoardServerRuntime({
+      apiBasePath: '/api/board',
+      boardId: 'flow-test-board',
+      boards: [{
+        label: 'base',
+        boardAdapter,
+        baseRef,
+        cardStoreRef,
+        outputsStoreRef,
+        chatHandlerFlow: { steps: [{ id: 'append-chat', type: 'noop' }], transitions: [] },
+      }],
+      chatFlowRunner: {
+        async run() {
+          flowRuns += 1;
+          return { dispatched: false, error: 'test cleanup path' };
+        },
+      },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      serverUrl: 'http://127.0.0.1:0',
+    });
+
+    const server2 = http.createServer(async (req, res) => {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      const handled = await runtime.handleRuntimeApi(req as unknown as RuntimeRequest, res as unknown as RuntimeResponse, url);
+      if (!handled) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      }
+    });
+    await new Promise<void>((resolve) => server2.listen(0, '127.0.0.1', resolve));
+    const addr = server2.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+    const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/card-portfolio/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow preferred' } }),
+    });
+    expect(chatRes.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(flowRuns).toBe(1);
+
+    await new Promise<void>((resolve) => server2.close(() => resolve()));
+    try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 });

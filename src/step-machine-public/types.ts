@@ -86,6 +86,20 @@ export type InvokeRefFn = (
   args: Record<string, unknown>,
 ) => NormalizedHandlerResult | Promise<NormalizedHandlerResult>;
 
+export interface CreateStepMachineChatFlowRunnerOptions {
+  invokeRef: InvokeRefFn;
+  storeFactory?: () => import('../step-machine/types.js').StepMachineStore;
+}
+
+export interface StepMachineChatFlowRunnerResult {
+  dispatched: boolean;
+  error?: string;
+}
+
+export interface StepMachineChatFlowRunner {
+  run(flow: unknown, args: Record<string, unknown>): Promise<StepMachineChatFlowRunnerResult>;
+}
+
 // ============================================================================
 // StepHandler — the engine-facing handler signature
 // ============================================================================

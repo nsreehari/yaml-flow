@@ -128,7 +128,7 @@ export interface BoardPlatformAdapter {
    * KV storage factory — scoped by namespace.
    * Namespaces used by the public layer:
    *   'state-snapshot'     — board graph snapshot (StateSnapshotStorageAdapter, built internally)
-   *   'config'             — board configuration (.task-executor, .chat-handler, .card-store-ref)
+   *   'config'             — board configuration (.task-executor, .chat-handler, .chat-handler-flow, .card-store-ref)
    *   'card-upsert'        — card upsert dedup index
    *   'execution-requests' — queued execution requests (keyed by journalId)
    *   'card-runtime'       — card runtime state snapshots
@@ -236,14 +236,14 @@ export interface BoardPlatformAdapter {
 
 export interface BoardLiveCardsPublic {
   // Board management
-  // params: taskExecutor?, chatHandler?
+  // body: task-executor-ref?, chat-handler-flow?
   init(input: CommandInput): CommandResult;
   // no params needed
   status(input: CommandInput): CommandResult<BoardStatusObject>;
   // no params needed
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
-  // params: key — one of: 'task-executor', 'chat-handler', 'card-store-ref', 'outputs-store-ref'
+  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref'
   getConfig(input: CommandInput): CommandResult<{ value: unknown }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
@@ -642,7 +642,7 @@ export function createBoardLiveCardsPublic(
       cfg.writeOutputsStoreRef(outputsStoreRef);
       const body = (input.body ?? {}) as Record<string, unknown>;
       if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
-      if (body['chat-handler-ref'])  cfg.writeChatHandlerRef(body['chat-handler-ref'] as ExecutionRef);
+      if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) cfg.writeChatHandlerFlow(body['chat-handler-flow']);
       try { outputStore().writeStatusSnapshot(buildBoardStatusObject(boardPath, restore(loadEnvelope().graph))); } catch { /* best-effort */ }
       return ok();
     } catch (e) { return err(e); }
@@ -827,7 +827,7 @@ export function createBoardLiveCardsPublic(
       let value: unknown;
       switch (key) {
         case 'task-executor':     value = cfg.readTaskExecutorRef() ?? null; break;
-        case 'chat-handler':      value = cfg.readChatHandlerRef()  ?? null; break;
+        case 'chat-handler-flow': value = cfg.readChatHandlerFlow() ?? null; break;
         case 'card-store-ref':    value = cfg.readCardStoreRef(); break;
         case 'outputs-store-ref': value = cfg.readOutputsStoreRef(); break;
         default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
