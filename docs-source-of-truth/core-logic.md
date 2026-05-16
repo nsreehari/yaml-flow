@@ -3,25 +3,55 @@
 
 ## Source Fetch Lifecycle
 
-Each source entry tracks three timestamps: `queueRequestedAt`, `lastRequestedAt`, `lastFetchedAt`.
+Each source entry tracks three ordered request-cycle markers and one terminal outcome: `queueRequestedToken`, `lastRequestedToken`, `lastCompletedToken`, `lastCompletionStatus`.
+
+Each dispatched fetch also carries `rqt`, a request-cycle identity token. In the current implementation it is encoded as an ordered timestamp-like value, so newer request cycles sort after older ones. The runtime uses that ordering for stale-result checks, but the semantic role of `rqt` is request identity, not fetch completion time.
 
 **Rules that never change:**
-- Only `queueRequestedAt` is ever set to "now". The other two are never set to now directly.
-- None of the three fields are ever cleared once written.
-- They always advance forward: `queueRequestedAt ≥ lastRequestedAt ≥ lastFetchedAt`.
+- `queueRequestedToken` is the newest request the card wants fulfilled.
+- `lastRequestedToken` is the newest request actually dispatched.
+- `lastCompletedToken` is the newest request cycle that reached a terminal outcome.
+- `lastCompletionStatus` is the outcome for `lastCompletedToken`: `success`, `failure`, or `not-started` before any terminal outcome has been recorded.
+- None of these fields are ever cleared once written.
+- The token fields always advance forward in token order.
 
 **When a card runs (non-update path — task started or retriggered):**
 
-The card handler marks a fresh request by writing `queueRequestedAt = now`. Then it decides whether to dispatch immediately or wait:
-- If no fetch is currently in-flight (i.e. `lastFetchedAt == lastRequestedAt`), it dispatches immediately: sets `lastRequestedAt = queueRequestedAt` and fires the fetch with `rqt = lastRequestedAt`.
-- If a fetch is already in-flight (`lastFetchedAt < lastRequestedAt`), it does nothing now. The `queueRequestedAt` timestamp is already recorded, so when the in-flight fetch completes it will detect a newer request and re-dispatch automatically.
+The card handler marks a fresh request by writing `queueRequestedToken = now`.
+- If the current dispatched cycle is already terminal (`lastCompletedToken == lastRequestedToken`), it dispatches immediately: `lastRequestedToken = queueRequestedToken`, and the fetch carries `rqt = lastRequestedToken`.
+- Otherwise a fetch is already in-flight, so it does nothing now. The queued token is already recorded, and completion of the in-flight fetch will decide whether re-dispatch is needed.
+- If multiple new requests arrive while a fetch is in-flight, only `queueRequestedToken` advances. Intermediate queued tokens are overwritten, so only the latest queued token survives.
 
 **When a fetch result arrives (task-progress / update path):**
 
-The delivery is identified by the `rqt` timestamp it was dispatched with. The handler decides whether the result is still current:
-- If the incoming `rqt` is not newer than what was already fetched (`rqt ≤ lastFetchedAt`), the result is stale and is ignored.
-- Otherwise the result is accepted: the fetched file is committed and `lastFetchedAt = rqt`.
-- After committing, if there is a newer queued request (`queueRequestedAt > lastFetchedAt`), a new fetch is dispatched immediately with `lastRequestedAt = queueRequestedAt`.
+The delivery is identified by its `rqt` token.
+- If `rqt ≤ lastCompletedToken`, the terminal result is stale and is ignored, regardless of whether that older completion was a success or a failure.
+- Otherwise the result is accepted: the fetched file is committed, `lastCompletedToken = rqt`, and `lastCompletionStatus = success`.
+- After accepting the result, if `queueRequestedToken > lastCompletedToken`, a new fetch is dispatched immediately with `lastRequestedToken = queueRequestedToken`.
+
+**Other lifecycle rules:**
+- A failed fetch is terminal for that request cycle: `lastCompletedToken = rqt` and `lastCompletionStatus = failure`.
+- Required sources must clear their queued request cycle before card completion. Optional sources do not block completion.
+- A retrigger starts a fresh request cycle for the card's sources.
+
+
+## Multi-Source Cards and `task-completed`
+
+When a card has multiple `source_defs`, each source advances through its own request cycle independently.
+
+`task-completed` is a card-level state, not a per-source state. It means:
+- every required source for the card has cleared its queued request cycle
+- the card's computed outputs have been produced and published
+
+For a required source, the queued request cycle is cleared only when:
+- `queueRequestedToken == lastRequestedToken`
+- and the current dispatched cycle is terminal (`lastCompletedToken == lastRequestedToken`)
+
+The terminal outcome for that completed cycle is given by `lastCompletionStatus`:
+- `success`: the cycle produced accepted source data
+- `failure`: the cycle terminated without accepted source data
+
+So a card must not enter `task-completed` while any required source is still in-flight, or while a newer queued request for that source is still waiting to be dispatched. Optional sources may still be pending or continue fetching after the card reaches `task-completed`.
 
 
 ## Drain Cycle
