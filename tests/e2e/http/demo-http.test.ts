@@ -21,11 +21,10 @@ function run(cmd: string, args: string[], timeoutMs = 120_000) {
   };
 }
 
-describe('e2e: demo-http-test.js', () => {
+describe('e2e: server-http-test.js', () => {
   it('demo board HTTP smoke checks pass', () => {
     const r = run(process.execPath, [
-      '--experimental-vm-modules',
-      path.join('public-examples', 'board', 'test', 'demo-http-test.js'),
+      path.join('public-examples', 'board', 'test', 'server-http-test.js'),
     ]);
 
     if (r.error) throw r.error;

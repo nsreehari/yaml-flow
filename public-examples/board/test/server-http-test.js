@@ -10,7 +10,7 @@
  * T1: PATCH holdings (+1 row) → verify recomputation (holdings +1, positions +1)
  *
  * Usage:
- *   node test/demo-http-test.js [--port 7799]
+ *   node test/server-http-test.js [--port 7799]
  */
 
 import { spawn } from 'node:child_process';
