@@ -35,8 +35,11 @@ try {
     const lastSeenIndex = lastEntryId
       ? messages.findIndex(m => typeof m?.id === 'string' && m.id === lastEntryId)
       : -1;
+    const currentUser = lastSeenIndex >= 0 && messages[lastSeenIndex]?.role === 'user'
+      ? messages[lastSeenIndex]
+      : null;
     const newerMessages = lastSeenIndex >= 0 ? messages.slice(lastSeenIndex + 1) : messages;
-    const lastUser = newerMessages.filter(m => m.role === 'user').at(-1);
+    const lastUser = currentUser ?? newerMessages.filter(m => m.role === 'user').at(-1);
     userText = typeof lastUser?.text === 'string' ? lastUser.text : '';
   }
 } catch (err) {
@@ -66,6 +69,8 @@ try {
   }
   const postData = await postRes.json();
   console.log(JSON.stringify({ result: 'success', data: { replyText, id: postData?.id } }));
+  process.exit(0);
 } catch (err) {
   console.log(JSON.stringify({ result: 'failure', data: {}, error: err instanceof Error ? err.message : String(err) }));
+  process.exit(0);
 }
