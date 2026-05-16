@@ -360,8 +360,8 @@ export function subtractBoardState(state: BoardState, excludeIds: Set<string> | 
   return { payload: state.payload, cardIds: nextIds, modelsById: nextModels };
 }
 
-function notifyBoardEngine(board: { engine?: unknown } | null): void {
-  const eng = board?.engine as { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void } | undefined;
+function notifyBoardEngine(board: { engine?: unknown; core?: { engine?: unknown } } | null): void {
+  const eng = (board?.engine ?? board?.core?.engine) as { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void } | undefined;
   if (eng && typeof eng.onServerSseEvent === 'function') {
     eng.onServerSseEvent();
   } else if (eng && typeof eng.refreshOpenChatModal === 'function') {

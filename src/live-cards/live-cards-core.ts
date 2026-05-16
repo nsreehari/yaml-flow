@@ -486,6 +486,33 @@ var LiveCard = (function () {
       return _cleanup[id];
     }
 
+    function _syncChatComposerState(nodeId?) {
+      const activeNodeId = nodeId || _chatModal.currentNodeId;
+      const node = activeNodeId ? cfg.resolve(activeNodeId) : null;
+      const chatDisabled = !!(node && node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
+      const isProcessing = !!_chatStateFromCardState(node).processing;
+      if (_chatModal.input) {
+        _chatModal.input.disabled = chatDisabled;
+        _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
+      }
+      if (_chatModal.attachBtn) _chatModal.attachBtn.disabled = chatDisabled || isProcessing;
+      if (_chatModal.sendBtn) _chatModal.sendBtn.disabled = chatDisabled || isProcessing || !!_chatModal.loading || !!_chatModal.awaitingProcessingAck;
+    }
+
+    function _setChatSendButtonPending(pending) {
+      _chatModal.awaitingProcessingAck = !!pending;
+      if (!_chatModal.sendBtn) return;
+      if (pending) {
+        _chatModal.sendBtn.setAttribute('aria-label', 'Waiting for AI response');
+        _chatModal.sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        _syncChatComposerState();
+        return;
+      }
+      _chatModal.sendBtn.innerHTML = _chatModal.sendBtnIdleHtml;
+      _chatModal.sendBtn.setAttribute('aria-label', 'Send');
+      _syncChatComposerState();
+    }
+
     function _ensureChatModal() {
       if (_chatModal.backdrop) return;
 
@@ -526,33 +553,6 @@ var LiveCard = (function () {
       _chatModal.attachBtn = backdrop.querySelector('[data-lc-chat-attach]');
       _chatModal.closeBtn = backdrop.querySelector('[data-lc-chat-close]');
       _chatModal.sendBtnIdleHtml = _chatModal.sendBtn ? _chatModal.sendBtn.innerHTML : '';
-
-      function _syncChatComposerState(nodeId) {
-        const activeNodeId = nodeId || _chatModal.currentNodeId;
-        const node = activeNodeId ? cfg.resolve(activeNodeId) : null;
-        const chatDisabled = !!(node && node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
-        const isProcessing = !!_chatStateFromCardState(node).processing;
-        if (_chatModal.input) {
-          _chatModal.input.disabled = chatDisabled;
-          _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
-        }
-        if (_chatModal.attachBtn) _chatModal.attachBtn.disabled = chatDisabled || isProcessing;
-        if (_chatModal.sendBtn) _chatModal.sendBtn.disabled = chatDisabled || isProcessing || !!_chatModal.loading || !!_chatModal.awaitingProcessingAck;
-      }
-
-      function _setChatSendButtonPending(pending) {
-        _chatModal.awaitingProcessingAck = !!pending;
-        if (!_chatModal.sendBtn) return;
-        if (pending) {
-          _chatModal.sendBtn.setAttribute('aria-label', 'Waiting for AI response');
-          _chatModal.sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-          _syncChatComposerState();
-          return;
-        }
-        _chatModal.sendBtn.innerHTML = _chatModal.sendBtnIdleHtml;
-        _chatModal.sendBtn.setAttribute('aria-label', 'Send');
-        _syncChatComposerState();
-      }
 
       function resizeChatInput() {
         if (!_chatModal.input) return;
