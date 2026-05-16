@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "config": {
+    "settings": {
+      "completion": "manual",
+      "refreshStrategy": "data-changed"
+    },
+    "tasks": {}
+  },
+  "state": {
+    "status": "running",
+    "tasks": {},
+    "availableOutputs": [],
+    "stuckDetection": {
+      "is_stuck": false,
+      "stuck_description": null,
+      "outputs_unresolvable": [],
+      "tasks_blocked": []
+    },
+    "lastUpdated": "2026-05-16T11:48:32.093Z",
+    "executionId": "live-1778932112093",
+    "executionConfig": {
+      "executionMode": "eligibility-mode",
+      "conflictStrategy": "alphabetical",
+      "completionStrategy": "manual"
+    }
+  },
+  "snapshotAt": "2026-05-16T11:48:32.093Z"
+}

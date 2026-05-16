@@ -16,9 +16,11 @@
       "bindTo": "quotes",
       "outputFile": "market-prices-quotes.json",
       "projections": {
-        "url_list": "requires.holdings.ticker.('https://query1.finance.yahoo.com/v8/finance/chart/' & $ & '?interval=1d&range=1d')"
+        "quote_urls": "requires.holdings.ticker.('https://query1.finance.yahoo.com/v8/finance/chart/' & $ & '?interval=1d&range=1d')"
       },
-      "url-list": {
+      "urls": {
+        "url": "{{url}}",
+        "projectionList": "quote_urls",
         "headers": {
           "User-Agent": "Mozilla/5.0 (compatible; portfolio-tracker-demo/1.0)"
         },
@@ -29,11 +31,11 @@
   "compute": [
     {
       "bindTo": "normalizedQuotes",
-      "expr": "{ \"quoteResponse\": { \"result\": $map(fetched_sources.quotes, function($r) { ($m := $r.chart.result[0].meta; $price := $sum($m.regularMarketPrice); $prev := $sum($m.chartPreviousClose); $chg := $price - $prev; { \"symbol\": $join($m.symbol, \"\"), \"shortName\": ($join($m.shortName, \"\") != \"\" ? $join($m.shortName, \"\") : $join($m.longName, \"\")), \"regularMarketPrice\": $price, \"regularMarketChange\": $chg, \"regularMarketChangePercent\": $prev = 0 ? 0 : ($chg / $prev * 100) }) }), \"error\": null } }"
+      "expr": "($raw := fetched_sources.quotes; $rows := $type($raw) = 'array' ? $raw : (($exists($raw.resultValue) and $type($raw.resultValue) = 'array') ? $raw.resultValue : [$raw]); $normalized := $filter($map($rows, function($row) { ($level1 := $exists($row.resultValue) ? $row.resultValue : $row; $level2 := $exists($level1.resultValue) ? $level1.resultValue : $level1; $meta := $level2.chart.result[0].meta; $exists($meta.symbol) ? { \"symbol\": $meta.symbol, \"shortName\": ($exists($meta.longName) ? $meta.longName : $meta.shortName), \"regularMarketPrice\": $meta.regularMarketPrice, \"regularMarketChange\": ($exists($meta.regularMarketChange) ? $meta.regularMarketChange : (($exists($meta.chartPreviousClose) and $exists($meta.regularMarketPrice)) ? ($meta.regularMarketPrice - $meta.chartPreviousClose) : null)), \"regularMarketChangePercent\": ($exists($meta.regularMarketChangePercent) ? $meta.regularMarketChangePercent : (($exists($meta.chartPreviousClose) and $meta.chartPreviousClose != 0 and $exists($meta.regularMarketPrice)) ? (($meta.regularMarketPrice - $meta.chartPreviousClose) / $meta.chartPreviousClose * 100) : null)) } : undefined) }), function($q) { $exists($q.symbol) }); { \"quoteResponse\": { \"result\": $normalized, \"error\": null } })"
     },
     {
       "bindTo": "prices",
-      "expr": "$map((computed_values.normalizedQuotes.quoteResponse.result ? computed_values.normalizedQuotes.quoteResponse.result : []), function($q) { {\"ticker\": $q.symbol, \"name\": $q.shortName, \"price\": $round($q.regularMarketPrice, 2), \"change\": $round($q.regularMarketChange, 2), \"chg_pct\": $round($q.regularMarketChangePercent, 2)} })"
+      "expr": "$map(computed_values.normalizedQuotes.quoteResponse.result, function($q) { {\"ticker\": $q.symbol, \"name\": $q.shortName, \"price\": ($exists($q.regularMarketPrice) ? $round($q.regularMarketPrice, 2) : null), \"change\": ($exists($q.regularMarketChange) ? $round($q.regularMarketChange, 2) : null), \"chg_pct\": ($exists($q.regularMarketChangePercent) ? $round($q.regularMarketChangePercent, 2) : null)} })"
     }
   ],
   "provides": [

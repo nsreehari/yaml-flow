@@ -1,0 +1,195 @@
+{
+  "version": "1.0",
+  "description": "Self-contained source-def registry for board-worker runtimes.",
+  "executor": "board-worker",
+  "subcommands": [
+    "run-source-fetch",
+    "describe-capabilities",
+    "validate-source-def",
+    "validate-card-preflight",
+    "probe-source-preflight"
+  ],
+  "extraSchema": {
+    "description": "Board topology context passed via --extra (base64-encoded JSON, baked at init).",
+    "properties": {
+      "boardSetupRoot": {
+        "type": "string",
+        "description": "Absolute path to board root."
+      },
+      "boardId": {
+        "type": "string",
+        "description": "Board identifier."
+      },
+      "boardRuntimeDir": {
+        "type": "string",
+        "description": "Relative path to runtime dir."
+      },
+      "runtimeStatusDir": {
+        "type": "string",
+        "description": "Relative path to runtime-out dir."
+      },
+      "cardsDir": {
+        "type": "string",
+        "description": "Relative path to cards dir."
+      },
+      "serverUrl": {
+        "type": "string",
+        "description": "Base URL of the hosting server (e.g. http://127.0.0.1:7799). Used by source kinds that call server-side endpoints."
+      },
+      "boardLiveCardsCliJs": {
+        "type": "string",
+        "description": "Absolute path to board-live-cards-cli.js when configured by the runtime."
+      },
+      "stepMachineCliPath": {
+        "type": "string",
+        "description": "Absolute path to step-machine-cli.js when configured by the runtime."
+      }
+    }
+  },
+  "kinds": {
+    "urls": {
+      "detect": {
+        "field": "urls"
+      },
+      "flow": "./source-def-flows/url.flow.json",
+      "validate": [
+        {
+          "field": "urls",
+          "type": "object",
+          "message": "urls must be an object."
+        },
+        {
+          "field": "urls.url",
+          "type": "string",
+          "message": "urls.url is required and must be a string."
+        }
+      ],
+      "probe": {
+        "strategy": "http-head",
+        "urlFrom": "urls.url"
+      },
+      "manifest": {
+        "description": "URL fetch via interpolation and cache, with optional fan-out over a projected URL list.",
+        "inputSchema": {
+          "urls": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "url": {
+                "type": "string",
+                "required": true
+              },
+              "method": {
+                "type": "string",
+                "required": false
+              },
+              "headers": {
+                "type": "object",
+                "required": false
+              },
+              "args": {
+                "type": "object",
+                "required": false
+              },
+              "cacheTimeout": {
+                "type": "number",
+                "required": false
+              },
+              "projectionList": {
+                "type": "string",
+                "required": false
+              }
+            }
+          },
+          "tickersFrom": {
+            "type": "string",
+            "required": false
+          }
+        }
+      }
+    },
+    "mock": {
+      "detect": {
+        "field": "mock"
+      },
+      "flow": "./source-def-flows/mock.flow.json",
+      "validate": [
+        {
+          "field": "mock",
+          "type": "string",
+          "message": "mock must be a string key."
+        }
+      ],
+      "probe": {
+        "strategy": "mock-db-lookup"
+      },
+      "manifest": {
+        "description": "Look up values from demo MOCK_DB map.",
+        "inputSchema": {
+          "mock": {
+            "type": "string",
+            "required": true
+          }
+        }
+      }
+    },
+    "sqlite": {
+      "detect": {
+        "field": "sqlite"
+      },
+      "flow": "./source-def-flows/sqlite.flow.json",
+      "validate": [
+        {
+          "field": "sqlite",
+          "type": "object",
+          "message": "sqlite must be an object."
+        },
+        {
+          "field": "sqlite.db",
+          "type": "string",
+          "message": "sqlite.db is required and must be a string."
+        },
+        {
+          "field": "sqlite.query",
+          "type": "string",
+          "message": "sqlite.query is required and must be a string."
+        }
+      ],
+      "probe": {
+        "strategy": "mock-db-lookup"
+      },
+      "manifest": {
+        "description": "Query a SQLite database via the sqlite handler's local query runner.",
+        "inputSchema": {
+          "sqlite": {
+            "type": "object",
+            "required": true,
+            "properties": {
+              "db": {
+                "type": "string",
+                "required": true
+              },
+              "query": {
+                "type": "string",
+                "required": true
+              },
+              "params": {
+                "type": "array",
+                "required": false
+              },
+              "mode": {
+                "type": "string",
+                "required": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "resolveOrder": [
+    "urls",
+    "sqlite",
+    "mock"
+  ]
+}

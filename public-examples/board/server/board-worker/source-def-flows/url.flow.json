@@ -1,0 +1,73 @@
+{
+  "id": "demo-source-urls",
+  "settings": {
+    "start_step": "prepare",
+    "max_total_steps": 10,
+    "timeout_ms": 60000
+  },
+  "steps": {
+    "prepare": {
+      "description": "Resolve URL targets",
+      "produces_data": ["target_urls", "fanout_mode", "sourceDef"],
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.fanout_mode = $exists(expects_data.sourceDef.urls.projectionList) and expects_data.sourceDef.urls.projectionList != ''",
+          "data.target_urls = data.fanout_mode ? $lookup(expects_data.sourceDef._projections, expects_data.sourceDef.urls.projectionList) : [expects_data.sourceDef.urls.url]",
+          "data.sourceDef = expects_data.sourceDef",
+          "result = $type(data.target_urls) = 'array' and $count(data.target_urls) > 0 ? 'success' : 'failure'"
+        ]
+      },
+      "transitions": {
+        "success": "execute",
+        "failure": "failed"
+      }
+    },
+    "execute": {
+      "description": "Fetch each resolved URL",
+      "expects_data": ["target_urls", "fanout_mode", "sourceDef"],
+      "produces_data": ["fetched_values"],
+      "forEach": {
+        "items": "target_urls",
+        "as": "url",
+        "concurrency": 4,
+        "collectAs": "fetched_values"
+      },
+      "handler": {
+        "type": "ref",
+        "howToRun": "demo-local-module",
+        "whatToRun": { "kind": "fs-path", "value": "./source-def-flows/url-handler/http-source-handler.js" }
+      },
+      "transitions": {
+        "success": "finalize",
+        "failure": "failed"
+      }
+    },
+    "finalize": {
+      "description": "Normalize flow output",
+      "expects_data": ["fetched_values", "fanout_mode"],
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.resultValue = expects_data.fanout_mode ? expects_data.fetched_values : expects_data.fetched_values[0]",
+          "result = 'success'"
+        ]
+      },
+      "transitions": {
+        "success": "completed",
+        "failure": "failed"
+      }
+    }
+  },
+  "terminal_states": {
+    "completed": {
+      "description": "URL fetch succeeded",
+      "return_intent": "success",
+      "return_artifacts": ["resultValue", "wroteOutputDirectly"]
+    },
+    "failed": {
+      "description": "URL fetch failed",
+      "return_intent": "failure"
+    }
+  }
+}

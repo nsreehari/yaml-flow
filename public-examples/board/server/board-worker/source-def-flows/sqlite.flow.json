@@ -1,0 +1,33 @@
+{
+  "id": "demo-source-sqlite",
+  "settings": {
+    "start_step": "execute",
+    "max_total_steps": 5,
+    "timeout_ms": 30000
+  },
+  "steps": {
+    "execute": {
+      "description": "Execute SQLite query source def",
+      "handler": {
+        "type": "ref",
+        "howToRun": "demo-local-module",
+        "whatToRun": { "kind": "fs-path", "value": "./source-def-flows/sqlite-handler/sqlite-handler.js" }
+      },
+      "transitions": {
+        "success": "completed",
+        "failure": "failed"
+      }
+    }
+  },
+  "terminal_states": {
+    "completed": {
+      "description": "SQLite query succeeded",
+      "return_intent": "success",
+      "return_artifacts": ["resultValue", "wroteOutputDirectly"]
+    },
+    "failed": {
+      "description": "SQLite query failed",
+      "return_intent": "failure"
+    }
+  }
+}

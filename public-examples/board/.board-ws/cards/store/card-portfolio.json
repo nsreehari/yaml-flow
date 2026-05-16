@@ -60,23 +60,18 @@
     "holdings": [
       {
         "ticker": "AAPL",
-        "quantity": 66,
+        "quantity": 10,
         "cost_basis": 150
       },
       {
-        "ticker": "MSFT",
+        "ticker": "NVDA",
         "quantity": 5,
         "cost_basis": 310
       },
       {
-        "ticker": "GOOGL",
-        "quantity": 2,
-        "cost_basis": 280
-      },
-      {
-        "ticker": "TSLA",
+        "ticker": "GOOG",
         "quantity": 3,
-        "cost_basis": 200
+        "cost_basis": 33
       }
     ]
   }
