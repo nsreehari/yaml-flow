@@ -1,0 +1,426 @@
+import { describe, expect, it } from 'vitest';
+import {
+  createCardHandlerFn,
+  type CardHandlerAdapters,
+  type CardRuntimeSnapshot,
+  type LiveCard,
+} from '../../src/cli/common/board-live-cards-lib.js';
+import type { TaskHandlerInput } from '../../src/continuous-event-graph/reactive.js';
+import type { GraphEngineStore } from '../../src/event-graph/types.js';
+
+// ---------------------------------------------------------------------------
+// Minimal mocks
+// ---------------------------------------------------------------------------
+
+function makeTaskState(executionCount = 1): GraphEngineStore {
+  return {
+    status: 'in-progress',
+    executionCount,
+    retryCount: 0,
+    lastEpoch: 0,
+  };
+}
+
+function makeInput(nodeId: string, update?: Record<string, unknown>): TaskHandlerInput {
+  return {
+    nodeId,
+    state: {},
+    taskState: makeTaskState(),
+    config: { taskHandlers: ['card-handler'] },
+    callbackToken: 'cb-token',
+    update,
+  };
+}
+
+function makeAdapters(card: LiveCard): {
+  adapters: CardHandlerAdapters;
+  completedCalls: Array<{ taskName: string; data: Record<string, unknown> }>;
+  runtimeStore: Map<string, CardRuntimeSnapshot>;
+  stagedContent: Map<string, string>;
+  committedContent: Map<string, unknown>;
+} {
+  const completedCalls: Array<{ taskName: string; data: Record<string, unknown> }> = [];
+  const runtimeStore = new Map<string, CardRuntimeSnapshot>();
+  const stagedContent = new Map<string, string>();
+  const committedContent = new Map<string, unknown>();
+
+  const adapters: CardHandlerAdapters = {
+    cardStore: {
+      readCard: (id) => (id === card.id ? card : null),
+      readCardKey: () => null,
+      readAllCards: () => [card],
+      readChecksumIndex: () => ({}),
+      changedSince: () => [],
+    },
+    cardRuntimeStore: {
+      readRuntime: (cardId) => runtimeStore.get(cardId) ?? { _sources: {} },
+      writeRuntime: (cardId, state) => { runtimeStore.set(cardId, state); },
+    },
+    fetchedSourcesStore: {
+      readSourceData: (cardId, outputFile) =>
+        committedContent.get(`${cardId}/${outputFile}`) ?? null,
+      ingestSourceDataStaged: (cardId, outputFile, _ref, deliveryToken) => {
+        stagedContent.set(`${cardId}/.staged/${deliveryToken}/${outputFile}`, `content-for-${outputFile}`);
+      },
+      commitSourceData: (cardId, outputFile, deliveryToken) => {
+        const key = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
+        const content = stagedContent.get(key);
+        if (content == null) return false;
+        committedContent.set(`${cardId}/${outputFile}`, content);
+        return true;
+      },
+      hasSource: (cardId, outputFile) => committedContent.has(`${cardId}/${outputFile}`),
+    },
+    outputStore: {
+      writeComputedValues: () => {},
+      readComputedValues: () => null,
+      readAllComputedValues: () => ({}),
+      writeDataObjects: () => {},
+      readDataObject: () => null,
+      readAllDataObjects: () => ({}),
+      writeStatusSnapshot: () => {},
+      readStatusSnapshot: () => null,
+    },
+    executionRequestStore: {
+      appendEntries: () => {},
+      dispatchEntriesForJournalId: () => {},
+    },
+  };
+
+  // Wrap completedCalls collection into the adapters snapshot so callers can
+  // pass their own taskCompletedFn while still using the same mocks.
+  return { adapters, completedCalls, runtimeStore, stagedContent, committedContent };
+}
+
+const BASE_REF = { kind: 'fs-path' as const, value: '/tmp/test-board' };
+const JOURNAL_ID = 'journal-0';
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('createCardHandlerFn — multi-source completion gating', () => {
+  /**
+   * Regression: card with two required source_defs.
+   * Identity source delivers first; manager is still in-flight.
+   * The handler must NOT call taskCompletedFn — it must return 'task-initiated' and wait.
+   */
+  it('does not complete when a required source is still in-flight after first delivery', async () => {
+    const card: LiveCard = {
+      id: 'card-multi',
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt' },
+        { bindTo: 'manager', outputFile: 'manager.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, runtimeStore, stagedContent } = makeAdapters(card);
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>) => {
+      completedCalls.push({ taskName, data });
+    };
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
+
+    // Pre-condition: both sources have been dispatched (lastRequestedAt set).
+    // Manager is still in-flight (no lastFetchedAt).
+    runtimeStore.set('card-multi', {
+      _sources: {
+        'identity.txt': { lastRequestedAt: '2026-05-16T10:00:01.000Z', queueRequestedAt: '2026-05-16T10:00:01.000Z' },
+        'manager.txt':  { lastRequestedAt: '2026-05-16T10:00:01.000Z', queueRequestedAt: '2026-05-16T10:00:01.000Z' },
+      },
+      _lastExecutionCount: 1,
+    });
+
+    // Stage identity content so commitSourceData succeeds.
+    stagedContent.set('card-multi/.staged/tok-identity/identity.txt', 'Alice');
+
+    // Simulate identity task-progress arriving.
+    const result = await handler(makeInput('card-multi', {
+      outputFile: 'identity.txt',
+      rqt: '2026-05-16T10:00:02.000Z',
+      deliveryToken: 'tok-identity',
+    }));
+
+    expect(result).toBe('task-initiated');
+    expect(completedCalls).toHaveLength(0); // must NOT complete yet
+  });
+
+  /**
+   * Happy path: card completes once all required sources are delivered.
+   */
+  it('calls taskCompletedFn once all required sources are delivered', async () => {
+    const card: LiveCard = {
+      id: 'card-multi',
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt' },
+        { bindTo: 'manager', outputFile: 'manager.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, runtimeStore, stagedContent } = makeAdapters(card);
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>) => {
+      completedCalls.push({ taskName, data });
+    };
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
+
+    // Pre-condition: identity is already delivered (idle); manager is still in-flight.
+    runtimeStore.set('card-multi', {
+      _sources: {
+        'identity.txt': {
+          lastRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastFetchedAt:   '2026-05-16T10:00:02.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+        'manager.txt': {
+          lastRequestedAt: '2026-05-16T10:00:01.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+      },
+      _lastExecutionCount: 1,
+    });
+
+    // Identity content already committed (from the previous delivery cycle).
+    adapters.fetchedSourcesStore.commitSourceData; // noop for setup; set committedContent directly
+    // Use the inner map via closure — re-make with explicit pre-commit:
+    const { adapters: a2, completedCalls: cc2, runtimeStore: rs2, stagedContent: sc2, committedContent: committed2 } = makeAdapters(card);
+    const taskCompletedFn2 = (taskName: string, data: Record<string, unknown>) => {
+      cc2.push({ taskName, data });
+    };
+    const handler2 = createCardHandlerFn(BASE_REF, JOURNAL_ID, a2, taskCompletedFn2, () => {});
+
+    rs2.set('card-multi', {
+      _sources: {
+        'identity.txt': {
+          lastRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastFetchedAt:   '2026-05-16T10:00:02.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+        'manager.txt': {
+          lastRequestedAt: '2026-05-16T10:00:01.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+      },
+      _lastExecutionCount: 1,
+    });
+    committed2.set('card-multi/identity.txt', 'Alice');
+    sc2.set('card-multi/.staged/tok-manager/manager.txt', 'Bob');
+
+    // Now manager delivers.
+    const result2 = await handler2(makeInput('card-multi', {
+      outputFile: 'manager.txt',
+      rqt: '2026-05-16T10:00:03.000Z',
+      deliveryToken: 'tok-manager',
+    }));
+
+    expect(result2).toBe('task-initiated');
+    expect(cc2).toHaveLength(1);
+    expect(cc2[0].taskName).toBe('card-multi');
+  });
+
+  /**
+   * Single required source: card completes immediately after that source delivers.
+   * (Existing behaviour — must not regress.)
+   */
+  it('completes immediately when there is only one required source and it delivers', async () => {
+    const card: LiveCard = {
+      id: 'card-single',
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, runtimeStore, stagedContent } = makeAdapters(card);
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>) => {
+      completedCalls.push({ taskName, data });
+    };
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
+
+    runtimeStore.set('card-single', {
+      _sources: {
+        'identity.txt': { lastRequestedAt: '2026-05-16T10:00:01.000Z', queueRequestedAt: '2026-05-16T10:00:01.000Z' },
+      },
+      _lastExecutionCount: 1,
+    });
+    stagedContent.set('card-single/.staged/tok-1/identity.txt', 'Alice');
+
+    const result = await handler(makeInput('card-single', {
+      outputFile: 'identity.txt',
+      rqt: '2026-05-16T10:00:02.000Z',
+      deliveryToken: 'tok-1',
+    }));
+
+    expect(result).toBe('task-initiated');
+    expect(completedCalls).toHaveLength(1);
+    expect(completedCalls[0].taskName).toBe('card-single');
+  });
+
+  /**
+   * Safety: if the second required source FAILS (not delivers), the card must still
+   * proceed to complete — a failed source is terminal, not in-flight.
+   * isSourceInFlight is purely timestamp-based; nextEntryAfterFetchFailure removes
+   * lastFetchedAt but keeps lastRequestedAt, so the entry would look "in-flight" to
+   * a naive timestamp check. The guard must treat lastError as terminal.
+   */
+  it('does not get stuck when one required source fails — completes with that source absent', async () => {
+    const card: LiveCard = {
+      id: 'card-fail',
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt' },
+        { bindTo: 'manager', outputFile: 'manager.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, runtimeStore, stagedContent, committedContent } = makeAdapters(card);
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>) => {
+      completedCalls.push({ taskName, data });
+    };
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
+
+    // Identity already delivered (idle). Manager was dispatched but not yet failed.
+    runtimeStore.set('card-fail', {
+      _sources: {
+        'identity.txt': {
+          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
+          lastFetchedAt:    '2026-05-16T10:00:02.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+        'manager.txt': {
+          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+      },
+      _lastExecutionCount: 1,
+    });
+    committedContent.set('card-fail/identity.txt', 'Alice');
+
+    // Manager fails.
+    const result = await handler(makeInput('card-fail', {
+      outputFile: 'manager.txt',
+      failure: true,
+      reason: 'network timeout',
+    }));
+
+    // Card must complete (with manager data absent) — not get stuck.
+    expect(result).toBe('task-initiated');
+    expect(completedCalls).toHaveLength(1);
+    expect(completedCalls[0].taskName).toBe('card-fail');
+  });
+
+  /**
+   * Safety: retrigger (executionCount bump) resets _sources and redispatches all
+   * sources. The anyRequiredInFlight guard must never be reached — handled by the
+   * earlier undeliveredRequired block.
+   */
+  it('re-dispatches all sources on retrigger (executionCount change) without premature completion', async () => {
+    const card: LiveCard = {
+      id: 'card-retrigger',
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt' },
+        { bindTo: 'manager',  outputFile: 'manager.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, runtimeStore, committedContent } = makeAdapters(card);
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>) => {
+      completedCalls.push({ taskName, data });
+    };
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
+
+    // Previous execution had both sources delivered (idle) with executionCount = 1.
+    runtimeStore.set('card-retrigger', {
+      _sources: {
+        'identity.txt': {
+          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
+          lastFetchedAt:    '2026-05-16T10:00:02.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+        'manager.txt': {
+          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
+          lastFetchedAt:    '2026-05-16T10:00:02.000Z',
+          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+        },
+      },
+      _lastExecutionCount: 1,
+    });
+    committedContent.set('card-retrigger/identity.txt', 'Alice');
+    committedContent.set('card-retrigger/manager.txt', 'Bob');
+
+    // Retrigger: executionCount bumped to 2, no update.
+    const retriggeredInput: TaskHandlerInput = {
+      nodeId: 'card-retrigger',
+      state: {},
+      taskState: makeTaskState(2), // new execution
+      config: { taskHandlers: ['card-handler'] },
+      callbackToken: 'cb-retrigger',
+      // no update — fresh initiation
+    };
+
+    const result = await handler(retriggeredInput);
+
+    // Sources must be re-dispatched, card must NOT complete yet.
+    expect(result).toBe('task-initiated');
+    expect(completedCalls).toHaveLength(0);
+    // _sources must have been wiped and re-stamped (lastRequestedAt set, no lastFetchedAt)
+    const rt = runtimeStore.get('card-retrigger');
+    expect(rt?._sources['identity.txt']?.lastRequestedAt).toBeDefined();
+    expect(rt?._sources['identity.txt']?.lastFetchedAt).toBeUndefined();
+    expect(rt?._sources['manager.txt']?.lastRequestedAt).toBeDefined();
+    expect(rt?._sources['manager.txt']?.lastFetchedAt).toBeUndefined();
+  });
+
+  /**
+   * Migration safety: persisted snapshot has source entries (possibly with lastError or
+   * stale lastFetchedAt) but _lastExecutionCount was never written (undefined).
+   * A retrigger must still wipe _sources — the old typeof guard would have skipped
+   * the wipe because typeof undefined !== 'number'.
+   */
+  it('wipes stale sources on retrigger even when _lastExecutionCount is absent (migration case)', async () => {
+    const card: LiveCard = {
+      id: 'card-migrate',
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt' },
+        { bindTo: 'manager',  outputFile: 'manager.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, runtimeStore } = makeAdapters(card);
+    const taskCompletedFn = (taskName: string, data: Record<string, unknown>) => {
+      completedCalls.push({ taskName, data });
+    };
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
+
+    // Simulate a migrated snapshot: has source entries but _lastExecutionCount is absent.
+    runtimeStore.set('card-migrate', {
+      _sources: {
+        'identity.txt': {
+          lastRequestedAt:  '2026-05-15T10:00:01.000Z',
+          lastFetchedAt:    '2026-05-15T10:00:02.000Z',
+          queueRequestedAt: '2026-05-15T10:00:01.000Z',
+        },
+        'manager.txt': {
+          lastRequestedAt: '2026-05-15T10:00:01.000Z',
+          lastError:       'previous failure',
+        },
+      },
+      // _lastExecutionCount intentionally absent (undefined)
+    } as unknown as import('../../src/cli/common/board-live-cards-lib.js').CardRuntimeSnapshot);
+
+    // Retrigger: executionCount = 1 (fresh start, _lastExecutionCount was undefined).
+    const result = await handler({
+      nodeId: 'card-migrate',
+      state: {},
+      taskState: makeTaskState(1),
+      config: { taskHandlers: ['card-handler'] },
+      callbackToken: 'cb-migrate',
+    });
+
+    // Must re-dispatch both sources, not complete.
+    expect(result).toBe('task-initiated');
+    expect(completedCalls).toHaveLength(0);
+    // Stale source entries must have been wiped and re-stamped.
+    const rt = runtimeStore.get('card-migrate');
+    expect(rt?._lastExecutionCount).toBe(1);
+    expect(rt?._sources['identity.txt']?.lastFetchedAt).toBeUndefined();
+    expect(rt?._sources['manager.txt']?.lastError).toBeUndefined();
+  });
+});
+

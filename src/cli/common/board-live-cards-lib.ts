@@ -944,11 +944,15 @@ export function createCardHandlerFn(
 
         const currentExecutionCount = input.taskState?.executionCount ?? 0;
         const lastExecCount = state._lastExecutionCount;
-        if (typeof lastExecCount === 'number' && lastExecCount !== currentExecutionCount) {
-          state._sources = {}; dirty = true;
-        }
         if (lastExecCount !== currentExecutionCount) {
-          state._lastExecutionCount = currentExecutionCount; dirty = true;
+          // Wipe source entries whenever the execution count changes (retrigger / first run).
+          // The typeof guard was removed: on first run lastExecCount is undefined, and
+          // _sources is already empty, so the wipe is a no-op. The guard was creating a gap
+          // for migrated snapshots that have source entries but no _lastExecutionCount — those
+          // would retain stale data across a retrigger without the unconditional wipe.
+          state._sources = {};
+          state._lastExecutionCount = currentExecutionCount;
+          dirty = true;
         }
 
 
@@ -1073,6 +1077,23 @@ export function createCardHandlerFn(
           adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
           return 'task-initiated';
         }
+
+        // Guard: do not complete the card while any required source is still in-flight.
+        // undeliveredRequired excludes in-flight sources (they don't need re-dispatch), so a card
+        // with N required sources where the first N-1 have delivered but the last is still in-flight
+        // would otherwise fall through to taskCompletedFn prematurely.
+        // Note: isSourceInFlight is purely timestamp-based; nextEntryAfterFetchFailure deletes
+        // lastFetchedAt (keeping lastRequestedAt), so a failed entry also looks in-flight by
+        // timestamps. We exclude entries with lastError — they have terminated, just with failure.
+        const anyRequiredInFlight = requiredSources.some(s => {
+          const outputFile = s.outputFile;
+          if (typeof outputFile !== 'string' || !outputFile) return false;
+          const entry = getSourceEntry(outputFile);
+          if (entry.lastError) return false; // failed fetch is terminal, not in-flight
+          const qrt = entry.queueRequestedAt ?? entry.lastRequestedAt ?? now;
+          return decideSourceAction(entry, qrt) === 'in-flight';
+        });
+        if (anyRequiredInFlight) return 'task-initiated';
 
         const providesBindings = (card.provides ?? []) as { bindTo: string; ref: string }[];
         const data: Record<string, unknown> = {};
