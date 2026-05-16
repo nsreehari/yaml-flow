@@ -1,0 +1,102 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  applyBoardNotifications,
+  createBoardRuntimeSession,
+  createDerivedBoardRuntime,
+  defaultBoardPaths,
+  serverPayloadToBoardState,
+} from '../../src/board-livecards-client/index.js';
+import type { BoardRuntimeArtifactsPayload } from '../../src/board-livegraph-runtime/index.js';
+
+const PAYLOAD: BoardRuntimeArtifactsPayload = {
+  cardDefinitions: [
+    { id: 'card-a', card_data: { title: 'Card A' }, requires: ['prices'] },
+    { id: 'card-b', card_data: { title: 'Card B' } },
+  ],
+  cardRuntimeById: {
+    'card-a': {
+      schema_version: 'v1',
+      card_id: 'card-a',
+      card_data: { subtitle: 'Runtime value' },
+      computed_values: { score: 99 },
+    },
+  },
+  dataObjectsByToken: {
+    prices: { AAPL: 201.1 },
+  },
+  statusSnapshot: {
+    cards: [
+      {
+        name: 'card-a',
+        status: 'completed',
+        runtime: { last_transition_at: '2026-05-13T00:00:00.000Z' },
+      },
+      {
+        name: 'card-b',
+        status: 'in-progress',
+        runtime: { last_transition_at: '2026-05-13T00:01:00.000Z' },
+      },
+    ],
+  },
+};
+
+function createSession() {
+  return createBoardRuntimeSession({
+    fetchServer: async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    boardPaths: (boardId: string) => defaultBoardPaths(boardId),
+    getServerOrigin: () => 'http://localhost:7799',
+  });
+}
+
+describe('board-livecards-client runtime session', () => {
+  it('adapts provided payloads into reusable board state', () => {
+    const session = createSession();
+    const state = session.attachProvidedState({ boardId: 'default', payload: PAYLOAD });
+
+    expect(state?.cardIds).toEqual(['card-a', 'card-b']);
+    expect(session.getBoardId()).toBe('default');
+    expect(session.isConnected()).toBe(false);
+
+    const rebuilt = serverPayloadToBoardState(PAYLOAD);
+    expect(state).toEqual(rebuilt);
+  });
+
+  it('projects a derived runtime over shared session state and notification updates', () => {
+    const session = createSession();
+    session.attachProvidedState({ boardId: 'default', payload: PAYLOAD });
+
+    const derived = createDerivedBoardRuntime({
+      session,
+      includeCard: (model) => model.id === 'card-a',
+      mapPayload: (payload) => ({ ...(payload as Record<string, unknown>), view: 'solo' }),
+    });
+
+    expect(derived.getBoardId()).toBe('default');
+    expect(derived.getClientId()).toBe(session.getClientId());
+    expect(derived.getState()?.cardIds).toEqual(['card-a']);
+
+    session.applyServerUpdate({
+      kind: 'notification-batch',
+      notifications: [{ kind: 'computed_values', cardId: 'card-a', values: { score: 123 } }],
+    });
+
+    expect(derived.getState()?.modelsById['card-a']?.computed_values).toEqual({ score: 123 });
+    expect(derived.getFullState()?.modelsById['card-a']?.computed_values).toEqual({ score: 123 });
+  });
+
+  it('exposes the same notification reduction helper used by the shared session', () => {
+    const state = serverPayloadToBoardState(PAYLOAD);
+    const nextState = applyBoardNotifications(
+      state,
+      [{ kind: 'card_chats', cardId: 'card-a', messages: [{ role: 'assistant', text: 'hello' }], receiving: true }],
+      () => PAYLOAD,
+    );
+
+    expect(nextState.modelsById['card-a']?.card_chats).toEqual({
+      messages: [{ role: 'assistant', text: 'hello' }],
+      processing: false,
+      receiving: true,
+    });
+  });
+});

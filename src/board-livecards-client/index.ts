@@ -76,6 +76,72 @@ export interface BootstrapBoardParams {
   rootElement: HTMLElement;
 }
 
+export interface BoardNotification {
+  kind: string;
+  [key: string]: unknown;
+}
+
+export interface BoardRuntimeSessionBootstrapParams {
+  boardId?: string;
+  taskExecutorPath?: string;
+  initialPayload?: unknown;
+  initialState?: BoardState | null;
+  skipInitBoard?: boolean;
+}
+
+export interface MountBoardViewParams {
+  rootElement: HTMLElement;
+  mode?: string;
+}
+
+export interface DerivedBoardRuntimeOptions extends DeriveBoardStateOptions {
+  session: BoardRuntimeSession;
+}
+
+export interface BoardRuntimeSession {
+  bootstrap(params?: BoardRuntimeSessionBootstrapParams): Promise<BoardState | null>;
+  attachProvidedState(params: { boardId: string; state?: BoardState | null; payload?: BoardRuntimeArtifactsPayload | null }): BoardState | null;
+  applyServerUpdate(update: { kind?: string; notifications?: BoardNotification[]; cardDefinitions?: unknown[]; [key: string]: unknown }): BoardState | null;
+  seedStateFromPayload(payload: unknown, prevState?: BoardState | null): BoardState;
+  seedState(state: BoardState | null): BoardState | null;
+  applyNotificationBatch(notifications: BoardNotification[]): BoardState | null;
+  replacePayload(payload: unknown): BoardState;
+  subscribe(listener: (state: BoardState | null) => void): () => void;
+  closeSse(): void;
+  isConnected(): boolean;
+  getState(): BoardState | null;
+  getPayload(): unknown | null;
+  getBoardId(): string | null;
+  getClientId(): string;
+  getSseClientId(): string;
+  patchCardState(cardId: string, patch: Record<string, unknown>): Promise<void>;
+  dispatchCardAction(cardId: string, actionType: string, payload?: Record<string, unknown> | null): Promise<{ payload: Record<string, unknown> }>;
+  uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null>;
+  subscribeCardChats(cardId: string): Promise<void>;
+  unsubscribeCardChats(cardId: string): Promise<void>;
+  dispose(): void;
+}
+
+export interface DerivedBoardRuntime {
+  mountBoard(params: MountBoardViewParams): unknown;
+  subscribe(listener: (state: BoardState | null) => void): () => void;
+  getState(): BoardState | null;
+  getFullState(): BoardState | null;
+  getBoardId(): string | null;
+  getClientId(): string;
+  getSseClientId(): string;
+  patchCardState(cardId: string, patch: Record<string, unknown>): Promise<void>;
+  dispatchCardAction(cardId: string, actionType: string, payload?: Record<string, unknown> | null): Promise<{ payload: Record<string, unknown> }>;
+  uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null>;
+  subscribeCardChats(cardId: string): Promise<void>;
+  unsubscribeCardChats(cardId: string): Promise<void>;
+  setMode(mode: string): void;
+  autoLayout(): void;
+  setDevMode(enabled: boolean): void;
+  getCurrentMode(): string;
+  dispose(): void;
+}
+
 /**
  * Build the standard BoardPaths for a yaml-flow server runtime board.
  *
@@ -249,6 +315,26 @@ export async function dispatchCardAction(opts: {
   return { payload: processedPayload };
 }
 
+export function serverPayloadToBoardState(
+  payload: BoardRuntimeArtifactsPayload,
+  prevState: BoardState | null = null,
+): BoardState {
+  return buildBoardState(payload, prevState, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
+}
+
+export function applyBoardNotifications(
+  prevState: BoardState,
+  notifications: BoardNotification[],
+  getFullPayload: () => unknown,
+): BoardState {
+  return applyNotification(
+    prevState,
+    notifications,
+    selectLiveCardModel as Parameters<typeof applyNotification>[2],
+    getFullPayload,
+  );
+}
+
 /**
  * Return a new BoardState containing only the cards whose ids appear in `ids`.
  * Preserves original ordering.
@@ -273,6 +359,421 @@ export function subtractBoardState(state: BoardState, excludeIds: Set<string> | 
   for (const id of nextIds) nextModels[id] = state.modelsById[id];
   return { payload: state.payload, cardIds: nextIds, modelsById: nextModels };
 }
+
+function notifyBoardEngine(board: { engine?: unknown } | null): void {
+  const eng = board?.engine as { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void } | undefined;
+  if (eng && typeof eng.onServerSseEvent === 'function') {
+    eng.onServerSseEvent();
+  } else if (eng && typeof eng.refreshOpenChatModal === 'function') {
+    eng.refreshOpenChatModal();
+  }
+}
+
+function loadLiveCardGlobal() {
+  const LiveCard = (globalThis as unknown as {
+    LiveCard?: {
+      init: (opts: unknown) => unknown;
+      Board: (
+        engine: unknown,
+        el: HTMLElement,
+        opts: unknown,
+      ) => { setState: (fn: (prev: BoardState) => BoardState) => void; core?: unknown; engine?: unknown };
+    };
+  }).LiveCard;
+  if (!LiveCard) throw new Error('LiveCard global not loaded — include live-cards.js before this script');
+  return LiveCard;
+}
+
+export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): BoardRuntimeSession {
+  if (!options || typeof options !== 'object') throw new Error('options are required');
+
+  const { fetchServer, boardPaths, getServerOrigin } = options;
+  if (typeof fetchServer !== 'function') throw new Error('options.fetchServer is required');
+  if (typeof boardPaths !== 'function') throw new Error('options.boardPaths is required');
+  if (typeof getServerOrigin !== 'function') throw new Error('options.getServerOrigin is required');
+
+  const stateRef: { current: BoardState | null } = { current: null };
+  const listeners = new Set<(state: BoardState | null) => void>();
+  let sse: EventSource | null = null;
+  let currentBoardId: string | null = null;
+  let currentPaths: BoardPaths | null = null;
+  const activeChatSubscriptions: Record<string, true> = {};
+  const sseClientId = (
+    globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `lc-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+
+  function emitState(): void {
+    for (const listener of listeners) listener(stateRef.current);
+  }
+
+  function getFullPayload() {
+    return stateRef.current ? stateRef.current.payload : null;
+  }
+
+  function setState(next: BoardState | null): BoardState | null {
+    stateRef.current = next;
+    emitState();
+    return stateRef.current;
+  }
+
+  function requireBoardContext(): { boardId: string; paths: BoardPaths } {
+    const boardId = currentBoardId;
+    if (!boardId) throw new Error('Board runtime session is not bound to a board yet');
+    const paths = currentPaths ?? boardPaths(boardId);
+    currentPaths = paths;
+    return { boardId, paths };
+  }
+
+  function replacePayload(payload: unknown): BoardState {
+    const next = buildBoardState(payload, stateRef.current, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
+    setState(next);
+    return next;
+  }
+
+  function seedStateFromPayload(payload: unknown, prevState?: BoardState | null): BoardState {
+    const next = buildBoardState(payload, prevState ?? stateRef.current, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
+    setState(next);
+    return next;
+  }
+
+  function seedState(state: BoardState | null): BoardState | null {
+    return setState(state);
+  }
+
+  function applyNotificationBatch(notifications: BoardNotification[]): BoardState | null {
+    if (!stateRef.current) return stateRef.current;
+    const next = applyNotification(
+      stateRef.current,
+      notifications,
+      selectLiveCardModel as Parameters<typeof applyNotification>[2],
+      getFullPayload,
+    );
+    setState(next);
+    return next;
+  }
+
+  async function uploadCardFileForSession(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null> {
+    const { boardId } = requireBoardContext();
+    return uploadCardFile({ fetchServer, boardPaths, boardId, cardId, file, inChat: opts?.inChat });
+  }
+
+  async function dispatchCardActionForSession(
+    cardId: string,
+    actionType: string,
+    payload?: Record<string, unknown> | null,
+  ): Promise<{ payload: Record<string, unknown> }> {
+    const { boardId } = requireBoardContext();
+    return dispatchCardAction({ fetchServer, boardPaths, boardId, cardId, actionType, payload });
+  }
+
+  async function patchCardStateForSession(cardId: string, patch: Record<string, unknown>): Promise<void> {
+    const { boardId } = requireBoardContext();
+    await patchCardState({ fetchServer, boardPaths, boardId, cardId, patch });
+  }
+
+  async function subscribeCardChats(cardId: string): Promise<void> {
+    const { paths } = requireBoardContext();
+    activeChatSubscriptions[cardId] = true;
+    applyNotificationBatch([{ kind: 'card_chats', cardId, messages: stateRef.current?.modelsById[cardId]?.card_chats?.messages ?? [], receiving: true }]);
+    try {
+      await fetchServer(paths.chatSubscribeSse(cardId), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: sseClientId }),
+      });
+    } catch { /* ignore subscribe errors */ }
+  }
+
+  async function unsubscribeCardChats(cardId: string): Promise<void> {
+    const { paths } = requireBoardContext();
+    delete activeChatSubscriptions[cardId];
+    try {
+      await fetchServer(paths.chatUnsubscribeSse(cardId), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: sseClientId }),
+      });
+    } catch { /* ignore unsubscribe errors */ }
+    applyNotificationBatch([{ kind: 'card_chats', cardId, messages: stateRef.current?.modelsById[cardId]?.card_chats?.messages ?? [], receiving: false }]);
+  }
+
+  function resubscribeActiveChats(paths: BoardPaths): void {
+    Object.keys(activeChatSubscriptions).forEach((cardId) => {
+      void fetchServer(paths.chatSubscribeSse(cardId), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: sseClientId }),
+      }).catch(() => { /* ignore re-subscribe errors */ });
+    });
+  }
+
+  function handleIncomingUpdate(update: unknown): void {
+    const payload = update as { kind?: string; notifications?: BoardNotification[]; cardDefinitions?: unknown[] };
+    if (payload?.kind === 'notification-batch' && Array.isArray(payload.notifications)) {
+      applyNotificationBatch(payload.notifications);
+    } else if (payload?.cardDefinitions) {
+      replacePayload(payload);
+    }
+  }
+
+  function attachProvidedState(params: { boardId: string; state?: BoardState | null; payload?: BoardRuntimeArtifactsPayload | null }): BoardState | null {
+    currentBoardId = String(params.boardId || 'default');
+    currentPaths = boardPaths(currentBoardId);
+    if (params.state !== undefined) return seedState(params.state ?? null);
+    if (params.payload) return seedStateFromPayload(params.payload, stateRef.current);
+    return stateRef.current;
+  }
+
+  function applyServerUpdate(update: { kind?: string; notifications?: BoardNotification[]; cardDefinitions?: unknown[]; [key: string]: unknown }): BoardState | null {
+    handleIncomingUpdate(update);
+    return stateRef.current;
+  }
+
+  function closeSse(): void {
+    if (sse) {
+      sse.close();
+      sse = null;
+    }
+  }
+
+  async function bootstrap(params: BoardRuntimeSessionBootstrapParams = {}): Promise<BoardState | null> {
+    const boardId = String(params.boardId || currentBoardId || 'default');
+    currentBoardId = boardId;
+    const paths = boardPaths(boardId);
+    currentPaths = paths;
+
+    if (params.initialState !== undefined) {
+      seedState(params.initialState ?? null);
+    } else if (params.initialPayload !== undefined) {
+      seedStateFromPayload(params.initialPayload, stateRef.current);
+    }
+
+    if (params.skipInitBoard !== true) {
+      const taskExecutorPath = typeof params.taskExecutorPath === 'string' ? params.taskExecutorPath.trim() : '';
+      const initBoardPath = taskExecutorPath
+        ? `${paths.initBoard}?taskExecutorPath=${encodeURIComponent(taskExecutorPath)}`
+        : paths.initBoard;
+      const initBoardRes = await fetchServer(initBoardPath);
+      if (!initBoardRes.ok) throw new Error(`Server init-board failed (${initBoardRes.status}).`);
+    }
+
+    const origin = getServerOrigin();
+    if (!origin) throw new Error('Server origin not resolved before SSE start');
+
+    closeSse();
+
+    const waitForInitialPayload = !stateRef.current;
+    const streamUrl = `${origin}${paths.stream}${paths.stream.includes('?') ? '&' : '?'}clientId=${encodeURIComponent(sseClientId)}`;
+
+    const initialPayload = await new Promise<unknown | null>((resolve, reject) => {
+      const sseConn = new EventSource(streamUrl);
+      sse = sseConn;
+      let gotInitialPayload = false;
+      const timeout = waitForInitialPayload
+        ? setTimeout(() => {
+            if (!gotInitialPayload) reject(new Error('SSE initial payload timeout (15s)'));
+          }, 15_000)
+        : null;
+
+      sseConn.onopen = () => {
+        resubscribeActiveChats(paths);
+        if (!waitForInitialPayload) resolve(stateRef.current?.payload ?? null);
+      };
+
+      sseConn.onmessage = (evt) => {
+        try {
+          const update = JSON.parse(evt.data || '{}');
+          handleIncomingUpdate(update);
+          if (!gotInitialPayload && waitForInitialPayload && (update?.cardDefinitions || selectAllLiveCardModels(update))) {
+            gotInitialPayload = true;
+            if (timeout) clearTimeout(timeout);
+            resolve(update);
+          }
+        } catch {
+          if (!waitForInitialPayload) return;
+        }
+      };
+
+      sseConn.onerror = () => {
+        if (waitForInitialPayload && !gotInitialPayload) {
+          if (timeout) clearTimeout(timeout);
+          reject(new Error('SSE connection failed during bootstrap'));
+        }
+      };
+    });
+
+    if (waitForInitialPayload) {
+      if (!selectAllLiveCardModels(initialPayload as BoardRuntimeArtifactsPayload)) {
+        throw new Error('SSE payload missing published runtime artifacts');
+      }
+      replacePayload(initialPayload);
+    }
+
+    return stateRef.current;
+  }
+
+  function subscribe(listener: (state: BoardState | null) => void): () => void {
+    listeners.add(listener);
+    listener(stateRef.current);
+    return () => { listeners.delete(listener); };
+  }
+
+  function dispose(): void {
+    closeSse();
+    Object.keys(activeChatSubscriptions).forEach((cardId) => delete activeChatSubscriptions[cardId]);
+    currentPaths = null;
+    currentBoardId = null;
+    listeners.clear();
+    stateRef.current = null;
+  }
+
+  return {
+    bootstrap,
+    attachProvidedState,
+    applyServerUpdate,
+    seedStateFromPayload,
+    seedState,
+    applyNotificationBatch,
+    replacePayload,
+    subscribe,
+    closeSse,
+    isConnected: () => sse != null,
+    getState: () => stateRef.current,
+    getPayload: getFullPayload,
+    getBoardId: () => currentBoardId,
+    getClientId: () => sseClientId,
+    getSseClientId: () => sseClientId,
+    patchCardState: patchCardStateForSession,
+    dispatchCardAction: dispatchCardActionForSession,
+    uploadCardFile: uploadCardFileForSession,
+    subscribeCardChats,
+    unsubscribeCardChats,
+    dispose,
+  };
+}
+
+export function createDerivedBoardRuntime(options: DerivedBoardRuntimeOptions): DerivedBoardRuntime {
+  if (!options || typeof options !== 'object') throw new Error('options are required');
+  if (!options.session) throw new Error('options.session is required');
+
+  const { session, ...deriveOptions } = options;
+  const canvas = (options.session && 'canvas' in options && typeof (options as { canvas?: unknown }).canvas === 'object')
+    ? (options as { canvas?: { height?: string; overflow?: string } }).canvas
+    : { height: '72vh', overflow: 'auto' };
+
+  let derivedState = session.getState()
+    ? deriveBoardState(session.getState() as BoardState, deriveOptions)
+    : null;
+  let board: { setState: (fn: (prev: BoardState) => BoardState) => void; core?: unknown; engine?: unknown } | null = null;
+  let currentMode = String((options as { initialMode?: string }).initialMode || 'board');
+  const listeners = new Set<(state: BoardState | null) => void>();
+
+  function emitState(): void {
+    for (const listener of listeners) listener(derivedState);
+  }
+
+  function recompute(sourceState: BoardState | null): void {
+    derivedState = sourceState ? deriveBoardState(sourceState, deriveOptions) : null;
+    emitState();
+    if (board && derivedState) {
+      board.setState(() => derivedState as BoardState);
+      notifyBoardEngine(board);
+    }
+  }
+
+  const unsubscribeSession = session.subscribe((sourceState) => {
+    recompute(sourceState);
+  });
+
+  function mountBoard(params: MountBoardViewParams): unknown {
+    if (!derivedState) throw new Error('Derived board runtime has no state to mount');
+    const rootEl = params?.rootElement;
+    if (!rootEl) throw new Error('mountBoard requires params.rootElement');
+    currentMode = String(params?.mode || currentMode || 'board');
+
+    const LiveCard = loadLiveCardGlobal();
+    const engine = LiveCard.init({
+      resolve: (id: string) => derivedState?.modelsById[id],
+      chartLib:  (globalThis as { Chart?: unknown }).Chart  ?? null,
+      markdown:  (globalThis as { marked?: { parse: (t: string) => string } }).marked
+        ? (text: string) => (globalThis as unknown as { marked: { parse: (t: string) => string } }).marked.parse(text)
+        : null,
+      sanitize:  (globalThis as { DOMPurify?: { sanitize: (h: string) => string } }).DOMPurify
+        ? (html: string) => (globalThis as unknown as { DOMPurify: { sanitize: (h: string) => string } }).DOMPurify.sanitize(html)
+        : null,
+      onPatchState: (id: string, patch: Record<string, unknown>) => session.patchCardState(id, patch),
+      onRefresh: (id: string) => session.patchCardState(id, {}),
+      onAction: (id: string, actionType: string, actionPayload: Record<string, unknown> | null) =>
+        session.dispatchCardAction(id, actionType, actionPayload).then(() => undefined),
+      startReceivingChats: (id: string) => { void session.subscribeCardChats(id); },
+      stopReceivingChats: (id: string) => { void session.unsubscribeCardChats(id); },
+    });
+
+    rootEl.innerHTML = '';
+    board = LiveCard.Board(engine, rootEl, {
+      initialState: derivedState,
+      getNodeIds: (s: BoardState) => s.cardIds,
+      selectNode: (s: BoardState, id: string) => s.modelsById[id],
+      mode: currentMode,
+      canvas,
+    });
+    return board;
+  }
+
+  function subscribe(listener: (state: BoardState | null) => void): () => void {
+    listeners.add(listener);
+    listener(derivedState);
+    return () => { listeners.delete(listener); };
+  }
+
+  function setMode(mode: string): void {
+    currentMode = String(mode || 'board');
+    const core = board && (board as { core?: { setMode?: (m: string) => void } }).core;
+    if (core && typeof core.setMode === 'function') core.setMode(currentMode);
+  }
+
+  function autoLayout(): void {
+    if (!board) return;
+    currentMode = 'canvas';
+    const core = (board as { core?: { setMode?: (m: string) => void; autoLayout?: () => void } }).core;
+    if (core && typeof core.setMode === 'function') core.setMode('canvas');
+    if (core && typeof core.autoLayout === 'function') core.autoLayout();
+  }
+
+  function setDevMode(enabled: boolean): void {
+    const core = board && (board as { core?: { setDevMode?: (e: boolean) => void } }).core;
+    if (core && typeof core.setDevMode === 'function') core.setDevMode(Boolean(enabled));
+  }
+
+  function dispose(): void {
+    unsubscribeSession();
+    listeners.clear();
+    board = null;
+  }
+
+  return {
+    mountBoard,
+    subscribe,
+    getState: () => derivedState,
+    getFullState: () => session.getState(),
+    getBoardId: () => session.getBoardId(),
+    getClientId: () => session.getClientId(),
+    getSseClientId: () => session.getSseClientId(),
+    patchCardState: (cardId, patch) => session.patchCardState(cardId, patch),
+    dispatchCardAction: (cardId, actionType, payload) => session.dispatchCardAction(cardId, actionType, payload),
+    uploadCardFile: (cardId, file, opts) => session.uploadCardFile(cardId, file, opts),
+    subscribeCardChats: (cardId) => session.subscribeCardChats(cardId),
+    unsubscribeCardChats: (cardId) => session.unsubscribeCardChats(cardId),
+    setMode,
+    autoLayout,
+    setDevMode,
+    getCurrentMode: () => currentMode,
+    dispose,
+  };
+}
+
 export interface BoardRuntimeClient {
   /** Bootstrap the board: init-board → bootstrap-cards → LiveCard.Board + SSE. */
   bootstrapBoard(params: BootstrapBoardParams): Promise<unknown>;
@@ -282,6 +783,9 @@ export interface BoardRuntimeClient {
   autoLayout(): void;
   setDevMode(enabled: boolean): void;
   getCurrentMode(): string;
+  getState(): BoardState | null;
+  getRuntimeSession(): BoardRuntimeSession;
+  createDerivedRuntime(options?: Omit<DerivedBoardRuntimeOptions, 'session'>): DerivedBoardRuntime;
 }
 
 // ============================================================================
@@ -289,337 +793,30 @@ export interface BoardRuntimeClient {
 // ============================================================================
 
 export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): BoardRuntimeClient {
-  if (!options || typeof options !== 'object') throw new Error('options are required');
+  const session = createBoardRuntimeSession(options);
+  const derived = createDerivedBoardRuntime({ session });
 
-  const { fetchServer, boardPaths, getServerOrigin } = options;
-  if (typeof fetchServer !== 'function') throw new Error('options.fetchServer is required');
-  if (typeof boardPaths !== 'function') throw new Error('options.boardPaths is required');
-  if (typeof getServerOrigin !== 'function') throw new Error('options.getServerOrigin is required');
-
-  const canvas = (options.canvas && typeof options.canvas === 'object')
-    ? options.canvas
-    : { height: '72vh', overflow: 'auto' };
-
-  // Reactive state — single source of truth
-  const stateRef: { current: BoardState | null } = { current: null };
-  let board: { setState: (fn: (prev: BoardState) => BoardState) => void; core?: unknown; engine?: unknown } | null = null;
-  let sse: EventSource | null = null;
-  let currentMode = String(options.initialMode || 'board');
-
-  const _activeChatSubscriptions: Record<string, true> = {};
-  const sseClientId = (
-    globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
-      ? globalThis.crypto.randomUUID()
-      : `lc-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  );
-  let _currentPaths: BoardPaths | null = null;
-
-  function getFullPayload() {
-    return stateRef.current ? stateRef.current.payload : null;
-  }
-
-  function _normalizeChatMessages(raw: Array<{ role?: string; text?: string; files?: unknown[] }>) {
-    return (Array.isArray(raw) ? raw : []).map((m) => ({
-      role: typeof m?.role === 'string' ? m.role : 'system',
-      text: typeof m?.text === 'string' ? m.text : '',
-      files: Array.isArray(m?.files) ? m.files : [],
-    }));
-  }
-
-  function _applyCardChatsUpdate(cardId: string, messages: unknown[], receiving: boolean) {
-    if (!board || !stateRef.current) return;
-    board.setState((prev: BoardState) => {
-      const next = applyNotification(
-        prev,
-        [{ kind: 'card_chats', cardId, messages, receiving }],
-        selectLiveCardModel as Parameters<typeof applyNotification>[2],
-        getFullPayload,
-      );
-      stateRef.current = next;
-      return next;
-    });
-    const eng = board && (board as { engine?: { onServerSseEvent?: () => void } }).engine;
-    if (eng && typeof (eng as { onServerSseEvent?: () => void }).onServerSseEvent === 'function') {
-      (eng as { onServerSseEvent: () => void }).onServerSseEvent();
-    }
-  }
-
-  async function _subscribeChatSse(cardId: string, paths: BoardPaths) {
-    _activeChatSubscriptions[cardId] = true;
-    _applyCardChatsUpdate(cardId, stateRef.current?.modelsById[cardId]?.card_chats?.messages ?? [], true);
-    try {
-      await fetchServer(paths.chatSubscribeSse(cardId), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId: sseClientId }),
-      });
-    } catch { /* ignore subscribe errors; reconnect path retries */ }
-  }
-
-  async function _unsubscribeChatSse(cardId: string, paths: BoardPaths) {
-    delete _activeChatSubscriptions[cardId];
-    try {
-      await fetchServer(paths.chatUnsubscribeSse(cardId), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId: sseClientId }),
-      });
-    } catch { /* ignore unsubscribe errors */ }
-  }
-
-  function _resubscribeActiveChats(paths: BoardPaths) {
-    Object.keys(_activeChatSubscriptions).forEach((cardId) => {
-      void fetchServer(paths.chatSubscribeSse(cardId), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId: sseClientId }),
-      }).catch(() => { /* ignore re-subscribe errors */ });
-    });
-  }
-
-  // ── File upload helpers ───────────────────────────────────────────────────
-
-  async function uploadCardFile(
-    boardId: string,
-    cardId: string,
-    file: File,
-    opts?: { inChat?: boolean },
-  ): Promise<unknown | null> {
-    if (!file) return null;
-    const inChat = opts?.inChat === true;
-    const fileName = typeof file.name === 'string' ? file.name : 'upload.bin';
-    const contentType = file.type || 'application/octet-stream';
-    const paths = boardPaths(boardId);
-    const uploadPath = inChat
-      ? `${paths.cardFile(cardId)}?inChat=true`
-      : paths.cardFile(cardId);
-
-    const upload = await fetchServer(uploadPath, {
-      method: 'POST',
-      headers: {
-        'content-type': contentType,
-        'x-file-name': encodeURIComponent(fileName),
-      },
-      body: file,
-    });
-
-    if (!upload.ok) {
-      const errText = await upload.text();
-      throw new Error(`Upload failed (${upload.status}): ${errText || 'unknown error'}`);
-    }
-
-    const payload = await upload.json() as { file?: unknown };
-    return payload?.file ?? null;
-  }
-
-  async function uploadActionFiles(
-    boardId: string,
-    cardId: string,
-    actionType: string,
-    payload: Record<string, unknown> | null,
-  ): Promise<Record<string, unknown>> {
-    if (actionType !== 'chat-send' && actionType !== 'file-upload') return payload || {};
-    const nextPayload: Record<string, unknown> = { ...(payload || {}) };
-    const rawFiles = Array.isArray(nextPayload.files) ? nextPayload.files as File[] : [];
-    if (!rawFiles.length) {
-      nextPayload.files = [];
-      return nextPayload;
-    }
-
-    const uploaded: unknown[] = [];
-    for (const file of rawFiles) {
-      const fileMeta = await uploadCardFile(boardId, cardId, file, { inChat: actionType === 'chat-send' });
-      if (fileMeta) uploaded.push(fileMeta);
-    }
-
-    // For chat uploads, server-side file API already records metadata and emits system chat logs.
-    nextPayload.files = actionType === 'chat-send' ? [] : uploaded;
-    return nextPayload;
-  }
-
-  // ── bootstrapBoard ────────────────────────────────────────────────────────
-
-  async function bootstrapBoard(params: BootstrapBoardParams): Promise<unknown> {
+  async function wrappedBootstrapBoard(params: BootstrapBoardParams): Promise<unknown> {
     const boardId = String(params?.boardId || 'default');
-    const taskExecutorPath = typeof params?.taskExecutorPath === 'string' ? params.taskExecutorPath.trim() : '';
-    const mode = String(params?.mode || currentMode || 'board');
-    const rootEl = params?.rootElement;
-    if (!rootEl) throw new Error('bootstrapBoard requires params.rootElement');
-
-    const paths = boardPaths(boardId);
-    _currentPaths = paths;
-
-    const initBoardPath = taskExecutorPath
-      ? `${paths.initBoard}?taskExecutorPath=${encodeURIComponent(taskExecutorPath)}`
-      : paths.initBoard;
-    const initBoardRes = await fetchServer(initBoardPath);
-    if (!initBoardRes.ok) throw new Error(`Server init-board failed (${initBoardRes.status}).`);
-
-    const origin = getServerOrigin();
-    if (!origin) throw new Error('Server origin not resolved before SSE start');
-
-    // Open SSE first and wait for the initial full-payload frame.
-    // The /sse endpoint calls bootstrapBoard() server-side, publishes the
-    // persisted state snapshot via the notification channel, then sends the
-    // full runtime payload as the first SSE frame.
-    const initialPayload = await new Promise<unknown>((resolve, reject) => {
-      const streamUrl = `${origin}${paths.stream}${paths.stream.includes('?') ? '&' : '?'}clientId=${encodeURIComponent(sseClientId)}`;
-      const sseConn = new EventSource(streamUrl);
-      sse = sseConn;
-      let gotInitialPayload = false;
-      const timeout = setTimeout(() => {
-        if (!gotInitialPayload) reject(new Error('SSE initial payload timeout (15s)'));
-      }, 15_000);
-      sseConn.onmessage = (evt) => {
-        try {
-          const update = JSON.parse(evt.data || '{}');
-          if (!gotInitialPayload && (update?.cardDefinitions || selectAllLiveCardModels(update))) {
-            gotInitialPayload = true;
-            clearTimeout(timeout);
-            resolve(update);
-          }
-        } catch { /* wait for valid frame */ }
-      };
-      sseConn.onerror = () => {
-        if (!gotInitialPayload) {
-          clearTimeout(timeout);
-          reject(new Error('SSE connection failed during bootstrap'));
-        }
-      };
+    await session.bootstrap({
+      boardId,
+      taskExecutorPath: params?.taskExecutorPath,
     });
-
-    if (!selectAllLiveCardModels(initialPayload as BoardRuntimeArtifactsPayload)) throw new Error('SSE payload missing published runtime artifacts');
-
-    // Build initial reactive state using bundled selectLiveCardModel
-    stateRef.current = buildBoardState(initialPayload, null, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
-
-    const LiveCard = (globalThis as unknown as { LiveCard?: { init: (opts: unknown) => unknown; Board: (engine: unknown, el: HTMLElement, opts: unknown) => typeof board } }).LiveCard;
-    if (!LiveCard) throw new Error('LiveCard global not loaded — include live-cards.js before this script');
-
-    const engine = LiveCard.init({
-      resolve: (id: string) => stateRef.current?.modelsById[id],
-      chartLib:  (globalThis as { Chart?: unknown }).Chart  ?? null,
-      markdown:  (globalThis as { marked?: { parse: (t: string) => string } }).marked
-        ? (text: string) => (globalThis as unknown as { marked: { parse: (t: string) => string } }).marked.parse(text)
-        : null,
-      sanitize:  (globalThis as { DOMPurify?: { sanitize: (h: string) => string } }).DOMPurify
-        ? (html: string) => (globalThis as unknown as { DOMPurify: { sanitize: (h: string) => string } }).DOMPurify.sanitize(html)
-        : null,
-      onPatchState: async (id: string, patch: Record<string, unknown>) => {
-        await fetchServer(paths.patchCard(id), {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(patch || {}),
-        });
-      },
-      onRefresh: async (id: string) => {
-        await fetchServer(paths.patchCard(id), {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-      },
-      onAction: async (id: string, actionType: string, actionPayload: Record<string, unknown> | null) => {
-        const uploadedPayload = await uploadActionFiles(boardId, id, actionType, actionPayload);
-        await fetchServer(paths.cardAction(id), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ actionType, payload: uploadedPayload || {} }),
-        });
-      },
-      startReceivingChats: (id: string) => { void _subscribeChatSse(id, paths); },
-      stopReceivingChats:  (id: string) => {
-        void _unsubscribeChatSse(id, paths);
-        _applyCardChatsUpdate(id, stateRef.current?.modelsById[id]?.card_chats?.messages ?? [], false);
-      },
-    });
-
-    rootEl.innerHTML = '';
-    board = LiveCard.Board(engine, rootEl, {
-      initialState: stateRef.current,
-      getNodeIds: (s: BoardState) => s.cardIds,
-      selectNode:  (s: BoardState, id: string) => s.modelsById[id],
-      mode,
-      canvas,
-    });
-    currentMode = mode;
-
-    // Wire up the ongoing SSE message handler on the already-open connection.
-    sse!.onopen = () => {
-      _resubscribeActiveChats(paths);
-    };
-    sse!.onmessage = (evt) => {
-      try {
-        const update = JSON.parse(evt.data || '{}') as {
-          kind?: string;
-          notifications?: Array<{ kind: string; [k: string]: unknown }>;
-          cardDefinitions?: unknown[];
-          engine?: { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void };
-        };
-
-        if (update?.kind === 'notification-batch' && Array.isArray(update.notifications)) {
-          if (board) {
-            board.setState((prev: BoardState) => {
-              const next = applyNotification(
-                prev,
-                update.notifications!,
-                selectLiveCardModel as Parameters<typeof applyNotification>[2],
-                getFullPayload,
-              );
-              stateRef.current = next;
-              return next;
-            });
-          }
-        } else if (update?.cardDefinitions) {
-          const next = buildBoardState(update, stateRef.current, selectLiveCardModel as Parameters<typeof buildBoardState>[2]);
-          stateRef.current = next;
-          if (board) board.setState(() => next);
-        }
-
-        const eng = board && (board as { engine?: { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void } }).engine;
-        if (eng && typeof eng.onServerSseEvent === 'function') {
-          eng.onServerSseEvent();
-        } else if (eng && typeof eng.refreshOpenChatModal === 'function') {
-          eng.refreshOpenChatModal();
-        }
-      } catch (err) {
-        console.warn('Bad SSE payload', err);
-      }
-    };
-
-    return board;
+    return derived.mountBoard({ rootElement: params.rootElement, mode: params.mode });
   }
 
-  // ── Control methods ───────────────────────────────────────────────────────
-
-  function dispose() {
-    if (sse) { sse.close(); sse = null; }
-    Object.keys(_activeChatSubscriptions).forEach((cardId) => delete _activeChatSubscriptions[cardId]);
-    board = null;
-    stateRef.current = null;
-    _currentPaths = null;
-  }
-
-  function setMode(mode: string) {
-    currentMode = String(mode || 'board');
-    const core = board && (board as { core?: { setMode?: (m: string) => void } }).core;
-    if (core && typeof core.setMode === 'function') core.setMode(currentMode);
-  }
-
-  function autoLayout() {
-    if (!board) return;
-    currentMode = 'canvas';
-    const core = (board as { core?: { setMode?: (m: string) => void; autoLayout?: () => void } }).core;
-    if (core && typeof core.setMode === 'function') core.setMode('canvas');
-    if (core && typeof core.autoLayout === 'function') core.autoLayout();
-  }
-
-  function setDevMode(enabled: boolean) {
-    const core = board && (board as { core?: { setDevMode?: (e: boolean) => void } }).core;
-    if (core && typeof core.setDevMode === 'function') core.setDevMode(Boolean(enabled));
-  }
-
-  function getCurrentMode() { return currentMode; }
-
-  return { bootstrapBoard, dispose, setMode, autoLayout, setDevMode, getCurrentMode };
+  return {
+    bootstrapBoard: wrappedBootstrapBoard,
+    dispose: () => {
+      derived.dispose();
+      session.dispose();
+    },
+    setMode: (mode: string) => derived.setMode(mode),
+    autoLayout: () => derived.autoLayout(),
+    setDevMode: (enabled: boolean) => derived.setDevMode(enabled),
+    getCurrentMode: () => derived.getCurrentMode(),
+    getState: () => session.getState(),
+    getRuntimeSession: () => session,
+    createDerivedRuntime: (runtimeOptions = {}) => createDerivedBoardRuntime({ session, ...runtimeOptions }),
+  };
 }

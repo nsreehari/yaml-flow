@@ -10,6 +10,12 @@ import {
   deriveBoardState as deriveBoardStateSource,
 } from '../../src/cli/common/board-state-reducer.js';
 import {
+  applyBoardNotifications as applyBoardNotificationsSource,
+  createBoardRuntimeSession as createBoardRuntimeSessionSource,
+  createDerivedBoardRuntime as createDerivedBoardRuntimeSource,
+  serverPayloadToBoardState as serverPayloadToBoardStateSource,
+} from '../../src/board-livecards-client/index.js';
+import {
   selectAllLiveCardModels as selectAllLiveCardModelsSource,
   selectLiveCardModel as selectLiveCardModelSource,
   type BoardRuntimeArtifactsPayload,
@@ -18,9 +24,13 @@ import {
 type BrowserBoardLiveCardsClientApi = {
   buildBoardState: typeof buildBoardStateSource;
   applyNotification: typeof applyNotificationSource;
+  applyBoardNotifications: typeof applyBoardNotificationsSource;
   deriveBoardState: typeof deriveBoardStateSource;
+  serverPayloadToBoardState: typeof serverPayloadToBoardStateSource;
   selectLiveCardModel: typeof selectLiveCardModelSource;
   selectAllLiveCardModels: typeof selectAllLiveCardModelsSource;
+  createBoardRuntimeSession: typeof createBoardRuntimeSessionSource;
+  createDerivedBoardRuntime: typeof createDerivedBoardRuntimeSource;
   createBoardRuntimeClient: (options: Record<string, unknown>) => unknown;
 };
 
@@ -79,9 +89,13 @@ describe('board-livecards-client parity', () => {
   it('exports the supported public client surface', () => {
     const api = loadBrowserClient();
     expect(typeof api.createBoardRuntimeClient).toBe('function');
+    expect(typeof api.createBoardRuntimeSession).toBe('function');
+    expect(typeof api.createDerivedBoardRuntime).toBe('function');
     expect(typeof api.buildBoardState).toBe('function');
     expect(typeof api.applyNotification).toBe('function');
+    expect(typeof api.applyBoardNotifications).toBe('function');
     expect(typeof api.deriveBoardState).toBe('function');
+    expect(typeof api.serverPayloadToBoardState).toBe('function');
     expect(typeof api.selectLiveCardModel).toBe('function');
     expect(typeof api.selectAllLiveCardModels).toBe('function');
   });
@@ -98,10 +112,13 @@ describe('board-livecards-client parity', () => {
 
   it('keeps browser and source board-state reducer behavior in sync', () => {
     const api = loadBrowserClient();
-    const serverState = buildBoardStateSource(PAYLOAD, null, selectLiveCardModelSource);
-    const browserState = api.buildBoardState(PAYLOAD, null, api.selectLiveCardModel);
+    const selectSource = selectLiveCardModelSource as Parameters<typeof buildBoardStateSource>[2];
+    const selectBrowser = api.selectLiveCardModel as Parameters<typeof api.buildBoardState>[2];
+    const serverState = buildBoardStateSource(PAYLOAD, null, selectSource);
+    const browserState = api.buildBoardState(PAYLOAD, null, selectBrowser);
 
     expect(browserState).toEqual(serverState);
+    expect(api.serverPayloadToBoardState(PAYLOAD)).toEqual(serverPayloadToBoardStateSource(PAYLOAD));
 
     const notifications = [
       { kind: 'computed_values', cardId: 'card-a', values: { score: 101 } },
@@ -122,16 +139,24 @@ describe('board-livecards-client parity', () => {
     ];
 
     expect(
-      api.applyNotification(browserState, notifications, api.selectLiveCardModel, () => PAYLOAD),
+      api.applyNotification(browserState, notifications, selectBrowser, () => PAYLOAD),
     ).toEqual(
-      applyNotificationSource(serverState, notifications, selectLiveCardModelSource, () => PAYLOAD),
+      applyNotificationSource(serverState, notifications, selectSource, () => PAYLOAD),
+    );
+
+    expect(
+      api.applyBoardNotifications(browserState, notifications, () => PAYLOAD),
+    ).toEqual(
+      applyBoardNotificationsSource(serverState, notifications, () => PAYLOAD),
     );
   });
 
   it('keeps browser and source derived board view behavior in sync', () => {
     const api = loadBrowserClient();
-    const serverState = buildBoardStateSource(PAYLOAD, null, selectLiveCardModelSource);
-    const browserState = api.buildBoardState(PAYLOAD, null, api.selectLiveCardModel);
+    const selectSource = selectLiveCardModelSource as Parameters<typeof buildBoardStateSource>[2];
+    const selectBrowser = api.selectLiveCardModel as Parameters<typeof api.buildBoardState>[2];
+    const serverState = buildBoardStateSource(PAYLOAD, null, selectSource);
+    const browserState = api.buildBoardState(PAYLOAD, null, selectBrowser);
 
     const sourceDerived = deriveBoardStateSource(serverState, {
       includeCard: (model) => model.id === 'card-a',

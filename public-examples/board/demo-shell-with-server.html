@@ -14,6 +14,24 @@
     .lc-result p  { font-size: 0.8rem; margin: 0 0 0.25rem; }
     .lc-result ul, .lc-result ol { font-size: 0.8rem; margin: 0 0 0.25rem; padding-left: 1.2rem; }
     .lc-result li { margin-bottom: 0.15rem; }
+    .demo-docs pre {
+      background: #0f172a;
+      border-radius: 0.75rem;
+      color: #e2e8f0;
+      font-size: 0.8rem;
+      margin: 0;
+      overflow-x: auto;
+      padding: 0.9rem 1rem;
+      white-space: pre-wrap;
+    }
+    .demo-docs code {
+      color: inherit;
+      font-size: inherit;
+    }
+    .demo-docs .list-inline-item {
+      margin-right: 0.35rem;
+      margin-bottom: 0.35rem;
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -54,6 +72,153 @@
       Source execution and event processing happen on the server side.
     </div>
 
+    <div class="card shadow-sm border-0 mb-3 demo-docs">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between gap-3 mb-3">
+          <div>
+            <h2 class="h6 mb-1">Advanced Composition Model</h2>
+            <p class="small text-muted mb-0">
+              This demo still mounts the full board, but the same client now exposes the shared runtime session
+              needed for filtered or projected live views. Host applications do not need to reimplement SSE,
+              client identity, notification reduction, or card chat subscribe or unsubscribe.
+            </p>
+          </div>
+          <div class="small text-muted text-end">
+            <div><strong>Active board:</strong> <span id="docActiveBoard">default</span></div>
+            <div><strong>Shared client id:</strong> <span id="docClientId">pending</span></div>
+            <div><strong>Session state:</strong> <span id="docSessionState">not connected</span></div>
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-lg-4">
+            <div class="border rounded-3 p-3 h-100 bg-white">
+              <h3 class="h6 mb-2">What is public now</h3>
+              <ul class="list-inline small mb-0">
+                <li class="list-inline-item badge text-bg-light">createBoardRuntimeSession()</li>
+                <li class="list-inline-item badge text-bg-light">createDerivedBoardRuntime()</li>
+                <li class="list-inline-item badge text-bg-light">applyBoardNotifications()</li>
+                <li class="list-inline-item badge text-bg-light">serverPayloadToBoardState()</li>
+                <li class="list-inline-item badge text-bg-light">pickBoardState()</li>
+                <li class="list-inline-item badge text-bg-light">subtractBoardState()</li>
+                <li class="list-inline-item badge text-bg-light">deriveBoardState()</li>
+                <li class="list-inline-item badge text-bg-light">session.attachProvidedState()</li>
+                <li class="list-inline-item badge text-bg-light">session.subscribeCardChats()</li>
+                <li class="list-inline-item badge text-bg-light">session.unsubscribeCardChats()</li>
+              </ul>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="border rounded-3 p-3 h-100 bg-white">
+              <h3 class="h6 mb-2">Recommended shape</h3>
+              <ol class="small mb-0 ps-3">
+                <li>Create one shared runtime session per logical board.</li>
+                <li>Mount the full board or any number of derived views from that same session.</li>
+                <li>Reuse the shared client id for all chat subscribe or unsubscribe calls.</li>
+                <li>Use the public reducer helpers instead of mutating projected state by hand.</li>
+              </ol>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="border rounded-3 p-3 h-100 bg-white">
+              <h3 class="h6 mb-2">When to use this</h3>
+              <ul class="small mb-0 ps-3">
+                <li>split views over one board</li>
+                <li>plugin or secondary mounts</li>
+                <li>filtered card subsets</li>
+                <li>provided-state boot with live SSE attached afterward</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-xl-4">
+            <div class="border rounded-3 overflow-hidden bg-white h-100">
+              <div class="px-3 py-2 border-bottom small fw-semibold">1. Share one session</div>
+              <pre><code>const client = BoardLiveCardsClient.createBoardRuntimeClient({
+  fetchServer,
+  boardPaths,
+  getServerOrigin,
+});
+
+await client.bootstrapBoard({
+  boardId: 'default',
+  rootElement: boardRoot,
+});
+
+const session = client.getRuntimeSession();</code></pre>
+            </div>
+          </div>
+          <div class="col-xl-4">
+            <div class="border rounded-3 overflow-hidden bg-white h-100">
+              <div class="px-3 py-2 border-bottom small fw-semibold">2. Mount derived live views</div>
+              <pre><code>const alertsView = client.createDerivedRuntime({
+  includeCard: (model) =&gt; model.id.startsWith('alert-'),
+});
+
+alertsView.mountBoard({
+  rootElement: alertsRoot,
+  mode: 'board',
+});
+
+// shares SSE + chat session with the main board</code></pre>
+            </div>
+          </div>
+          <div class="col-xl-4">
+            <div class="border rounded-3 overflow-hidden bg-white h-100">
+              <div class="px-3 py-2 border-bottom small fw-semibold">3. Start from provided state</div>
+              <pre><code>const session = BoardLiveCardsClient.createBoardRuntimeSession({
+  fetchServer,
+  boardPaths,
+  getServerOrigin,
+});
+
+session.attachProvidedState({ boardId, payload });
+await session.bootstrap({ boardId, skipInitBoard: true });
+
+const view = BoardLiveCardsClient.createDerivedBoardRuntime({
+  session,
+  includeCard: (model) =&gt; model.id !== 'hidden-card',
+});</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-xl-6">
+            <div class="border rounded-3 overflow-hidden bg-white h-100">
+              <div class="px-3 py-2 border-bottom small fw-semibold">Reducer helpers for host-managed state</div>
+              <pre><code>const state = BoardLiveCardsClient.serverPayloadToBoardState(payload);
+
+const nextState = BoardLiveCardsClient.applyBoardNotifications(
+  state,
+  notifications,
+  () =&gt; payload,
+);
+
+const leftPane = BoardLiveCardsClient.pickBoardState(nextState, ['card-a']);
+const rightPane = BoardLiveCardsClient.subtractBoardState(nextState, ['card-a']);</code></pre>
+            </div>
+          </div>
+          <div class="col-xl-6">
+            <div class="border rounded-3 overflow-hidden bg-white h-100">
+              <div class="px-3 py-2 border-bottom small fw-semibold">Chat lifecycle stays with the session</div>
+              <pre><code>const session = client.getRuntimeSession();
+
+await session.subscribeCardChats(cardId);
+await session.unsubscribeCardChats(cardId);
+
+// same shared client id is reused automatically
+console.log(session.getClientId());
+
+// incoming notifications keep mounted chat UIs synchronized</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="boardRoot">
       <div class="d-flex align-items-center justify-content-center" style="height: 72vh;">
         <div class="text-center">
@@ -79,6 +244,31 @@
       let bootstrapCompleted = false;
       let activeBoardId = 'default';
       let runtimeClient = null;
+
+      function refreshDocsRuntimeState() {
+        const boardEl = document.getElementById('docActiveBoard');
+        const clientIdEl = document.getElementById('docClientId');
+        const sessionStateEl = document.getElementById('docSessionState');
+        const session = runtimeClient && typeof runtimeClient.getRuntimeSession === 'function'
+          ? runtimeClient.getRuntimeSession()
+          : null;
+
+        if (boardEl) boardEl.textContent = activeBoardId || 'default';
+        if (!session) {
+          if (clientIdEl) clientIdEl.textContent = 'unavailable';
+          if (sessionStateEl) sessionStateEl.textContent = 'not connected';
+          return;
+        }
+
+        if (clientIdEl) clientIdEl.textContent = session.getClientId();
+        if (sessionStateEl) {
+          const state = session.getState();
+          const status = session.isConnected()
+            ? `connected, ${Array.isArray(state && state.cardIds) ? state.cardIds.length : 0} cards in session state`
+            : 'not connected';
+          sessionStateEl.textContent = status;
+        }
+      }
 
       function boardPaths(boardId) {
         return defaultBoardPaths(boardId || activeBoardId || 'default');
@@ -162,6 +352,7 @@
         runtimeClient.dispose();
         bootstrapCompleted = false;
         activeBoardId = boardId;
+        refreshDocsRuntimeState();
         document.getElementById('boardRoot').innerHTML =
           '<div class="d-flex align-items-center justify-content-center" style="height:72vh">'
           + '<div class="text-center"><div class="spinner-border mb-3" role="status">'
@@ -187,6 +378,7 @@
         });
 
         bootstrapCompleted = true;
+        refreshDocsRuntimeState();
       }
 
       document.getElementById('modeBoard').addEventListener('click', function () {
@@ -256,6 +448,7 @@
       });
 
       loadBoardList().then(function () {
+        refreshDocsRuntimeState();
         return bootstrap(activeBoardId);
       }).catch(function (err) {
         console.error(err);
