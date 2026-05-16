@@ -454,6 +454,8 @@ var LiveCard = (function () {
       currentNodeId: null,
       stagedFiles: [],
       loading: false,
+      awaitingProcessingAck: false,
+      sendBtnIdleHtml: '',
     };
     const _filesModal = {
       backdrop: null,
@@ -523,6 +525,34 @@ var LiveCard = (function () {
       _chatModal.sendBtn = backdrop.querySelector('[data-lc-chat-send]');
       _chatModal.attachBtn = backdrop.querySelector('[data-lc-chat-attach]');
       _chatModal.closeBtn = backdrop.querySelector('[data-lc-chat-close]');
+      _chatModal.sendBtnIdleHtml = _chatModal.sendBtn ? _chatModal.sendBtn.innerHTML : '';
+
+      function _syncChatComposerState(nodeId) {
+        const activeNodeId = nodeId || _chatModal.currentNodeId;
+        const node = activeNodeId ? cfg.resolve(activeNodeId) : null;
+        const chatDisabled = !!(node && node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
+        const isProcessing = !!_chatStateFromCardState(node).processing;
+        if (_chatModal.input) {
+          _chatModal.input.disabled = chatDisabled;
+          _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
+        }
+        if (_chatModal.attachBtn) _chatModal.attachBtn.disabled = chatDisabled || isProcessing;
+        if (_chatModal.sendBtn) _chatModal.sendBtn.disabled = chatDisabled || isProcessing || !!_chatModal.loading || !!_chatModal.awaitingProcessingAck;
+      }
+
+      function _setChatSendButtonPending(pending) {
+        _chatModal.awaitingProcessingAck = !!pending;
+        if (!_chatModal.sendBtn) return;
+        if (pending) {
+          _chatModal.sendBtn.setAttribute('aria-label', 'Waiting for AI response');
+          _chatModal.sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+          _syncChatComposerState();
+          return;
+        }
+        _chatModal.sendBtn.innerHTML = _chatModal.sendBtnIdleHtml;
+        _chatModal.sendBtn.setAttribute('aria-label', 'Send');
+        _syncChatComposerState();
+      }
 
       function resizeChatInput() {
         if (!_chatModal.input) return;
@@ -536,6 +566,7 @@ var LiveCard = (function () {
         _chatModal.stagedFiles = [];
         _chatModal.staged.innerHTML = '';
         _chatModal.input.value = '';
+        _setChatSendButtonPending(false);
         resizeChatInput();
         _chatModal.backdrop.classList.remove('lc-open');
         // Lifecycle hook: stop receiving chats
@@ -568,8 +599,8 @@ var LiveCard = (function () {
         if (!text && !files.length) return;
 
         _chatModal.loading = true;
-        _chatModal.sendBtn.disabled = true;
-        _chatModal.attachBtn.disabled = true;
+        _syncChatComposerState(nodeId);
+        _setChatSendButtonPending(true);
 
         _appendPendingModalChatMessage(text);
 
@@ -581,12 +612,12 @@ var LiveCard = (function () {
         try {
           await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text, files }));
         } catch (err) {
+          _setChatSendButtonPending(false);
           _clearPendingModalChatMessages();
           _appendModalChatMessage('system', 'Failed to send message: ' + String((err && err.message) || err), []);
         } finally {
           _chatModal.loading = false;
-          _chatModal.sendBtn.disabled = false;
-          _chatModal.attachBtn.disabled = false;
+          _syncChatComposerState(nodeId);
         }
       }
 
@@ -611,6 +642,7 @@ var LiveCard = (function () {
       _chatModal.input.addEventListener('input', resizeChatInput);
       _chatModal.input.addEventListener('keydown', function (evt) {
         if (evt.key === 'Enter' && !evt.shiftKey) {
+          if (_chatModal.sendBtn && _chatModal.sendBtn.disabled) return;
           evt.preventDefault();
           sendMessage();
         }
@@ -735,6 +767,7 @@ var LiveCard = (function () {
       if (!_chatModal.body) return;
       const node = nodeId ? cfg.resolve(nodeId) : null;
       const isProcessing = !!_chatStateFromCardState(node).processing;
+      _syncChatComposerState(nodeId);
       let ind = _chatModal.body.querySelector('.lc-chat-processing');
       if (isProcessing) {
         if (!ind) {
@@ -761,12 +794,9 @@ var LiveCard = (function () {
 
       // Disable input controls when card_data.features.chat.disabled is true
       const chatDisabled = !!(node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
-      _chatModal.input.disabled = chatDisabled;
-      _chatModal.attachBtn.disabled = chatDisabled;
-      _chatModal.sendBtn.disabled = chatDisabled;
-      _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
+      _syncChatComposerState(nodeId);
 
-      if (!chatDisabled) _chatModal.input.focus();
+      if (!chatDisabled && !_chatModal.input.disabled) _chatModal.input.focus();
       // Lifecycle hook: start receiving chats (drives state-driven refresh via onServerSseEvent)
       if (typeof cfg.startReceivingChats === 'function') cfg.startReceivingChats(nodeId);
       await _refreshModalChatHistory(nodeId);
@@ -2527,6 +2557,9 @@ var LiveCard = (function () {
     function onServerSseEvent() {
       const nodeId = _chatModal.currentNodeId;
       if (!nodeId || !_chatModal.backdrop || !_chatModal.backdrop.classList.contains('lc-open')) return;
+      if (_chatModal.awaitingProcessingAck) {
+        _setChatSendButtonPending(false);
+      }
       _clearPendingModalChatMessages();
       _syncProcessingBar(nodeId);
       _refreshModalChatHistory(nodeId).catch(function () {});
