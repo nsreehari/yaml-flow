@@ -381,8 +381,17 @@ export function cardFetchedSourcesManifestKey(cardId: string): string {
   return `cards/${cardId}/fetched-sources-manifest`;
 }
 
+export type SourceCompletionStatus = 'success' | 'failure' | 'not-started';
+
+export interface SourceRuntimeEntry {
+  lastRequestedToken?: string;
+  lastCompletedToken?: string;
+  lastCompletionStatus?: SourceCompletionStatus;
+  queueRequestedToken?: string;
+}
+
 export interface CardRuntimeSnapshot {
-  _sources: Record<string, { lastRequestedAt?: string; lastFetchedAt?: string; queueRequestedAt?: string }>;
+  _sources: Record<string, SourceRuntimeEntry>;
   _lastExecutionCount?: number;
 }
 
@@ -613,13 +622,6 @@ export interface PublishedBoardStatusCache {
 // ---- from board-live-cards-lib-types.ts ----
 // ============================================================================
 
-export interface SourceRuntimeEntry {
-  lastRequestedAt?: string;
-  lastFetchedAt?: string;
-  lastError?: string;
-  queueRequestedAt?: string;
-}
-
 export type FetchRuntimeEntry = SourceRuntimeEntry;
 
 export interface SourceTokenPayload {
@@ -633,39 +635,54 @@ export interface SourceTokenPayload {
   rqt: string;
 }
 
+export function normalizeSourceRuntimeEntry(entry: SourceRuntimeEntry | undefined): SourceRuntimeEntry {
+  if (!entry) return { lastCompletionStatus: 'not-started' };
+  return {
+    lastRequestedToken: entry.lastRequestedToken,
+    lastCompletedToken: entry.lastCompletedToken,
+    lastCompletionStatus:
+      entry.lastCompletionStatus ?? (entry.lastCompletedToken ? 'success' : 'not-started'),
+    queueRequestedToken: entry.queueRequestedToken,
+  };
+}
+
 export function isSourceInFlight(entry: FetchRuntimeEntry | undefined): boolean {
-  if (!entry?.lastRequestedAt) return false;
-  return !entry.lastFetchedAt || entry.lastFetchedAt < entry.lastRequestedAt;
+  if (!entry?.lastRequestedToken) return false;
+  return entry.lastCompletedToken !== entry.lastRequestedToken;
 }
 
 export function decideSourceAction(
   entry: FetchRuntimeEntry | undefined,
-  queueRequestedAt: string,
+  queueRequestedToken: string,
 ): 'dispatch' | 'in-flight' | 'idle' {
-  if (!entry?.lastRequestedAt) return 'dispatch';
+  if (!entry?.lastRequestedToken) return 'dispatch';
   const inFlight = isSourceInFlight(entry);
   if (inFlight) return 'in-flight';
-  if (!entry.lastFetchedAt) return 'dispatch';
-  if (entry.lastFetchedAt < queueRequestedAt) return 'dispatch';
+  if (!entry.lastCompletedToken) return 'dispatch';
+  if (entry.lastCompletedToken < queueRequestedToken) return 'dispatch';
   return 'idle';
 }
 
 export function nextEntryAfterFetchDelivery<T extends FetchRuntimeEntry>(
   entry: T,
-  fetchedAt: string,
+  completionToken: string,
 ): T {
-  const next = { ...entry, lastFetchedAt: fetchedAt };
-  delete (next as FetchRuntimeEntry).lastError;
-  return next as T;
+  return {
+    ...entry,
+    lastCompletedToken: completionToken,
+    lastCompletionStatus: 'success' as const,
+  } as T;
 }
 
 export function nextEntryAfterFetchFailure<T extends FetchRuntimeEntry>(
   entry: T,
-  reason: string,
+  completionToken: string,
 ): T {
-  const next = { ...entry, lastError: reason };
-  delete (next as FetchRuntimeEntry).lastFetchedAt;
-  return next as T;
+  return {
+    ...entry,
+    lastCompletedToken: completionToken,
+    lastCompletionStatus: 'failure' as const,
+  } as T;
 }
 
 export interface CardHandlerAdapters {
@@ -937,9 +954,9 @@ export function createCardHandlerFn(
         };
 
         const getSourceEntry = (outputFile: string): SourceRuntimeEntry =>
-          ({ ...(state._sources[outputFile] ?? {}) });
+          normalizeSourceRuntimeEntry(state._sources[outputFile]);
         const setSourceEntry = (outputFile: string, entry: SourceRuntimeEntry): void => {
-          state._sources[outputFile] = entry; dirty = true;
+          state._sources[outputFile] = normalizeSourceRuntimeEntry(entry); dirty = true;
         };
 
         const currentExecutionCount = input.taskState?.executionCount ?? 0;
@@ -962,10 +979,16 @@ export function createCardHandlerFn(
           if (outputFile) {
             const entry = getSourceEntry(outputFile);
             if (u.failure) {
-              setSourceEntry(outputFile, nextEntryAfterFetchFailure(entry, (u.reason as string | undefined) ?? 'unknown'));
+              const failureToken = (u.rqt as string | undefined) ?? entry.lastRequestedToken ?? entry.queueRequestedToken;
+              if (failureToken) {
+                setSourceEntry(
+                  outputFile,
+                  nextEntryAfterFetchFailure(entry, failureToken),
+                );
+              }
             } else {
               const incomingRqt = u.rqt as string;
-              if (!entry.lastFetchedAt || incomingRqt > entry.lastFetchedAt) {
+              if (!entry.lastCompletedToken || incomingRqt > entry.lastCompletedToken) {
                 const deliveryToken = typeof u.deliveryToken === 'string' ? u.deliveryToken : undefined;
                 let committed = false;
                 if (deliveryToken) {
@@ -976,10 +999,7 @@ export function createCardHandlerFn(
                 } else {
                   setSourceEntry(
                     outputFile,
-                    nextEntryAfterFetchFailure(
-                      entry,
-                      `source delivery commit failed for ${outputFile} token=${String(deliveryToken)}`,
-                    ),
+                    nextEntryAfterFetchFailure(entry, incomingRqt),
                   );
                 }
               }
@@ -1040,17 +1060,17 @@ export function createCardHandlerFn(
           : enrichedSources;
 
         const now = nowHighRes();
-        const runQueuedAt = input.update ? undefined : now;
+        const runQueuedToken = input.update ? undefined : now;
 
         const undeliveredRequired = requiredSources.filter(s => {
           const outputFile = s.outputFile;
           if (typeof outputFile !== 'string' || !outputFile) return true;
           let entry = getSourceEntry(outputFile);
-          if (runQueuedAt) {
-            entry = { ...entry, queueRequestedAt: runQueuedAt };
+          if (runQueuedToken) {
+            entry = { ...entry, queueRequestedToken: runQueuedToken };
             setSourceEntry(outputFile, entry);
           }
-          const qrt = entry.queueRequestedAt ?? entry.lastRequestedAt ?? now;
+          const qrt = entry.queueRequestedToken ?? entry.lastRequestedToken ?? now;
           const action = decideSourceAction(entry, qrt);
           if (action === 'in-flight') return false;
           return action === 'dispatch';
@@ -1065,8 +1085,8 @@ export function createCardHandlerFn(
             const outputFile = src.outputFile;
             if (typeof outputFile !== 'string' || !outputFile) continue;
             const entry = getSourceEntry(outputFile);
-            const queuedAt = entry.queueRequestedAt ?? now;
-            setSourceEntry(outputFile, { ...entry, lastRequestedAt: queuedAt });
+            const queuedAt = entry.queueRequestedToken ?? now;
+            setSourceEntry(outputFile, { ...entry, lastRequestedToken: queuedAt });
             dispatchRqt = queuedAt;
             stampedAny = true;
           }
@@ -1082,15 +1102,11 @@ export function createCardHandlerFn(
         // undeliveredRequired excludes in-flight sources (they don't need re-dispatch), so a card
         // with N required sources where the first N-1 have delivered but the last is still in-flight
         // would otherwise fall through to taskCompletedFn prematurely.
-        // Note: isSourceInFlight is purely timestamp-based; nextEntryAfterFetchFailure deletes
-        // lastFetchedAt (keeping lastRequestedAt), so a failed entry also looks in-flight by
-        // timestamps. We exclude entries with lastError — they have terminated, just with failure.
         const anyRequiredInFlight = requiredSources.some(s => {
           const outputFile = s.outputFile;
           if (typeof outputFile !== 'string' || !outputFile) return false;
           const entry = getSourceEntry(outputFile);
-          if (entry.lastError) return false; // failed fetch is terminal, not in-flight
-          const qrt = entry.queueRequestedAt ?? entry.lastRequestedAt ?? now;
+          const qrt = entry.queueRequestedToken ?? entry.lastRequestedToken ?? now;
           return decideSourceAction(entry, qrt) === 'in-flight';
         });
         if (anyRequiredInFlight) return 'task-initiated';
@@ -1106,9 +1122,9 @@ export function createCardHandlerFn(
         const undeliveredOptional = allSources.filter(s => {
           if (s.optionalForCompletionGating !== true) return false;
           const entry = getSourceEntry(s.outputFile as string);
-          if (!entry.lastRequestedAt) return true;
-          if (!entry.lastFetchedAt) return true;
-          return entry.lastFetchedAt <= entry.lastRequestedAt;
+          if (!entry.lastRequestedToken) return true;
+          if (!entry.lastCompletedToken) return true;
+          return entry.lastCompletedToken <= entry.lastRequestedToken;
         });
         if (undeliveredOptional.length > 0) {
           pendingRequests.push({ taskKind: 'source-fetch', payload: { boardRef: serializeRef(baseRef), enrichedCard: enrichedCard as Record<string, unknown>, callbackToken: input.callbackToken, rqt: now } });

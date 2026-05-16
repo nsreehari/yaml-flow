@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   createCardHandlerFn,
+  normalizeSourceRuntimeEntry,
   type CardHandlerAdapters,
   type CardRuntimeSnapshot,
   type LiveCard,
+  type SourceRuntimeEntry,
 } from '../../src/cli/common/board-live-cards-lib.js';
 import type { TaskHandlerInput } from '../../src/continuous-event-graph/reactive.js';
 import type { GraphEngineStore } from '../../src/event-graph/types.js';
@@ -14,7 +16,7 @@ import type { GraphEngineStore } from '../../src/event-graph/types.js';
 
 function makeTaskState(executionCount = 1): GraphEngineStore {
   return {
-    status: 'in-progress',
+    status: 'running',
     executionCount,
     retryCount: 0,
     lastEpoch: 0,
@@ -26,7 +28,7 @@ function makeInput(nodeId: string, update?: Record<string, unknown>): TaskHandle
     nodeId,
     state: {},
     taskState: makeTaskState(),
-    config: { taskHandlers: ['card-handler'] },
+    config: { provides: [], taskHandlers: ['card-handler'] },
     callbackToken: 'cb-token',
     update,
   };
@@ -120,12 +122,12 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     };
     const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
 
-    // Pre-condition: both sources have been dispatched (lastRequestedAt set).
-    // Manager is still in-flight (no lastFetchedAt).
+    // Pre-condition: both sources have been dispatched (lastRequestedToken set).
+    // Manager is still in-flight (no lastCompletedToken).
     runtimeStore.set('card-multi', {
       _sources: {
-        'identity.txt': { lastRequestedAt: '2026-05-16T10:00:01.000Z', queueRequestedAt: '2026-05-16T10:00:01.000Z' },
-        'manager.txt':  { lastRequestedAt: '2026-05-16T10:00:01.000Z', queueRequestedAt: '2026-05-16T10:00:01.000Z' },
+        'identity.txt': { lastRequestedToken: '2026-05-16T10:00:01.000Z', queueRequestedToken: '2026-05-16T10:00:01.000Z' },
+        'manager.txt':  { lastRequestedToken: '2026-05-16T10:00:01.000Z', queueRequestedToken: '2026-05-16T10:00:01.000Z' },
       },
       _lastExecutionCount: 1,
     });
@@ -136,7 +138,7 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     // Simulate identity task-progress arriving.
     const result = await handler(makeInput('card-multi', {
       outputFile: 'identity.txt',
-      rqt: '2026-05-16T10:00:02.000Z',
+      rqt: '2026-05-16T10:00:01.000Z',
       deliveryToken: 'tok-identity',
     }));
 
@@ -166,13 +168,14 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     runtimeStore.set('card-multi', {
       _sources: {
         'identity.txt': {
-          lastRequestedAt: '2026-05-16T10:00:01.000Z',
-          lastFetchedAt:   '2026-05-16T10:00:02.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken: '2026-05-16T10:00:01.000Z',
+          lastCompletedToken:   '2026-05-16T10:00:01.000Z',
+          lastCompletionStatus: 'success',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
         'manager.txt': {
-          lastRequestedAt: '2026-05-16T10:00:01.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken: '2026-05-16T10:00:01.000Z',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
       },
       _lastExecutionCount: 1,
@@ -190,13 +193,14 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     rs2.set('card-multi', {
       _sources: {
         'identity.txt': {
-          lastRequestedAt: '2026-05-16T10:00:01.000Z',
-          lastFetchedAt:   '2026-05-16T10:00:02.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken: '2026-05-16T10:00:01.000Z',
+          lastCompletedToken:   '2026-05-16T10:00:01.000Z',
+          lastCompletionStatus: 'success',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
         'manager.txt': {
-          lastRequestedAt: '2026-05-16T10:00:01.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken: '2026-05-16T10:00:01.000Z',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
       },
       _lastExecutionCount: 1,
@@ -207,7 +211,7 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     // Now manager delivers.
     const result2 = await handler2(makeInput('card-multi', {
       outputFile: 'manager.txt',
-      rqt: '2026-05-16T10:00:03.000Z',
+      rqt: '2026-05-16T10:00:01.000Z',
       deliveryToken: 'tok-manager',
     }));
 
@@ -236,7 +240,7 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
 
     runtimeStore.set('card-single', {
       _sources: {
-        'identity.txt': { lastRequestedAt: '2026-05-16T10:00:01.000Z', queueRequestedAt: '2026-05-16T10:00:01.000Z' },
+        'identity.txt': { lastRequestedToken: '2026-05-16T10:00:01.000Z', queueRequestedToken: '2026-05-16T10:00:01.000Z' },
       },
       _lastExecutionCount: 1,
     });
@@ -244,7 +248,7 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
 
     const result = await handler(makeInput('card-single', {
       outputFile: 'identity.txt',
-      rqt: '2026-05-16T10:00:02.000Z',
+      rqt: '2026-05-16T10:00:01.000Z',
       deliveryToken: 'tok-1',
     }));
 
@@ -254,11 +258,10 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
   });
 
   /**
-   * Safety: if the second required source FAILS (not delivers), the card must still
-   * proceed to complete — a failed source is terminal, not in-flight.
-   * isSourceInFlight is purely timestamp-based; nextEntryAfterFetchFailure removes
-   * lastFetchedAt but keeps lastRequestedAt, so the entry would look "in-flight" to
-   * a naive timestamp check. The guard must treat lastError as terminal.
+  * Safety: if the second required source FAILS (not delivers), the card must still
+  * proceed to complete — a failed source is terminal, not in-flight.
+  * The lifecycle now records terminal failure in lastCompletedToken/lastCompletionStatus,
+  * so the completion guard must treat that source as finished for the current cycle.
    */
   it('does not get stuck when one required source fails — completes with that source absent', async () => {
     const card: LiveCard = {
@@ -279,13 +282,14 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     runtimeStore.set('card-fail', {
       _sources: {
         'identity.txt': {
-          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
-          lastFetchedAt:    '2026-05-16T10:00:02.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken:  '2026-05-16T10:00:01.000Z',
+          lastCompletedToken:    '2026-05-16T10:00:01.000Z',
+          lastCompletionStatus: 'success',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
         'manager.txt': {
-          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken:  '2026-05-16T10:00:01.000Z',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
       },
       _lastExecutionCount: 1,
@@ -329,14 +333,16 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     runtimeStore.set('card-retrigger', {
       _sources: {
         'identity.txt': {
-          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
-          lastFetchedAt:    '2026-05-16T10:00:02.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken:  '2026-05-16T10:00:01.000Z',
+          lastCompletedToken:    '2026-05-16T10:00:01.000Z',
+          lastCompletionStatus: 'success',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
         'manager.txt': {
-          lastRequestedAt:  '2026-05-16T10:00:01.000Z',
-          lastFetchedAt:    '2026-05-16T10:00:02.000Z',
-          queueRequestedAt: '2026-05-16T10:00:01.000Z',
+          lastRequestedToken:  '2026-05-16T10:00:01.000Z',
+          lastCompletedToken:    '2026-05-16T10:00:01.000Z',
+          lastCompletionStatus: 'success',
+          queueRequestedToken: '2026-05-16T10:00:01.000Z',
         },
       },
       _lastExecutionCount: 1,
@@ -349,7 +355,7 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
       nodeId: 'card-retrigger',
       state: {},
       taskState: makeTaskState(2), // new execution
-      config: { taskHandlers: ['card-handler'] },
+      config: { provides: [], taskHandlers: ['card-handler'] },
       callbackToken: 'cb-retrigger',
       // no update — fresh initiation
     };
@@ -359,21 +365,21 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     // Sources must be re-dispatched, card must NOT complete yet.
     expect(result).toBe('task-initiated');
     expect(completedCalls).toHaveLength(0);
-    // _sources must have been wiped and re-stamped (lastRequestedAt set, no lastFetchedAt)
+    // _sources must have been wiped and re-stamped (lastRequestedToken set, no lastCompletedToken)
     const rt = runtimeStore.get('card-retrigger');
-    expect(rt?._sources['identity.txt']?.lastRequestedAt).toBeDefined();
-    expect(rt?._sources['identity.txt']?.lastFetchedAt).toBeUndefined();
-    expect(rt?._sources['manager.txt']?.lastRequestedAt).toBeDefined();
-    expect(rt?._sources['manager.txt']?.lastFetchedAt).toBeUndefined();
+    const identity = normalizeSourceRuntimeEntry(rt?._sources['identity.txt']);
+    const manager = normalizeSourceRuntimeEntry(rt?._sources['manager.txt']);
+    expect(identity?.lastRequestedToken).toBeDefined();
+    expect(identity?.lastCompletedToken).toBeUndefined();
+    expect(manager?.lastRequestedToken).toBeDefined();
+    expect(manager?.lastCompletedToken).toBeUndefined();
   });
 
   /**
-   * Migration safety: persisted snapshot has source entries (possibly with lastError or
-   * stale lastFetchedAt) but _lastExecutionCount was never written (undefined).
-   * A retrigger must still wipe _sources — the old typeof guard would have skipped
-   * the wipe because typeof undefined !== 'number'.
+   * Retrigger safety: even if _lastExecutionCount was never written, a fresh run must
+   * still wipe stale token-state and redispatch all sources.
    */
-  it('wipes stale sources on retrigger even when _lastExecutionCount is absent (migration case)', async () => {
+  it('wipes stale sources on retrigger even when _lastExecutionCount is absent', async () => {
     const card: LiveCard = {
       id: 'card-migrate',
       source_defs: [
@@ -388,28 +394,31 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     };
     const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, taskCompletedFn, () => {});
 
-    // Simulate a migrated snapshot: has source entries but _lastExecutionCount is absent.
+    // Simulate a stale snapshot: has source entries but _lastExecutionCount is absent.
     runtimeStore.set('card-migrate', {
       _sources: {
         'identity.txt': {
-          lastRequestedAt:  '2026-05-15T10:00:01.000Z',
-          lastFetchedAt:    '2026-05-15T10:00:02.000Z',
-          queueRequestedAt: '2026-05-15T10:00:01.000Z',
+          lastRequestedToken: '2026-05-15T10:00:01.000Z',
+          lastCompletedToken: '2026-05-15T10:00:02.000Z',
+          lastCompletionStatus: 'success',
+          queueRequestedToken: '2026-05-15T10:00:01.000Z',
         },
         'manager.txt': {
-          lastRequestedAt: '2026-05-15T10:00:01.000Z',
-          lastError:       'previous failure',
+          lastRequestedToken: '2026-05-15T10:00:01.000Z',
+          lastCompletedToken: '2026-05-15T10:00:01.000Z',
+          lastCompletionStatus: 'failure',
+          queueRequestedToken: '2026-05-15T10:00:01.000Z',
         },
       },
       // _lastExecutionCount intentionally absent (undefined)
-    } as unknown as import('../../src/cli/common/board-live-cards-lib.js').CardRuntimeSnapshot);
+    });
 
     // Retrigger: executionCount = 1 (fresh start, _lastExecutionCount was undefined).
     const result = await handler({
       nodeId: 'card-migrate',
       state: {},
       taskState: makeTaskState(1),
-      config: { taskHandlers: ['card-handler'] },
+      config: { provides: [], taskHandlers: ['card-handler'] },
       callbackToken: 'cb-migrate',
     });
 
@@ -418,9 +427,126 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     expect(completedCalls).toHaveLength(0);
     // Stale source entries must have been wiped and re-stamped.
     const rt = runtimeStore.get('card-migrate');
+    const identity = normalizeSourceRuntimeEntry(rt?._sources['identity.txt']);
+    const manager = normalizeSourceRuntimeEntry(rt?._sources['manager.txt']);
     expect(rt?._lastExecutionCount).toBe(1);
-    expect(rt?._sources['identity.txt']?.lastFetchedAt).toBeUndefined();
-    expect(rt?._sources['manager.txt']?.lastError).toBeUndefined();
+    expect(identity?.lastCompletedToken).toBeUndefined();
+    expect(manager?.lastCompletedToken).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// request-cycle token completion
+// ---------------------------------------------------------------------------
+
+describe('createCardHandlerFn — request-cycle token completion', () => {
+  /**
+   * Completion is recorded against the dispatched request-cycle token (rqt), even when
+   * the event also carries fetchedAt as informational metadata.
+   */
+  it('records lastCompletedToken from rqt and marks success', async () => {
+    const card: LiveCard = {
+      id: 'card-fetchedat',
+      source_defs: [{ bindTo: 'identity', outputFile: 'identity.txt' }],
+    };
+
+    const { adapters, runtimeStore, stagedContent } = makeAdapters(card);
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, () => {}, () => {});
+
+    const rqt       = '2026-05-16T10:00:01.000Z';
+    const fetchedAt = '2026-05-16T10:00:03.000Z'; // later than rqt
+
+    runtimeStore.set('card-fetchedat', {
+      _sources: {
+        'identity.txt': { lastRequestedToken: rqt, queueRequestedToken: rqt },
+      },
+      _lastExecutionCount: 1,
+    });
+    stagedContent.set('card-fetchedat/.staged/tok-1/identity.txt', 'Alice');
+
+    await handler(makeInput('card-fetchedat', {
+      outputFile: 'identity.txt',
+      rqt,
+      fetchedAt,
+      deliveryToken: 'tok-1',
+    }));
+
+    const entry = runtimeStore.get('card-fetchedat')?._sources['identity.txt'] as SourceRuntimeEntry | undefined;
+    expect(entry?.lastCompletedToken).toBe(rqt);
+    expect(entry?.lastCompletionStatus).toBe('success');
+    expect(entry?.lastCompletedToken).not.toBe(fetchedAt);
+  });
+
+  /**
+   * Failure is also terminal for the dispatched request-cycle token.
+   */
+  it('records lastCompletedToken from rqt and marks failure on fetch failure', async () => {
+    const card: LiveCard = {
+      id: 'card-rqt-failure',
+      source_defs: [{ bindTo: 'identity', outputFile: 'identity.txt' }],
+    };
+
+    const { adapters, runtimeStore, stagedContent } = makeAdapters(card);
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, () => {}, () => {});
+
+    const rqt = '2026-05-16T10:00:01.000Z';
+
+    runtimeStore.set('card-rqt-failure', {
+      _sources: {
+        'identity.txt': { lastRequestedToken: rqt, queueRequestedToken: rqt },
+      },
+      _lastExecutionCount: 1,
+    });
+
+    await handler(makeInput('card-rqt-failure', {
+      outputFile: 'identity.txt',
+      rqt,
+      failure: true,
+      reason: 'network timeout',
+    }));
+
+    const entry = runtimeStore.get('card-rqt-failure')?._sources['identity.txt'] as SourceRuntimeEntry | undefined;
+    expect(entry?.lastCompletedToken).toBe(rqt);
+    expect(entry?.lastCompletionStatus).toBe('failure');
+  });
+
+  /**
+   * When the queued request token advances mid-flight, completing the older dispatched
+   * cycle leaves the source ready to dispatch again on the next evaluation.
+   */
+  it('source re-dispatches after delivery when queueRequestedToken advanced mid-flight', async () => {
+    const { decideSourceAction } = await import('../../src/cli/common/board-live-cards-lib.js');
+
+    const card: LiveCard = {
+      id: 'card-advanced-qrt',
+      source_defs: [{ bindTo: 'identity', outputFile: 'identity.txt' }],
+    };
+
+    const { adapters, runtimeStore, stagedContent } = makeAdapters(card);
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, () => {}, () => {});
+
+    const rqt         = '2026-05-16T10:00:01.000Z';
+    const advancedQrt = '2026-05-16T10:00:02.000Z'; // queueRequestedToken advanced mid-flight
+
+    runtimeStore.set('card-advanced-qrt', {
+      _sources: {
+        'identity.txt': {
+          lastRequestedToken:  rqt,
+          queueRequestedToken: advancedQrt, // advanced while fetch was in-flight
+        },
+      },
+      _lastExecutionCount: 1,
+    });
+    stagedContent.set('card-advanced-qrt/.staged/tok-3/identity.txt', 'Alice');
+
+    await handler(makeInput('card-advanced-qrt', {
+      outputFile: 'identity.txt',
+      rqt,
+      deliveryToken: 'tok-3',
+    }));
+
+    const entry = runtimeStore.get('card-advanced-qrt')?._sources['identity.txt'] as SourceRuntimeEntry | undefined;
+    expect(decideSourceAction(entry, advancedQrt)).toBe('in-flight');
   });
 });
 

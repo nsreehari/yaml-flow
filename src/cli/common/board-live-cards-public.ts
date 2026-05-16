@@ -787,7 +787,7 @@ export function createBoardLiveCardsPublic(
       if (!token) return fail('sourceDataFetchFailure requires params.token');
       const payload = decodeSourceToken(token);
       if (!payload) return fail('Invalid source token');
-      const { cbk, b, d, cs } = payload;
+      const { cbk, b, d, cs, rqt } = payload;
 
       const cbkDecoded = decodeCallbackToken(cbk);
       if (!cbkDecoded) return fail('Invalid callback token embedded in source token');
@@ -795,7 +795,7 @@ export function createBoardLiveCardsPublic(
       appendJournalEvent({
         type: 'task-progress',
         taskName: cbkDecoded.taskName,
-        update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs },
+        update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs, rqt },
         timestamp: nowIso(),
       });
       void drain();
