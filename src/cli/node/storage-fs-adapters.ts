@@ -197,6 +197,9 @@ export function createFsAbsolutePathBlobStorage(): BlobStorage {
         return null;
       }
     },
+
+    // Keys are absolute paths — prefix-based listing is not meaningful for this adapter.
+    listKeys(_prefix?: string): string[] { return []; },
   };
 }
 

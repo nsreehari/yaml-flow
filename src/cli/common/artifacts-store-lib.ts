@@ -80,41 +80,12 @@ export interface CardFileMetadataStore {
   resolve(cardData: unknown, index: number, expectedStoredName?: string | null): CardFileLookupResult;
 }
 
-const INDEX_KEY = '.artifacts-index.json';
-
-interface ArtifactIndexEntry {
-  key: string;
-  size?: number;
-  updatedAt?: string;
-  contentType?: string;
-}
-
-interface ArtifactIndex {
-  entries: Record<string, ArtifactIndexEntry>;
-}
-
 function nowIso(): string {
   return new Date().toISOString();
 }
 
 function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).byteLength;
-}
-
-function loadIndex(blob: BlobStorage): ArtifactIndex {
-  const raw = blob.read(INDEX_KEY);
-  if (!raw) return { entries: {} };
-  try {
-    const parsed = JSON.parse(raw) as ArtifactIndex;
-    if (parsed && parsed.entries && typeof parsed.entries === 'object') return parsed;
-  } catch {
-    // fall through
-  }
-  return { entries: {} };
-}
-
-function saveIndex(blob: BlobStorage, index: ArtifactIndex): void {
-  blob.write(INDEX_KEY, JSON.stringify(index, null, 2));
 }
 
 function statToInfo(stat: BlobStat | null): ArtifactInfo | null {
@@ -124,15 +95,6 @@ function statToInfo(stat: BlobStat | null): ArtifactInfo | null {
     size: stat.size,
     updatedAt: stat.updatedAt,
     contentType: stat.contentType,
-  };
-}
-
-function updateIndex(index: ArtifactIndex, key: string, info: ArtifactInfo): void {
-  index.entries[key] = {
-    key,
-    size: info.size,
-    updatedAt: info.updatedAt,
-    contentType: info.contentType,
   };
 }
 
@@ -182,10 +144,6 @@ export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
     const fromStat = blob.stat ? statToInfo(blob.stat(key)) : null;
     if (fromStat) return fromStat;
 
-    const index = loadIndex(blob);
-    const entry = index.entries[key];
-    if (entry) return { ...entry };
-
     if (!blob.exists(key)) return null;
     const content = blob.read(key);
     if (content === null) return { key };
@@ -206,9 +164,6 @@ export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
       info.contentType = contentType;
       info.updatedAt = info.updatedAt ?? nowIso();
       info.size = info.size ?? utf8ByteLength(content);
-      const index = loadIndex(blob);
-      updateIndex(index, key, info);
-      saveIndex(blob, index);
       return info;
     },
 
@@ -224,9 +179,6 @@ export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
       info.contentType = contentType;
       info.updatedAt = info.updatedAt ?? nowIso();
       info.size = info.size ?? content.byteLength;
-      const index = loadIndex(blob);
-      updateIndex(index, key, info);
-      saveIndex(blob, index);
       return info;
     },
 
@@ -270,30 +222,13 @@ export function createArtifactsStore(blob: BlobStorage): ArtifactsStore {
     head,
 
     list(prefix = ''): ArtifactInfo[] {
-      const infoByKey = new Map<string, ArtifactInfo>();
-
-      if (blob.listKeys) {
-        for (const key of blob.listKeys(prefix)) {
-          if (key === INDEX_KEY) continue;
-          const info = head(key) ?? { key };
-          infoByKey.set(key, info);
-        }
-      }
-
-      const index = loadIndex(blob);
-      for (const [key, entry] of Object.entries(index.entries)) {
-        if (key === INDEX_KEY || (prefix && !key.startsWith(prefix))) continue;
-        if (!infoByKey.has(key)) infoByKey.set(key, { ...entry });
-      }
-
-      return [...infoByKey.values()].sort((a, b) => a.key.localeCompare(b.key));
+      return blob.listKeys(prefix)
+        .map((key) => head(key) ?? { key })
+        .sort((a, b) => a.key.localeCompare(b.key));
     },
 
     remove(key: string): void {
       blob.remove(key);
-      const index = loadIndex(blob);
-      delete index.entries[key];
-      saveIndex(blob, index);
     },
   };
 }

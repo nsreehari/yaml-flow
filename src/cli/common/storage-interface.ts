@@ -62,8 +62,8 @@ export interface BlobStorage {
   /** Optional binary write for file-like artifacts. */
   writeBytes?(key: string, content: Uint8Array): void;
 
-  /** Optional key listing by prefix. */
-  listKeys?(prefix?: string): string[];
+  /** List all keys that start with the given prefix. */
+  listKeys(prefix?: string): string[];
 
   /** Optional metadata lookup. */
   stat?(key: string): BlobStat | null;
