@@ -1187,18 +1187,21 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         if (!body.length) { json(res, 400, { error: 'Empty upload body' }); return true; }
 
         const file = persistUploadedFile(cardId, requestedName, contentType, body);
+        // Always register the file in card_data.files regardless of inChat flag,
+        // so GET /cards/:id and GET /cards/:id/files/:idx work unconditionally.
+        updateCardLocalOnly(cardId, (card) => {
+          const now = new Date().toISOString();
+          const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
+          card.card_data = cardData;
+          const incoming = cardFileMetadataStoreInstance().normalizeIncoming([{
+            name: file.name, stored_name: file.stored_name, size: file.size,
+            mime_type: file.mime_type, path: file.path, uploaded_at: file.uploaded_at || now,
+          }], now);
+          cardFileMetadataStoreInstance().merge(cardData, incoming);
+          return card;
+        });
+        // inChat: additionally record a system chat message so the upload appears in the chat thread.
         if (inChat) {
-          updateCardLocalOnly(cardId, (card) => {
-            const now = new Date().toISOString();
-            const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
-            card.card_data = cardData;
-            const incoming = cardFileMetadataStoreInstance().normalizeIncoming([{
-              name: file.name, stored_name: file.stored_name, size: file.size,
-              mime_type: file.mime_type, path: file.path, uploaded_at: file.uploaded_at || now,
-            }], now);
-            cardFileMetadataStoreInstance().merge(cardData, incoming);
-            return card;
-          });
           writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
         }
         json(res, 200, { ok: true, file });
