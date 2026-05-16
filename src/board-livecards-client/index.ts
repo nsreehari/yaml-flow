@@ -3,8 +3,12 @@
  *
  * Two layers in one bundle:
  *   1. Platform-free state: buildBoardState, applyNotification, selectLiveCardModel,
- *      selectAllLiveCardModels — usable with any transport (Firebase, WebSocket, SSE, etc.)
+ *      selectAllLiveCardModels, deriveBoardState, pickBoardState, subtractBoardState
+ *      — usable with any transport (Firebase, WebSocket, SSE, etc.)
  *   2. SSE/HTTP transport: createBoardRuntimeClient — for yaml-flow server runtime.
+ *   3. Standalone action helpers: buildFileUrlBase, uploadCardFile, prepareActionPayload,
+ *      patchCardState, dispatchCardAction — for custom renderers that manage their own
+ *      SSE lifecycle (satellite views, plugin boards, etc.)
  *
  * Usage (SSE/HTTP mode):
  *   <script src="board-livecards-client.js"></script>
@@ -116,7 +120,159 @@ export function singleBoardPaths(apiBase = '/api/board'): BoardPaths {
     chatUnsubscribeSse: (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/unsubscribe-sse`,
   };
 }
+// ============================================================================
+// Standalone action helpers
+// For custom board renderers that call server APIs directly without going
+// through createBoardRuntimeClient — e.g. satellite views, plugin boards,
+// or any shell that manages its own SSE lifecycle.
+// ============================================================================
 
+export type FetchServerFn = (path: string, init?: RequestInit) => Promise<Response>;
+export type BoardPathsFn = (boardId: string) => BoardPaths;
+
+/**
+ * Construct the base URL used to resolve card file download URLs.
+ * Pass the result as `fileUrlBase` to `LiveCard.init()` in a custom renderer.
+ */
+export function buildFileUrlBase(opts: {
+  boardPaths: BoardPathsFn;
+  getServerOrigin: () => string | null;
+  boardId: string;
+}): string | null {
+  const origin = opts.getServerOrigin();
+  if (!origin || !opts.boardId) return null;
+  const paths = opts.boardPaths(opts.boardId);
+  return `${origin}${paths.initBoard.replace(/\/init-board$/, '')}`;
+}
+
+/**
+ * Upload a single File to a card's file endpoint.
+ * Returns the file metadata object from the server, or null if no file was provided.
+ */
+export async function uploadCardFile(opts: {
+  fetchServer: FetchServerFn;
+  boardPaths: BoardPathsFn;
+  boardId: string;
+  cardId: string;
+  file: File;
+  inChat?: boolean;
+}): Promise<unknown | null> {
+  if (!opts.file) return null;
+  const paths = opts.boardPaths(opts.boardId);
+  const uploadPath = opts.inChat
+    ? `${paths.cardFile(opts.cardId)}?inChat=true`
+    : paths.cardFile(opts.cardId);
+  const fileName = typeof opts.file.name === 'string' ? opts.file.name : 'upload.bin';
+  const contentType = opts.file.type || 'application/octet-stream';
+  const res = await opts.fetchServer(uploadPath, {
+    method: 'POST',
+    headers: { 'content-type': contentType, 'x-file-name': encodeURIComponent(fileName) },
+    body: opts.file,
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Upload failed for ${opts.cardId} (${res.status})${errText ? ': ' + errText : ''}`);
+  }
+  const payload = await res.json() as { file?: unknown };
+  return payload?.file ?? null;
+}
+
+/**
+ * Prepare an action payload: if the action carries File objects in `payload.files`,
+ * upload them and replace with server-returned metadata objects.
+ * Passthrough for action types other than `file-upload` and `chat-send`.
+ */
+export async function prepareActionPayload(opts: {
+  fetchServer: FetchServerFn;
+  boardPaths: BoardPathsFn;
+  boardId: string;
+  cardId: string;
+  actionType: string;
+  payload?: Record<string, unknown> | null;
+}): Promise<Record<string, unknown>> {
+  const { actionType } = opts;
+  if (actionType !== 'chat-send' && actionType !== 'file-upload') return opts.payload || {};
+  const next: Record<string, unknown> = { ...(opts.payload || {}) };
+  const rawFiles = Array.isArray(next.files) ? next.files as File[] : [];
+  if (!rawFiles.length) { next.files = []; return next; }
+  const uploaded: unknown[] = [];
+  for (const file of rawFiles) {
+    const meta = await uploadCardFile({ ...opts, file, inChat: actionType === 'chat-send' });
+    if (meta) uploaded.push(meta);
+  }
+  next.files = actionType === 'chat-send' ? [] : uploaded;
+  return next;
+}
+
+/**
+ * PATCH a card's state via the server API.
+ */
+export async function patchCardState(opts: {
+  fetchServer: FetchServerFn;
+  boardPaths: BoardPathsFn;
+  boardId: string;
+  cardId: string;
+  patch: Record<string, unknown>;
+}): Promise<void> {
+  const paths = opts.boardPaths(opts.boardId);
+  const res = await opts.fetchServer(paths.patchCard(opts.cardId), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(opts.patch || {}),
+  });
+  if (!res.ok) throw new Error(`PATCH failed for ${opts.cardId} (${res.status})`);
+}
+
+/**
+ * Dispatch a card action via the server API.
+ * File objects in `payload.files` are uploaded first via prepareActionPayload.
+ * Returns the processed payload that was sent to the server.
+ */
+export async function dispatchCardAction(opts: {
+  fetchServer: FetchServerFn;
+  boardPaths: BoardPathsFn;
+  boardId: string;
+  cardId: string;
+  actionType: string;
+  payload?: Record<string, unknown> | null;
+}): Promise<{ payload: Record<string, unknown> }> {
+  const paths = opts.boardPaths(opts.boardId);
+  const processedPayload = await prepareActionPayload(opts);
+  const res = await opts.fetchServer(paths.cardAction(opts.cardId), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ actionType: opts.actionType, payload: processedPayload }),
+  });
+  if (!res.ok) {
+    throw new Error(`${opts.actionType === 'refresh' ? 'Refresh' : 'Action'} failed for ${opts.cardId} (${res.status})`);
+  }
+  return { payload: processedPayload };
+}
+
+/**
+ * Return a new BoardState containing only the cards whose ids appear in `ids`.
+ * Preserves original ordering.
+ */
+export function pickBoardState(state: BoardState, ids: string[]): BoardState {
+  const idSet = new Set(ids.map(String));
+  const nextIds = state.cardIds.filter((id) => idSet.has(id));
+  const nextModels: Record<string, CardModel> = {};
+  for (const id of nextIds) nextModels[id] = state.modelsById[id];
+  return { payload: state.payload, cardIds: nextIds, modelsById: nextModels };
+}
+
+/**
+ * Return a new BoardState with the cards in `excludeIds` removed.
+ * Complement of pickBoardState — useful when a satellite view "consumes" a set of cards
+ * and the main view should display the remainder.
+ */
+export function subtractBoardState(state: BoardState, excludeIds: Set<string> | string[]): BoardState {
+  const excSet = excludeIds instanceof Set ? excludeIds : new Set((excludeIds as string[]).map(String));
+  const nextIds = state.cardIds.filter((id) => !excSet.has(id));
+  const nextModels: Record<string, CardModel> = {};
+  for (const id of nextIds) nextModels[id] = state.modelsById[id];
+  return { payload: state.payload, cardIds: nextIds, modelsById: nextModels };
+}
 export interface BoardRuntimeClient {
   /** Bootstrap the board: init-board → bootstrap-cards → LiveCard.Board + SSE. */
   bootstrapBoard(params: BootstrapBoardParams): Promise<unknown>;
