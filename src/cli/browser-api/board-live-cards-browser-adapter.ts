@@ -11,9 +11,11 @@
  *   - selfRef: 'in-browser' kind — routes to registered in-memory handlers
  */
 
-import type { KindValueRef, AtomicRelayLock } from '../common/storage-interface.js';
+import type { KindValueRef, AtomicRelayLock, JournalEntry, JournalStorage } from '../common/storage-interface.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { BoardPlatformAdapter } from '../common/board-live-cards-public.js';
+import { createChatStorage } from '../common/chat-storage-lib.js';
+import type { ChatStorage } from '../common/chat-storage-lib.js';
 import {
   createLocalStorageBlobStorage,
   createLocalStorageKvStorage,
@@ -35,6 +37,63 @@ function createInMemoryRelayLock(): AtomicRelayLock {
       return () => { held = false; };
     },
   };
+}
+
+function safeChatCardKey(cardId: string): string {
+  return String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function createLocalStorageJournalStorage(storageKey: string): JournalStorage {
+  function load(): JournalEntry[] {
+    const raw = globalThis.localStorage.getItem(storageKey);
+    if (!raw) return [];
+    try { return JSON.parse(raw) as JournalEntry[]; } catch { return []; }
+  }
+
+  function save(entries: JournalEntry[]): void {
+    globalThis.localStorage.setItem(storageKey, JSON.stringify(entries));
+  }
+
+  return {
+    append(payload: unknown): JournalEntry {
+      const entry: JournalEntry = { id: globalThis.crypto.randomUUID(), payload };
+      const entries = load();
+      entries.push(entry);
+      save(entries);
+      return entry;
+    },
+
+    readAll(): JournalEntry[] {
+      return load();
+    },
+
+    readAfter(cursor: string | null) {
+      const all = load();
+      if (!cursor) {
+        return {
+          entries: all,
+          newCursor: all.length > 0 ? all[all.length - 1].id : null,
+        };
+      }
+      const idx = all.findIndex((entry) => entry.id === cursor);
+      const entries = idx === -1 ? all : all.slice(idx + 1);
+      return {
+        entries,
+        newCursor: entries.length > 0 ? entries[entries.length - 1].id : cursor,
+      };
+    },
+
+    clear(): void {
+      globalThis.localStorage.removeItem(storageKey);
+    },
+  };
+}
+
+export function createLocalStorageChatStorage(namespace: string): ChatStorage {
+  return createChatStorage(
+    (cardId: string) => createLocalStorageJournalStorage(`${namespace}:chat:journal:${safeChatCardKey(cardId)}`),
+    createLocalStorageKvStorage(`${namespace}:chat`),
+  );
 }
 
 // ============================================================================

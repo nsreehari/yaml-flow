@@ -22,7 +22,12 @@
 
 import { createSingleBoardServerRuntime } from '../server-runtime/index.js';
 import type { SingleBoardRuntime, ExecutionRef, InvocationAdapter } from '../server-runtime/types.js';
-import { createBrowserBoardPlatformAdapter, createInMemoryNotificationTransport, getInMemoryNotificationBus } from '../cli/browser-api/board-live-cards-browser-adapter.js';
+import {
+  createBrowserBoardPlatformAdapter,
+  createInMemoryNotificationTransport,
+  createLocalStorageChatStorage,
+  getInMemoryNotificationBus,
+} from '../cli/browser-api/board-live-cards-browser-adapter.js';
 import { parseRef, serializeRef } from '../cli/common/storage-interface.js';
 
 // ============================================================================
@@ -187,9 +192,11 @@ export function create(
   // ── Create server runtime with localStorage adapters ─────────────────────
 
   const notificationTransport = createInMemoryNotificationTransport();
+  const chatStorage = createLocalStorageChatStorage(namespace);
 
   const serverRuntime = createSingleBoardServerRuntime({
     boardId: namespace,
+    chatStorage,
     boards: [{
       label: namespace,
       boardAdapter,

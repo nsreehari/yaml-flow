@@ -1,14 +1,6 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import path from 'node:path';
-import {
-  createArtifactsStore,
-  createChatArtifactsStore,
-  createFsBoardPlatformAdapter,
-  parseRef,
-  serializeRef,
-} from 'yaml-flow/board-live-cards-node';
 
 function readJsonStdin() {
   try {
@@ -21,72 +13,59 @@ function readJsonStdin() {
   }
 }
 
-function resolveChatDir(extra) {
-  if (typeof extra.chatDir === 'string' && extra.chatDir.trim()) return extra.chatDir;
-  if (typeof extra.chatsBlobBasePath === 'string' && typeof extra.chatsKeyPrefix === 'string') {
-    const cardPart = String(extra.chatsKeyPrefix).split('/')[0];
-    return path.join(extra.chatsBlobBasePath, cardPart);
-  }
-  return '';
-}
-
-function resolveChatStoreContext(extra, chatDir) {
-  if (typeof extra.chatsBlobBasePath === 'string' && typeof extra.chatsKeyPrefix === 'string') {
-    return {
-      chatsRoot: extra.chatsBlobBasePath,
-      cardPrefix: String(extra.chatsKeyPrefix).split('/')[0],
-    };
-  }
-  if (chatDir) {
-    return {
-      chatsRoot: path.dirname(chatDir),
-      cardPrefix: path.basename(chatDir),
-    };
-  }
-  return { chatsRoot: '', cardPrefix: '' };
-}
-
 const extra = readJsonStdin();
-const chatDir = resolveChatDir(extra);
-const { chatsRoot, cardPrefix } = resolveChatStoreContext(extra, chatDir);
-const lastChatFile = typeof extra.lastChatFile === 'string' ? extra.lastChatFile : '';
+const cardId = typeof extra.cardId === 'string' ? extra.cardId : '';
+const serverUrl = typeof extra.serverUrl === 'string' ? extra.serverUrl.replace(/\/$/, '') : '';
+const lastEntryId = typeof extra.lastChatEntryId === 'string' ? extra.lastChatEntryId : '';
+const apiBasePath = typeof extra.apiBasePath === 'string' ? extra.apiBasePath : '/api/board';
 
-if (!chatDir || !lastChatFile || !chatsRoot || !cardPrefix) {
-  console.log(JSON.stringify({ result: 'failure', data: {}, error: 'missing chatDir/lastChatFile' }));
+if (!cardId || !serverUrl) {
+  console.log(JSON.stringify({ result: 'failure', data: {}, error: 'missing cardId or serverUrl' }));
   process.exit(0);
 }
 
-const lastChatPath = path.join(chatDir, lastChatFile);
+// Read the last user message by fetching the chat history
 let userText = '';
 try {
-  userText = fs.readFileSync(lastChatPath, 'utf-8').trim();
-} catch {
-  console.log(JSON.stringify({ result: 'failure', data: {}, error: 'could not read last chat file' }));
+  const chatsUrl = `${serverUrl}${apiBasePath}/cards/${encodeURIComponent(cardId)}/chats`;
+  const res = await fetch(chatsUrl);
+  if (res.ok) {
+    const data = await res.json();
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    const lastSeenIndex = lastEntryId
+      ? messages.findIndex(m => typeof m?.id === 'string' && m.id === lastEntryId)
+      : -1;
+    const newerMessages = lastSeenIndex >= 0 ? messages.slice(lastSeenIndex + 1) : messages;
+    const lastUser = newerMessages.filter(m => m.role === 'user').at(-1);
+    userText = typeof lastUser?.text === 'string' ? lastUser.text : '';
+  }
+} catch (err) {
+  console.log(JSON.stringify({ result: 'failure', data: {}, error: `could not fetch chat history: ${err?.message || err}` }));
+  process.exit(0);
+}
+
+if (!userText) {
+  console.log(JSON.stringify({ result: 'success', data: { skipped: true, reason: 'no new user message after lastChatEntryId' } }));
   process.exit(0);
 }
 
 const replyText = `Echo: ${userText}`;
 
+// Write assistant reply via the chat API; done=true also clears the processing flag
 try {
-  const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: chatsRoot }));
-  const adapter = createFsBoardPlatformAdapter(baseRef, { suppressSpawn: true });
-  const artifacts = createArtifactsStore(adapter.blobStorage(''));
-  const chats = createChatArtifactsStore(artifacts, { indexFileName: '.index.json' });
-  const serial = chats.nextSerial(cardPrefix);
-  const storedName = `${String(serial).padStart(3, '0')}_assistant.txt`;
-
-  artifacts.putText(`${cardPrefix}/${storedName}`, replyText + '\n', 'text/plain; charset=utf-8');
-  chats.appendIndexRecord(cardPrefix, {
-    serial,
-    role: 'assistant',
-    stored_name: storedName,
-    path: `${cardPrefix}/chats/${storedName}`,
-    updated_at: new Date().toISOString(),
+  const postUrl = `${serverUrl}${apiBasePath}/cards/${encodeURIComponent(cardId)}/chats`;
+  const postRes = await fetch(postUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'assistant', text: replyText, files: [], done: true }),
   });
-  if (typeof extra.chatProcessingMarkerKey === 'string' && extra.chatProcessingMarkerKey.trim()) {
-    artifacts.remove(extra.chatProcessingMarkerKey.trim());
+  if (!postRes.ok) {
+    const err = await postRes.text();
+    console.log(JSON.stringify({ result: 'failure', data: {}, error: `chat POST failed: ${err}` }));
+    process.exit(0);
   }
-  console.log(JSON.stringify({ result: 'success', data: { replyFile: storedName, replyText } }));
+  const postData = await postRes.json();
+  console.log(JSON.stringify({ result: 'success', data: { replyText, id: postData?.id } }));
 } catch (err) {
   console.log(JSON.stringify({ result: 'failure', data: {}, error: err instanceof Error ? err.message : String(err) }));
 }

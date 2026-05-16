@@ -13,11 +13,13 @@
 import type { BoardPlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
 import type { ExecutionRef } from '../cli/common/execution-interface.js';
 import type { KindValueRef, KVStorage, BlobStorage } from '../cli/common/storage-interface.js';
+import type { ChatStorage } from '../cli/common/chat-storage-lib.js';
 
 // Re-export for convenience so hosts can import from server-runtime/types
 export type { BoardPlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification };
 export type { ExecutionRef };
 export type { KindValueRef, KVStorage, BlobStorage };
+export type { ChatStorage };
 
 // ============================================================================
 // InvocationAdapter — dispatches execution requests
@@ -131,6 +133,8 @@ export interface SingleBoardRuntimeOptions {
 
   invocationAdapter: InvocationAdapter;
   chatFlowRunner?: ChatHandlerFlowRunner;
+  /** Chat storage backend. Defaults to an in-memory store when omitted. */
+  chatStorage?: ChatStorage;
   notificationTransport?: NotificationTransport;
   logger?: RuntimeLogger;
   serverUrl?: string;

@@ -170,6 +170,9 @@ export interface JournalStorage {
    * If cursor is null/empty, returns all entries from the beginning.
    */
   readAfter(cursor: string | null): JournalReadResult;
+
+  /** Truncate all entries. Optional — not all backends support it. */
+  clear?(): void;
 }
 
 // ============================================================================

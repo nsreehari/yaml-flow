@@ -15,6 +15,7 @@ import {
 
 import {
   createFsBoardPlatformAdapter,
+  createFsBoardChatStorage,
   createArtifactsStore,
   invokeRefSync,
   parseRef,
@@ -414,10 +415,12 @@ const runtime = createMultiBoardServerRuntime({
 
     // runtimeCardsDir is where the live card store lives (inside setupDir).
     const runtimeCardsDir = path.join(boardDir, 'cards');
+    const chatStorage = createFsBoardChatStorage(boardDir);
 
     const singleBoardRuntime = createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
       boardId,
+      chatStorage,
       boards,
       invocationAdapter,
       chatFlowRunner: flowRunner,

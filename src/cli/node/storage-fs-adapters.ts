@@ -298,6 +298,10 @@ export function createFsJournalStorage(journalPath: string): JournalStorage {
         newCursor: entries.length > 0 ? entries[entries.length - 1].id : cursor,
       };
     },
+
+    clear(): void {
+      if (fs.existsSync(journalPath)) fs.truncateSync(journalPath, 0);
+    },
   };
 }
 

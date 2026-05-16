@@ -27,10 +27,14 @@ import { createCardStore } from '../cli/common/board-live-cards-lib.js';
 
 import {
   createArtifactsStore,
-  createChatArtifactsStore,
   createFileArtifactsStore,
   createCardFileMetadataStore,
 } from '../cli/common/artifacts-store-lib.js';
+
+import {
+  createInMemoryChatStorage,
+} from '../cli/common/chat-storage-lib.js';
+import type { ChatStorage } from '../cli/common/chat-storage-lib.js';
 
 import type {
   SingleBoardRuntimeOptions,
@@ -78,7 +82,6 @@ interface BoardContext {
   board: ReturnType<typeof createBoardLiveCardsPublic>;
   cardStore: ReturnType<typeof createCardStorePublic>;
   readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
-  readonly chatsArtifacts: ReturnType<typeof createArtifactsStore>;
   boardAdapter: import('./types.js').BoardPlatformAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
@@ -144,12 +147,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const logger: RuntimeLogger = options.logger || { info: console.log, warn: console.warn, error: console.error };
   const invocationAdapter = options.invocationAdapter;
   const chatFlowRunner = options.chatFlowRunner || null;
+  const chatStorage: ChatStorage = options.chatStorage ?? createInMemoryChatStorage();
   const notificationTransport = options.notificationTransport || null;
   const serverUrl = options.serverUrl || null;
   const executionExtra = options.executionExtra || {};
 
   const sseClients = new Map<string, { res: RuntimeResponse; subscribedChatCardIds: Set<string> }>();
-  const lastChatSignalByCardId = new Map<string, string>();
+  const lastChatCursorByCardId = new Map<string, string | null>();
+  const lastChatProcessingByCardId = new Map<string, boolean>();
   let chatSubscriptionScanTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Build board contexts from injected configs ───────────────────────────
@@ -169,16 +174,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
 
     // Lazy artifact stores — only created on first access (saves ~5KB in bundles
-    // that never use chat/file features).
+    // that never use file features).
     let _filesArtifacts: ReturnType<typeof createArtifactsStore> | null = null;
-    let _chatsArtifacts: ReturnType<typeof createArtifactsStore> | null = null;
 
     return {
       label: cfg.label,
       board,
       cardStore,
       get filesArtifacts() { return _filesArtifacts ??= createArtifactsStore(artAdapter.blobStorage('files')); },
-      get chatsArtifacts() { return _chatsArtifacts ??= createArtifactsStore(artAdapter.blobStorage('chats')); },
       boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
@@ -205,14 +208,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const ctx = boardContexts[ownerIndex(cardId)];
     return {
       files: ctx ? ctx.filesArtifacts : null,
-      chats: ctx ? ctx.chatsArtifacts : null,
     };
-  }
-
-  function chatArtifactsForCard(cardId: string) {
-    const stores = artifactsStores(cardId);
-    if (!stores.chats) return null;
-    return createChatArtifactsStore(stores.chats, { indexFileName: '.index.json' });
   }
 
   function fileArtifactsForCard(cardId: string) {
@@ -448,13 +444,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return merged;
   }
 
-  function readChatSignal(cardId: string): { count: number; latest_mtime_ms: number; processing: boolean } {
-    const sid = safeCardId(cardId);
-    const chatStore = chatArtifactsForCard(cardId);
-    if (!chatStore) return { count: 0, latest_mtime_ms: 0, processing: false };
-    return chatStore.readSignal(sid);
-  }
-
   function buildPublishedRuntimePayload(): unknown {
     const cardDefinitions = readCardDefinitions();
     const rawArtifacts = readCardRuntimeArtifacts();
@@ -483,17 +472,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (!cardDef?.id) continue;
       const id = cardDef.id as string;
       try {
-        const chatSignal = readChatSignal(id);
-        const chatRecords = readChatRecords(id);
-        if (chatRecords.length > 0 || chatSignal.processing) {
+        const records = readChatRecords(id);
+        const processing = chatStorage.isProcessing(id);
+        if (records.length > 0 || processing) {
           cardChatsByCardId[id] = {
-            messages: chatRecords.map((r: Record<string, unknown>) => ({
+            messages: records.map((r: Record<string, unknown>) => ({
               role: String(r.role || 'system'),
               text: String(r.text || ''),
               files: Array.isArray(r.files) ? r.files : [],
             })),
             receiving: false,
-            processing: !!chatSignal.processing,
+            processing,
           };
         }
       } catch { /* ignore errors reading chat records for this card */ }
@@ -593,11 +582,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat & file operations ───────────────────────────────────────────────
 
-  function parseLeadingSerial(fileName: string): number {
-    const m = String(fileName || '').match(/^(\d+)[-_]/);
-    return m ? parseInt(m[1], 10) : 0;
-  }
-
   function normalizeDisplayFileName(name: string): string {
     const input = String(name || '').trim();
     if (!input) return 'upload.bin';
@@ -608,66 +592,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   function clearChatRecords(cardId: string): void {
-    const sid = safeCardId(cardId);
-    const chatStore = chatArtifactsForCard(cardId);
-    if (!chatStore) return;
-    chatStore.clear(sid);
+    chatStorage.clear(cardId);
+    chatStorage.setProcessing(cardId, false);
   }
 
-  function nextChatStoredName(cardId: string, role: string): string {
-    const sid = safeCardId(cardId);
-    const chatStore = chatArtifactsForCard(cardId);
-    const serial = chatStore ? chatStore.nextSerial(sid) : 1;
-    const safeRole = String(role || 'system').toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'system';
-    return `${String(serial).padStart(3, '0')}_${safeRole}.txt`;
-  }
-
-  function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>): Record<string, unknown> {
-    const now = new Date().toISOString();
-    const sid = safeCardId(cardId);
-    const stores = artifactsStores(cardId);
-    const outName = nextChatStoredName(cardId, role || 'system');
-    const artifactKey = `${sid}/${outName}`;
-
-    const lines: string[] = [];
+  /** Append a chat message; returns the new entry id (used as cursor). */
+  function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>): string {
     const msg = typeof text === 'string' ? text.trim() : '';
-    if (msg) lines.push(msg);
-
-    const fileList = Array.isArray(files) ? files : [];
-    if (fileList.length) {
-      if (lines.length) lines.push('');
-      lines.push('files:');
-      for (const file of fileList) {
-        if (!file || typeof file !== 'object') continue;
-        const display = typeof file.name === 'string' ? file.name : 'file';
-        const stored = typeof file.stored_name === 'string' ? file.stored_name : '';
-        lines.push(stored ? `- ${display} -> ${stored}` : `- ${display}`);
-      }
-    }
-
-    if (stores.chats) stores.chats.putText(artifactKey, `${lines.join('\n')}\n`);
-    const serial = parseLeadingSerial(outName);
-    const chatStore = chatArtifactsForCard(cardId);
-    if (chatStore) {
-      chatStore.appendIndexRecord(sid, {
-        serial,
-        role: role || 'system',
-        stored_name: outName,
-        path: `${cardId}/chats/${outName}`,
-        updated_at: now,
-      });
-    }
-    return { at: now, role: role || 'system', text: msg, files: fileList, path: `${cardId}/chats/${outName}` };
+    return chatStorage.append(cardId, role || 'system', msg, files);
   }
 
   function readChatRecords(cardId: string): Array<Record<string, unknown>> {
-    const sid = safeCardId(cardId);
-    const chatStore = chatArtifactsForCard(cardId);
-    if (!chatStore) return [];
-    return chatStore.readRecords(sid).map((row) => ({
-      ...row,
-      path: `${cardId}/chats/${row.stored_name}`,
-    }));
+    return chatStorage.readAll(cardId) as unknown as Array<Record<string, unknown>>;
   }
 
   function readCardStoredFileNames(cardId: string): string[] {
@@ -709,7 +645,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat handler invocation ──────────────────────────────────────────────
 
-  function invokeChatHandler(cardId: string, chatsKeyPrefix: string, lastChatFile: string): void {
+  function invokeChatHandler(cardId: string, lastEntryId: string): void {
     const ctx = cardContextForCard(cardId);
     if (!ctx) return;
 
@@ -719,24 +655,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const handlerRef = ctx.chatHandlerRef;
     if (handlerFlow == null && (!handlerRef || typeof handlerRef !== 'object')) return;
 
-    const sid = safeCardId(cardId);
-    const stores = artifactsStores(cardId);
-    const processingMarkerKey = `${sid}/.processing`;
-    try { stores.chats?.putText(processingMarkerKey, '', 'text/plain; charset=utf-8'); } catch {}
+    try { chatStorage.setProcessing(cardId, true); } catch {}
 
     const args: Record<string, unknown> = {
       boardId,
       cardId: String(cardId),
-      chatsKeyPrefix,
-      chatProcessingMarkerKey: processingMarkerKey,
-      lastChatFile,
+      lastChatEntryId: lastEntryId,
       ...executionExtra,
       ...(serverUrl ? { serverUrl } : {}),
     };
 
     if (!chatFlowRunner) {
       if (handlerFlow != null) {
-        try { stores.chats?.remove(processingMarkerKey); } catch {}
+        try { chatStorage.setProcessing(cardId, false); } catch {}
         logger.warn(`[chat-handler-flow] configured for card "${cardId}" but no chatFlowRunner was provided`);
         return;
       }
@@ -757,12 +688,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           if (result.dispatched) {
             logger.info(`[chat-handler-flow] invoked for card "${cardId}" (boardId: "${boardId}")`);
           } else {
-            try { stores.chats?.remove(processingMarkerKey); } catch {}
+            try { chatStorage.setProcessing(cardId, false); } catch {}
             logger.warn(`[chat-handler-flow] dispatch failed for card "${cardId}": ${result.error || 'unknown'}`);
           }
         },
         (err) => {
-          try { stores.chats?.remove(processingMarkerKey); } catch {}
+          try { chatStorage.setProcessing(cardId, false); } catch {}
           logger.warn(`[chat-handler-flow] invoke failed for card "${cardId}": ${err?.message || String(err)}`);
         },
       );
@@ -776,12 +707,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         if (result.dispatched) {
           logger.info(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
         } else {
-          try { stores.chats?.remove(processingMarkerKey); } catch {}
+          try { chatStorage.setProcessing(cardId, false); } catch {}
           logger.warn(`[chat-handler] dispatch failed for card "${cardId}": ${result.error || 'unknown'}`);
         }
       },
       (err) => {
-        try { stores.chats?.remove(processingMarkerKey); } catch {}
+        try { chatStorage.setProcessing(cardId, false); } catch {}
         logger.warn(`[chat-handler] invoke failed for card "${cardId}": ${err?.message || String(err)}`);
       },
     );
@@ -791,7 +722,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): void {
     const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
-    let chatHandlerResult: { chatsKeyPrefix: string; lastChatFile: string } | undefined;
+    let chatHandlerResult: { cardId: string; lastEntryId: string } | undefined;
 
     persistCard(cardId, (card) => {
       const now = new Date().toISOString();
@@ -813,11 +744,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         }
 
         if (text || files.length > 0) {
-          const sid = safeCardId(cardId);
-          const userRecord = writeChatRecord(cardId, 'user', text, files);
-          const recPath = userRecord.path as string;
-          const lastSeg = recPath.includes('/') ? recPath.slice(recPath.lastIndexOf('/') + 1) : recPath;
-          chatHandlerResult = { chatsKeyPrefix: `${sid}/chats`, lastChatFile: lastSeg };
+          const entryId = writeChatRecord(cardId, 'user', text, files);
+          chatHandlerResult = { cardId, lastEntryId: entryId };
           for (const file of files) {
             if (!file || typeof file !== 'object') continue;
             const display = typeof file.name === 'string' ? file.name : 'file';
@@ -828,7 +756,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           // Emit SSE notification so connected clients receive updated chat state immediately
           try {
             const allRecords = readChatRecords(cardId);
-            const chatSignal = readChatSignal(cardId);
             broadcastNotificationBatchToSseClients([{
               kind: 'card_chats',
               cardId,
@@ -838,7 +765,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
                 files: Array.isArray(r.files) ? r.files : [],
               })),
               receiving: true,
-              processing: !!chatSignal.processing,
+              processing: chatStorage.isProcessing(cardId),
             }]);
           } catch { /* best-effort SSE broadcast */ }
         }
@@ -862,7 +789,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
 
     if (chatHandlerResult) {
-      invokeChatHandler(cardId, chatHandlerResult.chatsKeyPrefix, chatHandlerResult.lastChatFile);
+      invokeChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId);
     }
   }
 
@@ -933,14 +860,20 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return Array.from(ids);
   }
 
-  function chatSignalKey(cardId: string): string {
-    const signal = readChatSignal(cardId);
-    return `${signal.count}:${signal.latest_mtime_ms}:${signal.processing ? 1 : 0}`;
+  /** Returns true when there are new messages or the processing flag changed since last call. Advances cursor as a side effect. */
+  function hasChatChanges(cardId: string): boolean {
+    const lastCursor = lastChatCursorByCardId.has(cardId) ? lastChatCursorByCardId.get(cardId)! : null;
+    const { cursor: newCursor } = chatStorage.readAfter(cardId, lastCursor);
+    const processing = chatStorage.isProcessing(cardId);
+    const processingChanged = processing !== (lastChatProcessingByCardId.get(cardId) ?? false);
+    const hasNewRecords = newCursor !== lastCursor;
+    if (hasNewRecords) lastChatCursorByCardId.set(cardId, newCursor);
+    lastChatProcessingByCardId.set(cardId, processing);
+    return hasNewRecords || processingChanged;
   }
 
   function buildCardChatsNotification(cardId: string, receiving = true): Record<string, unknown> {
     const records = readChatRecords(cardId);
-    const chatSignal = readChatSignal(cardId);
     return {
       kind: 'card_chats',
       cardId,
@@ -950,7 +883,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         files: Array.isArray(r.files) ? r.files : [],
       })),
       receiving,
-      processing: !!chatSignal.processing,
+      processing: chatStorage.isProcessing(cardId),
     };
   }
 
@@ -968,7 +901,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       clearInterval(chatSubscriptionScanTimer);
       chatSubscriptionScanTimer = null;
     }
-    lastChatSignalByCardId.clear();
+    lastChatCursorByCardId.clear();
+    lastChatProcessingByCardId.clear();
   }
 
   function ensureChatSubscriptionScan(): void {
@@ -980,14 +914,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         return;
       }
       const activeSet = new Set(activeCardIds);
-      for (const cardId of Array.from(lastChatSignalByCardId.keys())) {
-        if (!activeSet.has(cardId)) lastChatSignalByCardId.delete(cardId);
+      for (const cardId of Array.from(lastChatCursorByCardId.keys())) {
+        if (!activeSet.has(cardId)) lastChatCursorByCardId.delete(cardId);
+      }
+      for (const cardId of Array.from(lastChatProcessingByCardId.keys())) {
+        if (!activeSet.has(cardId)) lastChatProcessingByCardId.delete(cardId);
       }
       for (const cardId of activeCardIds) {
-        const nextKey = chatSignalKey(cardId);
-        const prevKey = lastChatSignalByCardId.get(cardId);
-        if (prevKey !== nextKey) {
-          lastChatSignalByCardId.set(cardId, nextKey);
+        if (hasChatChanges(cardId)) {
           broadcastCardChatsToSubscribedSseClients(cardId, true);
         }
       }
@@ -998,7 +932,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const client = sseClients.get(clientId);
     if (!client) return false;
     client.subscribedChatCardIds.add(cardId);
-    lastChatSignalByCardId.set(cardId, chatSignalKey(cardId));
+    // Initialise cursor to latest so we only push deltas from this point forward.
+    const { cursor: latestCursor } = chatStorage.readAfter(cardId, null);
+    lastChatCursorByCardId.set(cardId, latestCursor);
+    lastChatProcessingByCardId.set(cardId, chatStorage.isProcessing(cardId));
     ensureChatSubscriptionScan();
     writeSseFrame(clientId, { kind: 'notification-batch', notifications: [buildCardChatsNotification(cardId, true)] });
     return true;
@@ -1008,7 +945,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const client = sseClients.get(clientId);
     if (!client) return false;
     client.subscribedChatCardIds.delete(cardId);
-    if (!currentSubscribedChatCardIds().includes(cardId)) lastChatSignalByCardId.delete(cardId);
+    if (!currentSubscribedChatCardIds().includes(cardId)) {
+      lastChatCursorByCardId.delete(cardId);
+      lastChatProcessingByCardId.delete(cardId);
+    }
     stopChatSubscriptionScanIfIdle();
     return true;
   }
@@ -1141,6 +1081,21 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardChatsMatch[1]);
         json(res, 200, { ok: true, messages: readChatRecords(cardId) });
+        return true;
+      }
+
+      if (method === 'POST' && cardChatsMatch) {
+        await bootstrapBoard();
+        const cardId = decodeURIComponent(cardChatsMatch[1]);
+        const body = await readJsonBody(req);
+        const role = typeof body?.role === 'string' ? body.role : 'assistant';
+        const text = typeof body?.text === 'string' ? body.text : '';
+        const files = Array.isArray(body?.files) ? body.files : [];
+        const done = body?.done === true;
+        const entryId = chatStorage.append(cardId, role, text, files);
+        if (done) chatStorage.setProcessing(cardId, false);
+        broadcastCardChatsToSubscribedSseClients(cardId, !done);
+        json(res, 200, { ok: true, id: entryId });
         return true;
       }
 

@@ -8,9 +8,9 @@ import {
   type TaskHandlerFn,
   type TaskHandlerInput,
   type TaskHandlerReturn,
-  type LiveGraph,
-  schedule,
-} from '../continuous-event-graph/index.js';
+} from '../continuous-event-graph/reactive.js';
+import { schedule } from '../continuous-event-graph/schedule.js';
+import type { LiveGraph } from '../continuous-event-graph/types.js';
 import type { LiveCard, LiveBoard } from '../continuous-event-graph/live-cards-bridge.js';
 
 export interface BrowserSourceAdapterContext {

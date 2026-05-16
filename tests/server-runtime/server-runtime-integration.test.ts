@@ -29,6 +29,7 @@ import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 // ── Import FS adapters (Node-specific) ─────────────────────────────────────
 import { createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
 import { serializeRef, parseRef } from '../../src/cli/common/storage-interface.js';
+import { createInMemoryChatStorage } from '../../src/cli/common/chat-storage-lib.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SOURCE_CARDS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cards');
@@ -41,6 +42,7 @@ const OUTPUTS_DIR = path.join(TEST_ROOT, 'outputs');
 const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/board`;
 
 let server: http.Server | null = null;
+const testChatStorage = createInMemoryChatStorage();
 
 // ── CardSourceAdapter from FS ──────────────────────────────────────────────
 function createFsCardSource(cardsDir: string): CardSourceAdapter {
@@ -78,6 +80,7 @@ beforeAll(async () => {
   const runtimeOptions: SingleBoardRuntimeOptions = {
     apiBasePath: '/api/board',
     boardId: 'test-board',
+    chatStorage: testChatStorage,
     boards: [{
       label: 'base',
       boardAdapter,
@@ -335,8 +338,8 @@ describe('platform-free server runtime (Node host)', () => {
 
   // ── Chat handler failure / .processing marker cleanup ────────────────────
 
-  it('cleans up .processing marker when chat-handler dispatch fails', async () => {
-    // With no chat-handler-flow configured, chat-send should not leave processing behind.
+  it('does not leave processing state behind when no chat handler is configured', async () => {
+    // With no chat-handler-flow configured, chat-send should not leave processing=true behind.
     const statusRes = await fetch(`${API_BASE}/board-status`);
     const statusData = await statusRes.json() as Record<string, unknown>;
     const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
@@ -356,17 +359,101 @@ describe('platform-free server runtime (Node host)', () => {
     // Give the async invocation time to settle
     await new Promise(resolve => setTimeout(resolve, 200));
 
-    // Chat signal should NOT show processing (marker was cleaned up after dispatch failure)
-    const statusRes2 = await fetch(`${API_BASE}/board-status`);
-    const statusData2 = await statusRes2.json() as Record<string, unknown>;
-    const runtimeById = statusData2.cardRuntimeById as Record<string, Record<string, unknown>>;
-    const cardRuntime = runtimeById[cardId];
-    const cardData = cardRuntime?.card_data as Record<string, unknown> | undefined;
-    const chatSignal = cardData?.__chat_signal as Record<string, unknown> | undefined;
-    // processing should be false — marker was removed after failed dispatch
-    if (chatSignal) {
-      expect(chatSignal.processing).toBe(false);
+    // processing should be false — no handler was configured so setProcessing(true) was never called
+    expect(testChatStorage.isProcessing(cardId)).toBe(false);
+  });
+
+  it('cleans up processing state when chat-handler dispatch fails', async () => {
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-srt-dispatch-fail-'));
+    const isolatedBoardDir = path.join(isolatedRoot, 'runtime');
+    const isolatedCardStoreDir = path.join(isolatedRoot, 'card-store');
+    const isolatedOutputsDir = path.join(isolatedRoot, 'outputs');
+    fs.mkdirSync(isolatedBoardDir, { recursive: true });
+    fs.mkdirSync(isolatedCardStoreDir, { recursive: true });
+    fs.mkdirSync(isolatedOutputsDir, { recursive: true });
+
+    const isolatedCardsDir = path.join(isolatedRoot, 'cards');
+    fs.mkdirSync(isolatedCardsDir, { recursive: true });
+    for (const entry of fs.readdirSync(SOURCE_CARDS_DIR, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        fs.copyFileSync(path.join(SOURCE_CARDS_DIR, entry.name), path.join(isolatedCardsDir, entry.name));
+      }
     }
+
+    const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: isolatedBoardDir }));
+    const boardAdapter = createFsBoardPlatformAdapter(baseRef, repoRoot, { suppressSpawn: true });
+    const cardStoreRef = serializeRef({ kind: 'fs-path', value: isolatedCardStoreDir });
+    const outputsStoreRef = serializeRef({ kind: 'fs-path', value: isolatedOutputsDir });
+    const preloadKv = boardAdapter.kvStorageForRef(cardStoreRef);
+    const preloadStore = createCardStorePublic(createCardStore({
+      readIndex: () => preloadKv.read('_index'),
+      writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+      readCard: (id: string) => preloadKv.read(id),
+      writeCard: (id: string, card: unknown) => {
+        preloadKv.write(id, card);
+        return id;
+      },
+      cardExists: (id: string) => preloadKv.read(id) !== null,
+      defaultCardKey: (id: string) => id,
+    } as any));
+    const preloadCards = createFsCardSource(isolatedCardsDir).listCards();
+    for (const card of preloadCards) {
+      const setResult = preloadStore.set({ body: card });
+      expect(setResult.status).toBe('success');
+    }
+
+    const isolatedChatStorage = createInMemoryChatStorage();
+    let flowRuns = 0;
+    const runtime = createSingleBoardServerRuntime({
+      apiBasePath: '/api/board',
+      boardId: 'dispatch-fail-board',
+      chatStorage: isolatedChatStorage,
+      boards: [{
+        label: 'base',
+        boardAdapter,
+        baseRef,
+        cardStoreRef,
+        outputsStoreRef,
+        chatHandlerFlow: { steps: [{ id: 'append-chat', type: 'noop' }], transitions: [] },
+      }],
+      chatFlowRunner: {
+        async run() {
+          flowRuns += 1;
+          return { dispatched: false, error: 'test dispatch failure' };
+        },
+      },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      serverUrl: 'http://127.0.0.1:0',
+    });
+
+    const server2 = http.createServer(async (req, res) => {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      const handled = await runtime.handleRuntimeApi(req as unknown as RuntimeRequest, res as unknown as RuntimeResponse, url);
+      if (!handled) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      }
+    });
+
+    await new Promise<void>((resolve) => server2.listen(0, '127.0.0.1', resolve));
+    const addr = server2.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const cardId = 'card-portfolio';
+
+    const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow should fail dispatch' } }),
+    });
+    expect(chatRes.ok).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(flowRuns).toBe(1);
+    expect(isolatedChatStorage.isProcessing(cardId)).toBe(false);
+
+    await new Promise<void>((resolve) => server2.close(() => resolve()));
+    try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
   it('runs chat-handler-flow when a chatFlowRunner is provided', async () => {

@@ -34,10 +34,13 @@ import {
   createFsAbsolutePathBlobStorage,
   createFsAtomicRelayLock,
   createFsJournalStorageAdapter,
+  createFsJournalStorage,
   computeStableJsonHash,
 } from './storage-fs-adapters.js';
 import { validateLiveCardDefinition } from '../../card-compute/schema-validator.js';
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from '../common/board-live-cards-public.js';
+import { createChatStorage } from '../common/chat-storage-lib.js';
+import type { ChatStorage } from '../common/chat-storage-lib.js';
 
 // ============================================================================
 // Re-export public API — consumers only need to import from this file
@@ -64,7 +67,9 @@ export type { ExecutionRef } from '../common/execution-interface.js';
 export { createCardStorePublic } from '../common/card-store-lib-public.js';
 export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
 export { createCardStore } from '../common/board-live-cards-lib.js';
-export { createArtifactsStore, createChatArtifactsStore, createFileArtifactsStore, createCardFileMetadataStore } from '../common/artifacts-store-lib.js';
+export { createArtifactsStore, createFileArtifactsStore, createCardFileMetadataStore } from '../common/artifacts-store-lib.js';
+export { createChatStorage, createInMemoryChatStorage } from '../common/chat-storage-lib.js';
+export type { ChatStorage, ChatRecord, ChatConfig } from '../common/chat-storage-lib.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 export {
@@ -115,13 +120,6 @@ export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
         return { dispatched: false, error: `createNodeSpawnInvocationAdapter: could not resolve fs-path from whatToRun` };
       }
       const finalArgs: Record<string, unknown> = { ...args };
-      // FS-specific: resolve chatsKeyPrefix + chatsBlobBasePath → chatDir
-      if (finalArgs.chatsKeyPrefix && finalArgs.chatsBlobBasePath) {
-        const cardPart = String(finalArgs.chatsKeyPrefix).split('/')[0];
-        finalArgs.chatDir = joinPath(String(finalArgs.chatsBlobBasePath), cardPart);
-      }
-      delete finalArgs.chatsKeyPrefix;
-      delete finalArgs.chatsBlobBasePath;
       const extra = Buffer.from(JSON.stringify(finalArgs)).toString('base64');
       try {
         const proc = spawn(process.execPath, [
@@ -347,6 +345,29 @@ export function createFsBoardNonCorePlatformAdapter(
     },
     absoluteBlob: createFsAbsolutePathBlobStorage(),
   };
+}
+
+// ============================================================================
+// createFsBoardChatStorage — convenience factory wiring fs-backed ChatStorage
+//
+// Wires:
+//   - one FsJournalStorage per card at  boardDir/chats/<safeCardId>.jsonl
+//   - one FsKvStorage for processing flags + config at  boardDir/.kv/chat/
+//
+// Usage:
+//   const chatStorage = createFsBoardChatStorage(boardDir);
+//   // pass to createSingleBoardServerRuntime({ ..., chatStorage })
+// ============================================================================
+
+export function createFsBoardChatStorage(boardDir: string): ChatStorage {
+  const kv = createFsKvStorage(joinPath(boardDir, '.kv', 'chat'));
+  return createChatStorage(
+    (cardId: string) => {
+      const safeId = String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      return createFsJournalStorage(joinPath(boardDir, 'chats', `${safeId}.jsonl`));
+    },
+    kv,
+  );
 }
 
 // ============================================================================
