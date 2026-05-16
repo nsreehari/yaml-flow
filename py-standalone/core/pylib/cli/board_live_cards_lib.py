@@ -437,34 +437,50 @@ def create_published_outputs_store(kv: Any) -> Any:
 # Source runtime helpers
 # ============================================================================
 
+def normalize_source_runtime_entry(entry: dict | None) -> dict:
+    if not entry:
+        return {"lastCompletionStatus": "not-started"}
+    return {
+        "lastRequestedToken": entry.get("lastRequestedToken"),
+        "lastCompletedToken": entry.get("lastCompletedToken"),
+        "lastCompletionStatus": entry.get("lastCompletionStatus") or (
+            "success" if entry.get("lastCompletedToken") else "not-started"
+        ),
+        "queueRequestedToken": entry.get("queueRequestedToken"),
+    }
+
 def is_source_in_flight(entry: dict | None) -> bool:
-    if not entry or not entry.get("lastRequestedAt"):
+    if not entry or not entry.get("lastRequestedToken"):
         return False
-    return not entry.get("lastFetchedAt") or entry["lastFetchedAt"] < entry["lastRequestedAt"]
+    return entry.get("lastCompletedToken") != entry.get("lastRequestedToken")
 
 
-def decide_source_action(entry: dict | None, queue_requested_at: str) -> str:
-    if not entry or not entry.get("lastRequestedAt"):
+def decide_source_action(entry: dict | None, queue_requested_token: str) -> str:
+    if not entry or not entry.get("lastRequestedToken"):
         return "dispatch"
     if is_source_in_flight(entry):
         return "in-flight"
-    if not entry.get("lastFetchedAt"):
+    if not entry.get("lastCompletedToken"):
         return "dispatch"
-    if entry["lastFetchedAt"] < queue_requested_at:
+    if entry["lastCompletedToken"] < queue_requested_token:
         return "dispatch"
     return "idle"
 
 
-def next_entry_after_fetch_delivery(entry: dict, fetched_at: str) -> dict:
-    nxt = {**entry, "lastFetchedAt": fetched_at}
-    nxt.pop("lastError", None)
-    return nxt
+def next_entry_after_fetch_delivery(entry: dict, completion_token: str) -> dict:
+    return {
+        **entry,
+        "lastCompletedToken": completion_token,
+        "lastCompletionStatus": "success",
+    }
 
 
-def next_entry_after_fetch_failure(entry: dict, reason: str) -> dict:
-    nxt = {**entry, "lastError": reason}
-    nxt.pop("lastFetchedAt", None)
-    return nxt
+def next_entry_after_fetch_failure(entry: dict, completion_token: str) -> dict:
+    return {
+        **entry,
+        "lastCompletedToken": completion_token,
+        "lastCompletionStatus": "failure",
+    }
 
 
 # ============================================================================
@@ -665,16 +681,16 @@ def create_card_handler_fn(
             dirty = False
 
         def get_source_entry(output_file: str) -> dict:
-            return {**(state.get("_sources", {}).get(output_file) or {})}
+            return normalize_source_runtime_entry(state.get("_sources", {}).get(output_file))
 
         def set_source_entry(output_file: str, entry: dict) -> None:
             nonlocal dirty
-            state.setdefault("_sources", {})[output_file] = entry
+            state.setdefault("_sources", {})[output_file] = normalize_source_runtime_entry(entry)
             dirty = True
 
         current_exec_count = (handler_input.get("taskState") or {}).get("executionCount", 0)
         last_exec_count = state.get("_lastExecutionCount")
-        if isinstance(last_exec_count, int) and last_exec_count != current_exec_count:
+        if last_exec_count != current_exec_count:
             state["_sources"] = {}
             dirty = True
         if last_exec_count != current_exec_count:
@@ -687,10 +703,12 @@ def create_card_handler_fn(
             if output_file:
                 entry = get_source_entry(output_file)
                 if update.get("failure"):
-                    set_source_entry(output_file, next_entry_after_fetch_failure(entry, update.get("reason", "unknown")))
+                    failure_token = update.get("rqt") or entry.get("lastRequestedToken") or entry.get("queueRequestedToken")
+                    if failure_token:
+                        set_source_entry(output_file, next_entry_after_fetch_failure(entry, failure_token))
                 else:
                     incoming_rqt = update.get("rqt", "")
-                    if not entry.get("lastFetchedAt") or incoming_rqt > entry.get("lastFetchedAt", ""):
+                    if not entry.get("lastCompletedToken") or incoming_rqt > entry.get("lastCompletedToken", ""):
                         delivery_token = update.get("deliveryToken")
                         committed = False
                         if isinstance(delivery_token, str):
@@ -702,10 +720,7 @@ def create_card_handler_fn(
                         else:
                             set_source_entry(
                                 output_file,
-                                next_entry_after_fetch_failure(
-                                    entry,
-                                    f"source delivery commit failed for {output_file} token={delivery_token}",
-                                ),
+                                next_entry_after_fetch_failure(entry, incoming_rqt),
                             )
                 flush()
 
@@ -757,7 +772,7 @@ def create_card_handler_fn(
         enriched_card["source_defs"] = enriched_sources
 
         now = _now_iso()
-        run_queued_at = None if update else now
+        run_queued_token = None if update else now
 
         undelivered_required = []
         for s in required_sources:
@@ -766,10 +781,10 @@ def create_card_handler_fn(
                 undelivered_required.append(s)
                 continue
             entry = get_source_entry(output_file)
-            if run_queued_at:
-                entry = {**entry, "queueRequestedAt": run_queued_at}
+            if run_queued_token:
+                entry = {**entry, "queueRequestedToken": run_queued_token}
                 set_source_entry(output_file, entry)
-            qrt = entry.get("queueRequestedAt") or entry.get("lastRequestedAt") or now
+            qrt = entry.get("queueRequestedToken") or entry.get("lastRequestedToken") or now
             action = decide_source_action(entry, qrt)
             if action == "in-flight":
                 continue
@@ -786,8 +801,8 @@ def create_card_handler_fn(
                 if not isinstance(output_file, str) or not output_file:
                     continue
                 entry = get_source_entry(output_file)
-                queued_at = entry.get("queueRequestedAt") or now
-                set_source_entry(output_file, {**entry, "lastRequestedAt": queued_at})
+                queued_at = entry.get("queueRequestedToken") or now
+                set_source_entry(output_file, {**entry, "lastRequestedToken": queued_at})
                 dispatch_rqt = queued_at
                 stamped_any = True
             if stamped_any:
@@ -807,6 +822,19 @@ def create_card_handler_fn(
             adapters["executionRequestStore"].append_entries(journal_id, pending_requests)
             return "task-initiated"
 
+        any_required_in_flight = False
+        for src in required_sources:
+            output_file = src.get("outputFile")
+            if not isinstance(output_file, str) or not output_file:
+                continue
+            entry = get_source_entry(output_file)
+            qrt = entry.get("queueRequestedToken") or entry.get("lastRequestedToken") or now
+            if decide_source_action(entry, qrt) == "in-flight":
+                any_required_in_flight = True
+                break
+        if any_required_in_flight:
+            return "task-initiated"
+
         # Compute provides data
         provides_bindings = card.get("provides") or []
         data: dict[str, Any] = {}
@@ -820,6 +848,32 @@ def create_card_handler_fn(
 
         do_fn = write_data_objects_fn or adapters["outputStore"].write_data_objects
         do_fn(data)
+
+        undelivered_optional = []
+        for src in all_sources:
+            if src.get("optionalForCompletionGating") is not True:
+                continue
+            output_file = src.get("outputFile")
+            entry = get_source_entry(output_file) if isinstance(output_file, str) and output_file else {}
+            if not entry.get("lastRequestedToken"):
+                undelivered_optional.append(src)
+                continue
+            if not entry.get("lastCompletedToken"):
+                undelivered_optional.append(src)
+                continue
+            if entry.get("lastCompletedToken") <= entry.get("lastRequestedToken"):
+                undelivered_optional.append(src)
+
+        if undelivered_optional:
+            pending_requests.append({
+                "taskKind": "source-fetch",
+                "payload": {
+                    "boardRef": serialize_ref(base_ref),
+                    "enrichedCard": enriched_card,
+                    "callbackToken": handler_input.get("callbackToken", ""),
+                    "rqt": now,
+                },
+            })
 
         task_completed_fn(handler_input["nodeId"], data)
         if pending_requests:

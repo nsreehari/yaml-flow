@@ -708,6 +708,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                         "failure": True,
                         "reason": reason,
                         "sourceChecksum": decoded.get("cs"),
+                        "rqt": decoded.get("rqt", ""),
                     },
                     "timestamp": _now_iso(),
                 })
