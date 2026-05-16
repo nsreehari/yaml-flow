@@ -315,7 +315,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
 
 // Pre-register configured boards in the server meta store
 const persistedBoardsConfigText = serverMetaStore.getText('boards-config.json');
-let persistedBoardsConfig = { boards: [{ id: 'default', label: 'Default Board' }] };
+let persistedBoardsConfig = { boards: [] };
 if (persistedBoardsConfigText) {
   try {
     const parsedBoardsConfig = JSON.parse(persistedBoardsConfigText);
@@ -323,7 +323,7 @@ if (persistedBoardsConfigText) {
       persistedBoardsConfig = parsedBoardsConfig;
     }
   } catch {
-    persistedBoardsConfig = { boards: [{ id: 'default', label: 'Default Board' }] };
+    persistedBoardsConfig = { boards: [] };
   }
 }
 

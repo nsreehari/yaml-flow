@@ -45,6 +45,7 @@ runtime-out/
 # Example board artifacts are generated content — do not track
 **/.demo-setup/**
 **/.server-meta/**
+**/.board-ws/**
 pydist/
 
 metafile-iife.json
