@@ -1152,7 +1152,8 @@ describe('computed-values persistence', () => {
 
 describe('windows launcher behavior', () => {
   it('keeps the repo CLI wrapper hidden on Windows fallback launches', () => {
-    const wrapper = fs.readFileSync(path.join(repoRoot, 'dev', 'board-live-cards-cli.js'), 'utf-8');
+    // board-live-cards-cli.js delegates to run-dev-cli.js; windowsHide is enforced there.
+    const wrapper = fs.readFileSync(path.join(repoRoot, 'dev', 'run-dev-cli.js'), 'utf-8');
     expect(wrapper).toContain('windowsHide: true');
   });
 

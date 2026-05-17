@@ -228,8 +228,12 @@ beforeAll(async () => {
       cardStoreRef: serializeRef({ kind: 'firestore', value: 'boards/firebase-test/card-store' }),
       outputsStoreRef: serializeRef({ kind: 'firestore', value: 'boards/firebase-test/outputs' }),
       cardSource,
+      chatHandlerFlow: { id: 'firebase-test-chat-flow', steps: {}, terminal_states: {} },
     }],
     invocationAdapter,
+    chatFlowRunner: {
+      async run() { return { dispatched: true }; },
+    },
     logger: {
       info: () => {},
       warn: () => {},
