@@ -407,6 +407,168 @@ export function createFsScratchStorage(scratchDir: string): ScratchStorage {
 }
 
 // ============================================================================
+// FsArchiveFactory
+//
+// Long-lived archival store rooted at <archiveDir>. Layout:
+//   <archiveDir>/__archive-marker         (safety guard; sweep refuses w/o it)
+//   <archiveDir>/__archive-config.json    (retention bag)
+//   <archiveDir>/streams/<name>.jsonl     (one JournalStorage per stream)
+//   <archiveDir>/blobs/<name>/...         (one BlobStorage per namespace)
+//
+// Retention is disabled by default (archives are long-lived). Embedders may
+// set 'retention.maxAgeMs' and 'retention.sweepIntervalMs' via config to
+// enable best-effort sweep of stream and blob files older than maxAgeMs.
+// ============================================================================
+
+const ARCHIVE_MARKER_FILE = '__archive-marker';
+const ARCHIVE_CONFIG_FILE = '__archive-config.json';
+const ARCHIVE_STREAMS_DIR = 'streams';
+const ARCHIVE_BLOBS_DIR = 'blobs';
+const ARCHIVE_SWEEP_WALL_TIME_BUDGET_MS = 500;
+
+function sanitizeArchiveSegment(s: string): string {
+  const cleaned = s.replace(/[^A-Za-z0-9._-]/g, '_');
+  if (!cleaned) throw new Error('Archive segment name cannot be empty after sanitization');
+  return cleaned;
+}
+
+export function createFsArchiveFactory(archiveDir: string): import('../common/storage-interface.js').ArchiveFactory {
+  fs.mkdirSync(archiveDir, { recursive: true });
+  fs.mkdirSync(path.join(archiveDir, ARCHIVE_STREAMS_DIR), { recursive: true });
+  fs.mkdirSync(path.join(archiveDir, ARCHIVE_BLOBS_DIR), { recursive: true });
+  const markerPath = path.join(archiveDir, ARCHIVE_MARKER_FILE);
+  const configPath = path.join(archiveDir, ARCHIVE_CONFIG_FILE);
+  if (!fs.existsSync(markerPath)) {
+    try { fs.writeFileSync(markerPath, `archive-store\n${new Date().toISOString()}\n`, 'utf-8'); } catch { /* best-effort */ }
+  }
+
+  function readConfigBag(): Record<string, unknown> {
+    if (!fs.existsSync(configPath)) return {};
+    try {
+      const raw = fs.readFileSync(configPath, 'utf-8');
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch { return {}; }
+  }
+
+  function writeConfigBag(bag: Record<string, unknown>): void {
+    const tmp = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(bag, null, 2), 'utf-8');
+      renameSync(tmp, configPath);
+    } catch { /* best-effort */ }
+  }
+
+  function maybeSweep(): void {
+    if (!fs.existsSync(markerPath)) return;
+    const bag = readConfigBag();
+    const maxAgeMs = typeof bag['retention.maxAgeMs'] === 'number' ? (bag['retention.maxAgeMs'] as number) : 0;
+    const sweepIntervalMs = typeof bag['retention.sweepIntervalMs'] === 'number' ? (bag['retention.sweepIntervalMs'] as number) : 0;
+    if (maxAgeMs <= 0 || sweepIntervalMs <= 0) return;
+    const lastSweepAt = typeof bag['retention.lastSweepAt'] === 'number' ? (bag['retention.lastSweepAt'] as number) : 0;
+    const now = Date.now();
+    if (now - lastSweepAt < sweepIntervalMs) return;
+    bag['retention.lastSweepAt'] = now;
+    writeConfigBag(bag);
+
+    const sweepStart = now;
+    const walk = (root: string): void => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (Date.now() - sweepStart > ARCHIVE_SWEEP_WALL_TIME_BUDGET_MS) return;
+        const full = path.join(root, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.isFile()) continue;
+        try {
+          const st = fs.statSync(full);
+          if (now - st.mtimeMs > maxAgeMs) {
+            try { fs.unlinkSync(full); } catch { /* best-effort */ }
+          }
+        } catch { /* best-effort */ }
+      }
+    };
+    walk(path.join(archiveDir, ARCHIVE_STREAMS_DIR));
+    walk(path.join(archiveDir, ARCHIVE_BLOBS_DIR));
+  }
+
+  return {
+    stream(name: string) {
+      const safe = sanitizeArchiveSegment(name);
+      const streamPath = path.join(archiveDir, ARCHIVE_STREAMS_DIR, `${safe}.jsonl`);
+      const inner = createFsJournalStorage(streamPath);
+      return {
+        append(payload: unknown): JournalEntry {
+          const entry = inner.append(payload);
+          try { maybeSweep(); } catch { /* best-effort */ }
+          return entry;
+        },
+        readAll: () => inner.readAll(),
+        readAfter: (cursor: string | null) => inner.readAfter(cursor),
+        clear: () => { if (inner.clear) inner.clear(); },
+      };
+    },
+
+    blob(name: string) {
+      const safe = sanitizeArchiveSegment(name);
+      const blobDir = path.join(archiveDir, ARCHIVE_BLOBS_DIR, safe);
+      fs.mkdirSync(blobDir, { recursive: true });
+      const inner = createFsBlobStorage(blobDir);
+      return {
+        read: (key: string) => inner.read(key),
+        write: (key: string, content: string) => {
+          inner.write(key, content);
+          try { maybeSweep(); } catch { /* best-effort */ }
+        },
+        exists: (key: string) => inner.exists(key),
+        remove: (key: string) => inner.remove(key),
+        readBytes: inner.readBytes ? (key: string) => inner.readBytes!(key) : undefined,
+        writeBytes: inner.writeBytes ? (key: string, content: Uint8Array) => {
+          inner.writeBytes!(key, content);
+          try { maybeSweep(); } catch { /* best-effort */ }
+        } : undefined,
+        listKeys: (prefix?: string) => inner.listKeys(prefix),
+        stat: inner.stat ? (key: string) => inner.stat!(key) : undefined,
+      };
+    },
+
+    listStreams(prefix?: string): string[] {
+      const dir = path.join(archiveDir, ARCHIVE_STREAMS_DIR);
+      try {
+        return fs.readdirSync(dir, { withFileTypes: true })
+          .filter(e => e.isFile() && e.name.endsWith('.jsonl'))
+          .map(e => e.name.slice(0, -'.jsonl'.length))
+          .filter(n => !prefix || n.startsWith(prefix))
+          .sort();
+      } catch { return []; }
+    },
+
+    listBlobs(prefix?: string): string[] {
+      const dir = path.join(archiveDir, ARCHIVE_BLOBS_DIR);
+      try {
+        return fs.readdirSync(dir, { withFileTypes: true })
+          .filter(e => e.isDirectory())
+          .map(e => e.name)
+          .filter(n => !prefix || n.startsWith(prefix))
+          .sort();
+      } catch { return []; }
+    },
+
+    config: {
+      get(k: string): unknown { return readConfigBag()[k] ?? null; },
+      set(k: string, v: unknown): void {
+        const bag = readConfigBag();
+        if (v === undefined || v === null) delete bag[k];
+        else bag[k] = v;
+        writeConfigBag(bag);
+      },
+    },
+  };
+}
+
+// ============================================================================
 // FsKvStorage
 //
 // key "cards/abc123/runtime" → <kvDir>/cards/abc123/runtime.json

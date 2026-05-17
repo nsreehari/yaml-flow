@@ -302,6 +302,46 @@ export interface ScratchStorage extends BlobStorage {
 }
 
 // ============================================================================
+// ArchiveFactory — long-lived archival store for tracking / audit artifacts
+//
+// Pairs two existing primitives under a single rooted namespace with optional
+// retention policy:
+//   stream(name) → JournalStorage   (append-only structured event streams)
+//   blob(name)   → BlobStorage      (raw text/byte dumps, keyed inside the
+//                                    blob namespace)
+//
+// Intent: holds runtime-generated tracking files that are written once and
+// read later for inspection/audit (NOT operational hot-path state, NOT the
+// board's primary journal). Each archive root is independent and may live
+// on a different backend / ref than the board's main runtime.
+//
+// Reserved config keys (used by optional sweep machinery):
+//   'retention.maxAgeMs'        — default 0 (disabled; archives are long-lived by default)
+//   'retention.sweepIntervalMs' — default 0 (disabled)
+//   'retention.lastSweepAt'     — epoch-ms of last sweep (managed internally)
+// ============================================================================
+
+export interface ArchiveFactory {
+  /** Open (or create) a named append-only stream rooted inside the archive. */
+  stream(name: string): JournalStorage;
+
+  /** Open (or create) a named blob namespace rooted inside the archive. */
+  blob(name: string): BlobStorage;
+
+  /** List all stream names present in the archive. */
+  listStreams(prefix?: string): string[];
+
+  /** List all blob namespace names present in the archive. */
+  listBlobs(prefix?: string): string[];
+
+  /** Backend-agnostic config bag (retention knobs and similar). */
+  config: {
+    get(k: string): unknown;
+    set(k: string, v: unknown): void;
+  };
+}
+
+// ============================================================================
 // StorageProvider — aggregate of all three primitives
 //
 // Adapter factories receive a StorageProvider and close over any scope (e.g.

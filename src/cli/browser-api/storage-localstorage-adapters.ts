@@ -310,6 +310,181 @@ export function createLocalStorageScratchStorage(prefix: string): ScratchStorage
 }
 
 // ============================================================================
+// createLocalStorageArchiveFactory
+//
+// localStorage layout under <prefix>:
+//   <prefix>:archive-marker                 (safety guard)
+//   <prefix>:archive-config                 (retention bag)
+//   <prefix>:archive:stream:<name>          (JSON array of JournalEntry)
+//   <prefix>:archive:blob:<name>:<key>      (blob namespace entries)
+//
+// Retention is disabled by default; embedders set 'retention.maxAgeMs' +
+// 'retention.sweepIntervalMs' to enable. Each stream entry includes a `__ts`
+// field used by the sweep.
+// ============================================================================
+
+const LS_ARCHIVE_MARKER_SUFFIX = ':archive-marker';
+const LS_ARCHIVE_CONFIG_SUFFIX = ':archive-config';
+const LS_ARCHIVE_STREAM_INFIX = ':archive:stream:';
+const LS_ARCHIVE_BLOB_INFIX = ':archive:blob:';
+
+function sanitizeLsArchiveSegment(s: string): string {
+  const cleaned = s.replace(/[^A-Za-z0-9._-]/g, '_');
+  if (!cleaned) throw new Error('Archive segment name cannot be empty after sanitization');
+  return cleaned;
+}
+
+export function createLocalStorageArchiveFactory(prefix: string): import('../common/storage-interface.js').ArchiveFactory {
+  const markerKey = `${prefix}${LS_ARCHIVE_MARKER_SUFFIX}`;
+  const configKey = `${prefix}${LS_ARCHIVE_CONFIG_SUFFIX}`;
+  const streamKey = (name: string) => `${prefix}${LS_ARCHIVE_STREAM_INFIX}${name}`;
+
+  if (globalThis.localStorage.getItem(markerKey) === null) {
+    try { globalThis.localStorage.setItem(markerKey, `archive-store\n${new Date().toISOString()}`); } catch { /* best-effort */ }
+  }
+
+  function readConfigBag(): Record<string, unknown> {
+    const raw = globalThis.localStorage.getItem(configKey);
+    if (raw === null) return {};
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch { return {}; }
+  }
+
+  function writeConfigBag(bag: Record<string, unknown>): void {
+    try { globalThis.localStorage.setItem(configKey, JSON.stringify(bag)); } catch { /* best-effort */ }
+  }
+
+  function maybeSweep(): void {
+    if (globalThis.localStorage.getItem(markerKey) === null) return;
+    const bag = readConfigBag();
+    const maxAgeMs = typeof bag['retention.maxAgeMs'] === 'number' ? (bag['retention.maxAgeMs'] as number) : 0;
+    const sweepIntervalMs = typeof bag['retention.sweepIntervalMs'] === 'number' ? (bag['retention.sweepIntervalMs'] as number) : 0;
+    if (maxAgeMs <= 0 || sweepIntervalMs <= 0) return;
+    const lastSweepAt = typeof bag['retention.lastSweepAt'] === 'number' ? (bag['retention.lastSweepAt'] as number) : 0;
+    const now = Date.now();
+    if (now - lastSweepAt < sweepIntervalMs) return;
+    bag['retention.lastSweepAt'] = now;
+    writeConfigBag(bag);
+
+    const streamMarker = `${prefix}${LS_ARCHIVE_STREAM_INFIX}`;
+    for (let i = 0; i < globalThis.localStorage.length; i++) {
+      const k = globalThis.localStorage.key(i);
+      if (!k || !k.startsWith(streamMarker)) continue;
+      const raw = globalThis.localStorage.getItem(k);
+      if (!raw) continue;
+      try {
+        const arr = JSON.parse(raw) as Array<{ id: string; payload: unknown; __ts?: number }>;
+        const kept = arr.filter(e => typeof e.__ts !== 'number' || now - e.__ts <= maxAgeMs);
+        if (kept.length !== arr.length) globalThis.localStorage.setItem(k, JSON.stringify(kept));
+      } catch { /* best-effort */ }
+    }
+  }
+
+  return {
+    stream(name: string) {
+      const safe = sanitizeLsArchiveSegment(name);
+      const k = streamKey(safe);
+
+      function load(): Array<{ id: string; payload: unknown; __ts?: number }> {
+        const raw = globalThis.localStorage.getItem(k);
+        if (!raw) return [];
+        try { return JSON.parse(raw) as Array<{ id: string; payload: unknown; __ts?: number }>; } catch { return []; }
+      }
+      function save(arr: Array<{ id: string; payload: unknown; __ts?: number }>): void {
+        try { globalThis.localStorage.setItem(k, JSON.stringify(arr)); } catch { /* best-effort */ }
+      }
+
+      return {
+        append(payload: unknown) {
+          const entry = { id: globalThis.crypto.randomUUID(), payload, __ts: Date.now() };
+          const arr = load();
+          arr.push(entry);
+          save(arr);
+          try { maybeSweep(); } catch { /* best-effort */ }
+          return { id: entry.id, payload: entry.payload };
+        },
+        readAll() {
+          return load().map(e => ({ id: e.id, payload: e.payload }));
+        },
+        readAfter(cursor: string | null) {
+          const all = load();
+          if (!cursor) {
+            const entries = all.map(e => ({ id: e.id, payload: e.payload }));
+            return { entries, newCursor: entries.length > 0 ? entries[entries.length - 1].id : null };
+          }
+          const idx = all.findIndex(e => e.id === cursor);
+          const tail = idx === -1 ? all : all.slice(idx + 1);
+          const entries = tail.map(e => ({ id: e.id, payload: e.payload }));
+          return { entries, newCursor: entries.length > 0 ? entries[entries.length - 1].id : cursor };
+        },
+        clear() { try { globalThis.localStorage.removeItem(k); } catch { /* best-effort */ } },
+      };
+    },
+
+    blob(name: string) {
+      const safe = sanitizeLsArchiveSegment(name);
+      const inner = createLocalStorageBlobStorage(`${prefix}${LS_ARCHIVE_BLOB_INFIX}${safe}`);
+      return {
+        read: (key: string) => inner.read(key),
+        write: (key: string, content: string) => {
+          inner.write(key, content);
+          try { maybeSweep(); } catch { /* best-effort */ }
+        },
+        exists: (key: string) => inner.exists(key),
+        remove: (key: string) => inner.remove(key),
+        readBytes: inner.readBytes ? (key: string) => inner.readBytes!(key) : undefined,
+        writeBytes: inner.writeBytes ? (key: string, content: Uint8Array) => {
+          inner.writeBytes!(key, content);
+          try { maybeSweep(); } catch { /* best-effort */ }
+        } : undefined,
+        listKeys: (pfx?: string) => inner.listKeys(pfx),
+        stat: inner.stat ? (key: string) => inner.stat!(key) : undefined,
+      };
+    },
+
+    listStreams(pfx?: string): string[] {
+      const marker = `${prefix}${LS_ARCHIVE_STREAM_INFIX}`;
+      const out: string[] = [];
+      for (let i = 0; i < globalThis.localStorage.length; i++) {
+        const k = globalThis.localStorage.key(i);
+        if (!k || !k.startsWith(marker)) continue;
+        const name = k.slice(marker.length);
+        if (!pfx || name.startsWith(pfx)) out.push(name);
+      }
+      return out.sort();
+    },
+
+    listBlobs(pfx?: string): string[] {
+      const marker = `${prefix}${LS_ARCHIVE_BLOB_INFIX}`;
+      const seen = new Set<string>();
+      for (let i = 0; i < globalThis.localStorage.length; i++) {
+        const k = globalThis.localStorage.key(i);
+        if (!k || !k.startsWith(marker)) continue;
+        const tail = k.slice(marker.length);
+        const colonIdx = tail.indexOf(':');
+        const name = colonIdx === -1 ? tail : tail.slice(0, colonIdx);
+        if (!pfx || name.startsWith(pfx)) seen.add(name);
+      }
+      return Array.from(seen).sort();
+    },
+
+    config: {
+      get(k: string): unknown { return readConfigBag()[k] ?? null; },
+      set(k: string, v: unknown): void {
+        const bag = readConfigBag();
+        if (v === undefined || v === null) delete bag[k];
+        else bag[k] = v;
+        writeConfigBag(bag);
+      },
+    },
+  };
+}
+
+// ============================================================================
 // createLocalStorageKvStorage
 // ============================================================================
 

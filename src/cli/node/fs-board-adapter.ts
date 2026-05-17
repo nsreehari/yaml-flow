@@ -38,6 +38,7 @@ import {
   createFsJournalStorageAdapter,
   createFsJournalStorage,
   createFsScratchStorage,
+  createFsArchiveFactory,
   computeStableJsonHash,
 } from './storage-fs-adapters.js';
 import { validateLiveCardDefinition } from '../../card-compute/schema-validator.js';
@@ -253,6 +254,9 @@ export function createFsBoardPlatformAdapter(
 
     scratchStorage: () => createFsScratchStorage(joinPath(dir, '.tmp')),
     scratchStorageForRef: (ref: string) => createFsScratchStorage(parseRef(ref).value),
+
+    archiveFactory: () => createFsArchiveFactory(joinPath(dir, 'archive')),
+    archiveFactoryForRef: (ref: string) => createFsArchiveFactory(parseRef(ref).value),
 
     journalAdapter: () => createFsJournalStorageAdapter(dir),
 

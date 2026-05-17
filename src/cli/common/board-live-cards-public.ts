@@ -31,7 +31,7 @@
  *   const status = board.status();
  */
 
-import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage } from './storage-interface.js';
+import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
@@ -162,6 +162,15 @@ export interface BoardPlatformAdapter {
   scratchStorageForRef(ref: string): ScratchStorage;
 
   /**
+   * Archive factory — long-lived tracking / audit store. Default scope is
+   * board-local; if the config has an 'archive-store-ref' set,
+   * archiveFactoryForRef(ref) is used instead so archives can live on a
+   * different backend / path than the main board runtime.
+   */
+  archiveFactory(): ArchiveFactory;
+  archiveFactoryForRef(ref: string): ArchiveFactory;
+
+  /**
    * Journal storage adapter (append-only log).
    * Uses the lib's JournalStorageAdapter interface.
    * One journal per board — no namespace parameter needed.
@@ -253,7 +262,8 @@ export interface BoardLiveCardsPublic {
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getScratchStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
-  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref'
+  getArchiveStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
+  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref', 'archive-store-ref'
   getConfig(input: CommandInput): CommandResult<{ value: unknown }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
@@ -648,10 +658,12 @@ export function createBoardLiveCardsPublic(
       const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
       if (!outputsStoreRef) return fail('init requires params.outputsStoreRef — pass the outputs store ref here');
       const scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
+      const archiveStoreRef = input.params?.['archiveStoreRef'] as string | undefined;
       const cfg = configStore();
       cfg.writeCardStoreRef(storeRef);
       cfg.writeOutputsStoreRef(outputsStoreRef);
       if (scratchStoreRef) cfg.writeScratchStoreRef(scratchStoreRef);
+      if (archiveStoreRef) cfg.writeArchiveStoreRef(archiveStoreRef);
       const body = (input.body ?? {}) as Record<string, unknown>;
       if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
       if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) cfg.writeChatHandlerFlow(body['chat-handler-flow']);
@@ -838,6 +850,13 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
   }
 
+  function getArchiveStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
+    try {
+      const storeRef = configStore().readArchiveStoreRef();
+      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
+  }
+
   function getConfig(input: CommandInput): CommandResult<{ value: unknown }> {
     try {
       const key = input.params?.['key'] as string | undefined;
@@ -850,6 +869,7 @@ export function createBoardLiveCardsPublic(
         case 'card-store-ref':    value = cfg.readCardStoreRef(); break;
         case 'outputs-store-ref': value = cfg.readOutputsStoreRef(); break;
         case 'scratch-store-ref': value = cfg.readScratchStoreRef(); break;
+        case 'archive-store-ref': value = cfg.readArchiveStoreRef(); break;
         default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
       }
       return ok({ value }) as CommandResult<{ value: unknown }>;
@@ -887,7 +907,7 @@ export function createBoardLiveCardsPublic(
   }
 
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getConfig,
+    init, status, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getArchiveStoreRef, getConfig,
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     removeCard, retrigger, processAccumulatedEvents,

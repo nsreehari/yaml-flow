@@ -20,6 +20,7 @@ import {
   createLocalStorageBlobStorage,
   createLocalStorageKvStorage,
   createLocalStorageScratchStorage,
+  createLocalStorageArchiveFactory,
   createLocalStorageJournalStorageAdapter,
   computeStableJsonHashBrowser,
 } from './storage-localstorage-adapters.js';
@@ -213,6 +214,9 @@ export function createBrowserBoardPlatformAdapter(
 
     scratchStorage: () => createLocalStorageScratchStorage(`${namespace}:scratch`),
     scratchStorageForRef: (ref: string) => createLocalStorageScratchStorage(parseRef(ref).value),
+
+    archiveFactory: () => createLocalStorageArchiveFactory(`${namespace}:archive`),
+    archiveFactoryForRef: (ref: string) => createLocalStorageArchiveFactory(parseRef(ref).value),
 
     journalAdapter: () =>
       createLocalStorageJournalStorageAdapter(`${namespace}:journal`),
