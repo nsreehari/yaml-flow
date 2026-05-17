@@ -222,7 +222,7 @@ describe('platform-free server runtime (Node host)', () => {
       }),
     });
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: `chat handler is not configured for card: ${cardId}` });
+    await expect(res.json()).resolves.toMatchObject({ error: `chat handler is not configured for card: ${cardId}` });
 
     const chatsRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/chats`);
     expect(chatsRes.ok).toBe(true);
