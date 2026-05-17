@@ -771,9 +771,10 @@ var LiveCard = (function () {
       let ind = _chatModal.body.querySelector('.lc-chat-processing');
       if (isProcessing) {
         if (!ind) {
+          const asstSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
           ind = document.createElement('div');
           ind.className = 'lc-chat-processing';
-          ind.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span><span>\u2728 AI working\u2026</span>';
+          ind.innerHTML = '<span class="lc-chat-icon" aria-hidden="true">' + asstSvg + '</span><span>AI working\u2026</span><span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span>';
           _chatModal.body.appendChild(ind);
         }
         _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
