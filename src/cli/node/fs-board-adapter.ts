@@ -71,6 +71,7 @@ export { createCardStorePublic } from '../common/card-store-lib-public.js';
 export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
 export { createCardStore } from '../common/board-live-cards-lib.js';
 export { createArtifactsStore, createFileArtifactsStore, createCardFileMetadataStore } from '../common/artifacts-store-lib.js';
+import { createArtifactsStore } from '../common/artifacts-store-lib.js';
 export { createChatStorage, createInMemoryChatStorage } from '../common/chat-storage-lib.js';
 export type { ChatStorage, ChatRecord, ChatConfig } from '../common/chat-storage-lib.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
@@ -355,23 +356,66 @@ export function createFsBoardNonCorePlatformAdapter(
 // createFsBoardChatStorage — convenience factory wiring fs-backed ChatStorage
 //
 // Wires:
-//   - one FsJournalStorage per card at  boardDir/chats/<safeCardId>.jsonl
-//   - one FsKvStorage for processing flags + config at  boardDir/.kv/chat/
+//   - one FsJournalStorage per card at  boardDir/<chatsSubdir>/<safeCardId>.jsonl
+//   - one FsKvStorage for processing flags + config at  boardDir/<kvSubdir>/chat/
+//
+// Both leaf segments are overridable; pass "" to write directly under boardDir.
 //
 // Usage:
 //   const chatStorage = createFsBoardChatStorage(boardDir);
 //   // pass to createSingleBoardServerRuntime({ ..., chatStorage })
 // ============================================================================
 
-export function createFsBoardChatStorage(boardDir: string): ChatStorage {
-  const kv = createFsKvStorage(joinPath(boardDir, '.kv', 'chat'));
+export interface FsBoardChatStorageOptions {
+  /** Subdirectory under boardDir for per-card jsonl files. Default: 'chats'. Pass '' to write directly under boardDir. */
+  chatsSubdir?: string;
+  /** Subdirectory under boardDir for chat KV (processing flags + config). Default: '.kv'. Pass '' to root at boardDir. */
+  kvSubdir?: string;
+}
+
+export function createFsBoardChatStorage(
+  boardDir: string,
+  opts: FsBoardChatStorageOptions = {},
+): ChatStorage {
+  const chatsSubdir = opts.chatsSubdir ?? 'chats';
+  const kvSubdir = opts.kvSubdir ?? '.kv';
+  const kvParts = kvSubdir ? [kvSubdir, 'chat'] : ['chat'];
+  const kv = createFsKvStorage(joinPath(boardDir, ...kvParts));
   return createChatStorage(
     (cardId: string) => {
       const safeId = String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      return createFsJournalStorage(joinPath(boardDir, 'chats', `${safeId}.jsonl`));
+      const fileName = `${safeId}.jsonl`;
+      const journalPath = chatsSubdir
+        ? joinPath(boardDir, chatsSubdir, fileName)
+        : joinPath(boardDir, fileName);
+      return createFsJournalStorage(journalPath);
     },
     kv,
   );
+}
+
+// ============================================================================
+// createFsBoardFileArtifactsStore — fs-backed file artifacts store
+//
+// Writes uploads under <baseDir>/<filesSubdir>/<cardId>/<file>. Pass
+// filesSubdir: '' to root uploads directly at baseDir/<cardId>/<file>.
+//
+// Pass the returned store to createSingleBoardServerRuntime via
+// BoardContextConfig.filesArtifactsStore.
+// ============================================================================
+
+export interface FsBoardFileArtifactsStoreOptions {
+  /** Subdirectory under baseDir for file uploads. Default: 'files'. Pass '' to root at baseDir. */
+  filesSubdir?: string;
+}
+
+export function createFsBoardFileArtifactsStore(
+  baseDir: string,
+  opts: FsBoardFileArtifactsStoreOptions = {},
+) {
+  const filesSubdir = opts.filesSubdir ?? 'files';
+  const root = filesSubdir ? joinPath(baseDir, filesSubdir) : baseDir;
+  return createArtifactsStore(createFsBlobStorage(root));
 }
 
 // ============================================================================

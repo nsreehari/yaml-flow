@@ -174,6 +174,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
     const cardStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
     const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
+    const callerFilesArtifactsStore = cfg.filesArtifactsStore ?? null;
 
     // Lazy artifact stores — only created on first access (saves ~5KB in bundles
     // that never use file features).
@@ -183,7 +184,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       label: cfg.label,
       board,
       cardStore,
-      get filesArtifacts() { return _filesArtifacts ??= createArtifactsStore(artAdapter.blobStorage('files')); },
+      get filesArtifacts() { return _filesArtifacts ??= (callerFilesArtifactsStore ?? createArtifactsStore(artAdapter.blobStorage('files'))); },
       boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,

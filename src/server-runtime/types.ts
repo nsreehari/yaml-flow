@@ -107,6 +107,13 @@ export interface BoardContextConfig {
   boardAdapter: BoardPlatformAdapter;
   /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
   artifactsAdapter?: BoardPlatformAdapter;
+  /**
+   * Optional caller-supplied file artifacts store. When provided, this is used
+   * verbatim and the runtime does NOT consult artifactsAdapter.blobStorage('files').
+   * Use this to give the embedder full control over the on-disk layout (e.g.
+   * via createFsBoardFileArtifactsStore(baseDir, { filesSubdir: '' })).
+   */
+  filesArtifactsStore?: import('../cli/common/artifacts-store-lib.js').ArtifactsStore;
   baseRef: KindValueRef;
   cardStoreRef: string;
   outputsStoreRef: string;

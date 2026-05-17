@@ -106,7 +106,12 @@ export async function cli(argv: string[]): Promise<void> {
       console.error('chat-store: stdin envelope missing "boardDir"');
       process.exit(1);
     }
-    const storePublic = createChatStorePublic(createFsBoardChatStorage(boardDir));
+    const chatsSubdir = envelope.chatsSubdir as string | undefined;
+    const kvSubdir = envelope.kvSubdir as string | undefined;
+    const chatOpts: { chatsSubdir?: string; kvSubdir?: string } = {};
+    if (chatsSubdir !== undefined) chatOpts.chatsSubdir = chatsSubdir;
+    if (kvSubdir !== undefined) chatOpts.kvSubdir = kvSubdir;
+    const storePublic = createChatStorePublic(createFsBoardChatStorage(boardDir, chatOpts));
     if (Array.isArray(envelope.commands)) {
       const batchResult = storePublic.runBatch(toBatchEnvelope(envelope));
       printResult(batchResult);
