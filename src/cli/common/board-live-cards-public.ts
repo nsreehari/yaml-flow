@@ -31,7 +31,7 @@
  *   const status = board.status();
  */
 
-import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock } from './storage-interface.js';
+import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
@@ -153,6 +153,15 @@ export interface BoardPlatformAdapter {
   blobStorage(namespace: string): BlobStorage;
 
   /**
+   * Ephemeral scratch store for transient I/O staging (probe in/out/err,
+   * dispatchExecution argv/out/err). Default scope is board-local; if the
+   * config has a 'scratch-store-ref' set, scratchStorageForRef(ref) is used
+   * instead.
+   */
+  scratchStorage(): ScratchStorage;
+  scratchStorageForRef(ref: string): ScratchStorage;
+
+  /**
    * Journal storage adapter (append-only log).
    * Uses the lib's JournalStorageAdapter interface.
    * One journal per board — no namespace parameter needed.
@@ -243,7 +252,8 @@ export interface BoardLiveCardsPublic {
   // no params needed
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
-  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref'
+  getScratchStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
+  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref'
   getConfig(input: CommandInput): CommandResult<{ value: unknown }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
@@ -637,9 +647,11 @@ export function createBoardLiveCardsPublic(
       }
       const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
       if (!outputsStoreRef) return fail('init requires params.outputsStoreRef — pass the outputs store ref here');
+      const scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
       const cfg = configStore();
       cfg.writeCardStoreRef(storeRef);
       cfg.writeOutputsStoreRef(outputsStoreRef);
+      if (scratchStoreRef) cfg.writeScratchStoreRef(scratchStoreRef);
       const body = (input.body ?? {}) as Record<string, unknown>;
       if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
       if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) cfg.writeChatHandlerFlow(body['chat-handler-flow']);
@@ -819,6 +831,13 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
   }
 
+  function getScratchStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
+    try {
+      const storeRef = configStore().readScratchStoreRef();
+      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
+  }
+
   function getConfig(input: CommandInput): CommandResult<{ value: unknown }> {
     try {
       const key = input.params?.['key'] as string | undefined;
@@ -830,6 +849,7 @@ export function createBoardLiveCardsPublic(
         case 'chat-handler-flow': value = cfg.readChatHandlerFlow() ?? null; break;
         case 'card-store-ref':    value = cfg.readCardStoreRef(); break;
         case 'outputs-store-ref': value = cfg.readOutputsStoreRef(); break;
+        case 'scratch-store-ref': value = cfg.readScratchStoreRef(); break;
         default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
       }
       return ok({ value }) as CommandResult<{ value: unknown }>;
@@ -867,7 +887,7 @@ export function createBoardLiveCardsPublic(
   }
 
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef, getConfig,
+    init, status, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getConfig,
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     removeCard, retrigger, processAccumulatedEvents,
@@ -901,10 +921,7 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
   /** Schema-only card validator (no executor invocation). */
   validateSchema(card: Record<string, unknown>): { ok: boolean; errors: string[] };
 
-  /** Create a temp file path for I/O staging — absolute, board-scoped. */
-  makeTempFilePath(label: string, ext?: string): string;
-
-  /** Absolute-path blob I/O for temp files and card file references. */
+  /** Absolute-path blob I/O for resolving arbitrary KindValueRef blobs. */
   absoluteBlob: BlobStorage;
 
   /**
@@ -991,6 +1008,11 @@ export function createBoardLiveCardsNonCorePublic(
   }
   const cardStore = () => createCardStore(makeCardAdapterNC(), adapter.onWarn ?? (() => { /* no-op */ }));
 
+  const scratchStore = () => {
+    const ref = configStore().readScratchStoreRef();
+    return ref ? adapter.scratchStorageForRef(ref) : adapter.scratchStorage();
+  };
+
   // ── Shared validation helper ───────────────────────────────────────────────
 
   function validateCardObject(
@@ -1042,9 +1064,7 @@ export function createBoardLiveCardsNonCorePublic(
     if (!teRef) return fail('No task-executor registered for this board');
 
     const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
-    const inFile  = adapter.makeTempFilePath(`probe-in-${bindTo}`);
-    const outFile = adapter.makeTempFilePath(`probe-out-${bindTo}`);
-    const errFile = adapter.makeTempFilePath(`probe-err-${bindTo}`, '.txt');
+    const scratch = scratchStore();
 
     const inPayload: Record<string, unknown> = {
       ...src,
@@ -1052,11 +1072,13 @@ export function createBoardLiveCardsNonCorePublic(
       _projections: mockProjections,
     };
 
-    const inRefStr  = serializeRef({ kind: 'fs-path', value: inFile });
-    const outRefStr = serializeRef({ kind: 'fs-path', value: outFile });
-    const errRefStr = serializeRef({ kind: 'fs-path', value: errFile });
+    const inFile  = scratch.create(JSON.stringify(inPayload, null, 2), `probe-in-${bindTo}`, '.json');
+    const outFile = scratch.getUniqueKey(`probe-out-${bindTo}`, '.json');
+    const errFile = scratch.getUniqueKey(`probe-err-${bindTo}`, '.txt');
 
-    adapter.absoluteBlob.write(inFile, JSON.stringify(inPayload, null, 2));
+    const inRefStr  = serializeRef(scratch.keyRef(inFile));
+    const outRefStr = serializeRef(scratch.keyRef(outFile));
+    const errRefStr = serializeRef(scratch.keyRef(errFile));
 
     let result: string | null = null;
     try {
@@ -1064,23 +1086,22 @@ export function createBoardLiveCardsNonCorePublic(
         ['--in-ref', inRefStr, '--out-ref', outRefStr, '--err-ref', errRefStr],
         { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.probeMs ?? 60_000 },
       );
-      result = adapter.absoluteBlob.read(outFile);
+      result = scratch.read(outFile);
       if (result === null) return fail('Executor produced no output file');
     } catch (e) {
-      const errMsg = adapter.absoluteBlob.read(errFile)?.trim()
+      const errMsg = scratch.read(errFile)?.trim()
         ?? (e instanceof Error ? e.message : String(e));
       return fail(`Probe failed: ${errMsg}`);
     } finally {
-      try { adapter.absoluteBlob.remove(inFile); } catch { /* best-effort */ }
-      try { adapter.absoluteBlob.remove(errFile); } catch { /* best-effort */ }
+      try { scratch.remove(inFile); } catch { /* best-effort */ }
+      try { scratch.remove(errFile); } catch { /* best-effort */ }
     }
 
     if (outRef) {
       const parsed = parseRef(outRef);
       adapter.absoluteBlob.write(parsed.value, result);
-    } else {
-      try { adapter.absoluteBlob.remove(outFile); } catch { /* best-effort */ }
     }
+    try { scratch.remove(outFile); } catch { /* best-effort */ }
 
     return ok({ bindTo, resultSizeBytes: result.length });
   }

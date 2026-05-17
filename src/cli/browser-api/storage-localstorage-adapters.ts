@@ -10,7 +10,7 @@
  * No Node imports. Requires globalThis.localStorage (browser / jsdom environment).
  */
 
-import type { BlobStorage, KVStorage, JSONStorage } from '../common/storage-interface.js';
+import type { BlobStorage, KVStorage, JSONStorage, ScratchStorage } from '../common/storage-interface.js';
 import type { JournalStorageAdapter, CardStorageAdapter, JournalEntry, LiveCard, CardIndex } from '../common/board-live-cards-lib.js';
 
 // ============================================================================
@@ -133,6 +133,178 @@ export function createLocalStorageBlobStorage(prefix: string): BlobStorage {
         // plain text path
       }
       return { key: k, size };
+    },
+  };
+}
+
+// ============================================================================
+// createLocalStorageScratchStorage
+// ============================================================================
+
+const LS_SCRATCH_MARKER_SUFFIX = ':scratch-marker';
+const LS_SCRATCH_CONFIG_SUFFIX = ':scratch-config';
+const LS_SCRATCH_ENTRY_INFIX = ':scratch:';
+const LS_DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const LS_DEFAULT_SWEEP_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const LS_SWEEP_WALL_TIME_BUDGET_MS = 200;
+
+function sanitizeLsScratchSegment(s: string | undefined, fallback: string): string {
+  if (!s) return fallback;
+  const cleaned = s.replace(/[^A-Za-z0-9._-]/g, '_');
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+export function createLocalStorageScratchStorage(prefix: string): ScratchStorage {
+  const markerKey = `${prefix}${LS_SCRATCH_MARKER_SUFFIX}`;
+  const configKey = `${prefix}${LS_SCRATCH_CONFIG_SUFFIX}`;
+  const entryKey = (id: string) => `${prefix}${LS_SCRATCH_ENTRY_INFIX}${id}`;
+  const timestampKey = (id: string) => `${prefix}${LS_SCRATCH_ENTRY_INFIX}${id}:__ts`;
+
+  const wasNewlyMarked = globalThis.localStorage.getItem(markerKey) === null;
+  if (wasNewlyMarked) {
+    try { globalThis.localStorage.setItem(markerKey, `scratch-store\n${new Date().toISOString()}`); } catch { /* best-effort */ }
+  }
+
+  function readConfigBag(): Record<string, unknown> {
+    const raw = globalThis.localStorage.getItem(configKey);
+    if (raw === null) return {};
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch { return {}; }
+  }
+
+  function writeConfigBag(bag: Record<string, unknown>): void {
+    try { globalThis.localStorage.setItem(configKey, JSON.stringify(bag)); } catch { /* best-effort */ }
+  }
+
+  if (wasNewlyMarked) {
+    const bag = readConfigBag();
+    if (typeof bag['retention.lastSweepAt'] !== 'number') {
+      bag['retention.lastSweepAt'] = Date.now();
+      writeConfigBag(bag);
+    }
+  }
+
+  function maybeSweep(): void {
+    if (globalThis.localStorage.getItem(markerKey) === null) return;
+    const bag = readConfigBag();
+    const maxAgeMs = typeof bag['retention.maxAgeMs'] === 'number'
+      ? (bag['retention.maxAgeMs'] as number)
+      : LS_DEFAULT_MAX_AGE_MS;
+    const sweepIntervalMs = typeof bag['retention.sweepIntervalMs'] === 'number'
+      ? (bag['retention.sweepIntervalMs'] as number)
+      : LS_DEFAULT_SWEEP_INTERVAL_MS;
+    if (maxAgeMs <= 0 || sweepIntervalMs <= 0) return;
+    const lastSweepAt = typeof bag['retention.lastSweepAt'] === 'number'
+      ? (bag['retention.lastSweepAt'] as number)
+      : 0;
+    const now = Date.now();
+    if (now - lastSweepAt < sweepIntervalMs) return;
+
+    bag['retention.lastSweepAt'] = now;
+    writeConfigBag(bag);
+
+    const sweepStart = now;
+    const entryPrefix = `${prefix}${LS_SCRATCH_ENTRY_INFIX}`;
+    const candidates: string[] = [];
+    for (let i = 0; i < globalThis.localStorage.length; i++) {
+      const k = globalThis.localStorage.key(i);
+      if (k && k.startsWith(entryPrefix) && !k.endsWith(':__ts')) candidates.push(k);
+    }
+    for (const k of candidates) {
+      if (Date.now() - sweepStart > LS_SWEEP_WALL_TIME_BUDGET_MS) break;
+      const tsRaw = globalThis.localStorage.getItem(`${k}:__ts`);
+      const ts = tsRaw === null ? 0 : Number(tsRaw);
+      if (Number.isFinite(ts) && ts > 0 && now - ts > maxAgeMs) {
+        try { globalThis.localStorage.removeItem(k); } catch { /* best-effort */ }
+        try { globalThis.localStorage.removeItem(`${k}:__ts`); } catch { /* best-effort */ }
+      }
+    }
+  }
+
+  function genKey(p?: string, s?: string): string {
+    const safePrefix = sanitizeLsScratchSegment(p, 'scratch');
+    const safeSuffix = sanitizeLsScratchSegment(s, '.json');
+    const dotted = safeSuffix.startsWith('.') ? safeSuffix : `.${safeSuffix}`;
+    const rand = Math.random().toString(36).slice(2, 10);
+    return `${safePrefix}-${Date.now()}-${rand}${dotted}`;
+  }
+
+  function writeEntry(id: string, content: string): void {
+    globalThis.localStorage.setItem(entryKey(id), content);
+    globalThis.localStorage.setItem(timestampKey(id), String(Date.now()));
+  }
+
+  return {
+    read(id: string): string | null {
+      return globalThis.localStorage.getItem(entryKey(id));
+    },
+    write(id: string, content: string): void {
+      writeEntry(id, content);
+      try { maybeSweep(); } catch { /* best-effort */ }
+    },
+    exists(id: string): boolean {
+      return globalThis.localStorage.getItem(entryKey(id)) !== null;
+    },
+    remove(id: string): void {
+      try { globalThis.localStorage.removeItem(entryKey(id)); } catch { /* best-effort */ }
+      try { globalThis.localStorage.removeItem(timestampKey(id)); } catch { /* best-effort */ }
+    },
+    readBytes(id: string): Uint8Array | null {
+      const raw = globalThis.localStorage.getItem(entryKey(id));
+      if (raw === null) return null;
+      return new TextEncoder().encode(raw);
+    },
+    writeBytes(id: string, content: Uint8Array): void {
+      let bin = '';
+      for (let i = 0; i < content.length; i++) bin += String.fromCharCode(content[i]);
+      writeEntry(id, bin);
+      try { maybeSweep(); } catch { /* best-effort */ }
+    },
+    stat(id: string) {
+      const raw = globalThis.localStorage.getItem(entryKey(id));
+      if (raw === null) return null;
+      const tsRaw = globalThis.localStorage.getItem(timestampKey(id));
+      const ts = tsRaw === null ? null : Number(tsRaw);
+      return {
+        key: id,
+        size: new TextEncoder().encode(raw).byteLength,
+        updatedAt: ts !== null && Number.isFinite(ts) ? new Date(ts).toISOString() : undefined,
+      };
+    },
+    listKeys(filterPrefix?: string): string[] {
+      const entryPrefix = `${prefix}${LS_SCRATCH_ENTRY_INFIX}`;
+      const out: string[] = [];
+      for (let i = 0; i < globalThis.localStorage.length; i++) {
+        const k = globalThis.localStorage.key(i);
+        if (k && k.startsWith(entryPrefix) && !k.endsWith(':__ts')) {
+          const id = k.slice(entryPrefix.length);
+          if (!filterPrefix || id.startsWith(filterPrefix)) out.push(id);
+        }
+      }
+      return out.sort();
+    },
+    getUniqueKey(p?: string, s?: string): string { return genKey(p, s); },
+    create(data: string, p?: string, s?: string): string {
+      const id = genKey(p, s);
+      writeEntry(id, data);
+      try { maybeSweep(); } catch { /* best-effort */ }
+      return id;
+    },
+    keyRef(id: string) {
+      return { kind: 'local-storage-scratch', value: id, extra: { prefix } };
+    },
+    config: {
+      get(k: string): unknown { return readConfigBag()[k] ?? null; },
+      set(k: string, v: unknown): void {
+        const bag = readConfigBag();
+        if (v === undefined || v === null) delete bag[k];
+        else bag[k] = v;
+        writeConfigBag(bag);
+      },
     },
   };
 }

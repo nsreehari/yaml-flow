@@ -13,7 +13,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 import {
-  makeBoardTempFilePath,
   resolveBoardCliCallbackTarget,
   resolveModuleDir,
   genUUID,
@@ -31,7 +30,6 @@ import {
 } from './execution-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
-import { blobStorageForRef } from './board-worker-adapter.js';
 import {
   createFsKvStorage,
   createFsBlobStorage,
@@ -39,6 +37,7 @@ import {
   createFsAtomicRelayLock,
   createFsJournalStorageAdapter,
   createFsJournalStorage,
+  createFsScratchStorage,
   computeStableJsonHash,
 } from './storage-fs-adapters.js';
 import { validateLiveCardDefinition } from '../../card-compute/schema-validator.js';
@@ -251,6 +250,9 @@ export function createFsBoardPlatformAdapter(
     blobStorage: (namespace: string) =>
       namespace ? createFsBlobStorage(joinPath(dir, namespace)) : createFsBlobStorage(dir),
 
+    scratchStorage: () => createFsScratchStorage(joinPath(dir, '.tmp')),
+    scratchStorageForRef: (ref: string) => createFsScratchStorage(parseRef(ref).value),
+
     journalAdapter: () => createFsJournalStorageAdapter(dir),
 
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
@@ -262,13 +264,13 @@ export function createFsBoardPlatformAdapter(
       try {
         const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined
           ?? genUUID().slice(0, 8);
-        const inFile  = makeBoardTempFilePath(dir, `exec-in-${label}`);
-        const outFile = makeBoardTempFilePath(dir, `exec-out-${label}`);
-        const errFile = makeBoardTempFilePath(dir, `exec-err-${label}`, '.txt');
-        const inRef   = serializeRef({ kind: 'fs-path', value: inFile });
-        const outRef  = serializeRef({ kind: 'fs-path', value: outFile });
-        const errRef  = serializeRef({ kind: 'fs-path', value: errFile });
-        blobStorageForRef({ kind: 'fs-path', value: inFile }).write(inFile, JSON.stringify(args, null, 2));
+        const scratch = createFsScratchStorage(joinPath(dir, '.tmp'));
+        const inFile  = scratch.create(JSON.stringify(args, null, 2), `exec-in-${label}`, '.json');
+        const outFile = scratch.getUniqueKey(`exec-out-${label}`, '.json');
+        const errFile = scratch.getUniqueKey(`exec-err-${label}`, '.txt');
+        const inRef   = serializeRef(scratch.keyRef(inFile));
+        const outRef  = serializeRef(scratch.keyRef(outFile));
+        const errRef  = serializeRef(scratch.keyRef(errFile));
         dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, resolvedCliDir);
         return { dispatched: true };
       } catch (e) {
@@ -344,9 +346,6 @@ export function createFsBoardNonCorePlatformAdapter(
     validateSchema(card) {
       const result = validateLiveCardDefinition(card);
       return { ok: result.errors.length === 0, errors: result.errors };
-    },
-    makeTempFilePath(label, ext) {
-      return makeBoardTempFilePath(baseRef.value, label, ext);
     },
     absoluteBlob: createFsAbsolutePathBlobStorage(),
   };

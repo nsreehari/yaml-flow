@@ -252,6 +252,56 @@ export interface JSONStorage {
 }
 
 // ============================================================================
+// ScratchStorage — backend-neutral ephemeral blob store with self-managed
+// retention. Used by the public layer for child-process I/O handoff (probes,
+// dispatchExecution) and any other "stash bytes briefly, key them, clean up
+// later" need.
+//
+// Key shape is backend-defined and opaque to callers:
+//   - FS backend: key === absolute file path under the scratch root
+//   - Other backends: opaque string usable only with this store's methods
+//
+// Sweep policy is owned by the store itself (not the caller). Implementations
+// SHOULD run a best-effort sweep after each write/create when the configured
+// sweepIntervalMs has elapsed since the last sweep. Sweep deletes entries
+// older than maxAgeMs and is bounded in wall-time.
+//
+// Reserved config keys (used by sweep machinery):
+//   'retention.maxAgeMs'        — default 86_400_000 (24h)
+//   'retention.sweepIntervalMs' — default 43_200_000 (12h)
+//   'retention.lastSweepAt'     — epoch-ms of last sweep (managed internally)
+//
+// keyRef(key) returns a transport-resolvable KindValueRef for handing the
+// underlying location to a spawned child process or remote worker. On FS this
+// is { kind: 'fs-path', value: <absolute path> }. Non-FS backends should
+// return whatever the consumer (e.g. task-executor) understands.
+// ============================================================================
+
+export interface ScratchStorage extends BlobStorage {
+  /**
+   * Allocate a new unique key. Does NOT create any underlying object — caller
+   * must write to it (e.g. via a spawned child) before it has content.
+   * prefix and suffix are sanitized; both are optional.
+   */
+  getUniqueKey(prefix?: string, suffix?: string): string;
+
+  /**
+   * Allocate a new unique key AND write data at it atomically. Returns the
+   * new key. Counts as a write for sweep-trigger purposes.
+   */
+  create(data: string, prefix?: string, suffix?: string): string;
+
+  /** Resolve a key to a transport-neutral ref (e.g. for child-process handoff). */
+  keyRef(key: string): KindValueRef;
+
+  /** Backend-agnostic config bag (used for retention policy and similar knobs). */
+  config: {
+    get(k: string): unknown;
+    set(k: string, v: unknown): void;
+  };
+}
+
+// ============================================================================
 // StorageProvider — aggregate of all three primitives
 //
 // Adapter factories receive a StorageProvider and close over any scope (e.g.

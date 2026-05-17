@@ -46,6 +46,7 @@ import type {
   JournalStorage,
   JSONStorage,
   KVStorage,
+  ScratchStorage,
   StorageProvider,
 } from '../common/storage-interface.js';
 import type {
@@ -200,6 +201,208 @@ export function createFsAbsolutePathBlobStorage(): BlobStorage {
 
     // Keys are absolute paths — prefix-based listing is not meaningful for this adapter.
     listKeys(_prefix?: string): string[] { return []; },
+  };
+}
+
+// ============================================================================
+// FsScratchStorage
+//
+// Ephemeral blob store rooted at <scratchDir>. Keys are ABSOLUTE file paths
+// under scratchDir, so child processes can be handed a raw fs path directly
+// via { kind: 'fs-path', value: key }.
+//
+// Self-managed retention: every write/create checks whether sweepIntervalMs
+// has elapsed since the last sweep and, if so, deletes entries older than
+// maxAgeMs (best-effort, bounded). A marker file gates the sweep so that a
+// misconfigured scratch dir pointing at someone's home directory cannot
+// destroy unrelated files.
+// ============================================================================
+
+const SCRATCH_MARKER_FILE = '__scratch-marker';
+const SCRATCH_CONFIG_FILE = '__scratch-config.json';
+const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;       // 24h
+const DEFAULT_SWEEP_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12h
+const SWEEP_WALL_TIME_BUDGET_MS = 500;
+
+function sanitizeScratchSegment(s: string | undefined, fallback: string): string {
+  if (!s) return fallback;
+  // Allow letters, digits, dot, dash, underscore; replace anything else.
+  const cleaned = s.replace(/[^A-Za-z0-9._-]/g, '_');
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+export function createFsScratchStorage(scratchDir: string): ScratchStorage {
+  fs.mkdirSync(scratchDir, { recursive: true });
+  const markerPath = path.join(scratchDir, SCRATCH_MARKER_FILE);
+  const configPath = path.join(scratchDir, SCRATCH_CONFIG_FILE);
+  const wasNewlyMarked = !fs.existsSync(markerPath);
+  if (wasNewlyMarked) {
+    try { fs.writeFileSync(markerPath, `scratch-store\n${new Date().toISOString()}\n`, 'utf-8'); } catch { /* best-effort */ }
+  }
+
+  function readConfigBag(): Record<string, unknown> {
+    if (!fs.existsSync(configPath)) return {};
+    try {
+      const raw = fs.readFileSync(configPath, 'utf-8');
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch { return {}; }
+  }
+
+  function writeConfigBag(bag: Record<string, unknown>): void {
+    const tmp = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(bag, null, 2), 'utf-8');
+      renameSync(tmp, configPath);
+    } catch { /* best-effort */ }
+  }
+
+  // Seed sentinel on first construction so a freshly created store doesn't
+  // immediately sweep (gives in-flight callers a grace window).
+  if (wasNewlyMarked) {
+    const bag = readConfigBag();
+    if (typeof bag['retention.lastSweepAt'] !== 'number') {
+      bag['retention.lastSweepAt'] = Date.now();
+      writeConfigBag(bag);
+    }
+  }
+
+  function maybeSweep(): void {
+    if (!fs.existsSync(markerPath)) return; // safety: never sweep an unmarked dir
+    const bag = readConfigBag();
+    const maxAgeMs = typeof bag['retention.maxAgeMs'] === 'number'
+      ? (bag['retention.maxAgeMs'] as number)
+      : DEFAULT_MAX_AGE_MS;
+    const sweepIntervalMs = typeof bag['retention.sweepIntervalMs'] === 'number'
+      ? (bag['retention.sweepIntervalMs'] as number)
+      : DEFAULT_SWEEP_INTERVAL_MS;
+    if (maxAgeMs <= 0 || sweepIntervalMs <= 0) return; // disabled
+    const lastSweepAt = typeof bag['retention.lastSweepAt'] === 'number'
+      ? (bag['retention.lastSweepAt'] as number)
+      : 0;
+    const now = Date.now();
+    if (now - lastSweepAt < sweepIntervalMs) return;
+
+    // CAS-style: claim the sweep slot before doing work so concurrent writers
+    // don't all sweep at once.
+    bag['retention.lastSweepAt'] = now;
+    writeConfigBag(bag);
+
+    const sweepStart = now;
+    try {
+      const entries = fs.readdirSync(scratchDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (Date.now() - sweepStart > SWEEP_WALL_TIME_BUDGET_MS) break;
+        if (!entry.isFile()) continue;
+        if (entry.name === SCRATCH_MARKER_FILE) continue;
+        if (entry.name === SCRATCH_CONFIG_FILE) continue;
+        const full = path.join(scratchDir, entry.name);
+        try {
+          const st = fs.statSync(full);
+          if (now - st.mtimeMs > maxAgeMs) {
+            try { fs.unlinkSync(full); } catch { /* best-effort */ }
+          }
+        } catch { /* best-effort */ }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  function genKey(prefix?: string, suffix?: string): string {
+    const safePrefix = sanitizeScratchSegment(prefix, 'scratch');
+    const safeSuffix = sanitizeScratchSegment(suffix, '.json');
+    // Suffix always begins with '.' for fs-path readability.
+    const dotted = safeSuffix.startsWith('.') ? safeSuffix : `.${safeSuffix}`;
+    const name = `${safePrefix}-${Date.now()}-${randomUUID().slice(0, 8)}${dotted}`;
+    return path.join(scratchDir, name);
+  }
+
+  function writeAbsolute(key: string, content: string): void {
+    const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
+    fs.mkdirSync(path.dirname(key), { recursive: true });
+    fs.writeFileSync(tmp, content, 'utf-8');
+    renameSync(tmp, key);
+  }
+
+  return {
+    read(key: string): string | null {
+      if (!fs.existsSync(key)) return null;
+      try { return fs.readFileSync(key, 'utf-8'); } catch { return null; }
+    },
+
+    write(key: string, content: string): void {
+      writeAbsolute(key, content);
+      try { maybeSweep(); } catch { /* best-effort */ }
+    },
+
+    exists(key: string): boolean { return fs.existsSync(key); },
+
+    remove(key: string): void {
+      try { if (fs.existsSync(key)) fs.unlinkSync(key); } catch { /* best-effort */ }
+    },
+
+    readBytes(key: string): Uint8Array | null {
+      if (!fs.existsSync(key)) return null;
+      try { return new Uint8Array(fs.readFileSync(key)); } catch { return null; }
+    },
+
+    writeBytes(key: string, content: Uint8Array): void {
+      const tmp = `${key}.${process.pid}.${randomUUID()}.tmp`;
+      fs.mkdirSync(path.dirname(key), { recursive: true });
+      fs.writeFileSync(tmp, Buffer.from(content));
+      renameSync(tmp, key);
+      try { maybeSweep(); } catch { /* best-effort */ }
+    },
+
+    stat(key: string) {
+      if (!fs.existsSync(key)) return null;
+      try {
+        const st = fs.statSync(key);
+        return { key, size: Number(st.size || 0), updatedAt: new Date(st.mtimeMs).toISOString() };
+      } catch { return null; }
+    },
+
+    listKeys(prefix?: string): string[] {
+      try {
+        const entries = fs.readdirSync(scratchDir, { withFileTypes: true });
+        const out: string[] = [];
+        for (const e of entries) {
+          if (!e.isFile()) continue;
+          if (e.name === SCRATCH_MARKER_FILE || e.name === SCRATCH_CONFIG_FILE) continue;
+          const full = path.join(scratchDir, e.name);
+          if (!prefix || full.startsWith(prefix)) out.push(full);
+        }
+        return out.sort();
+      } catch { return []; }
+    },
+
+    getUniqueKey(prefix?: string, suffix?: string): string {
+      return genKey(prefix, suffix);
+    },
+
+    create(data: string, prefix?: string, suffix?: string): string {
+      const key = genKey(prefix, suffix);
+      writeAbsolute(key, data);
+      try { maybeSweep(); } catch { /* best-effort */ }
+      return key;
+    },
+
+    keyRef(key: string) {
+      return { kind: 'fs-path', value: key };
+    },
+
+    config: {
+      get(k: string): unknown {
+        return readConfigBag()[k] ?? null;
+      },
+      set(k: string, v: unknown): void {
+        const bag = readConfigBag();
+        if (v === undefined || v === null) delete bag[k];
+        else bag[k] = v;
+        writeConfigBag(bag);
+      },
+    },
   };
 }
 

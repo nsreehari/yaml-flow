@@ -160,8 +160,9 @@ export async function cli(argv: string[]): Promise<void> {
     case 'init': {
       const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
       const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
+      const scratchStoreRef = optFlag(rest, '--scratch-store-ref');
       const body = await readStdinBody();
-      printResult(board().init({ params: { cardStoreRef, outputsStoreRef }, body }));
+      printResult(board().init({ params: { cardStoreRef, outputsStoreRef, ...(scratchStoreRef ? { scratchStoreRef } : {}) }, body }));
       return;
     }
     case 'status': {
@@ -174,6 +175,10 @@ export async function cli(argv: string[]): Promise<void> {
     }
     case 'get-outputs-store-ref': {
       printResult(board().getOutputsStoreRef({}));
+      return;
+    }
+    case 'get-scratch-store-ref': {
+      printResult(board().getScratchStoreRef({}));
       return;
     }
     case 'get-outputs': {

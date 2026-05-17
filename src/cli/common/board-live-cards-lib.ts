@@ -504,6 +504,8 @@ export interface BoardConfigStore {
   writeCardStoreRef(ref: string): void;
   readOutputsStoreRef(): string | null;
   writeOutputsStoreRef(ref: string): void;
+  readScratchStoreRef(): string | null;
+  writeScratchStoreRef(ref: string): void;
 }
 
 export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
@@ -546,6 +548,14 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 
     writeOutputsStoreRef(ref: string): void {
       kv.write('outputs-store-ref', ref);
+    },
+
+    readScratchStoreRef(): string | null {
+      return readKey('scratch-store-ref');
+    },
+
+    writeScratchStoreRef(ref: string): void {
+      kv.write('scratch-store-ref', ref);
     },
   };
 }

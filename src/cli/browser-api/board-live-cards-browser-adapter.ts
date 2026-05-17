@@ -19,6 +19,7 @@ import type { ChatStorage } from '../common/chat-storage-lib.js';
 import {
   createLocalStorageBlobStorage,
   createLocalStorageKvStorage,
+  createLocalStorageScratchStorage,
   createLocalStorageJournalStorageAdapter,
   computeStableJsonHashBrowser,
 } from './storage-localstorage-adapters.js';
@@ -209,6 +210,9 @@ export function createBrowserBoardPlatformAdapter(
 
     blobStorage: (ns: string) =>
       createLocalStorageBlobStorage(ns ? `${namespace}:${ns}` : namespace),
+
+    scratchStorage: () => createLocalStorageScratchStorage(`${namespace}:scratch`),
+    scratchStorageForRef: (ref: string) => createLocalStorageScratchStorage(parseRef(ref).value),
 
     journalAdapter: () =>
       createLocalStorageJournalStorageAdapter(`${namespace}:journal`),
