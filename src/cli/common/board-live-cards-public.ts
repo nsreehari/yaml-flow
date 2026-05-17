@@ -414,6 +414,10 @@ export function createBoardLiveCardsPublic(
     if (!ref) throw new Error(`Board at ${baseRef.value} has no outputs store configured. Run: init --outputs-store-ref <b64-ref>`);
     return createPublishedOutputsStore(adapter.kvStorageForRef(ref));
   };
+  const archive = () => {
+    const ref = configStore().readArchiveStoreRef();
+    return ref ? adapter.archiveFactoryForRef(ref) : adapter.archiveFactory();
+  };
 
   function boardExists(): boolean {
     return !!snapshotStore().readSnapshot(baseRef.value).values[BOARD_GRAPH_KEY];
@@ -526,9 +530,12 @@ export function createBoardLiveCardsPublic(
 
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
       TX.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
+      try { archive().stream('exec-history').append({ taskName, status: 'completed', completedAt: nowIso() }); } catch { /* best-effort */ }
     };
-    const taskFailedFn = (taskName: string, error: string): void =>
+    const taskFailedFn = (taskName: string, error: string): void => {
       appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
+      try { archive().stream('exec-history').append({ taskName, status: 'failed', error, completedAt: nowIso() }); } catch { /* best-effort */ }
+    };
     const writeComputedValuesFn = (cardId: string, values: Record<string, unknown>): void => {
       CX.push({ cardId, values });
     };
@@ -752,6 +759,7 @@ export function createBoardLiveCardsPublic(
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-failed', taskName: decoded.taskName, error, timestamp: nowIso() });
+      try { archive().stream('exec-history').append({ taskName: decoded.taskName, status: 'failed', error, completedAt: nowIso() }); } catch { /* best-effort */ }
       void drain();
       return ok();
     } catch (e) { return err(e); }

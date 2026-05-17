@@ -279,7 +279,14 @@ export function createFsBoardPlatformAdapter(
         dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, resolvedCliDir);
         return { dispatched: true };
       } catch (e) {
-        return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
+        const error = e instanceof Error ? e.message : String(e);
+        try {
+          const archive = createFsArchiveFactory(joinPath(dir, 'archive'));
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined ?? 'unknown';
+          archive.blob('exec-failures').write(`${stamp}-${label}.json`, JSON.stringify({ error, args, ref, at: new Date().toISOString() }, null, 2));
+        } catch { /* best-effort */ }
+        return { dispatched: false, error };
       }
     },
 
