@@ -38,6 +38,7 @@ export default defineConfig({
     'board-live-cards-public': 'src/cli/common/board-live-cards-public.ts',
     'card-store-public': 'src/cli/common/card-store-lib-public.ts',
     'artifacts-store-public': 'src/cli/common/artifacts-store-lib-public.ts',
+    'chat-store-public': 'src/cli/common/chat-store-lib-public.ts',
     'board-worker-adapter': 'src/cli/node/board-worker-adapter.ts',
     'step-machine/index': 'src/step-machine/index.ts',
     'step-machine-public/index': 'src/step-machine-public/index.ts',

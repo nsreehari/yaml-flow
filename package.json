@@ -12,6 +12,7 @@
     "board-live-cards-cli": "./cli/node/board-live-cards-cli.js",
     "card-store": "./cli/node/card-store-cli.js",
     "artifacts-store": "./cli/node/artifacts-store-cli.js",
+    "chat-store": "./cli/node/chat-store-cli.js",
     "step-machine-cli": "./cli/node/step-machine-cli.js",
     "batch-runner-cli": "./cli/node/batch-runner-cli.js"
   },
@@ -35,6 +36,11 @@
       "types": "./lib/artifacts-store-public.d.ts",
       "import": "./lib/artifacts-store-public.js",
       "require": "./lib/artifacts-store-public.cjs"
+    },
+    "./chat-store-public": {
+      "types": "./lib/chat-store-public.d.ts",
+      "import": "./lib/chat-store-public.js",
+      "require": "./lib/chat-store-public.cjs"
     },
     "./board-worker-adapter": {
       "types": "./lib/board-worker-adapter.d.ts",

@@ -42,6 +42,7 @@ export default defineConfig({
     'node/execution-adapter': 'src/cli/node/execution-adapter.ts',
     'node/card-store-cli': 'src/cli/node/card-store-cli.ts',
     'node/artifacts-store-cli': 'src/cli/node/artifacts-store-cli.ts',
+    'node/chat-store-cli': 'src/cli/node/chat-store-cli.ts',
     'node/source-cli-task-executor': 'src/cli/node/source-cli-task-executor.ts',
     'browser-api/board-live-cards-browser-adapter': 'src/cli/browser-api/board-live-cards-browser-adapter.ts',
     'browser-api/card-store-browser-api': 'src/cli/browser-api/card-store-browser-api.ts',
