@@ -98,7 +98,7 @@
     "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
-    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s test:run && npm run -s check:bundle-budget && npm run -s check:browser-bundle",
+    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s test:run && npm run -s test:e2e && npm run -s check:bundle-budget && npm run -s check:browser-bundle",
     "standalone": "echo standalone is canonical; no assembly step required",
     "pycli:install": "python -m pip install -r py-standalone/requirements.txt",
     "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r py-standalone/requirements.txt",

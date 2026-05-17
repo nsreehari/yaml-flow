@@ -13,12 +13,14 @@
  *   node test/server-http-test.js [--port 7799]
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
+import os from 'node:os';
 
 const ECHO_PROBE_MARKER = '__probe__echo__probe__';
 
@@ -31,7 +33,14 @@ const cliPort = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : NaN;
 const skipT1 = cliArgs.includes('--skip-t1');
 const skipT2 = cliArgs.includes('--skip-t2');
 const skipT3 = cliArgs.includes('--skip-t3');
-const skipT3a = cliArgs.includes('--skip-t3a');
+function isCopilotAvailable() {
+  try {
+    const r = spawnSync('copilot', ['--version'], { timeout: 5_000, stdio: 'ignore', windowsHide: true });
+    return !r.error;
+  } catch { return false; }
+}
+
+const skipT3a = cliArgs.includes('--skip-t3a') || !isCopilotAvailable();
 const skipT3b = cliArgs.includes('--skip-t3b');
 const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -42,34 +51,28 @@ const SSE_WORKER_SCRIPT = path.join(__dirname, 'sse-worker.js');
 const CARD_PATTERN = 'cardT*';
 const CHAT_CARD_ID = 'card-portfolio';
 
-function resolveServerPort() {
-  if (Number.isInteger(cliPort) && cliPort > 0) return cliPort;
-  const configPath = path.join(BOARD_DIR, 'server-config.json');
-  try {
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const configured = Number(cfg?.port);
-    if (Number.isInteger(configured) && configured > 0) return configured;
-  } catch { /* ignore */ }
-  return 7799;
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = /** @type {import('node:net').AddressInfo} */ (srv.address());
+      srv.close(() => resolve(addr.port));
+    });
+    srv.on('error', reject);
+  });
 }
 
-const PORT = resolveServerPort();
+async function resolveServerPort() {
+  if (Number.isInteger(cliPort) && cliPort > 0) return cliPort;
+  return findFreePort();
+}
+
+const PORT = await resolveServerPort();
 const BASE = `http://127.0.0.1:${PORT}/api/boards/${BOARD_ID}`;
 
-// Resolve and wipe the setup directory so each test run starts clean.
+// Always use a system temp directory so parallel runs and vitest don't collide.
 function resolveSetupDirRoot() {
-  const configPath = path.join(BOARD_DIR, 'server-config.json');
-  try {
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const boardSetupDir = cfg?.boards?.[BOARD_ID]?.setupDir;
-    if (typeof boardSetupDir === 'string' && boardSetupDir.trim()) {
-      return path.resolve(BOARD_DIR, boardSetupDir.trim());
-    }
-    if (cfg && typeof cfg.setupDir === 'string' && cfg.setupDir.trim()) {
-      return path.resolve(BOARD_DIR, cfg.setupDir.trim());
-    }
-  } catch { /* ignore */ }
-  return path.join(BOARD_DIR, '.demo-setup');
+  return os.tmpdir();
 }
 
 const SETUP_DIR = path.join(resolveSetupDirRoot(), RUN_ID);
