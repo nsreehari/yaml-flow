@@ -38,11 +38,11 @@
       },
       "boardLiveCardsCliJs": {
         "type": "string",
-        "description": "Absolute path to board-live-cards-cli.js when configured by the runtime."
+        "description": "Absolute path to board-live-cards-cli.js when injected by the runtime; for authored ExecutionRefs that target the packaged CLI, prefer kind 'yaml-flow-cli' with value 'board-live-cards-cli.js'."
       },
       "stepMachineCliPath": {
         "type": "string",
-        "description": "Absolute path to step-machine-cli.js when configured by the runtime."
+        "description": "Absolute path to step-machine-cli.js when injected by the runtime; for authored ExecutionRefs that target the packaged CLI, prefer kind 'yaml-flow-cli' with value 'step-machine-cli.js'."
       }
     }
   },

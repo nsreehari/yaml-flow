@@ -236,11 +236,11 @@ export function createFsBoardPlatformAdapter(
 
   // Resolve selfRef once for callback-style invocations (node <script> ...).
   // When suppressSpawn is set, skip path resolution because spawning is disabled.
-  const callbackScriptPath = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(resolvedCliDir);
+  const callbackTarget = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(resolvedCliDir);
   const selfRef = {
     meta: 'board-live-cards',
     howToRun: 'local-node' as const,
-    whatToRun: callbackScriptPath ? serializeRef({ kind: 'fs-path', value: callbackScriptPath }) : '',
+    whatToRun: callbackTarget ? serializeRef({ kind: 'yaml-flow-cli', value: 'board-live-cards-cli.js' }) : '',
     ...(opts?.notifyChannel ? { extra: { notifyChannel: opts.notifyChannel } } : {}),
   };
 

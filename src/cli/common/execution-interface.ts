@@ -249,7 +249,9 @@ export interface ExecutionRef {
     * Address of the artifact to run. Two valid forms:
     *   - string:  must be KindValueRef wire form `b64:<base64url(json)>` (programmatically generated via serializeRef)
     *   - object:  `{ kind: string; value: string }` plain object (human-authored flow files — normalized by the handler factory)
-    * @example 'b64:<base64url({"kind":"fs-path","value":"/dist/cli/source-cli-task-executor.js"})>'
+    * Prefer `kind: 'yaml-flow-cli'` when targeting a packaged public yaml-flow CLI entrypoint.
+    * Use `kind: 'fs-path'` for external scripts or non-packaged local executables.
+    * @example 'b64:<base64url({"kind":"yaml-flow-cli","value":"chat-store-cli.js"})>'
     * @example { kind: 'http-url', value: '/api/workiq/ask' }
     * @example { kind: 'fs-path', value: './my-handler.js' }
    */

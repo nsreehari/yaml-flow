@@ -171,7 +171,7 @@ export interface BoardPlatformAdapter {
   /**
    * Self-identity ExecutionRef — how to invoke THIS board instance.
    * Embedded in source callback tokens so executors know where to report back.
-  *   Node/FS:  { howToRun: 'local-node', whatToRun: 'b64:<base64url({"kind":"fs-path","value":"/path/to/cli.js"})>' }
+  *   Node/FS:  { howToRun: 'local-node', whatToRun: 'b64:<base64url({"kind":"yaml-flow-cli","value":"board-live-cards-cli.js"})>' }
   *   Azure Fn: { howToRun: 'http:post',  whatToRun: 'b64:<base64url({"kind":"http-url","value":"https://…/api/board"})>' }
    */
   selfRef: ExecutionRef;
