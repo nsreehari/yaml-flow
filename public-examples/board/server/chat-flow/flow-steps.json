@@ -18,8 +18,8 @@
         "type": "ref",
         "howToRun": "local-node",
         "whatToRun": {
-          "kind": "fs-path",
-          "value": "../../cli/node/chat-store-cli.js"
+          "kind": "yaml-flow-cli",
+          "value": "chat-store-cli.js"
         },
         "meta": "chat-handler",
         "argsMassaging": {
@@ -105,10 +105,14 @@
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-node",
+        "howToRun": "local-process",
         "whatToRun": {
-          "kind": "fs-path",
-          "value": "./server/chat-flow/copilot-chat/assistant.js"
+          "kind": "process-name",
+          "value": "node"
+        },
+        "argsMassaging": {
+          "cmdTemplate": ["chatFlowRoot & '/copilot-chat/assistant.js'"],
+          "stdinTemplate": "{ 'cardId': cardId, 'boardSetupRoot': boardSetupRoot, 'boardRuntimeDir': boardRuntimeDir, 'runtimeStatusDir': runtimeStatusDir, 'cardsDir': cardsDir, 'chatMessages': chatMessages, 'userText': userText, 'chatCopilotTimeoutMs': chatCopilotTimeoutMs }"
         },
         "meta": "chat-handler"
       },
@@ -151,8 +155,8 @@
         "type": "ref",
         "howToRun": "local-node",
         "whatToRun": {
-          "kind": "fs-path",
-          "value": "../../cli/node/chat-store-cli.js"
+          "kind": "yaml-flow-cli",
+          "value": "chat-store-cli.js"
         },
         "meta": "chat-handler",
         "argsMassaging": {
@@ -179,8 +183,8 @@
         "type": "ref",
         "howToRun": "local-node",
         "whatToRun": {
-          "kind": "fs-path",
-          "value": "../../cli/node/chat-store-cli.js"
+          "kind": "yaml-flow-cli",
+          "value": "chat-store-cli.js"
         },
         "meta": "chat-handler",
         "argsMassaging": {

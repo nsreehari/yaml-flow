@@ -24,7 +24,11 @@ import {
   publishJsonEventsToNamedPipe,
   createNodeCommandExecutor,
 } from './process-runner.js';
-import { buildLocalBaseSpec, dispatchTaskExecutorDetached } from './execution-adapter.js';
+import {
+  buildLocalBaseSpec,
+  dispatchTaskExecutorDetached,
+  resolveWhatToRunValue,
+} from './execution-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
 import { blobStorageForRef } from './board-worker-adapter.js';
@@ -79,6 +83,8 @@ export {
   invokeExecutionRef,
   invokeExecutionRefSync,
   invokeRefSync,
+  resolveWhatToRunValue,
+  resolveYamlFlowCliPath,
 } from './execution-adapter.js';
 export type {
   CreateExecutionRefInvokerOptions,
@@ -112,13 +118,12 @@ export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
       let scriptPath = '';
       try {
         const w = ref.whatToRun;
-        const parsed = typeof w === 'string' ? parseRef(w) : w;
-        if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+        scriptPath = resolveWhatToRunValue(w);
       } catch {
         scriptPath = '';
       }
       if (!scriptPath) {
-        return { dispatched: false, error: `createNodeSpawnInvocationAdapter: could not resolve fs-path from whatToRun` };
+        return { dispatched: false, error: `createNodeSpawnInvocationAdapter: could not resolve executable path from whatToRun` };
       }
       const finalArgs: Record<string, unknown> = { ...args };
       const extra = Buffer.from(JSON.stringify(finalArgs)).toString('base64');
@@ -141,8 +146,7 @@ export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
       let scriptPath = '';
       try {
         const w = ref.whatToRun;
-        const parsed = typeof w === 'string' ? parseRef(w) : w;
-        if (parsed.kind === 'fs-path') scriptPath = parsed.value;
+        scriptPath = resolveWhatToRunValue(w);
       } catch {
         scriptPath = '';
       }

@@ -30,7 +30,9 @@ const portArg = cliArgs.indexOf('--port');
 const cliPort = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : NaN;
 const skipT1 = cliArgs.includes('--skip-t1');
 const skipT2 = cliArgs.includes('--skip-t2');
+const skipT3 = cliArgs.includes('--skip-t3');
 const skipT3a = cliArgs.includes('--skip-t3a');
+const skipT3b = cliArgs.includes('--skip-t3b');
 const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 const BOARD_ID = 'live';
@@ -501,6 +503,9 @@ try {
 
   // ── T3*: chat protocol over API + SSE ──
   {
+    if (skipT3) {
+      console.log('\n=== T3: skipped (--skip-t3) ===');
+    } else {
     console.log('\n=== T3: probe chat protocol (SSE lifecycle) ===');
   chatSseClientId = `chat-proto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   chatSseClient = startSseClient(`${BASE}/sse?clientId=${encodeURIComponent(chatSseClientId)}`, (payload) => {
@@ -565,6 +570,7 @@ try {
   assert(!!t2AssistantMsg && typeof t2AssistantMsg.id === 'string', 'T3 assistant chat message missing id');
   assert(String(t2AssistantMsg?.text || '').includes(`Echo: ${t2ProbePrompt}`), 'T3 assistant echo file content mismatch');
   console.log('[T3] ok: probe lifecycle observed (processing/user any-order, assistant write, processing clear)');
+    }
 
   // ── T3a: non-probe chat protocol over API + SSE ──
   // Disabled in the public example unless explicitly requested — requires a
@@ -613,6 +619,9 @@ try {
   }
 
   // ── T3b: probe-echo chat + file upload protocol over API + SSE ──
+  if (skipT3b) {
+    console.log('\n=== T3b: skipped (--skip-t3b) ===');
+  } else {
   console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
   const t2bBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
   assert(t2bBefore.status === 200, `T3b pre chats returned ${t2bBefore.status}`);
@@ -691,6 +700,7 @@ try {
   }, 30_000, 'T3b processing clear');
   assert(!!t2bProcessingCleared, 'T3b processing clear not observed');
   console.log('[T3b] ok: upload protocol (system/user) and chat protocol (.processing/user/assistant/.processing clear) observed');
+  }
   }
 
   console.log('\n=== All smoke checks passed ===\n');

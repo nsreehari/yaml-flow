@@ -44,11 +44,15 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { jsonata } from '../common/jsonata-loader.js';
 import type { ArgsMassaging, ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
+import type { KindValueRef } from '../common/storage-interface.js';
 import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.js';
+
+const require = createRequire(import.meta.url);
 
 // ============================================================================
 // Logical args shapes for well-known invocation kinds
@@ -91,6 +95,33 @@ export interface ExecutionAdapterOptions {
   cliDir: string;
 }
 
+function parseWhatToRunRef(whatToRun: string | KindValueRef): KindValueRef {
+  return typeof whatToRun === 'object' ? whatToRun : parseRef(whatToRun);
+}
+
+export function resolveYamlFlowCliPath(cliFileName: string): string {
+  const trimmed = path.basename(String(cliFileName || '').trim());
+  if (!trimmed) {
+    throw new Error(`resolveYamlFlowCliPath: expected non-empty cli file name, got ${JSON.stringify(cliFileName)}`);
+  }
+  const packageRoot = path.dirname(require.resolve('yaml-flow/package.json'));
+  const resolved = path.join(packageRoot, 'cli', 'node', trimmed);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`resolveYamlFlowCliPath: could not find ${trimmed} under ${path.join(packageRoot, 'cli', 'node')}`);
+  }
+  return resolved;
+}
+
+export function resolveWhatToRunValue(whatToRun: string | KindValueRef): string {
+  const ref = parseWhatToRunRef(whatToRun);
+  switch (ref.kind) {
+    case 'yaml-flow-cli':
+      return resolveYamlFlowCliPath(ref.value);
+    default:
+      return ref.value;
+  }
+}
+
 // ============================================================================
 // JSONata evaluation helper
 // ============================================================================
@@ -130,7 +161,7 @@ async function evalJsonataString(expr: string, context: Record<string, unknown>)
  */
 function resolveBuiltIn(whatToRun: string | { kind: string; value: string }, cliDir: string): { command: string; args: string[] } {
   // whatToRun must be a b64 KindValueRef string or a plain-object ref
-  const name = typeof whatToRun === 'object' ? whatToRun.value : parseRef(whatToRun).value;
+  const name = resolveWhatToRunValue(whatToRun);
 
   switch (name) {
     case 'source-cli-task-executor': {
@@ -171,8 +202,8 @@ function resolveBaseInvocation(
 
   // For local-* transports, resolve the whatToRun as a KindValueRef
   const scriptPath: string = typeof ref.whatToRun === 'object'
-    ? ref.whatToRun.value
-    : parseRef(ref.whatToRun).value;
+    ? resolveWhatToRunValue(ref.whatToRun)
+    : resolveWhatToRunValue(ref.whatToRun);
 
   switch (ref.howToRun) {
     case 'local-node':
@@ -317,15 +348,10 @@ function _parseStdoutAsJson(stdout: string): unknown {
   }
 }
 
-function resolveWhatToRunValue(ref: ExecutionRef): string {
-  const raw = ref.whatToRun;
-  return typeof raw === 'object' ? raw.value : parseRef(raw).value;
-}
-
 function buildMassagingContext(ref: ExecutionRef, args: Record<string, unknown>): Record<string, unknown> {
   return {
     ...args,
-    whatToRun: resolveWhatToRunValue(ref),
+    whatToRun: resolveWhatToRunValue(ref.whatToRun),
     ...(ref.extra ? { extra: ref.extra } : {}),
   };
 }
@@ -429,7 +455,7 @@ async function invokeHttpExecutionRef(
     return normalizeFailure(msg);
   }
 
-  const baseUrl = resolveWhatToRunValue(ref);
+  const baseUrl = resolveWhatToRunValue(ref.whatToRun);
   const headers = massaged.headers
     ? { 'Content-Type': 'application/json', ...massaged.headers }
     : { 'Content-Type': 'application/json' };
@@ -598,7 +624,7 @@ export function createExecutionAdapter(options: ExecutionAdapterOptions): Execut
       let callArgv: string[];
       if (ref.argsMassaging?.cmdTemplate) {
         // Evaluate each JSONata expression in the template
-        const context: Record<string, unknown> = { ...args, whatToRun: ref.whatToRun };
+        const context: Record<string, unknown> = { ...args, whatToRun: resolveWhatToRunValue(ref.whatToRun) };
         const evaluated = await Promise.all(
           ref.argsMassaging.cmdTemplate.map(expr => evalJsonataString(expr, context)),
         );
@@ -652,11 +678,11 @@ async function _invokeTaskExecutorHttp(
   ref: ExecutionRef,
   args: TaskExecutorArgs,
 ): Promise<ExecutionResult> {
-  const context: Record<string, unknown> = { ...args, whatToRun: ref.whatToRun };
+  const context: Record<string, unknown> = { ...args, whatToRun: resolveWhatToRunValue(ref.whatToRun) };
   const massaged = resolveArgsMassaging(ref.argsMassaging, context, '_invokeTaskExecutorHttp');
 
   const url = massaged.url
-    ?? (typeof ref.whatToRun === 'object' ? ref.whatToRun.value : parseRef(ref.whatToRun).value);
+    ?? resolveWhatToRunValue(ref.whatToRun);
 
   const body = massaged.body
     ? massaged.body as Record<string, unknown>

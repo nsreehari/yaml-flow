@@ -77,6 +77,13 @@
  *    whatToRun: 'b64:<base64url({"kind":"fs-path","value":"/path/to/my-executor.js"})>',
  *  };
  *
+ *  // Packaged yaml-flow CLI entrypoint resolved by the Node adapter:
+ *  const yamlFlowCli: ExecutionRef = {
+ *    meta: 'chat-handler',
+ *    howToRun: 'local-node',
+ *    whatToRun: 'b64:<base64url({"kind":"yaml-flow-cli","value":"chat-store-cli.js"})>',
+ *  };
+ *
  *  // Azure Function task executor with custom arg mapping:
  *  const azureFn: ExecutionRef = {
  *    meta: 'task-executor',

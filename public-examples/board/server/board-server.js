@@ -353,28 +353,9 @@ serverMetaStore.putText(
 );
 
 /**
- * Async local-node ref invoker — uses spawn() instead of spawnSync() so the
- * Node.js event loop is never blocked.  Required for chat-flow handlers that
- * must call back to the same server process (avoids a deadlock).
+ * Thin wrapper around the shared execution-ref invoker that pins the board
+ * server's cliDir/cwd/label defaults for chat-flow steps.
  */
-function resolveExecutionWhatToRunValue(ref) {
-  const raw = ref?.whatToRun;
-  if (raw && typeof raw === 'object' && typeof raw.value === 'string') {
-    return raw.value;
-  }
-  if (typeof raw === 'string') {
-    if (raw.startsWith('b64:')) {
-      try {
-        return parseRef(raw).value;
-      } catch {
-        return raw;
-      }
-    }
-    return raw;
-  }
-  return '';
-}
-
 function invokeExecutionRefAsync(ref, args, opts) {
   return invokeExecutionRef(ref, args, {
     cliDir: opts?.cliDir || BOARD_ROOT,

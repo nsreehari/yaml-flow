@@ -86,6 +86,54 @@ describe('ExecutionRef public invoker API', () => {
     });
   });
 
+  it('invokeExecutionRefSync resolves yaml-flow-cli refs for packaged CLI entrypoints', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'execution-ref-yaml-flow-cli-'));
+
+    const appendRef: ExecutionRef = {
+      howToRun: 'local-node',
+      whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'chat-store-cli.js' }),
+      argsMassaging: {
+        stdinTemplate: "{ 'command': 'append', 'boardDir': boardDir, 'cardId': cardId, 'role': 'assistant', 'text': text, 'files': [] }",
+      },
+    };
+
+    const appendResult = invokeExecutionRefSync(appendRef, {
+      boardDir: tmpDir,
+      cardId: 'card-yaml-flow-cli',
+      text: 'hello from yaml-flow-cli',
+    });
+
+    expect(appendResult).toEqual({
+      result: 'success',
+      data: { id: expect.any(String) },
+    });
+
+    const readRef: ExecutionRef = {
+      howToRun: 'local-node',
+      whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'chat-store-cli.js' }),
+      argsMassaging: {
+        stdinTemplate: "{ 'command': 'read-all', 'boardDir': boardDir, 'cardId': cardId }",
+      },
+    };
+
+    const readResult = invokeExecutionRefSync(readRef, {
+      boardDir: tmpDir,
+      cardId: 'card-yaml-flow-cli',
+    });
+
+    expect(readResult).toEqual({
+      result: 'success',
+      data: {
+        records: [
+          expect.objectContaining({
+            role: 'assistant',
+            text: 'hello from yaml-flow-cli',
+          }),
+        ],
+      },
+    });
+  });
+
   it('invokeExecutionRef dispatches http:post refs and preserves normalized response envelopes', async () => {
     const server = http.createServer(async (req, res) => {
       const chunks: Buffer[] = [];

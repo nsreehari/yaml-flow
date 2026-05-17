@@ -33,7 +33,10 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+
+const require = createRequire(import.meta.url);
 
 // ============================================================================
 // KindValueRef
@@ -153,7 +156,20 @@ export interface TaskCallback {
  * Extract the path/url value from a whatToRun b64:<base64url(json)> wire string.
  */
 function _parseWhatToRun(whatToRun: string): string {
-  return parseRef(whatToRun).value;
+  const parsed = parseRef(whatToRun);
+  if (parsed.kind === 'yaml-flow-cli') {
+    const trimmed = path.basename(parsed.value.trim());
+    if (!trimmed) {
+      throw new Error(`Invalid yaml-flow-cli ref: expected non-empty cli file name, got ${JSON.stringify(parsed.value)}`);
+    }
+    const packageRoot = path.dirname(require.resolve('yaml-flow/package.json'));
+    const resolved = path.join(packageRoot, 'cli', 'node', trimmed);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Invalid yaml-flow-cli ref: could not find ${trimmed} under ${path.join(packageRoot, 'cli', 'node')}`);
+    }
+    return resolved;
+  }
+  return parsed.value;
 }
 
 function _notifyChannelFromVia(via: ExecutionRef): string | undefined {
