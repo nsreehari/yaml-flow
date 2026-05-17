@@ -95,6 +95,26 @@
         "error": "cleanup_failure"
       }
     },
+    "probe_in_progress": {
+      "description": "Append a probe-only in-progress system message before generating the deterministic echo reply",
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-node",
+        "whatToRun": {
+          "kind": "yaml-flow-cli",
+          "value": "chat-store-cli.js"
+        },
+        "meta": "chat-handler",
+        "argsMassaging": {
+          "stdinTemplate": "{ 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'in-progress', 'files': [] }] }"
+        }
+      },
+      "transitions": {
+        "success": "write_reply",
+        "failure": "cleanup_failure",
+        "error": "cleanup_failure"
+      }
+    },
     "copilot_assistant": {
       "description": "Run the Copilot-backed assistant logic to generate the reply from the resolved chat history",
       "expects_data": ["userText", "chatMessages", "boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatCopilotTimeoutMs"],
@@ -133,11 +153,11 @@
         "type": "compute-jsonata",
         "expr": [
           "data.replyText = \"Echo: \" & expects_data.userText",
-          "result = \"success\""
+          "result = $contains($lowercase(expects_data.userText), \"simulate-failure\") ? \"failure\" : \"success\""
         ]
       },
       "transitions": {
-        "success": "write_reply",
+        "success": "probe_in_progress",
         "failure": "cleanup_failure",
         "error": "cleanup_failure"
       }

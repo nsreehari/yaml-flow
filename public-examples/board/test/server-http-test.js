@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 
 const ECHO_PROBE_MARKER = '__probe__echo__probe__';
+const PROBE_IN_PROGRESS_TEXT = 'in-progress';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -229,6 +230,49 @@ const waitForAllCompleted = (ms = 60_000, label = 'all completed') =>
 
 const waitForChatPredicate = (predicate, ms, label) =>
   waitUntil(() => predicate(NS.chatEvents) || false, ms, label);
+
+function deriveProbeLifecycleMilestones(events, opts) {
+  const milestones = [];
+  let prevMessageCount = Number(opts.beforeCount || 0);
+  let prevProcessing = Boolean(opts.beforeProcessing);
+  const prompt = String(opts.prompt || '');
+  const inProgressText = String(opts.inProgressText || PROBE_IN_PROGRESS_TEXT);
+
+  for (const event of events) {
+    const messages = Array.isArray(event?.messages) ? event.messages : [];
+    const nextMessageCount = Number(event?.messageCount || messages.length || 0);
+    const newMessages = nextMessageCount > prevMessageCount
+      ? messages.slice(prevMessageCount, nextMessageCount)
+      : [];
+
+    for (const message of newMessages) {
+      const role = String(message?.role || '');
+      const text = String(message?.text || '');
+      if (role === 'user' && text.includes(prompt)) milestones.push('user');
+      else if (role === 'system' && text.trim().toLowerCase() === inProgressText) milestones.push('in-progress');
+      else if (role === 'assistant' && text.includes(`Echo: ${prompt}`)) milestones.push('assistant');
+    }
+
+    const processing = Boolean(event?.processing);
+    if (processing !== prevProcessing) milestones.push(processing ? 'processing-true' : 'processing-false');
+
+    prevMessageCount = nextMessageCount;
+    prevProcessing = processing;
+  }
+
+  return milestones;
+}
+
+function matchOrderedProbeLifecycle(events, opts) {
+  const milestones = deriveProbeLifecycleMilestones(events, opts);
+  if (milestones.length !== 5) return false;
+  const firstPair = milestones.slice(0, 2);
+  const lastPair = milestones.slice(3, 5);
+  const firstOk = firstPair.includes('user') && firstPair.includes('processing-true');
+  const middleOk = milestones[2] === 'in-progress';
+  const lastOk = lastPair.includes('assistant') && lastPair.includes('processing-false');
+  return (firstOk && middleOk && lastOk) ? { milestones } : false;
+}
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
@@ -509,7 +553,7 @@ try {
     if (skipT3) {
       console.log('\n=== T3: skipped (--skip-t3) ===');
     } else {
-    console.log('\n=== T3: probe chat protocol (SSE lifecycle) ===');
+    console.log(`\n[${new Date().toISOString()}] === T3: probe chat protocol (SSE lifecycle) ===`);
   chatSseClientId = `chat-proto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   chatSseClient = startSseClient(`${BASE}/sse?clientId=${encodeURIComponent(chatSseClientId)}`, (payload) => {
     captureChatEvents(payload, CHAT_CARD_ID);
@@ -523,6 +567,7 @@ try {
   assert(t2Before.status === 200, `T3 pre chats returned ${t2Before.status}`);
   const t2BeforeMessages = Array.isArray(t2Before.data?.messages) ? t2Before.data.messages : [];
   const t2BeforeCount = t2BeforeMessages.length;
+  const t2EventStart = NS.chatEvents.length;
   const t2ProbePrompt = `Probe protocol validation ${Date.now()}`;
 
   const t2SendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
@@ -533,46 +578,30 @@ try {
   });
   assert(t2SendRes.status === 200, `T3 chat-send returned ${t2SendRes.status}`);
 
-  const t2UserOrProcessing = await waitForChatPredicate((events) => {
-    const slice = events.filter((e) => e.messageCount >= t2BeforeCount + 1 || e.processing === true);
-    return slice.length > 0 ? slice[slice.length - 1] : false;
-  }, 30_000, 'T3 user/proc signal');
-  assert(!!t2UserOrProcessing, 'T3 missing user/proc signal');
-
-  const t2Assistant = await waitForChatPredicate((events) => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const e = events[i];
-      if (e.messageCount < t2BeforeCount + 2) continue;
-      const last = e.messages[e.messages.length - 1];
-      if (last?.role === 'assistant' && String(last.text || '').includes(`Echo: ${t2ProbePrompt}`)) {
-        return e;
-      }
-    }
-    return false;
-  }, 45_000, 'T3 assistant echo');
-  assert(!!t2Assistant, 'T3 assistant echo not observed on SSE');
-
-  const t2ProcessingCleared = await waitForChatPredicate((events) => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const e = events[i];
-      if (e.messageCount >= t2BeforeCount + 2 && e.processing === false) return e;
-    }
-    return false;
-  }, 30_000, 'T3 processing clear');
-  assert(!!t2ProcessingCleared, 'T3 processing clear not observed');
+  const t2Lifecycle = await waitForChatPredicate((events) => {
+    return matchOrderedProbeLifecycle(events.slice(t2EventStart), {
+      beforeCount: t2BeforeCount,
+      beforeProcessing: false,
+      prompt: t2ProbePrompt,
+      inProgressText: PROBE_IN_PROGRESS_TEXT,
+    });
+  }, 45_000, 'T3 ordered lifecycle');
+  assert(!!t2Lifecycle, 'T3 ordered lifecycle not observed');
 
   const t2After = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
   assert(t2After.status === 200, `T3 post chats returned ${t2After.status}`);
   const t2AfterMessages = Array.isArray(t2After.data?.messages) ? t2After.data.messages : [];
   const t2NewMessages = t2AfterMessages.slice(t2BeforeCount);
-  assert(t2NewMessages.length >= 2, `T3 expected at least 2 new chat messages, got ${t2NewMessages.length}`);
+  assert(t2NewMessages.length >= 3, `T3 expected at least 3 new chat messages, got ${t2NewMessages.length}`);
   const t2User = t2NewMessages.find((m) => m?.role === 'user');
+  const t2InProgress = t2NewMessages.find((m) => m?.role === 'system' && String(m?.text || '').trim().toLowerCase() === PROBE_IN_PROGRESS_TEXT);
   const t2AssistantMsg = t2NewMessages.find((m) => m?.role === 'assistant');
   assert(!!t2User && typeof t2User.id === 'string', 'T3 user chat message missing id');
   assert(String(t2User?.text || '').includes(t2ProbePrompt), 'T3 user file text mismatch');
+  assert(!!t2InProgress && typeof t2InProgress.id === 'string', 'T3 in-progress system message missing id');
   assert(!!t2AssistantMsg && typeof t2AssistantMsg.id === 'string', 'T3 assistant chat message missing id');
   assert(String(t2AssistantMsg?.text || '').includes(`Echo: ${t2ProbePrompt}`), 'T3 assistant echo file content mismatch');
-  console.log('[T3] ok: probe lifecycle observed (processing/user any-order, assistant write, processing clear)');
+  console.log(`[${new Date().toISOString()}] [T3] ok: ordered probe lifecycle observed (user+processing, in-progress, assistant+processing clear)`);
     }
 
   // ── T3a: non-probe chat protocol over API + SSE ──
@@ -625,84 +654,68 @@ try {
   if (skipT3b) {
     console.log('\n=== T3b: skipped (--skip-t3b) ===');
   } else {
-  console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
-  const t2bBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
-  assert(t2bBefore.status === 200, `T3b pre chats returned ${t2bBefore.status}`);
-  const t2bBeforeMessages = Array.isArray(t2bBefore.data?.messages) ? t2bBefore.data.messages : [];
-  const t2bBeforeCount = t2bBeforeMessages.length;
+    console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
+    const t2bBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    assert(t2bBefore.status === 200, `T3b pre chats returned ${t2bBefore.status}`);
+    const t2bBeforeMessages = Array.isArray(t2bBefore.data?.messages) ? t2bBefore.data.messages : [];
+    const t2bBeforeCount = t2bBeforeMessages.length;
 
-  const t2bUploadRes = await httpUploadChatFile(
-    `${BASE}/cards/${CHAT_CARD_ID}/files?inChat=true`,
-    'q1.txt',
-    'what is the capital of japan',
-  );
-  assert(t2bUploadRes.status === 200, `T3b file upload returned ${t2bUploadRes.status}`);
-  const uploadedFile = t2bUploadRes.data?.file;
-  assert(uploadedFile && typeof uploadedFile === 'object', 'T3b upload response missing file metadata');
+    const t2bUploadRes = await httpUploadChatFile(
+      `${BASE}/cards/${CHAT_CARD_ID}/files?inChat=true`,
+      'q1.txt',
+      'what is the capital of japan',
+    );
+    assert(t2bUploadRes.status === 200, `T3b file upload returned ${t2bUploadRes.status}`);
+    const uploadedFile = t2bUploadRes.data?.file;
+    assert(uploadedFile && typeof uploadedFile === 'object', 'T3b upload response missing file metadata');
 
-  const t2bAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
-  assert(t2bAfterUpload.status === 200, `T3b chats after upload returned ${t2bAfterUpload.status}`);
-  const t2bUploadMessages = Array.isArray(t2bAfterUpload.data?.messages) ? t2bAfterUpload.data.messages : [];
-  const t2bUploadNewMessages = t2bUploadMessages.slice(t2bBeforeCount);
-  const t2bUploadSystem = t2bUploadNewMessages.find((m) => m?.role === 'system');
-  assert(!!t2bUploadSystem, 'T3b upload protocol missing system chat file');
-  assert(String(t2bUploadSystem?.text || '').toLowerCase().includes('file uploaded:'), 'T3b upload system message does not describe uploaded file');
+    const t2bAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    assert(t2bAfterUpload.status === 200, `T3b chats after upload returned ${t2bAfterUpload.status}`);
+    const t2bUploadMessages = Array.isArray(t2bAfterUpload.data?.messages) ? t2bAfterUpload.data.messages : [];
+    const t2bUploadNewMessages = t2bUploadMessages.slice(t2bBeforeCount);
+    const t2bUploadSystem = t2bUploadNewMessages.find((m) => m?.role === 'system');
+    assert(!!t2bUploadSystem, 'T3b upload protocol missing system chat file');
+    assert(String(t2bUploadSystem?.text || '').toLowerCase().includes('file uploaded:'), 'T3b upload system message does not describe uploaded file');
 
-  const t2bSendBaseline = t2bUploadMessages.length;
+    const t2bSendBaseline = t2bUploadMessages.length;
+    const t2bEventStart = NS.chatEvents.length;
 
-  const t2bPrompt = `probe echo file-upload validation ${Date.now()}`;
-  const t2bSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
-    actionType: 'chat-send',
-    payload: {
-      text: `${ECHO_PROBE_MARKER}${t2bPrompt}${ECHO_PROBE_MARKER}`,
-      files: [uploadedFile],
-    },
-  });
-  assert(t2bSendRes.status === 200, `T3b chat-send returned ${t2bSendRes.status}`);
+    const t2bPrompt = `probe echo file-upload validation ${Date.now()}`;
+    const t2bSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
+      actionType: 'chat-send',
+      payload: {
+        text: `${ECHO_PROBE_MARKER}${t2bPrompt}${ECHO_PROBE_MARKER}`,
+        files: [uploadedFile],
+      },
+    });
+    assert(t2bSendRes.status === 200, `T3b chat-send returned ${t2bSendRes.status}`);
 
-  const t2bUserOrProcessing = await waitForChatPredicate((events) => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const e = events[i];
-      if (e.messageCount >= t2bSendBaseline + 1 || e.processing === true) return e;
-    }
-    return false;
-  }, 45_000, 'T3b user/proc signal');
-  assert(!!t2bUserOrProcessing, 'T3b user/proc signal not observed');
+    const t2bLifecycle = await waitForChatPredicate((events) => {
+      return matchOrderedProbeLifecycle(events.slice(t2bEventStart), {
+        beforeCount: t2bSendBaseline,
+        beforeProcessing: false,
+        prompt: t2bPrompt,
+        inProgressText: PROBE_IN_PROGRESS_TEXT,
+      });
+    }, 60_000, 'T3b ordered lifecycle');
+    assert(!!t2bLifecycle, 'T3b ordered lifecycle not observed');
 
-  const t2bAssistantOnSse = await waitForChatPredicate((events) => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const e = events[i];
-      if (e.messageCount < t2bSendBaseline + 2) continue;
-      const last = e.messages[e.messages.length - 1];
-      if (last?.role === 'assistant' && String(last.text || '').includes(`Echo: ${t2bPrompt}`)) return e;
-    }
-    return false;
-  }, 60_000, 'T3b assistant response');
-  assert(!!t2bAssistantOnSse, 'T3b assistant response not observed on SSE');
+    const t2bAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    assert(t2bAfter.status === 200, `T3b post chats returned ${t2bAfter.status}`);
+    const t2bAfterMessages = Array.isArray(t2bAfter.data?.messages) ? t2bAfter.data.messages : [];
+    const t2bNewMessages = t2bAfterMessages.slice(t2bSendBaseline);
+    assert(t2bNewMessages.length >= 3, `T3b expected at least 3 chat messages after send, got ${t2bNewMessages.length}`);
 
-  const t2bAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
-  assert(t2bAfter.status === 200, `T3b post chats returned ${t2bAfter.status}`);
-  const t2bAfterMessages = Array.isArray(t2bAfter.data?.messages) ? t2bAfter.data.messages : [];
-  const t2bNewMessages = t2bAfterMessages.slice(t2bSendBaseline);
-  assert(t2bNewMessages.length >= 2, `T3b expected at least 2 chat messages after send, got ${t2bNewMessages.length}`);
+    const t2bUser = t2bNewMessages.find((m) => m?.role === 'user');
+    const t2bInProgress = t2bNewMessages.find((m) => m?.role === 'system' && String(m?.text || '').trim().toLowerCase() === PROBE_IN_PROGRESS_TEXT);
+    const t2bAssistantMsg = t2bNewMessages.find((m) => m?.role === 'assistant');
 
-  const t2bUser = t2bNewMessages.find((m) => m?.role === 'user');
-  const t2bAssistantMsg = t2bNewMessages.find((m) => m?.role === 'assistant');
-
-  assert(!!t2bUser && typeof t2bUser.id === 'string', 'T3b missing user chat message notification');
-  assert(!!t2bAssistantMsg && typeof t2bAssistantMsg.id === 'string', 'T3b missing assistant chat message notification');
-  assert(Array.isArray(t2bUser?.files) && t2bUser.files.length === 1, 'T3b user chat message missing uploaded file metadata');
-  assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant file content mismatch');
-
-  const t2bProcessingCleared = await waitForChatPredicate((events) => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const e = events[i];
-      if (e.messageCount >= t2bSendBaseline + 2 && e.processing === false) return e;
-    }
-    return false;
-  }, 30_000, 'T3b processing clear');
-  assert(!!t2bProcessingCleared, 'T3b processing clear not observed');
-  console.log('[T3b] ok: upload protocol (system/user) and chat protocol (.processing/user/assistant/.processing clear) observed');
+    assert(!!t2bUser && typeof t2bUser.id === 'string', 'T3b missing user chat message notification');
+    assert(!!t2bInProgress && typeof t2bInProgress.id === 'string', 'T3b missing in-progress system chat message');
+    assert(!!t2bAssistantMsg && typeof t2bAssistantMsg.id === 'string', 'T3b missing assistant chat message notification');
+    assert(Array.isArray(t2bUser?.files) && t2bUser.files.length === 1, 'T3b user chat message missing uploaded file metadata');
+    assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant file content mismatch');
+    console.log('[T3b] ok: upload protocol and ordered probe lifecycle observed (user+processing, in-progress, assistant+processing clear)');
   }
   }
 

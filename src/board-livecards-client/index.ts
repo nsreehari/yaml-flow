@@ -360,8 +360,9 @@ export function subtractBoardState(state: BoardState, excludeIds: Set<string> | 
   return { payload: state.payload, cardIds: nextIds, modelsById: nextModels };
 }
 
-function notifyBoardEngine(board: { engine?: unknown; core?: { engine?: unknown } } | null): void {
-  const eng = (board?.engine ?? board?.core?.engine) as { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void } | undefined;
+function notifyBoardEngine(board: { engine?: unknown; core?: unknown } | null): void {
+  const core = board?.core as { engine?: unknown } | null | undefined;
+  const eng = (board?.engine ?? core?.engine) as { onServerSseEvent?: () => void; refreshOpenChatModal?: () => void } | undefined;
   if (eng && typeof eng.onServerSseEvent === 'function') {
     eng.onServerSseEvent();
   } else if (eng && typeof eng.refreshOpenChatModal === 'function') {
@@ -398,6 +399,7 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
   let currentBoardId: string | null = null;
   let currentPaths: BoardPaths | null = null;
   const activeChatSubscriptions: Record<string, true> = {};
+  const pendingChatSubscriptions: Record<string, Promise<void>> = {};
   const sseClientId = (
     globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
       ? globalThis.crypto.randomUUID()
@@ -465,7 +467,27 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
     payload?: Record<string, unknown> | null,
   ): Promise<{ payload: Record<string, unknown> }> {
     const { boardId } = requireBoardContext();
+    if (actionType === 'chat-send') {
+      await ensureChatSubscribed(cardId);
+    }
     return dispatchCardAction({ fetchServer, boardPaths, boardId, cardId, actionType, payload });
+  }
+
+  function trackChatSubscription(cardId: string, request: Promise<void>): Promise<void> {
+    pendingChatSubscriptions[cardId] = request;
+    return request.finally(() => {
+      if (pendingChatSubscriptions[cardId] === request) delete pendingChatSubscriptions[cardId];
+    });
+  }
+
+  async function ensureChatSubscribed(cardId: string): Promise<void> {
+    const pending = pendingChatSubscriptions[cardId];
+    if (pending) {
+      await pending;
+      return;
+    }
+    if (activeChatSubscriptions[cardId]) return;
+    await subscribeCardChats(cardId);
   }
 
   async function patchCardStateForSession(cardId: string, patch: Record<string, unknown>): Promise<void> {
@@ -475,19 +497,31 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
 
   async function subscribeCardChats(cardId: string): Promise<void> {
     const { paths } = requireBoardContext();
+    const pending = pendingChatSubscriptions[cardId];
+    if (pending) {
+      await pending;
+      return;
+    }
+    if (activeChatSubscriptions[cardId]) return;
     activeChatSubscriptions[cardId] = true;
-    applyNotificationBatch([{ kind: 'card_chats', cardId, messages: stateRef.current?.modelsById[cardId]?.card_chats?.messages ?? [], receiving: true }]);
-    try {
+    const request = (async () => {
       await fetchServer(paths.chatSubscribeSse(cardId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clientId: sseClientId }),
       });
-    } catch { /* ignore subscribe errors */ }
+    })().catch(() => {
+      delete activeChatSubscriptions[cardId];
+    });
+    await trackChatSubscription(cardId, request);
   }
 
   async function unsubscribeCardChats(cardId: string): Promise<void> {
     const { paths } = requireBoardContext();
+    const pending = pendingChatSubscriptions[cardId];
+    if (pending) {
+      try { await pending; } catch { /* ignore pending subscribe errors */ }
+    }
     delete activeChatSubscriptions[cardId];
     try {
       await fetchServer(paths.chatUnsubscribeSse(cardId), {
@@ -496,7 +530,6 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
         body: JSON.stringify({ clientId: sseClientId }),
       });
     } catch { /* ignore unsubscribe errors */ }
-    applyNotificationBatch([{ kind: 'card_chats', cardId, messages: stateRef.current?.modelsById[cardId]?.card_chats?.messages ?? [], receiving: false }]);
   }
 
   function resubscribeActiveChats(paths: BoardPaths): void {

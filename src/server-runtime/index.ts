@@ -876,12 +876,28 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return `id: ${sseEventId}\ndata: ${jsonStr}\n\n`;
   }
 
+  function flushSseTransport(res: RuntimeResponse): void {
+    const resWithTransport = res as RuntimeResponse & {
+      flushHeaders?: () => void;
+      flush?: () => void;
+      socket?: {
+        setNoDelay?: (noDelay?: boolean) => void;
+        uncork?: () => void;
+      } | null;
+    };
+    try { resWithTransport.flushHeaders?.(); } catch { /* ignore */ }
+    try { resWithTransport.flush?.(); } catch { /* ignore */ }
+    try { resWithTransport.socket?.setNoDelay?.(true); } catch { /* ignore */ }
+    try { resWithTransport.socket?.uncork?.(); } catch { /* ignore */ }
+  }
+
   function writeSseFrame(clientId: string, payload: unknown): void {
     const client = sseClients.get(clientId);
     if (!client) return;
     const frame = buildSseFrame(payload);
     try {
       client.res.write(frame);
+      flushSseTransport(client.res);
     } catch {
       sseClients.delete(clientId);
     }
@@ -909,9 +925,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function buildCardChatsNotification(cardId: string, receiving = true): Record<string, unknown> {
     const records = readChatRecords(cardId);
+    const sentAtMs = Date.now();
     return {
       kind: 'card_chats',
       cardId,
+      sentAt: new Date(sentAtMs).toISOString(),
+      sentAtMs,
       messages: records.map((r: Record<string, unknown>) => ({
         role: String(r.role || 'system'),
         text: String(r.text || ''),
@@ -942,7 +961,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function ensureChatSubscriptionScan(): void {
     if (chatSubscriptionScanTimer) return;
-    chatSubscriptionScanTimer = setInterval(() => {
+    const scan = () => {
       const activeCardIds = currentSubscribedChatCardIds();
       if (activeCardIds.length === 0) {
         stopChatSubscriptionScanIfIdle();
@@ -960,7 +979,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           broadcastCardChatsToSubscribedSseClients(cardId, true);
         }
       }
-    }, 1000);
+    };
+    scan();
+    chatSubscriptionScanTimer = setInterval(scan, 1000);
   }
 
   function subscribeClientToCardChats(clientId: string, cardId: string): boolean {
@@ -1024,6 +1045,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     });
+    flushSseTransport(res);
     sseClients.set(clientId, { res, subscribedChatCardIds });
 
     // On reconnect, Last-Event-ID tells us the client's last received id.
@@ -1037,9 +1059,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }, 15_000);
     req.on('close', () => {
       clearInterval(keepAlive);
-      sseClients.delete(clientId);
-      stopChatSubscriptionScanIfIdle();
-      res.end();
+      const current = sseClients.get(clientId);
+      if (current?.res === res) {
+        sseClients.delete(clientId);
+        stopChatSubscriptionScanIfIdle();
+      }
+      try { res.end(); } catch { /* ignore */ }
     });
   }
 
@@ -1105,14 +1130,32 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (method === 'POST' && cardActionMatch) {
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardActionMatch[1]);
+        const requestReceivedAtMs = Date.now();
+        const requestReceivedAt = new Date(requestReceivedAtMs).toISOString();
         const body = await readJsonBody(req);
         const actionType = body?.actionType as string;
         if (actionType === 'chat-send' && !resolveChatHandlerTarget(cardId)) {
-          json(res, 409, { error: `chat handler is not configured for card: ${cardId}` });
+          const responseSentAtMs = Date.now();
+          json(res, 409, {
+            error: `chat handler is not configured for card: ${cardId}`,
+            requestReceivedAt,
+            requestReceivedAtMs,
+            responseSentAt: new Date(responseSentAtMs).toISOString(),
+            responseSentAtMs,
+            responseStatus: 409,
+          });
           return true;
         }
         applyCardAction(cardId, actionType, body?.payload as Record<string, unknown> | null);
-        json(res, 200, { ok: true });
+        const responseSentAtMs = Date.now();
+        json(res, 200, {
+          ok: true,
+          requestReceivedAt,
+          requestReceivedAtMs,
+          responseSentAt: new Date(responseSentAtMs).toISOString(),
+          responseSentAtMs,
+          responseStatus: 200,
+        });
         return true;
       }
 
