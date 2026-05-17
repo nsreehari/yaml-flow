@@ -771,10 +771,10 @@ var LiveCard = (function () {
       let ind = _chatModal.body.querySelector('.lc-chat-processing');
       if (isProcessing) {
         if (!ind) {
-          const asstSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+          const workingSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
           ind = document.createElement('div');
           ind.className = 'lc-chat-processing';
-          ind.innerHTML = '<span class="lc-chat-icon" aria-hidden="true">' + asstSvg + '</span><span>AI working\u2026</span><span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span>';
+          ind.innerHTML = '<span class="lc-chat-icon" aria-hidden="true">' + workingSvg + '</span><span>AI working\u2026</span><span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span>';
           _chatModal.body.appendChild(ind);
         }
         _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
@@ -2538,6 +2538,37 @@ var LiveCard = (function () {
 
     function destroyAll() {
       Object.keys(_cleanup).forEach(destroy);
+      if (_chatModal.backdrop) _chatModal.backdrop.remove();
+      _chatModal.backdrop = null;
+      _chatModal.title = null;
+      _chatModal.body = null;
+      _chatModal.input = null;
+      _chatModal.fileInput = null;
+      _chatModal.staged = null;
+      _chatModal.sendBtn = null;
+      _chatModal.attachBtn = null;
+      _chatModal.closeBtn = null;
+      _chatModal.currentNodeId = null;
+      _chatModal.stagedFiles = [];
+      _chatModal.loading = false;
+      _chatModal.awaitingProcessingAck = false;
+      _chatModal.sendBtnIdleHtml = '';
+
+      if (_filesModal.pollingTimer) clearInterval(_filesModal.pollingTimer);
+      if (_filesModal.backdrop) _filesModal.backdrop.remove();
+      _filesModal.backdrop = null;
+      _filesModal.title = null;
+      _filesModal.body = null;
+      _filesModal.staged = null;
+      _filesModal.fileInput = null;
+      _filesModal.dropzone = null;
+      _filesModal.uploadBtn = null;
+      _filesModal.attachBtn = null;
+      _filesModal.closeBtn = null;
+      _filesModal.currentNodeId = null;
+      _filesModal.stagedFiles = [];
+      _filesModal.pollingTimer = null;
+      _filesModal.loading = false;
     }
 
     // ===========================================================================

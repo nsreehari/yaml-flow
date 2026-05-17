@@ -96,6 +96,8 @@ export interface MountBoardViewParams {
 
 export interface DerivedBoardRuntimeOptions extends DeriveBoardStateOptions {
   session: BoardRuntimeSession;
+  boardPaths?: (boardId: string) => BoardPaths;
+  getServerOrigin?: () => string | null;
 }
 
 export interface BoardRuntimeSession {
@@ -725,6 +727,13 @@ export function createDerivedBoardRuntime(options: DerivedBoardRuntimeOptions): 
     const rootEl = params?.rootElement;
     if (!rootEl) throw new Error('mountBoard requires params.rootElement');
     currentMode = String(params?.mode || currentMode || 'board');
+    const fileUrlBase = deriveOptions.boardPaths && deriveOptions.getServerOrigin && session.getBoardId()
+      ? buildFileUrlBase({
+        boardPaths: deriveOptions.boardPaths,
+        getServerOrigin: deriveOptions.getServerOrigin,
+        boardId: session.getBoardId() as string,
+      })
+      : null;
 
     const LiveCard = loadLiveCardGlobal();
     const engine = LiveCard.init({
@@ -742,6 +751,7 @@ export function createDerivedBoardRuntime(options: DerivedBoardRuntimeOptions): 
         session.dispatchCardAction(id, actionType, actionPayload).then(() => undefined),
       startReceivingChats: (id: string) => { void session.subscribeCardChats(id); },
       stopReceivingChats: (id: string) => { void session.unsubscribeCardChats(id); },
+      fileUrlBase: fileUrlBase || undefined,
     });
 
     rootEl.innerHTML = '';
@@ -827,7 +837,11 @@ export interface BoardRuntimeClient {
 
 export function createBoardRuntimeClient(options: BoardRuntimeClientOptions): BoardRuntimeClient {
   const session = createBoardRuntimeSession(options);
-  const derived = createDerivedBoardRuntime({ session });
+  const derived = createDerivedBoardRuntime({
+    session,
+    boardPaths: options.boardPaths,
+    getServerOrigin: options.getServerOrigin,
+  });
 
   async function wrappedBootstrapBoard(params: BootstrapBoardParams): Promise<unknown> {
     const boardId = String(params?.boardId || 'default');
