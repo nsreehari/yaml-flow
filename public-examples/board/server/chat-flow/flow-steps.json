@@ -1,28 +1,75 @@
 {
   "id": "chat-flow-steps",
   "settings": {
-    "start_step": "open_turn",
+    "start_step": "read_chats",
     "max_total_steps": 10,
     "timeout_ms": 300000
   },
   "steps": {
-    "open_turn": {
-      "description": "Resolve the current user turn from the HTTP chat API and parse any chat envelope options",
-      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "userText", "serverUrl", "apiBasePath", "lastChatEntryId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "chatTimeMs"],
+    "read_chats": {
+      "description": "Read chats from runtime storage via chat-store-cli and pass them through the flow",
+      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId"],
+      "produces_data": ["chatMessages"],
       "input_validations": [
-        "$type(cardId) = \"string\" and $length(cardId) > 0",
-        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
-        "$type(apiBasePath) = \"string\" and $length(apiBasePath) > 0",
-        "$type(lastChatEntryId) = \"string\" and $length(lastChatEntryId) > 0"
+        "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
+        "$type(cardId) = \"string\" and $length(cardId) > 0"
       ],
       "handler": {
         "type": "ref",
         "howToRun": "local-node",
         "whatToRun": {
           "kind": "fs-path",
-          "value": "./server/chat-flow/chat-open-turn.js"
+          "value": "../../cli/node/chat-store-cli.js"
         },
-        "meta": "chat-handler"
+        "meta": "chat-handler",
+        "argsMassaging": {
+          "stdinTemplate": "{ 'command': 'read-all', 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId }"
+        },
+        "outputTransforms": {
+          "dataTemplate": "{ 'chatMessages': output.data.records }"
+        }
+      },
+      "transitions": {
+        "success": "open_turn",
+        "failure": "cleanup_failure",
+        "error": "cleanup_failure"
+      }
+    },
+    "open_turn": {
+      "description": "Resolve the current user turn from flow-provided chat messages and parse any chat envelope options",
+      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs"],
+      "input_validations": [
+        "$type(cardId) = \"string\" and $length(cardId) > 0",
+        "$type(chatMessages) = \"array\"",
+        "$type(lastChatEntryId) = \"string\" and $length(lastChatEntryId) > 0",
+        "$count($filter(chatMessages, function($message) { $message.id = lastChatEntryId and $message.role = \"user\" and $type($message.text) = \"string\" and $length($trim($message.text)) > 0 })) > 0"
+      ],
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.boardId = $type(expects_data.boardId) = \"string\" ? expects_data.boardId : \"\"",
+          "data.cardId = $type(expects_data.cardId) = \"string\" ? expects_data.cardId : \"\"",
+          "data.boardSetupRoot = $type(expects_data.boardSetupRoot) = \"string\" ? expects_data.boardSetupRoot : \"\"",
+          "data.boardRuntimeDir = ($type(expects_data.boardRuntimeDir) = \"string\" and $length(expects_data.boardRuntimeDir) > 0) ? expects_data.boardRuntimeDir : \"runtime\"",
+          "data.runtimeStatusDir = ($type(expects_data.runtimeStatusDir) = \"string\" and $length(expects_data.runtimeStatusDir) > 0) ? expects_data.runtimeStatusDir : \"runtime-out\"",
+          "data.cardsDir = ($type(expects_data.cardsDir) = \"string\" and $length(expects_data.cardsDir) > 0) ? expects_data.cardsDir : \"cards\"",
+          "data.projectRoot = $type(expects_data.projectRoot) = \"string\" ? expects_data.projectRoot : \"\"",
+          "data.chatFlowRoot = $type(expects_data.chatFlowRoot) = \"string\" ? expects_data.chatFlowRoot : \"\"",
+          "data.chatMessages = expects_data.chatMessages",
+          "data.lastChatEntryId = expects_data.lastChatEntryId",
+          "data._rawMessageText = $trim($string($filter(expects_data.chatMessages, function($message) { $message.id = expects_data.lastChatEntryId and $message.role = \"user\" })[0].text))",
+          "data._marker = \"__probe__echo__probe__\"",
+          "data._markerLen = $length(data._marker)",
+          "data._isEchoProbe = $length(data._rawMessageText) >= (data._markerLen * 2) and $substring(data._rawMessageText, 0, data._markerLen) = data._marker and $substring(data._rawMessageText, $length(data._rawMessageText) - data._markerLen) = data._marker",
+          "data._hasLegacyEnvelope = $length(data._rawMessageText) >= 2 and $substring(data._rawMessageText, 0, 1) = \"{\" and $substring(data._rawMessageText, $length(data._rawMessageText) - 1) = \"}\" and $count($match(data._rawMessageText, /^\\s*\\{\\s*\"(prompt|text|userText|query|probe|chatHandlerMode|chatTimeoutMs|chatCopilotTimeoutMs)\"/)) > 0",
+          "data._legacyEnvelope = data._hasLegacyEnvelope ? $eval(data._rawMessageText) : null",
+          "data._legacyPrompt = ($type(data._legacyEnvelope.prompt) = \"string\" and $length($trim(data._legacyEnvelope.prompt)) > 0) ? data._legacyEnvelope.prompt : (($type(data._legacyEnvelope.text) = \"string\" and $length($trim(data._legacyEnvelope.text)) > 0) ? data._legacyEnvelope.text : (($type(data._legacyEnvelope.userText) = \"string\" and $length($trim(data._legacyEnvelope.userText)) > 0) ? data._legacyEnvelope.userText : (($type(data._legacyEnvelope.query) = \"string\" and $length($trim(data._legacyEnvelope.query)) > 0) ? data._legacyEnvelope.query : null)))",
+          "data.userText = data._isEchoProbe ? $trim($substring(data._rawMessageText, data._markerLen, $length(data._rawMessageText) - (data._markerLen * 2))) : (($type(data._legacyPrompt) = \"string\" and $length($trim(data._legacyPrompt)) > 0) ? $trim(data._legacyPrompt) : data._rawMessageText)",
+          "data.probe = data._isEchoProbe ? true : (data._legacyEnvelope.probe = true or data._legacyEnvelope.probe = 1 or ($type(data._legacyEnvelope.probe) = \"string\" and $count($filter([\"1\", \"true\", \"yes\", \"on\"], function($value) { $value = $lowercase($trim(data._legacyEnvelope.probe)) })) > 0))",
+          "data.chatHandlerMode = data._isEchoProbe ? \"echo-probe\" : (($type(data._legacyEnvelope.chatHandlerMode) = \"string\" and $length($trim(data._legacyEnvelope.chatHandlerMode)) > 0) ? $lowercase($trim(data._legacyEnvelope.chatHandlerMode)) : (data.probe ? \"probe\" : \"copilot\"))",
+          "data.chatCopilotTimeoutMs = ($parsePositiveInt := function($value) { ($type($value) = \"number\" and $value > 0) ? $floor($value) : (($type($value) = \"string\" and $count($match($trim($value), /^[0-9]+$/)) > 0 and $number($trim($value)) > 0) ? $floor($number($trim($value))) : null) }; $legacyTimeout := $parsePositiveInt(data._legacyEnvelope.chatTimeoutMs); $legacyCopilotTimeout := $parsePositiveInt(data._legacyEnvelope.chatCopilotTimeoutMs); $fallbackTimeout := $parsePositiveInt(expects_data.chatCopilotTimeoutMs); $legacyTimeout ? $legacyTimeout : ($legacyCopilotTimeout ? $legacyCopilotTimeout : ($fallbackTimeout ? $fallbackTimeout : 300000)))",
+          "result = \"success\""
+        ]
       },
       "transitions": {
         "success": "select_assistant",
@@ -37,7 +84,7 @@
       "handler": {
         "type": "compute-jsonata",
         "expr": [
-          "data.selectedAssistant = (expects_data.probe = true or expects_data.probe = \"true\" or expects_data.probe = 1 or $lowercase($string(expects_data.chatHandlerMode)) = \"probe\") ? \"probe\" : \"copilot\"",
+          "data.selectedAssistant = (expects_data.probe = true or expects_data.probe = \"true\" or expects_data.probe = 1 or $lowercase($string(expects_data.chatHandlerMode)) = \"probe\" or $lowercase($string(expects_data.chatHandlerMode)) = \"echo-probe\") ? \"probe\" : \"copilot\"",
           "result = data.selectedAssistant"
         ]
       },
@@ -49,11 +96,12 @@
       }
     },
     "copilot_assistant": {
-      "description": "Run the Copilot-backed assistant logic to generate the reply from the HTTP chat history",
-      "expects_data": ["userText", "boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "serverUrl", "apiBasePath", "lastChatEntryId", "chatCopilotTimeoutMs"],
+      "description": "Run the Copilot-backed assistant logic to generate the reply from the resolved chat history",
+      "expects_data": ["userText", "chatMessages", "boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatCopilotTimeoutMs"],
       "produces_data": ["replyText"],
       "input_validations": [
-        "$type(userText) = \"string\""
+        "$type(userText) = \"string\"",
+        "$type(chatMessages) = \"array\""
       ],
       "handler": {
         "type": "ref",
@@ -71,20 +119,18 @@
       }
     },
     "probe_assistant": {
-      "description": "Run the deterministic echo assistant for probe and test flows",
-      "expects_data": ["userText", "chatTimeMs"],
+      "description": "Compute the deterministic echo assistant reply for echo-probe and test flows",
+      "expects_data": ["userText"],
       "produces_data": ["replyText"],
       "input_validations": [
         "$type(userText) = \"string\""
       ],
       "handler": {
-        "type": "ref",
-        "howToRun": "local-node",
-        "whatToRun": {
-          "kind": "fs-path",
-          "value": "./server/chat-flow/echo-probe/assistant.js"
-        },
-        "meta": "chat-handler"
+        "type": "compute-jsonata",
+        "expr": [
+          "data.replyText = \"Echo: \" & expects_data.userText",
+          "result = \"success\""
+        ]
       },
       "transitions": {
         "success": "write_reply",
@@ -93,12 +139,11 @@
       }
     },
     "write_reply": {
-      "description": "Append the assistant reply via the HTTP chat API and clear processing",
-      "expects_data": ["serverUrl", "apiBasePath", "cardId", "replyText"],
-      "produces_data": ["replyText", "replyId"],
+      "description": "Append the assistant reply and clear processing via one chat-store-cli command envelope",
+      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "replyText"],
+      "produces_data": ["replyId"],
       "input_validations": [
-        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
-        "$type(apiBasePath) = \"string\" and $length(apiBasePath) > 0",
+        "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(replyText) = \"string\""
       ],
@@ -107,43 +152,40 @@
         "howToRun": "local-node",
         "whatToRun": {
           "kind": "fs-path",
-          "value": "./server/chat-flow/chat-write-assistant.js"
+          "value": "../../cli/node/chat-store-cli.js"
         },
-        "meta": "chat-handler"
+        "meta": "chat-handler",
+        "argsMassaging": {
+          "stdinTemplate": "{ 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
+        },
+        "outputTransforms": {
+          "dataTemplate": "{ 'replyId': output.data.results[0].data.id }"
+        }
       },
       "transitions": {
-        "success": "cleanup_success",
+        "success": "completed",
         "failure": "cleanup_failure",
         "error": "cleanup_failure"
       }
     },
-    "cleanup_success": {
-      "description": "Delete the processing marker after a successful assistant turn",
-      "handler": {
-        "type": "ref",
-        "howToRun": "local-node",
-        "whatToRun": {
-          "kind": "fs-path",
-          "value": "./server/chat-flow/chat-clear-processing.js"
-        },
-        "meta": "chat-handler"
-      },
-      "transitions": {
-        "success": "completed",
-        "failure": "failed",
-        "error": "failed"
-      }
-    },
     "cleanup_failure": {
-      "description": "Best-effort processing marker cleanup after a failed assistant turn",
+      "description": "Write a failure system message and clear processing via one chat-store-cli command envelope",
+      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId"],
+      "input_validations": [
+        "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
+        "$type(cardId) = \"string\" and $length(cardId) > 0"
+      ],
       "handler": {
         "type": "ref",
         "howToRun": "local-node",
         "whatToRun": {
           "kind": "fs-path",
-          "value": "./server/chat-flow/chat-clear-processing.js"
+          "value": "../../cli/node/chat-store-cli.js"
         },
-        "meta": "chat-handler"
+        "meta": "chat-handler",
+        "argsMassaging": {
+          "stdinTemplate": "{ 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
+        }
       },
       "transitions": {
         "success": "failed",

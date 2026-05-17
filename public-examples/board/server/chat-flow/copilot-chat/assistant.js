@@ -16,15 +16,6 @@ function readJsonStdin() {
   }
 }
 
-function resolveChatDir(extra) {
-  if (typeof extra.chatDir === 'string' && extra.chatDir.trim()) return extra.chatDir;
-  if (typeof extra.chatsBlobBasePath === 'string' && typeof extra.chatsKeyPrefix === 'string') {
-    const cardPart = String(extra.chatsKeyPrefix).split('/')[0];
-    return path.join(extra.chatsBlobBasePath, cardPart);
-  }
-  return '';
-}
-
 const extra = readJsonStdin();
 const boardId = typeof extra.boardId === 'string' ? extra.boardId : '';
 const cardId = typeof extra.cardId === 'string' ? extra.cardId : '';
@@ -34,32 +25,20 @@ const runtimeStatusDir = typeof extra.runtimeStatusDir === 'string' ? extra.runt
 const cardsDir = typeof extra.cardsDir === 'string' ? extra.cardsDir : 'cards';
 const projectRoot = typeof extra.projectRoot === 'string' ? extra.projectRoot : '';
 const chatFlowRoot = typeof extra.chatFlowRoot === 'string' ? extra.chatFlowRoot : '';
-const serverUrl = typeof extra.serverUrl === 'string' ? extra.serverUrl.replace(/\/$/, '') : '';
-const apiBasePath = typeof extra.apiBasePath === 'string' ? extra.apiBasePath : '/api/board';
-const lastChatEntryId = typeof extra.lastChatEntryId === 'string' ? extra.lastChatEntryId : '';
+const chatMessages = Array.isArray(extra.chatMessages) ? extra.chatMessages : [];
 const userText = typeof extra.userText === 'string' ? extra.userText : '';
 const chatCopilotTimeoutMs = Number.isFinite(Number(extra.chatCopilotTimeoutMs)) && Number(extra.chatCopilotTimeoutMs) > 0
   ? Math.floor(Number(extra.chatCopilotTimeoutMs))
   : 300000;
 
-if (!boardSetupRoot || !serverUrl || !cardId) {
-  process.stderr.write('missing boardSetupRoot/serverUrl/cardId\n');
+if (!boardSetupRoot || !cardId) {
+  process.stderr.write('missing boardSetupRoot/cardId\n');
   process.exit(1);
 }
 
 const boardRuntimeDirAbs = path.join(boardSetupRoot, boardRuntimeDir || 'runtime');
 const runtimeStatusDirAbs = path.join(boardSetupRoot, runtimeStatusDir || 'runtime-out');
 const cardsDirAbs = path.join(boardSetupRoot, cardsDir || 'cards');
-
-async function fetchChatMessages() {
-  const chatsUrl = `${serverUrl}${apiBasePath}/cards/${encodeURIComponent(cardId)}/chats`;
-  const res = await fetch(chatsUrl);
-  if (!res.ok) {
-    throw new Error(`could not fetch chat history: HTTP ${res.status}`);
-  }
-  const data = await res.json();
-  return Array.isArray(data?.messages) ? data.messages : [];
-}
 
 function readHistory(messages) {
   return (Array.isArray(messages) ? messages : [])
@@ -224,15 +203,10 @@ function upsertCardsIfChanged() {
   }
 }
 
-const messages = await fetchChatMessages();
-const currentUser = messages.find((message) => typeof message?.id === 'string' && message.id === lastChatEntryId && message.role === 'user');
-const currentUserText = typeof currentUser?.text === 'string' && currentUser.text.trim()
-  ? currentUser.text.trim()
-  : userText.trim();
-const history = readHistory(messages);
+const history = readHistory(chatMessages);
 const sessionDir = path.join(os.tmpdir(), 'demo-chat-handler-sessions', boardId + '_' + cardId);
 const workingDir = boardSetupRoot;
-const prompt = buildPrompt(cardId, history, currentUserText);
+const prompt = buildPrompt(cardId, history, userText.trim());
 
 try {
   let replyText = '';
@@ -240,7 +214,7 @@ try {
     replyText = runWrapper(prompt, sessionDir, workingDir).trim();
   } catch (err) {
     if (!isNonInteractiveCopilotError(err)) throw err;
-    replyText = localFallbackReply(currentUserText);
+    replyText = localFallbackReply(userText);
   }
   if (!replyText) {
     throw new Error('Copilot wrapper returned an empty response');

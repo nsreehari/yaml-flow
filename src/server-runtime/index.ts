@@ -35,6 +35,7 @@ import {
   createInMemoryChatStorage,
 } from '../cli/common/chat-storage-lib.js';
 import type { ChatStorage } from '../cli/common/chat-storage-lib.js';
+import { createChatStorePublic } from '../cli/common/chat-store-lib-public.js';
 
 import type {
   SingleBoardRuntimeOptions,
@@ -148,6 +149,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const invocationAdapter = options.invocationAdapter;
   const chatFlowRunner = options.chatFlowRunner || null;
   const chatStorage: ChatStorage = options.chatStorage ?? createInMemoryChatStorage();
+  const chatStorePublic = createChatStorePublic(chatStorage);
   const notificationTransport = options.notificationTransport || null;
   const serverUrl = options.serverUrl || null;
   const executionExtra = options.executionExtra || {};
@@ -643,19 +645,36 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  // ── Chat handler invocation ──────────────────────────────────────────────
-
-  function invokeChatHandler(cardId: string, lastEntryId: string): void {
+  function resolveChatHandlerTarget(cardId: string): {
+    ctx: BoardContext;
+    handlerFlow: unknown;
+    handlerRef: import('./types.js').ExecutionRef;
+  } | null {
     const ctx = cardContextForCard(cardId);
-    if (!ctx) return;
+    if (!ctx) return null;
 
     const flowResult = ctx.board.getConfig({ params: { key: 'chat-handler-flow' } });
-    if (flowResult.status !== 'success') return;
-    const handlerFlow = (flowResult as any).data?.value;
+    const handlerFlow = flowResult.status === 'success' ? (flowResult as any).data?.value : null;
     const handlerRef = ctx.chatHandlerRef;
-    if (handlerFlow == null && (!handlerRef || typeof handlerRef !== 'object')) return;
+    if (handlerFlow == null && (!handlerRef || typeof handlerRef !== 'object')) return null;
 
-    try { chatStorage.setProcessing(cardId, true); } catch {}
+    return {
+      ctx,
+      handlerFlow,
+      handlerRef: handlerRef as import('./types.js').ExecutionRef,
+    };
+  }
+
+  // ── Chat handler invocation ──────────────────────────────────────────────
+
+  function invokeChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false): void {
+    const target = resolveChatHandlerTarget(cardId);
+    if (!target) return;
+    const { ctx, handlerFlow, handlerRef } = target;
+
+    if (!processingAlreadySet) {
+      try { chatStorage.setProcessing(cardId, true); } catch {}
+    }
 
     const args: Record<string, unknown> = {
       boardId,
@@ -722,7 +741,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): void {
     const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
-    let chatHandlerResult: { cardId: string; lastEntryId: string } | undefined;
+    let chatHandlerResult: { cardId: string; lastEntryId: string; processingAlreadySet: boolean } | undefined;
 
     persistCard(cardId, (card) => {
       const now = new Date().toISOString();
@@ -744,8 +763,24 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         }
 
         if (text || files.length > 0) {
-          const entryId = writeChatRecord(cardId, 'user', text, files);
-          chatHandlerResult = { cardId, lastEntryId: entryId };
+          const batchResult = chatStorePublic.runBatch({
+            cardId,
+            commands: [
+              { command: 'append', role: 'user', text, files },
+              { command: 'set-processing', active: true },
+            ],
+          });
+          if (batchResult.status !== 'success') {
+            throw new Error(batchResult.error);
+          }
+          const appendId = (batchResult.data.results[0]?.data as { id?: unknown } | undefined)?.id;
+          if (typeof appendId !== 'string' || !appendId) {
+            throw new Error(`chat-send did not return an append id for card ${cardId}`);
+          }
+          const entryId = appendId;
+          const processingAlreadySet = true;
+
+          chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet };
           for (const file of files) {
             if (!file || typeof file !== 'object') continue;
             const display = typeof file.name === 'string' ? file.name : 'file';
@@ -789,7 +824,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
 
     if (chatHandlerResult) {
-      invokeChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId);
+      invokeChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId, chatHandlerResult.processingAlreadySet);
     }
   }
 
@@ -1071,7 +1106,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardActionMatch[1]);
         const body = await readJsonBody(req);
-        applyCardAction(cardId, body?.actionType as string, body?.payload as Record<string, unknown> | null);
+        const actionType = body?.actionType as string;
+        if (actionType === 'chat-send' && !resolveChatHandlerTarget(cardId)) {
+          json(res, 409, { error: `chat handler is not configured for card: ${cardId}` });
+          return true;
+        }
+        applyCardAction(cardId, actionType, body?.payload as Record<string, unknown> | null);
         json(res, 200, { ok: true });
         return true;
       }

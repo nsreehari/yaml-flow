@@ -20,12 +20,17 @@ import path from 'node:path';
 import http from 'node:http';
 import fs from 'node:fs';
 
+const ECHO_PROBE_MARKER = '__probe__echo__probe__';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const cliArgs = process.argv.slice(2);
 const portArg = cliArgs.indexOf('--port');
 const cliPort = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : NaN;
+const skipT1 = cliArgs.includes('--skip-t1');
+const skipT2 = cliArgs.includes('--skip-t2');
+const skipT3a = cliArgs.includes('--skip-t3a');
 const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 const BOARD_ID = 'live';
@@ -402,7 +407,10 @@ try {
   console.log(`[T0] ok: ${t0Positions.length} positions computed`);
 
   // ── T1: PATCH holdings (+1 row), verify recomputation ──
-  console.log('\n=== T1: patch holdings (+1 row) ===');
+  if (skipT1) {
+    console.log('\n=== T1: skipped (--skip-t1) ===');
+  } else {
+    console.log('\n=== T1: patch holdings (+1 row) ===');
 
   // Read current holdings from card store
   const portfolioCardRes = await httpGet(`${BASE}/cards/card-portfolio`);
@@ -446,45 +454,50 @@ try {
     `Expected positions rows +1 (before=${t0PositionsCount}, after=${afterPositionsCount})`);
   console.log(`[T1] ok: holdings ${t0HoldingsCount}->${afterHoldingsCount}, ` +
     `positions ${t0PositionsCount}->${afterPositionsCount}, added=${newTicker}`);
+  }
 
   // ── T2: plain file upload API + card_data.files + download roundtrip ──
-  console.log('\n=== T2: plain file upload -> card_data.files -> download ===');
-  const t2CardBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
-  assert(t2CardBefore.status === 200, `T2 pre card read returned ${t2CardBefore.status}`);
-  const t2FilesBefore = Array.isArray(t2CardBefore.data?.card_data?.files)
-    ? t2CardBefore.data.card_data.files
-    : [];
-  const t2BeforeCount = t2FilesBefore.length;
+  if (skipT2) {
+    console.log('\n=== T2: skipped (--skip-t2) ===');
+  } else {
+    console.log('\n=== T2: plain file upload -> card_data.files -> download ===');
+    const t2CardBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    assert(t2CardBefore.status === 200, `T2 pre card read returned ${t2CardBefore.status}`);
+    const t2FilesBefore = Array.isArray(t2CardBefore.data?.card_data?.files)
+      ? t2CardBefore.data.card_data.files
+      : [];
+    const t2BeforeCount = t2FilesBefore.length;
 
-  const t2UploadText = `plain-file-upload-${Date.now()}`;
-  const t2UploadName = 't2-upload.txt';
-  const t2UploadRes = await httpUploadChatFile(
-    `${BASE}/cards/${CHAT_CARD_ID}/files`,
-    t2UploadName,
-    t2UploadText,
-  );
-  assert(t2UploadRes.status === 200, `T2 file upload returned ${t2UploadRes.status}`);
-  const t2UploadedFile = t2UploadRes.data?.file;
-  assert(t2UploadedFile && typeof t2UploadedFile === 'object', 'T2 upload response missing file metadata');
-  assert(String(t2UploadedFile?.name || '') === t2UploadName, 'T2 uploaded file name mismatch');
+    const t2UploadText = `plain-file-upload-${Date.now()}`;
+    const t2UploadName = 't2-upload.txt';
+    const t2UploadRes = await httpUploadChatFile(
+      `${BASE}/cards/${CHAT_CARD_ID}/files`,
+      t2UploadName,
+      t2UploadText,
+    );
+    assert(t2UploadRes.status === 200, `T2 file upload returned ${t2UploadRes.status}`);
+    const t2UploadedFile = t2UploadRes.data?.file;
+    assert(t2UploadedFile && typeof t2UploadedFile === 'object', 'T2 upload response missing file metadata');
+    assert(String(t2UploadedFile?.name || '') === t2UploadName, 'T2 uploaded file name mismatch');
 
-  const t2CardAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
-  assert(t2CardAfter.status === 200, `T2 post card read returned ${t2CardAfter.status}`);
-  const t2FilesAfter = Array.isArray(t2CardAfter.data?.card_data?.files)
-    ? t2CardAfter.data.card_data.files
-    : [];
-  assert(t2FilesAfter.length === t2BeforeCount + 1, `T2 expected files +1 (before=${t2BeforeCount}, after=${t2FilesAfter.length})`);
+    const t2CardAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    assert(t2CardAfter.status === 200, `T2 post card read returned ${t2CardAfter.status}`);
+    const t2FilesAfter = Array.isArray(t2CardAfter.data?.card_data?.files)
+      ? t2CardAfter.data.card_data.files
+      : [];
+    assert(t2FilesAfter.length === t2BeforeCount + 1, `T2 expected files +1 (before=${t2BeforeCount}, after=${t2FilesAfter.length})`);
 
-  const t2FileIndex = t2FilesAfter.findIndex((f) => String(f?.stored_name || '') === String(t2UploadedFile?.stored_name || ''));
-  assert(t2FileIndex >= 0, 'T2 uploaded file metadata not found in card_data.files');
+    const t2FileIndex = t2FilesAfter.findIndex((f) => String(f?.stored_name || '') === String(t2UploadedFile?.stored_name || ''));
+    assert(t2FileIndex >= 0, 'T2 uploaded file metadata not found in card_data.files');
 
-  const t2DownloadRes = await httpGetRaw(
-    `${BASE}/cards/${CHAT_CARD_ID}/files/${t2FileIndex}?sn=${encodeURIComponent(String(t2UploadedFile?.stored_name || ''))}`,
-  );
-  assert(t2DownloadRes.status === 200, `T2 file download returned ${t2DownloadRes.status}`);
-  const t2DownloadedText = t2DownloadRes.body.toString('utf-8');
-  assert(t2DownloadedText === t2UploadText, 'T2 downloaded content mismatch');
-  console.log('[T2] ok: card_data.files updated and file download endpoint returned exact bytes');
+    const t2DownloadRes = await httpGetRaw(
+      `${BASE}/cards/${CHAT_CARD_ID}/files/${t2FileIndex}?sn=${encodeURIComponent(String(t2UploadedFile?.stored_name || ''))}`,
+    );
+    assert(t2DownloadRes.status === 200, `T2 file download returned ${t2DownloadRes.status}`);
+    const t2DownloadedText = t2DownloadRes.body.toString('utf-8');
+    assert(t2DownloadedText === t2UploadText, 'T2 downloaded content mismatch');
+    console.log('[T2] ok: card_data.files updated and file download endpoint returned exact bytes');
+  }
 
   // ── T3*: chat protocol over API + SSE ──
   {
@@ -507,12 +520,7 @@ try {
   const t2SendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
     actionType: 'chat-send',
     payload: {
-      text: JSON.stringify({
-        prompt: t2ProbePrompt,
-        probe: true,
-        chatTimeMs: 2200,
-        chatTimeoutMs: 20000,
-      }),
+      text: `${ECHO_PROBE_MARKER}${t2ProbePrompt}${ECHO_PROBE_MARKER}`,
     },
   });
   assert(t2SendRes.status === 200, `T3 chat-send returned ${t2SendRes.status}`);
@@ -558,49 +566,51 @@ try {
   assert(String(t2AssistantMsg?.text || '').includes(`Echo: ${t2ProbePrompt}`), 'T3 assistant echo file content mismatch');
   console.log('[T3] ok: probe lifecycle observed (processing/user any-order, assistant write, processing clear)');
 
-  /*
   // ── T3a: non-probe chat protocol over API + SSE ──
-  // Disabled in the public example — requires a configured Azure Foundry
-  // endpoint and agent_id in server-config.json.
-  console.log('\n=== T3a: non-probe chat protocol (expect paris) ===');
-  const t2aBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
-  assert(t2aBefore.status === 200, `T3a pre chats returned ${t2aBefore.status}`);
-  const t2aBeforeMessages = Array.isArray(t2aBefore.data?.messages) ? t2aBefore.data.messages : [];
-  const t2aBeforeCount = t2aBeforeMessages.length;
-  const t2aPrompt = 'Just answer what is the capital of France. No Fluff. No COmmentary.  No Markup Respond in lower case in one word.';
+  // Disabled in the public example unless explicitly requested — requires a
+  // configured Azure Foundry endpoint and agent_id in server-config.json.
+  if (skipT3a) {
+    console.log('\n=== T3a: skipped (--skip-t3a) ===');
+  } else {
+    console.log('\n=== T3a: non-probe chat protocol (expect paris) ===');
+    const t2aBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    assert(t2aBefore.status === 200, `T3a pre chats returned ${t2aBefore.status}`);
+    const t2aBeforeMessages = Array.isArray(t2aBefore.data?.messages) ? t2aBefore.data.messages : [];
+    const t2aBeforeCount = t2aBeforeMessages.length;
+    const t2aPrompt = 'Just answer what is the capital of France. No Fluff. No COmmentary.  No Markup Respond in lower case in one word.';
 
-  const t2aSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
-    actionType: 'chat-send',
-    payload: {
-      text: JSON.stringify({
-        prompt: t2aPrompt,
-        chatTimeoutMs: 180000,
-      }),
-    },
-  });
-  assert(t2aSendRes.status === 200, `T3a chat-send returned ${t2aSendRes.status}`);
+    const t2aSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
+      actionType: 'chat-send',
+      payload: {
+        text: JSON.stringify({
+          prompt: t2aPrompt,
+          chatTimeoutMs: 180000,
+        }),
+      },
+    });
+    assert(t2aSendRes.status === 200, `T3a chat-send returned ${t2aSendRes.status}`);
 
-  const t2aAssistant = await waitForChatPredicate((events) => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const e = events[i];
-      if (e.messageCount < t2aBeforeCount + 2) continue;
-      const last = e.messages[e.messages.length - 1];
-      if (last?.role === 'assistant' && /paris/i.test(String(last.text || ''))) return e;
-    }
-    return false;
-  }, 240_000, 'T3a assistant response with paris');
-  assert(!!t2aAssistant, 'T3a assistant response with paris not observed on SSE');
+    const t2aAssistant = await waitForChatPredicate((events) => {
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const e = events[i];
+        if (e.messageCount < t2aBeforeCount + 2) continue;
+        const last = e.messages[e.messages.length - 1];
+        if (last?.role === 'assistant' && /paris/i.test(String(last.text || ''))) return e;
+      }
+      return false;
+    }, 240_000, 'T3a assistant response with paris');
+    assert(!!t2aAssistant, 'T3a assistant response with paris not observed on SSE');
 
-  const t2aAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
-  assert(t2aAfter.status === 200, `T3a post chats returned ${t2aAfter.status}`);
-  const t2aAfterMessages = Array.isArray(t2aAfter.data?.messages) ? t2aAfter.data.messages : [];
-  const t2aNewMessages = t2aAfterMessages.slice(t2aBeforeCount);
-  assert(t2aNewMessages.length >= 2, `T3a expected at least 2 new chat messages, got ${t2aNewMessages.length}`);
-  const t2aAssistantMsg = [...t2aNewMessages].reverse().find((m) => m?.role === 'assistant');
-  assert(!!t2aAssistantMsg && typeof t2aAssistantMsg.id === 'string', 'T3a assistant chat message missing id');
-  assert(/paris/i.test(String(t2aAssistantMsg?.text || '')), 'T3a assistant file content missing paris');
-  console.log('[T3a] ok: non-probe response contains paris');
-  */
+    const t2aAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    assert(t2aAfter.status === 200, `T3a post chats returned ${t2aAfter.status}`);
+    const t2aAfterMessages = Array.isArray(t2aAfter.data?.messages) ? t2aAfter.data.messages : [];
+    const t2aNewMessages = t2aAfterMessages.slice(t2aBeforeCount);
+    assert(t2aNewMessages.length >= 2, `T3a expected at least 2 new chat messages, got ${t2aNewMessages.length}`);
+    const t2aAssistantMsg = [...t2aNewMessages].reverse().find((m) => m?.role === 'assistant');
+    assert(!!t2aAssistantMsg && typeof t2aAssistantMsg.id === 'string', 'T3a assistant chat message missing id');
+    assert(/paris/i.test(String(t2aAssistantMsg?.text || '')), 'T3a assistant file content missing paris');
+    console.log('[T3a] ok: non-probe response contains paris');
+  }
 
   // ── T3b: probe-echo chat + file upload protocol over API + SSE ──
   console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
@@ -632,11 +642,7 @@ try {
   const t2bSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
     actionType: 'chat-send',
     payload: {
-      text: JSON.stringify({
-        prompt: t2bPrompt,
-        probe: true,
-        chatTimeMs: 2200,
-      }),
+      text: `${ECHO_PROBE_MARKER}${t2bPrompt}${ECHO_PROBE_MARKER}`,
       files: [uploadedFile],
     },
   });

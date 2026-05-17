@@ -207,7 +207,7 @@ describe('platform-free server runtime (Node host)', () => {
     expect(patchData).toHaveProperty('ok', true);
   });
 
-  it('POST /api/board/cards/:id/actions with chat-send', async () => {
+  it('POST /api/board/cards/:id/actions returns an error when chat-send has no handler', async () => {
     const statusRes = await fetch(`${API_BASE}/board-status`);
     const statusData = await statusRes.json() as Record<string, unknown>;
     const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
@@ -221,16 +221,15 @@ describe('platform-free server runtime (Node host)', () => {
         payload: { text: 'hello from integration test' },
       }),
     });
-    expect(res.ok).toBe(true);
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: `chat handler is not configured for card: ${cardId}` });
 
-    // Verify chat records
     const chatsRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/chats`);
     expect(chatsRes.ok).toBe(true);
     const chatsData = await chatsRes.json() as Record<string, unknown>;
     expect(chatsData).toHaveProperty('ok', true);
     const messages = (chatsData as any).messages as Array<Record<string, unknown>>;
-    expect(messages.length).toBeGreaterThan(0);
-    expect(messages.some(m => typeof m.text === 'string' && m.text.includes('hello from integration test'))).toBe(true);
+    expect(messages).toEqual([]);
   });
 
   it('POST /api/board/cards/:id/files uploads a file', async () => {
@@ -337,31 +336,6 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   // ── Chat handler failure / .processing marker cleanup ────────────────────
-
-  it('does not leave processing state behind when no chat handler is configured', async () => {
-    // With no chat-handler-flow configured, chat-send should not leave processing=true behind.
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
-    const cardId = cards[0].id as string;
-
-    // Send a chat — no chat flow is configured, runtime should still not leave processing behind
-    const chatRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/actions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        actionType: 'chat-send',
-        payload: { text: 'marker cleanup test' },
-      }),
-    });
-    expect(chatRes.ok).toBe(true);
-
-    // Give the async invocation time to settle
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    // processing should be false — no handler was configured so setProcessing(true) was never called
-    expect(testChatStorage.isProcessing(cardId)).toBe(false);
-  });
 
   it('cleans up processing state when chat-handler dispatch fails', async () => {
     const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-srt-dispatch-fail-'));

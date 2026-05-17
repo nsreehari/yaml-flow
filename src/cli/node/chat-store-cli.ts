@@ -20,6 +20,7 @@
  */
 
 import { createFsBoardChatStorage } from './fs-board-adapter.js';
+import { resolvePath } from './process-runner.js';
 import {
   createChatStorePublic,
   type ChatStoreCommandBatchEnvelope,
@@ -251,7 +252,10 @@ function printResult(result: CommandResult): void {
 
 // ── entry point ─────────────────────────────────────────────────────────────
 
-cli(process.argv.slice(2)).catch((e: unknown) => {
-  console.error('chat-store:', e instanceof Error ? e.message : String(e));
-  process.exit(1);
-});
+const isMain = process.argv[1] && resolvePath(process.argv[1]) === resolvePath(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
+if (isMain) {
+  cli(process.argv.slice(2)).catch((e: unknown) => {
+    console.error('chat-store:', e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  });
+}

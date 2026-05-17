@@ -73,6 +73,7 @@ export type { ChatStorage, ChatRecord, ChatConfig } from '../common/chat-storage
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 export {
+  buildLocalBaseSpec,
   createExecutionRefInvoker,
   evaluateArgsMassaging,
   invokeExecutionRef,

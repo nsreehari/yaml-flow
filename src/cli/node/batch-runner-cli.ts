@@ -4,27 +4,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { resolvePath } from './process-runner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const srcCli = path.join(__dirname, '..', '..', '..', 'src', 'cli', 'node', 'batch-runner-cli.ts');
-const tsxCli = path.join(__dirname, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-
-if (fs.existsSync(srcCli)) {
-  const result = spawnSync(process.execPath, [tsxCli, srcCli, ...process.argv.slice(2)], {
-    stdio: 'inherit',
-    shell: false,
-    windowsHide: true,
-  });
-
-  if (result.error) {
-    console.error(`[batch-runner-cli] Failed to launch dev fallback: ${result.error.message}`);
-    process.exit(1);
-  }
-
-  process.exit(result.status ?? 0);
-}
-
 const libIndexPath = path.join(__dirname, '..', '..', 'lib', 'index.js');
 const stepPublicPath = path.join(__dirname, '..', '..', 'lib', 'step-machine-public', 'index.js');
 const batchPath = path.join(__dirname, '..', '..', 'lib', 'batch', 'index.js');
@@ -40,8 +22,7 @@ function pathToFileUrl(filePath) {
   return new URL(`file:///${resolved.startsWith('/') ? resolved.slice(1) : resolved}`);
 }
 
-async function main() {
-  const args = process.argv.slice(2);
+export async function cli(args) {
   const parsed = parseCliArgs(args);
 
   if (parsed.help || args.length === 0) {
@@ -218,8 +199,11 @@ function printUsage() {
   console.error('  batch-runner-cli flow.yaml --items \'[{"a":1,"b":2},{"a":3,"b":4}]\'');
 }
 
-main().catch((error) => {
-  const msg = error instanceof Error ? error.stack ?? error.message : String(error);
-  console.error(msg);
-  process.exit(1);
-});
+const isMain = process.argv[1] && resolvePath(process.argv[1]) === resolvePath(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
+if (isMain) {
+  cli(process.argv.slice(2)).catch((error) => {
+    const msg = error instanceof Error ? error.stack ?? error.message : String(error);
+    console.error(msg);
+    process.exit(1);
+  });
+}
