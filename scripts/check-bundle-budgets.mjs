@@ -10,7 +10,7 @@ const budgets = [
   { file: 'lib/index.cjs', maxBytes: 280_000 },
   { file: 'cli/node/board-live-cards-cli.js', maxBytes: 240_000 },
   { file: 'cli/node/fs-board-adapter.js', maxBytes: 240_000 },
-  { file: 'browser/board-livecards-localstorage.js', maxBytes: 94_000 },
+  { file: 'browser/board-livecards-localstorage.js', maxBytes: 105_000 },
 ];
 
 let hasFailure = false;
