@@ -82,9 +82,6 @@ var LiveCard = (function () {
       .lc-dropzone:hover { border-color:var(--bs-primary,#0d6efd); }
       .lc-dropzone.lc-drag-over { border-color:var(--bs-primary,#0d6efd); background:rgba(13,110,253,.05); }
       .lc-dropzone.lc-disabled { pointer-events:none; opacity:.5; }
-      .lc-staged-file { display:flex; align-items:center; gap:.5rem; padding:.125rem 0; }
-      .lc-chat-el { display:flex; flex-direction:column; }
-      .lc-chat-body { flex:1; overflow-y:auto; max-height:300px; padding:.25rem; }
       .lc-chat-bubble { padding:.5rem .75rem; margin:.375rem 0; border-radius:.75rem; max-width:85%; word-wrap:break-word; font-size:.875rem; line-height:1.4; display:flex; gap:.5rem; align-items:flex-start; }
       .lc-chat-bubble-user { background:var(--bs-primary-bg-subtle,#cfe2ff); margin-left:auto; flex-direction:row-reverse; }
       .lc-chat-bubble-assistant { background:var(--bs-light,#f8f9fa); border:1px solid var(--bs-border-color,#dee2e6); }
@@ -95,7 +92,6 @@ var LiveCard = (function () {
       .lc-chat-bubble-pending { opacity:.85; }
       .lc-chat-bubble-pending .spinner-border { width:.75rem; height:.75rem; margin-left:.4rem; border-width:.12em; vertical-align:middle; }
       .lc-chat-processing { display:flex; align-items:center; gap:.5rem; padding:.375rem .75rem; color:var(--bs-secondary,#6c757d); font-size:.8rem; font-style:italic; }
-      .lc-chat-input-bar { display:flex; gap:.25rem; align-items:center; }
       .lc-chat-modal-input-row { display:flex; align-items:center; gap:.375rem; }
       .lc-chat-modal-input-row .form-control { min-width:0; }
       .lc-chat-modal-input-row textarea.form-control { resize:none; overflow-y:hidden; min-height:38px; max-height:120px; }
@@ -136,8 +132,6 @@ var LiveCard = (function () {
       @media (max-width:576px) {
         .lc-metric-value { font-size:1.5rem; }
         .lc-chart-wrap { min-height:150px; }
-        .lc-chat-msg { max-width:95%; }
-        .lc-chat-body { max-height:200px; }
         .lc-chat-bubble { max-width:95%; }
       }
     `;
@@ -441,37 +435,26 @@ var LiveCard = (function () {
     }
     const _renderers = {}; // kind → fn
     const _nodeEls = {};   // nodeId → { container, resultEl, uid }
-    const _chatModal = {
-      backdrop: null,
-      title: null,
-      body: null,
-      input: null,
-      fileInput: null,
-      staged: null,
-      sendBtn: null,
-      attachBtn: null,
-      closeBtn: null,
-      currentNodeId: null,
-      stagedFiles: [],
-      loading: false,
-      awaitingProcessingAck: false,
-      sendBtnIdleHtml: '',
-    };
-    const _filesModal = {
-      backdrop: null,
-      title: null,
-      body: null,
-      staged: null,
-      fileInput: null,
-      dropzone: null,
-      uploadBtn: null,
-      attachBtn: null,
-      closeBtn: null,
-      currentNodeId: null,
-      stagedFiles: [],
-      pollingTimer: null,
-      loading: false,
-    };
+
+    // ---- Chat pane registry ----
+    // All currently-mounted chat panes (modal + inline). SSE / refresh hooks
+    // iterate this to update every visible pane bound to the affected card.
+    const _chatPanes = new Set<any>();
+    // The modal's pane (lazily created by _ensureChatModal). null when modal
+    // has never been opened.
+    let _modalPane: any = null;
+    // Modal-only chrome references (backdrop / title / close button).
+    const _chatModalRefs: any = { backdrop: null, title: null, closeBtn: null };
+
+    // ---- Files pane registry ----
+    // All currently-mounted file panes (modal + inline upload + inline list).
+    // openFilesModal / destroyAll / SSE-equivalent refreshes iterate these.
+    const _filesPanes = new Set<any>();
+    // The modal's pane references (set by _ensureFilesModal). The modal
+    // composes one upload pane + one list pane inside its dialog chrome.
+    let _filesModalUploadPane: any = null;
+    let _filesModalListPane: any = null;
+    const _filesModalRefs: any = { backdrop: null, title: null, closeBtn: null, currentNodeId: null };
 
     // ---- Helpers ----
 
@@ -484,173 +467,6 @@ var LiveCard = (function () {
     function _getCleanup(id) {
       if (!_cleanup[id]) _cleanup[id] = { ac: new AbortController(), timers: [], charts: [], unsubs: [] };
       return _cleanup[id];
-    }
-
-    function _syncChatComposerState(nodeId?) {
-      const activeNodeId = nodeId || _chatModal.currentNodeId;
-      const node = activeNodeId ? cfg.resolve(activeNodeId) : null;
-      const chatDisabled = !!(node && node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
-      const isProcessing = !!_chatStateFromCardState(node).processing;
-      if (_chatModal.input) {
-        _chatModal.input.disabled = chatDisabled;
-        _chatModal.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : 'Type a message...';
-      }
-      if (_chatModal.attachBtn) _chatModal.attachBtn.disabled = chatDisabled || isProcessing;
-      if (_chatModal.sendBtn) _chatModal.sendBtn.disabled = chatDisabled || isProcessing || !!_chatModal.loading || !!_chatModal.awaitingProcessingAck;
-    }
-
-    function _setChatSendButtonPending(pending) {
-      _chatModal.awaitingProcessingAck = !!pending;
-      if (!_chatModal.sendBtn) return;
-      if (pending) {
-        _chatModal.sendBtn.setAttribute('aria-label', 'Waiting for AI response');
-        _chatModal.sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-        _syncChatComposerState();
-        return;
-      }
-      _chatModal.sendBtn.innerHTML = _chatModal.sendBtnIdleHtml;
-      _chatModal.sendBtn.setAttribute('aria-label', 'Send');
-      _syncChatComposerState();
-    }
-
-    function _ensureChatModal() {
-      if (_chatModal.backdrop) return;
-
-      const backdrop = document.createElement('div');
-      backdrop.className = 'lc-chat-modal-backdrop';
-      backdrop.innerHTML = '' +
-        '<div class="modal-dialog modal-lg modal-dialog-centered" role="dialog" aria-modal="true" aria-label="Card chat">' +
-        '  <div class="modal-content bg-white">' +
-        '    <div class="modal-header border-bottom p-3 d-flex align-items-center justify-content-between">' +
-        '      <h5 class="modal-title lc-chat-modal-title">Chat</h5>' +
-        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-close aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
-        '    </div>' +
-        '    <div class="modal-body bg-light" data-lc-chat-body></div>' +
-        '    <div class="modal-footer flex-column align-items-stretch border-top p-3 gap-3">' +
-        '      <div data-lc-chat-staged class="small w-100"></div>' +
-        '      <input type="file" class="d-none" data-lc-chat-file multiple>' +
-        '      <div class="lc-chat-modal-input-row mt-2">' +
-        '        <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-attach title="Attach files" aria-label="Attach files">' +
-        '          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>' +
-        '        </button>' +
-        '        <textarea class="form-control" data-lc-chat-input rows="1" placeholder="Type a message..."></textarea>' +
-        '        <button type="button" class="btn btn-sm btn-primary" data-lc-chat-send aria-label="Send">' +
-        '          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>' +
-        '        </button>' +
-        '      </div>' +
-        '    </div>' +
-        '  </div>' +
-        '</div>';
-
-      document.body.appendChild(backdrop);
-      _chatModal.backdrop = backdrop;
-      _chatModal.title = backdrop.querySelector('.lc-chat-modal-title');
-      _chatModal.body = backdrop.querySelector('[data-lc-chat-body]');
-      _chatModal.input = backdrop.querySelector('[data-lc-chat-input]');
-      _chatModal.fileInput = backdrop.querySelector('[data-lc-chat-file]');
-      _chatModal.staged = backdrop.querySelector('[data-lc-chat-staged]');
-      _chatModal.sendBtn = backdrop.querySelector('[data-lc-chat-send]');
-      _chatModal.attachBtn = backdrop.querySelector('[data-lc-chat-attach]');
-      _chatModal.closeBtn = backdrop.querySelector('[data-lc-chat-close]');
-      _chatModal.sendBtnIdleHtml = _chatModal.sendBtn ? _chatModal.sendBtn.innerHTML : '';
-
-      function resizeChatInput() {
-        if (!_chatModal.input) return;
-        _chatModal.input.style.height = 'auto';
-        _chatModal.input.style.height = Math.min(_chatModal.input.scrollHeight, 120) + 'px';
-      }
-
-      const close = function () {
-        const closingNodeId = _chatModal.currentNodeId;
-        _chatModal.currentNodeId = null;
-        _chatModal.stagedFiles = [];
-        _chatModal.staged.innerHTML = '';
-        _chatModal.input.value = '';
-        _setChatSendButtonPending(false);
-        resizeChatInput();
-        _chatModal.backdrop.classList.remove('lc-open');
-        // Lifecycle hook: stop receiving chats
-        if (closingNodeId && typeof cfg.stopReceivingChats === 'function') cfg.stopReceivingChats(closingNodeId);
-      };
-
-      function renderStagedFiles() {
-        if (!_chatModal.stagedFiles.length) {
-          _chatModal.staged.innerHTML = '';
-          return;
-        }
-        _chatModal.staged.innerHTML = _chatModal.stagedFiles.map(function (f, i) {
-          return '<span class="badge text-bg-light border me-1 mb-1">' + _esc(f.name || 'file') +
-            ' <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1" data-lc-rm-file="' + i + '">&times;</button></span>';
-        }).join('');
-        _chatModal.staged.querySelectorAll('[data-lc-rm-file]').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            const idx = parseInt(btn.getAttribute('data-lc-rm-file') || '-1', 10);
-            if (idx >= 0) _chatModal.stagedFiles.splice(idx, 1);
-            renderStagedFiles();
-          });
-        });
-      }
-
-      async function sendMessage() {
-        if (_chatModal.loading || !_chatModal.currentNodeId) return;
-        const nodeId = _chatModal.currentNodeId;
-        const text = (_chatModal.input.value || '').trim();
-        const files = _chatModal.stagedFiles.slice();
-        if (!text && !files.length) return;
-
-        _chatModal.loading = true;
-        _syncChatComposerState(nodeId);
-        _setChatSendButtonPending(true);
-
-        _appendPendingModalChatMessage(text);
-
-        _chatModal.input.value = '';
-        _chatModal.stagedFiles = [];
-        resizeChatInput();
-        renderStagedFiles();
-
-        try {
-          await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text, files }));
-        } catch (err) {
-          _setChatSendButtonPending(false);
-          _clearPendingModalChatMessages();
-          _appendModalChatMessage('system', 'Failed to send message: ' + String((err && err.message) || err), []);
-        } finally {
-          _chatModal.loading = false;
-          _syncChatComposerState(nodeId);
-        }
-      }
-
-      _chatModal.closeBtn.addEventListener('click', close);
-      backdrop.addEventListener('click', function (evt) {
-        if (evt.target === backdrop) close();
-      });
-      _chatModal.attachBtn.addEventListener('click', function () {
-        _chatModal.fileInput.click();
-      });
-      _chatModal.fileInput.addEventListener('change', function (evt) {
-        const files = evt.target && evt.target.files ? Array.from(evt.target.files) : [];
-        for (const f of files) {
-          if (!_chatModal.stagedFiles.find(function (x) { return x.name === f.name && x.size === f.size && x.lastModified === f.lastModified; })) {
-            _chatModal.stagedFiles.push(f);
-          }
-        }
-        evt.target.value = '';
-        renderStagedFiles();
-      });
-      _chatModal.sendBtn.addEventListener('click', sendMessage);
-      _chatModal.input.addEventListener('input', resizeChatInput);
-      _chatModal.input.addEventListener('keydown', function (evt) {
-        if (evt.key === 'Enter' && !evt.shiftKey) {
-          if (_chatModal.sendBtn && _chatModal.sendBtn.disabled) return;
-          evt.preventDefault();
-          sendMessage();
-        }
-      });
-      resizeChatInput();
-      document.addEventListener('keydown', function (evt) {
-        if (evt.key === 'Escape' && _chatModal.backdrop && _chatModal.backdrop.classList.contains('lc-open')) close();
-      });
     }
 
     function _normalizeChatMessages(rawMessages) {
@@ -666,121 +482,389 @@ var LiveCard = (function () {
       }).filter(Boolean);
     }
 
-    function _appendModalChatMessage(role, text, files) {
-      _ensureChatModal();
-      if (!_chatModal.body) return;
-      if (!text && !files) return; // skip empty messages
+    // ---------------------------------------------------------------------------
+    // Chat pane builder
+    //
+    // Builds a self-contained chat pane (bubbles area + input row) bound to a
+    // card. Used by both the modal (which provides the dialog chrome) and by
+    // the public mountChatPane() entry point (which renders the pane inline
+    // inside a caller-owned container). The pane is the single source of
+    // chat-UI truth — there is no separate inline implementation.
+    //
+    // spec: {
+    //   bodyEl: HTMLElement,           // bubble container (cleared on refresh)
+    //   inputRowEl: HTMLElement,       // input/staged container (cleared on build)
+    //   cardId?: string | null,        // initial bound card
+    //   isModal?: boolean,             // marks this pane as the modal pane
+    //   options?: {
+    //     placeholder?: string,
+    //     showEmptyState?: boolean,
+    //     fileAttach?: boolean,
+    //     fileAccept?: string[],
+    //     autoSubscribe?: boolean,     // start/stopReceivingChats on bind/dispose
+    //   },
+    // }
+    // ---------------------------------------------------------------------------
+    function _buildChatPane(spec: any) {
+      const opts = Object.assign({
+        placeholder: 'Type a message...',
+        showEmptyState: true,
+        fileAttach: true,
+        fileAccept: null,
+        autoSubscribe: true,
+      }, (spec && spec.options) || {});
 
-      const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
-      const roleClass = normalizedRole === 'user'
-        ? 'lc-chat-bubble-user'
-        : (normalizedRole === 'assistant' ? 'lc-chat-bubble-assistant' : 'lc-chat-bubble-system');
+      const pane: any = {
+        body: spec.bodyEl,
+        inputRow: spec.inputRowEl,
+        input: null,
+        fileInput: null,
+        staged: null,
+        sendBtn: null,
+        attachBtn: null,
+        sendBtnIdleHtml: '',
+        cardId: spec.cardId || null,
+        stagedFiles: [],
+        loading: false,
+        awaitingProcessingAck: false,
+        disposed: false,
+        isModal: !!spec.isModal,
+        options: opts,
+      };
 
-      const bubble = document.createElement('div');
-      bubble.className = 'lc-chat-bubble ' + roleClass;
-
-      if (normalizedRole !== 'system') {
-        // SVG icons: person for user, sparkle-star for assistant
-        const userSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
-        const asstSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
-        const iconEl = document.createElement('span');
-        iconEl.className = 'lc-chat-icon';
-        iconEl.setAttribute('aria-hidden', 'true');
-        iconEl.innerHTML = normalizedRole === 'user' ? userSvg : asstSvg;
-        bubble.appendChild(iconEl);
+      // Build input row markup. Same DOM/classes the modal has always used so
+      // the modal layout is byte-identical to before.
+      const attachHtml = opts.fileAttach
+        ? '<button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-attach title="Attach files" aria-label="Attach files">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>' +
+          '</button>'
+        : '';
+      pane.inputRow.innerHTML =
+        '<div data-lc-chat-staged class="small w-100"></div>' +
+        '<input type="file" class="d-none" data-lc-chat-file multiple>' +
+        '<div class="lc-chat-modal-input-row mt-2">' +
+          attachHtml +
+          '<textarea class="form-control" data-lc-chat-input rows="1" placeholder="' + _esc(opts.placeholder) + '"></textarea>' +
+          '<button type="button" class="btn btn-sm btn-primary" data-lc-chat-send aria-label="Send">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>' +
+          '</button>' +
+        '</div>';
+      pane.input = pane.inputRow.querySelector('[data-lc-chat-input]');
+      pane.fileInput = pane.inputRow.querySelector('[data-lc-chat-file]');
+      pane.staged = pane.inputRow.querySelector('[data-lc-chat-staged]');
+      pane.sendBtn = pane.inputRow.querySelector('[data-lc-chat-send]');
+      pane.attachBtn = pane.inputRow.querySelector('[data-lc-chat-attach]');
+      pane.sendBtnIdleHtml = pane.sendBtn ? pane.sendBtn.innerHTML : '';
+      if (opts.fileAccept && Array.isArray(opts.fileAccept) && pane.fileInput) {
+        pane.fileInput.setAttribute('accept', opts.fileAccept.join(','));
       }
 
-      const content = document.createElement('div');
-      content.className = 'lc-chat-bubble-content';
-      if (normalizedRole === 'assistant') {
-        content.innerHTML = _renderMd(text || '');
-      } else {
-        content.textContent = text || '';
+      function resizeInput() {
+        if (!pane.input) return;
+        pane.input.style.height = 'auto';
+        pane.input.style.height = Math.min(pane.input.scrollHeight, 120) + 'px';
       }
+      pane.resizeInput = resizeInput;
 
-      if (Array.isArray(files) && files.length) {
-        const meta = document.createElement('div');
-        meta.className = 'small mt-1 text-muted';
-        meta.textContent = '\uD83D\uDCCE ' + files.map(function (f) {
-          if (!f) return 'file';
-          return typeof f === 'string' ? f : (f.name || 'file');
-        }).join(', ');
-        content.appendChild(meta);
-      }
-
-      bubble.appendChild(content);
-      _chatModal.body.appendChild(bubble);
-      _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
-    }
-
-    function _appendPendingModalChatMessage(text) {
-      _ensureChatModal();
-      if (!_chatModal.body) return;
-
-      const bubble = document.createElement('div');
-      bubble.className = 'lc-chat-bubble lc-chat-bubble-user lc-chat-bubble-pending';
-      bubble.setAttribute('data-lc-chat-pending', '1');
-      bubble.textContent = text || '';
-
-      const spinner = document.createElement('span');
-      spinner.className = 'spinner-border spinner-border-sm';
-      spinner.setAttribute('role', 'status');
-      spinner.setAttribute('aria-label', 'Sending');
-      bubble.appendChild(spinner);
-
-      _chatModal.body.appendChild(bubble);
-      _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
-    }
-
-    function _clearPendingModalChatMessages() {
-      if (!_chatModal.body) return;
-      _chatModal.body.querySelectorAll('[data-lc-chat-pending="1"]').forEach(function (el) {
-        if (el && el.parentNode) el.parentNode.removeChild(el);
-      });
-    }
-
-    async function _refreshModalChatHistory(nodeId) {
-      if (_chatModal.currentNodeId !== nodeId) return;
-
-      const node = cfg.resolve(nodeId);
-      let messages = [];
-      // State-driven: chat history comes from card_chats, populated by the runtime/client.
-      if (node && node.card_chats) {
-        const chatState = _chatStateFromCardState(node);
-        messages = chatState.messages;
-      } else if (node && node.card_data && Array.isArray(node.card_data.messages)) {
-        messages = node.card_data.messages;
-      }
-
-      const normalized = _normalizeChatMessages(messages);
-      _chatModal.body.innerHTML = '';
-      if (!normalized.length) {
-        _chatModal.body.innerHTML = '<div class="text-muted small">No messages yet.</div>';
-        _syncProcessingBar(nodeId);
-        return;
-      }
-      normalized.forEach(function (m) { _appendModalChatMessage(m.role, m.text, m.files); });
-      _syncProcessingBar(nodeId);
-    }
-
-    function _syncProcessingBar(nodeId) {
-      if (!_chatModal.body) return;
-      const node = nodeId ? cfg.resolve(nodeId) : null;
-      const isProcessing = !!_chatStateFromCardState(node).processing;
-      _syncChatComposerState(nodeId);
-      let ind = _chatModal.body.querySelector('.lc-chat-processing');
-      if (isProcessing) {
-        if (!ind) {
-          const workingSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
-          ind = document.createElement('div');
-          ind.className = 'lc-chat-processing';
-          ind.innerHTML = '<span class="lc-chat-icon" aria-hidden="true">' + workingSvg + '</span><span>AI working\u2026</span><span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span>';
-          _chatModal.body.appendChild(ind);
+      pane.syncComposerState = function () {
+        const node = pane.cardId ? cfg.resolve(pane.cardId) : null;
+        const chatDisabled = !!(node && node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
+        const isProcessing = !!_chatStateFromCardState(node).processing;
+        if (pane.input) {
+          pane.input.disabled = chatDisabled;
+          pane.input.placeholder = chatDisabled ? 'Chat is disabled for this card.' : opts.placeholder;
         }
-        _chatModal.body.scrollTop = _chatModal.body.scrollHeight;
-      } else {
-        if (ind) ind.remove();
+        if (pane.attachBtn) pane.attachBtn.disabled = chatDisabled || isProcessing;
+        if (pane.sendBtn) pane.sendBtn.disabled = chatDisabled || isProcessing || !!pane.loading || !!pane.awaitingProcessingAck;
+      };
+
+      pane.setSendButtonPending = function (pending) {
+        pane.awaitingProcessingAck = !!pending;
+        if (!pane.sendBtn) { pane.syncComposerState(); return; }
+        if (pending) {
+          pane.sendBtn.setAttribute('aria-label', 'Waiting for AI response');
+          pane.sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        } else {
+          pane.sendBtn.innerHTML = pane.sendBtnIdleHtml;
+          pane.sendBtn.setAttribute('aria-label', 'Send');
+        }
+        pane.syncComposerState();
+      };
+
+      pane.appendMessage = function (role, text, files) {
+        if (!pane.body) return;
+        if (!text && !(Array.isArray(files) && files.length)) return;
+        const normalizedRole = role === 'user' || role === 'assistant' ? role : 'system';
+        const roleClass = normalizedRole === 'user'
+          ? 'lc-chat-bubble-user'
+          : (normalizedRole === 'assistant' ? 'lc-chat-bubble-assistant' : 'lc-chat-bubble-system');
+        const bubble = document.createElement('div');
+        bubble.className = 'lc-chat-bubble ' + roleClass;
+        if (normalizedRole !== 'system') {
+          const userSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+          const asstSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+          const iconEl = document.createElement('span');
+          iconEl.className = 'lc-chat-icon';
+          iconEl.setAttribute('aria-hidden', 'true');
+          iconEl.innerHTML = normalizedRole === 'user' ? userSvg : asstSvg;
+          bubble.appendChild(iconEl);
+        }
+        const content = document.createElement('div');
+        content.className = 'lc-chat-bubble-content';
+        if (normalizedRole === 'assistant') content.innerHTML = _renderMd(text || '');
+        else content.textContent = text || '';
+        if (Array.isArray(files) && files.length) {
+          const meta = document.createElement('div');
+          meta.className = 'small mt-1 text-muted';
+          meta.textContent = '\uD83D\uDCCE ' + files.map(function (f) {
+            if (!f) return 'file';
+            return typeof f === 'string' ? f : (f.name || 'file');
+          }).join(', ');
+          content.appendChild(meta);
+        }
+        bubble.appendChild(content);
+        pane.body.appendChild(bubble);
+        pane.body.scrollTop = pane.body.scrollHeight;
+      };
+
+      pane.appendPending = function (text) {
+        if (!pane.body) return;
+        const bubble = document.createElement('div');
+        bubble.className = 'lc-chat-bubble lc-chat-bubble-user lc-chat-bubble-pending';
+        bubble.setAttribute('data-lc-chat-pending', '1');
+        bubble.textContent = text || '';
+        const spinner = document.createElement('span');
+        spinner.className = 'spinner-border spinner-border-sm';
+        spinner.setAttribute('role', 'status');
+        spinner.setAttribute('aria-label', 'Sending');
+        bubble.appendChild(spinner);
+        pane.body.appendChild(bubble);
+        pane.body.scrollTop = pane.body.scrollHeight;
+      };
+
+      pane.clearPending = function () {
+        if (!pane.body) return;
+        pane.body.querySelectorAll('[data-lc-chat-pending="1"]').forEach(function (el) {
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+        });
+      };
+
+      pane.syncProcessingBar = function () {
+        if (!pane.body) return;
+        const node = pane.cardId ? cfg.resolve(pane.cardId) : null;
+        const isProcessing = !!_chatStateFromCardState(node).processing;
+        pane.syncComposerState();
+        let ind = pane.body.querySelector('.lc-chat-processing');
+        if (isProcessing) {
+          if (!ind) {
+            const workingSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+            ind = document.createElement('div');
+            ind.className = 'lc-chat-processing';
+            ind.innerHTML = '<span class="lc-chat-icon" aria-hidden="true">' + workingSvg + '</span><span>AI working\u2026</span><span class="spinner-border spinner-border-sm" role="status" aria-label="AI working"></span>';
+            pane.body.appendChild(ind);
+          }
+          pane.body.scrollTop = pane.body.scrollHeight;
+        } else {
+          if (ind) ind.remove();
+        }
+      };
+
+      pane.refresh = function () {
+        if (!pane.body) return;
+        if (!pane.cardId) {
+          pane.body.innerHTML = '';
+          pane.syncComposerState();
+          return;
+        }
+        const node = cfg.resolve(pane.cardId);
+        let messages = [];
+        // State-driven: chat history comes from card_chats, populated by the runtime/client.
+        if (node && node.card_chats) {
+          messages = _chatStateFromCardState(node).messages;
+        } else if (node && node.card_data && Array.isArray(node.card_data.messages)) {
+          messages = node.card_data.messages;
+        }
+        const normalized = _normalizeChatMessages(messages);
+        pane.body.innerHTML = '';
+        if (!normalized.length) {
+          if (opts.showEmptyState) {
+            pane.body.innerHTML = '<div class="text-muted small">No messages yet.</div>';
+          }
+          pane.syncProcessingBar();
+          return;
+        }
+        normalized.forEach(function (m) { pane.appendMessage(m.role, m.text, m.files); });
+        pane.syncProcessingBar();
+      };
+
+      function renderStagedFiles() {
+        if (!pane.staged) return;
+        if (!pane.stagedFiles.length) { pane.staged.innerHTML = ''; return; }
+        pane.staged.innerHTML = pane.stagedFiles.map(function (f, i) {
+          return '<span class="badge text-bg-light border me-1 mb-1">' + _esc(f.name || 'file') +
+            ' <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1" data-lc-rm-file="' + i + '">&times;</button></span>';
+        }).join('');
+        pane.staged.querySelectorAll('[data-lc-rm-file]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            const idx = parseInt(btn.getAttribute('data-lc-rm-file') || '-1', 10);
+            if (idx >= 0) pane.stagedFiles.splice(idx, 1);
+            renderStagedFiles();
+          });
+        });
       }
+      pane.renderStagedFiles = renderStagedFiles;
+
+      async function sendMessage() {
+        if (pane.loading || !pane.cardId || pane.disposed) return;
+        const nodeId = pane.cardId;
+        const text = (pane.input.value || '').trim();
+        const files = pane.stagedFiles.slice();
+        if (!text && !files.length) return;
+
+        pane.loading = true;
+        pane.syncComposerState();
+        pane.setSendButtonPending(true);
+
+        pane.appendPending(text);
+
+        pane.input.value = '';
+        pane.stagedFiles = [];
+        resizeInput();
+        renderStagedFiles();
+
+        try {
+          await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text, files }));
+        } catch (err) {
+          pane.setSendButtonPending(false);
+          pane.clearPending();
+          pane.appendMessage('system', 'Failed to send message: ' + String((err && err.message) || err), []);
+        } finally {
+          pane.loading = false;
+          pane.syncComposerState();
+        }
+      }
+      pane.sendMessage = sendMessage;
+
+      // Wire events. The pane keeps a list of (target, type, handler) entries
+      // and removes them on dispose so detaching an inline pane doesn't leak.
+      const _listeners: Array<{ t: any; e: string; h: any }> = [];
+      function on(target, evt, handler) {
+        target.addEventListener(evt, handler);
+        _listeners.push({ t: target, e: evt, h: handler });
+      }
+
+      if (pane.attachBtn && pane.fileInput) {
+        on(pane.attachBtn, 'click', function () { pane.fileInput.click(); });
+        on(pane.fileInput, 'change', function (evt) {
+          const files = evt.target && evt.target.files ? Array.from(evt.target.files) : [];
+          for (const f of files) {
+            if (!pane.stagedFiles.find(function (x) { return x.name === (f as any).name && x.size === (f as any).size && x.lastModified === (f as any).lastModified; })) {
+              pane.stagedFiles.push(f);
+            }
+          }
+          evt.target.value = '';
+          renderStagedFiles();
+        });
+      }
+      on(pane.sendBtn, 'click', sendMessage);
+      on(pane.input, 'input', resizeInput);
+      on(pane.input, 'keydown', function (evt) {
+        if (evt.key === 'Enter' && !evt.shiftKey) {
+          if (pane.sendBtn && pane.sendBtn.disabled) return;
+          evt.preventDefault();
+          sendMessage();
+        }
+      });
+      resizeInput();
+
+      pane.dispose = function () {
+        if (pane.disposed) return;
+        pane.disposed = true;
+        _listeners.forEach(function (l) {
+          try { l.t.removeEventListener(l.e, l.h); } catch (e) { /* noop */ }
+        });
+        _listeners.length = 0;
+        _chatPanes.delete(pane);
+        if (opts.autoSubscribe && pane.cardId && typeof cfg.stopReceivingChats === 'function') {
+          try { cfg.stopReceivingChats(pane.cardId); } catch (e) { /* noop */ }
+        }
+        pane.stagedFiles = [];
+      };
+
+      _chatPanes.add(pane);
+
+      // Initial render + lifecycle hook for inline panes that have a cardId.
+      pane.syncComposerState();
+      if (pane.cardId && opts.autoSubscribe && typeof cfg.startReceivingChats === 'function') {
+        try { cfg.startReceivingChats(pane.cardId); } catch (e) { /* noop */ }
+      }
+      if (pane.cardId) pane.refresh();
+
+      return pane;
+    }
+
+    function _ensureChatModal() {
+      if (_chatModalRefs.backdrop) return;
+
+      const backdrop = document.createElement('div');
+      backdrop.className = 'lc-chat-modal-backdrop';
+      backdrop.innerHTML = '' +
+        '<div class="modal-dialog modal-lg modal-dialog-centered" role="dialog" aria-modal="true" aria-label="Card chat">' +
+        '  <div class="modal-content bg-white">' +
+        '    <div class="modal-header border-bottom p-3 d-flex align-items-center justify-content-between">' +
+        '      <h5 class="modal-title lc-chat-modal-title">Chat</h5>' +
+        '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-chat-close aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
+        '    </div>' +
+        '    <div class="modal-body bg-light" data-lc-chat-body></div>' +
+        '    <div class="modal-footer flex-column align-items-stretch border-top p-3 gap-3" data-lc-chat-footer></div>' +
+        '  </div>' +
+        '</div>';
+
+      document.body.appendChild(backdrop);
+      const bodyEl = backdrop.querySelector('[data-lc-chat-body]');
+      const footerEl = backdrop.querySelector('[data-lc-chat-footer]');
+      const titleEl = backdrop.querySelector('.lc-chat-modal-title');
+      const closeBtn = backdrop.querySelector('[data-lc-chat-close]');
+
+      _chatModalRefs.backdrop = backdrop;
+      _chatModalRefs.title = titleEl;
+      _chatModalRefs.closeBtn = closeBtn;
+
+      // The modal owns its open/close chrome but delegates all chat behavior
+      // (bubbles, send, processing indicator, pending bubble, disabled
+      // handling, etc.) to a chat pane bound to its body+footer. autoSubscribe
+      // is false because the modal manages start/stopReceivingChats explicitly
+      // around its open/close lifecycle.
+      _modalPane = _buildChatPane({
+        bodyEl: bodyEl,
+        inputRowEl: footerEl,
+        cardId: null,
+        isModal: true,
+        options: { autoSubscribe: false },
+      });
+
+      const close = function () {
+        const closingNodeId = _modalPane ? _modalPane.cardId : null;
+        if (_modalPane) {
+          _modalPane.cardId = null;
+          _modalPane.stagedFiles = [];
+          if (_modalPane.staged) _modalPane.staged.innerHTML = '';
+          if (_modalPane.input) _modalPane.input.value = '';
+          _modalPane.setSendButtonPending(false);
+          _modalPane.resizeInput();
+        }
+        backdrop.classList.remove('lc-open');
+        // Lifecycle hook: stop receiving chats
+        if (closingNodeId && typeof cfg.stopReceivingChats === 'function') cfg.stopReceivingChats(closingNodeId);
+      };
+
+      closeBtn.addEventListener('click', close);
+      backdrop.addEventListener('click', function (evt) {
+        if (evt.target === backdrop) close();
+      });
+      document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && backdrop.classList.contains('lc-open')) close();
+      });
     }
 
     async function openChatModal(nodeId) {
@@ -788,23 +872,330 @@ var LiveCard = (function () {
       const node = cfg.resolve(nodeId);
       if (!node) return;
       const title = (node.card && node.card.meta && node.card.meta.title) || node.id;
-      _chatModal.currentNodeId = nodeId;
-      _chatModal.title.textContent = 'Chat: ' + title;
-      _chatModal.body.innerHTML = '<div class="text-muted small">Loading...</div>';
-      _chatModal.backdrop.classList.add('lc-open');
+      _modalPane.cardId = nodeId;
+      _chatModalRefs.title.textContent = 'Chat: ' + title;
+      _modalPane.body.innerHTML = '<div class="text-muted small">Loading...</div>';
+      _chatModalRefs.backdrop.classList.add('lc-open');
 
-      // Disable input controls when card_data.features.chat.disabled is true
-      const chatDisabled = !!(node.card_data && node.card_data.features && node.card_data.features.chat && node.card_data.features.chat.disabled);
-      _syncChatComposerState(nodeId);
-
-      if (!chatDisabled && !_chatModal.input.disabled) _chatModal.input.focus();
+      _modalPane.syncComposerState();
+      if (!_modalPane.input.disabled) _modalPane.input.focus();
       // Lifecycle hook: start receiving chats (drives state-driven refresh via onServerSseEvent)
       if (typeof cfg.startReceivingChats === 'function') cfg.startReceivingChats(nodeId);
-      await _refreshModalChatHistory(nodeId);
+      _modalPane.refresh();
+    }
+
+    // Public: mount a chat pane inside a caller-owned container. Returns a
+    // handle the caller uses to refresh / dispose. Behavior is identical to
+    // the modal's body+input row — same DOM/classes, same card_chats source
+    // of truth, same chat-send action, same pending/ack lifecycle.
+    function mountChatPane(options) {
+      options = options || {};
+      if (!options.container) throw new Error('mountChatPane: container is required');
+      if (!options.cardId) throw new Error('mountChatPane: cardId is required');
+      const container: HTMLElement = options.container;
+      container.innerHTML = '';
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'lc-chat-pane-body modal-body bg-light';
+      const inputRowEl = document.createElement('div');
+      inputRowEl.className = 'lc-chat-pane-input modal-footer flex-column align-items-stretch border-top p-3 gap-3';
+      container.appendChild(bodyEl);
+      container.appendChild(inputRowEl);
+      const pane = _buildChatPane({
+        bodyEl: bodyEl,
+        inputRowEl: inputRowEl,
+        cardId: options.cardId,
+        isModal: false,
+        options: {
+          placeholder: options.placeholder,
+          showEmptyState: options.showEmptyState !== false,
+          fileAttach: options.fileAttach !== false,
+          fileAccept: options.fileAccept || null,
+          autoSubscribe: options.autoSubscribe !== false,
+        },
+      });
+      return {
+        refresh: function () { pane.refresh(); },
+        dispose: function () { pane.dispose(); },
+      };
+    }
+
+
+    function _currentNodeFiles(nodeId) {
+      const node = cfg.resolve(nodeId);
+      const files = node && node.card_data && Array.isArray(node.card_data.files) ? node.card_data.files : [];
+      return files.filter(Boolean);
+    }
+
+    function _filesDisabled(nodeId) {
+      const node = nodeId ? cfg.resolve(nodeId) : null;
+      return !!(node && node.card_data && node.card_data.features && node.card_data.features.files && node.card_data.features.files.disabled);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Files list pane builder (read-only download view)
+    //
+    // Renders card_data.files as a Bootstrap list-group with name + size +
+    // Download anchor — same DOM the modal body uses today. Polls 1s by
+    // default so the list reflects newly-uploaded files without an external
+    // notify.
+    // ---------------------------------------------------------------------------
+    function _buildFilesListPane(spec: any) {
+      const opts = Object.assign({
+        emptyText: 'No files uploaded yet.',
+        livePoll: true,
+      }, (spec && spec.options) || {});
+
+      const pane: any = {
+        kind: 'files-list',
+        container: spec.container,
+        cardId: spec.cardId || null,
+        isModal: !!spec.isModal,
+        disposed: false,
+        pollingTimer: null,
+        options: opts,
+      };
+
+      pane.refresh = function () {
+        if (pane.disposed || !pane.container) return;
+        if (!pane.cardId) { pane.container.innerHTML = ''; return; }
+        const files = _currentNodeFiles(pane.cardId);
+        if (!files.length) {
+          pane.container.innerHTML = '<div class="alert alert-light border small mb-0">' + _esc(opts.emptyText) + '</div>';
+          return;
+        }
+        let h = '<div class="list-group list-group-flush">';
+        files.forEach(function (f, idx) {
+          const fileName = f && (f.name || f.stored_name) ? (f.name || f.stored_name) : 'file';
+          const sizeText = f && typeof f.size === 'number' ? ('size: ' + f.size + ' bytes') : '';
+          const stored = f && f.stored_name ? String(f.stored_name) : '';
+          const dl = stored
+            ? cfg.fileUrlBase + '/cards/' + encodeURIComponent(pane.cardId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
+            : null;
+          h += '<div class="list-group-item d-flex align-items-center justify-content-between gap-2">';
+          h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
+          h += '<div class="small text-muted">' + _esc(sizeText) + '</div></div>';
+          if (dl) {
+            h += '<a class="btn btn-sm btn-outline-secondary flex-shrink-0" href="' + dl + '">Download</a>';
+          }
+          h += '</div>';
+        });
+        h += '</div>';
+        pane.container.innerHTML = h;
+      };
+
+      pane.dispose = function () {
+        if (pane.disposed) return;
+        pane.disposed = true;
+        if (pane.pollingTimer) { clearInterval(pane.pollingTimer); pane.pollingTimer = null; }
+        _filesPanes.delete(pane);
+      };
+
+      _filesPanes.add(pane);
+      pane.refresh();
+      if (opts.livePoll) {
+        pane.pollingTimer = setInterval(function () { pane.refresh(); }, 1000);
+      }
+      return pane;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Files upload pane builder (drop zone + staged + Upload button)
+    //
+    // Same DOM/classes (lc-dropzone, lc-drag-over, lc-disabled, etc.) the
+    // modal footer uses today. If showUploadedList is true, also renders an
+    // embedded files-list pane above the drop zone — letting the inline pane
+    // be a self-contained replacement for the modal body+footer.
+    //
+    // spec: {
+    //   container: HTMLElement,
+    //   cardId: string,
+    //   isModal?: boolean,
+    //   listPaneEl?: HTMLElement,    // when set, list renders here instead of inside container (used by modal)
+    //   options?: {
+    //     placeholder?: string,      // dropzone hint text
+    //     accept?: string[],         // input[type=file] accept attribute
+    //     showUploadedList?: boolean,
+    //     livePoll?: boolean,
+    //   }
+    // }
+    // ---------------------------------------------------------------------------
+    function _buildFilesUploadPane(spec: any) {
+      const opts = Object.assign({
+        placeholder: 'Drop files here or click to browse',
+        accept: null,
+        showUploadedList: true,
+        livePoll: true,
+      }, (spec && spec.options) || {});
+
+      const pane: any = {
+        kind: 'files-upload',
+        container: spec.container,
+        cardId: spec.cardId || null,
+        isModal: !!spec.isModal,
+        disposed: false,
+        loading: false,
+        stagedFiles: [] as any[],
+        options: opts,
+        // sub-pane: an embedded files-list pane (or null if showUploadedList=false)
+        listPane: null as any,
+      };
+
+      // Layout: optional list pane on top, then dropzone + staged + actions.
+      // When the modal supplies an external listPaneEl (the modal body), the
+      // list pane is built there; otherwise it's inserted inside container.
+      pane.container.innerHTML = '';
+      const acceptAttr = opts.accept && Array.isArray(opts.accept) && opts.accept.length
+        ? ' accept="' + _esc(opts.accept.join(',')) + '"'
+        : '';
+      pane.container.innerHTML =
+        '<div class="lc-dropzone border-2 border-dashed p-4 text-center cursor-pointer rounded" data-lc-files-dz>' +
+          '<div class="small text-muted mb-2">' + _esc(opts.placeholder) + '</div>' +
+          '<input type="file" class="d-none" data-lc-files-input multiple' + acceptAttr + '>' +
+        '</div>' +
+        '<div data-lc-files-staged class="small w-100 d-flex flex-wrap gap-2 mt-2"></div>' +
+        '<div class="d-flex justify-content-end gap-2 w-100 mt-2">' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-attach>Select files</button>' +
+          '<button type="button" class="btn btn-sm btn-primary" data-lc-files-upload>Upload</button>' +
+        '</div>';
+
+      pane.dropzone = pane.container.querySelector('[data-lc-files-dz]');
+      pane.fileInput = pane.container.querySelector('[data-lc-files-input]');
+      pane.staged = pane.container.querySelector('[data-lc-files-staged]');
+      pane.attachBtn = pane.container.querySelector('[data-lc-files-attach]');
+      pane.uploadBtn = pane.container.querySelector('[data-lc-files-upload]');
+
+      // Embed an inline list pane (either inside our container or in the
+      // modal-provided body element).
+      if (opts.showUploadedList || spec.listPaneEl) {
+        let listHost: HTMLElement;
+        if (spec.listPaneEl) {
+          listHost = spec.listPaneEl;
+        } else {
+          listHost = document.createElement('div');
+          listHost.className = 'lc-files-uploaded-list mb-2';
+          pane.container.insertBefore(listHost, pane.dropzone);
+        }
+        pane.listPane = _buildFilesListPane({
+          container: listHost,
+          cardId: pane.cardId,
+          isModal: pane.isModal,
+          options: { livePoll: opts.livePoll },
+        });
+      }
+
+      function renderStagedFiles() {
+        if (!pane.stagedFiles.length) { pane.staged.innerHTML = ''; return; }
+        pane.staged.innerHTML = pane.stagedFiles.map(function (f, i) {
+          return '<span class="badge text-bg-light border me-1 mb-1">' + _esc(f.name || 'file') +
+            ' <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1" data-lc-files-rm="' + i + '">&times;</button></span>';
+        }).join('');
+        pane.staged.querySelectorAll('[data-lc-files-rm]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            const idx = parseInt(btn.getAttribute('data-lc-files-rm') || '-1', 10);
+            if (idx >= 0) pane.stagedFiles.splice(idx, 1);
+            renderStagedFiles();
+          });
+        });
+      }
+      pane.renderStagedFiles = renderStagedFiles;
+
+      function addFiles(fileList) {
+        const files = Array.from(fileList || []);
+        for (const f of files) {
+          const ff: any = f;
+          if (!pane.stagedFiles.find(function (x) { return x.name === ff.name && x.size === ff.size && x.lastModified === ff.lastModified; })) {
+            pane.stagedFiles.push(ff);
+          }
+        }
+        renderStagedFiles();
+      }
+
+      pane.syncDisabledState = function () {
+        const disabled = _filesDisabled(pane.cardId);
+        if (pane.dropzone) pane.dropzone.classList.toggle('lc-disabled', disabled);
+        if (pane.attachBtn) pane.attachBtn.disabled = disabled || pane.loading;
+        if (pane.uploadBtn) pane.uploadBtn.disabled = disabled || pane.loading;
+        if (pane.fileInput) pane.fileInput.disabled = disabled;
+      };
+
+      async function uploadFiles() {
+        if (pane.loading || !pane.cardId || !pane.stagedFiles.length || pane.disposed) return;
+        const nodeId = pane.cardId;
+        const files = pane.stagedFiles.slice();
+        pane.loading = true;
+        pane.uploadBtn.disabled = true;
+        pane.attachBtn.disabled = true;
+        pane.dropzone.classList.add('lc-disabled');
+        try {
+          await Promise.resolve(cfg.onAction(nodeId, 'file-upload', { files }));
+          pane.stagedFiles = [];
+          renderStagedFiles();
+          if (pane.listPane) pane.listPane.refresh();
+        } catch (err) {
+          pane.staged.innerHTML = '<span class="text-danger">Upload failed: ' + _esc(String((err && err.message) || err)) + '</span>';
+        } finally {
+          pane.loading = false;
+          pane.syncDisabledState();
+        }
+      }
+      pane.uploadFiles = uploadFiles;
+
+      const _listeners: Array<{ t: any; e: string; h: any }> = [];
+      function on(target, evt, handler) {
+        target.addEventListener(evt, handler);
+        _listeners.push({ t: target, e: evt, h: handler });
+      }
+      on(pane.attachBtn, 'click', function () { pane.fileInput.click(); });
+      on(pane.fileInput, 'change', function (evt) {
+        addFiles(evt.target && evt.target.files ? evt.target.files : []);
+        evt.target.value = '';
+      });
+      on(pane.uploadBtn, 'click', uploadFiles);
+      on(pane.dropzone, 'click', function () {
+        if (!pane.loading && !_filesDisabled(pane.cardId)) pane.fileInput.click();
+      });
+      on(pane.dropzone, 'dragover', function (evt) {
+        evt.preventDefault();
+        pane.dropzone.classList.add('lc-drag-over');
+      });
+      on(pane.dropzone, 'dragleave', function () {
+        pane.dropzone.classList.remove('lc-drag-over');
+      });
+      on(pane.dropzone, 'drop', function (evt) {
+        evt.preventDefault();
+        pane.dropzone.classList.remove('lc-drag-over');
+        if (_filesDisabled(pane.cardId)) return;
+        addFiles(evt.dataTransfer && evt.dataTransfer.files ? evt.dataTransfer.files : []);
+      });
+
+      pane.refresh = function () {
+        if (pane.disposed) return;
+        pane.syncDisabledState();
+        if (pane.listPane) {
+          pane.listPane.cardId = pane.cardId;
+          pane.listPane.refresh();
+        }
+      };
+
+      pane.dispose = function () {
+        if (pane.disposed) return;
+        pane.disposed = true;
+        _listeners.forEach(function (l) {
+          try { l.t.removeEventListener(l.e, l.h); } catch (e) { /* noop */ }
+        });
+        _listeners.length = 0;
+        if (pane.listPane) { try { pane.listPane.dispose(); } catch (e) { /* noop */ } }
+        pane.stagedFiles = [];
+        _filesPanes.delete(pane);
+      };
+
+      _filesPanes.add(pane);
+      pane.syncDisabledState();
+      return pane;
     }
 
     function _ensureFilesModal() {
-      if (_filesModal.backdrop) return;
+      if (_filesModalRefs.backdrop) return;
 
       const backdrop = document.createElement('div');
       backdrop.className = 'lc-files-modal-backdrop';
@@ -816,158 +1207,57 @@ var LiveCard = (function () {
         '      <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-close aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
         '    </div>' +
         '    <div class="modal-body bg-light" data-lc-files-body></div>' +
-        '    <div class="modal-footer flex-column align-items-stretch border-top p-3 gap-3">' +
-        '      <div class="lc-dropzone border-2 border-dashed p-4 text-center cursor-pointer rounded" data-lc-files-dz>' +
-        '        <div class="small text-muted mb-2">Drop files here or click to browse</div>' +
-        '        <input type="file" class="d-none" data-lc-files-input multiple>' +
-        '      </div>' +
-        '      <div data-lc-files-staged class="small w-100 d-flex flex-wrap gap-2"></div>' +
-        '      <div class="d-flex justify-content-end gap-2 w-100">' +
-        '        <button type="button" class="btn btn-sm btn-outline-secondary" data-lc-files-attach>Select files</button>' +
-        '        <button type="button" class="btn btn-sm btn-primary" data-lc-files-upload>Upload</button>' +
-        '      </div>' +
-        '    </div>' +
+        '    <div class="modal-footer flex-column align-items-stretch border-top p-3 gap-3" data-lc-files-footer></div>' +
         '  </div>' +
         '</div>';
 
       document.body.appendChild(backdrop);
-      _filesModal.backdrop = backdrop;
-      _filesModal.title = backdrop.querySelector('.lc-files-modal-title');
-      _filesModal.body = backdrop.querySelector('[data-lc-files-body]');
-      _filesModal.staged = backdrop.querySelector('[data-lc-files-staged]');
-      _filesModal.fileInput = backdrop.querySelector('[data-lc-files-input]');
-      _filesModal.dropzone = backdrop.querySelector('[data-lc-files-dz]');
-      _filesModal.uploadBtn = backdrop.querySelector('[data-lc-files-upload]');
-      _filesModal.attachBtn = backdrop.querySelector('[data-lc-files-attach]');
-      _filesModal.closeBtn = backdrop.querySelector('[data-lc-files-close]');
+      const bodyEl = backdrop.querySelector('[data-lc-files-body]') as HTMLElement;
+      const footerEl = backdrop.querySelector('[data-lc-files-footer]') as HTMLElement;
+      const titleEl = backdrop.querySelector('.lc-files-modal-title');
+      const closeBtn = backdrop.querySelector('[data-lc-files-close]');
+
+      _filesModalRefs.backdrop = backdrop;
+      _filesModalRefs.title = titleEl;
+      _filesModalRefs.closeBtn = closeBtn;
+
+      // The modal composes an upload pane (in footer) whose embedded list pane
+      // is hoisted into the modal body — preserving the original layout.
+      _filesModalUploadPane = _buildFilesUploadPane({
+        container: footerEl,
+        cardId: null,
+        isModal: true,
+        listPaneEl: bodyEl,
+        options: { showUploadedList: true, livePoll: false },
+      });
+      // The list pane reference for the modal is the one embedded in the upload pane.
+      _filesModalListPane = _filesModalUploadPane.listPane;
 
       const close = function () {
-        _filesModal.currentNodeId = null;
-        _filesModal.stagedFiles = [];
-        _filesModal.staged.innerHTML = '';
-        _filesModal.backdrop.classList.remove('lc-open');
-        if (_filesModal.pollingTimer) {
-          clearInterval(_filesModal.pollingTimer);
-          _filesModal.pollingTimer = null;
+        const closingNodeId = _filesModalRefs.currentNodeId;
+        _filesModalRefs.currentNodeId = null;
+        if (_filesModalUploadPane) {
+          _filesModalUploadPane.cardId = null;
+          _filesModalUploadPane.stagedFiles = [];
+          if (_filesModalUploadPane.staged) _filesModalUploadPane.staged.innerHTML = '';
         }
+        if (_filesModalListPane) _filesModalListPane.cardId = null;
+        backdrop.classList.remove('lc-open');
+        if (_filesModalRefs.pollingTimer) {
+          clearInterval(_filesModalRefs.pollingTimer);
+          _filesModalRefs.pollingTimer = null;
+        }
+        // No subscription lifecycle for files today; closingNodeId reserved for parity.
+        void closingNodeId;
       };
 
-      function renderStagedFiles() {
-        if (!_filesModal.stagedFiles.length) {
-          _filesModal.staged.innerHTML = '';
-          return;
-        }
-        _filesModal.staged.innerHTML = _filesModal.stagedFiles.map(function (f, i) {
-          return '<span class="badge text-bg-light border me-1 mb-1">' + _esc(f.name || 'file') +
-            ' <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1" data-lc-files-rm="' + i + '">&times;</button></span>';
-        }).join('');
-        _filesModal.staged.querySelectorAll('[data-lc-files-rm]').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            const idx = parseInt(btn.getAttribute('data-lc-files-rm') || '-1', 10);
-            if (idx >= 0) _filesModal.stagedFiles.splice(idx, 1);
-            renderStagedFiles();
-          });
-        });
-      }
-
-      function addFiles(fileList) {
-        const files = Array.from(fileList || []);
-        for (const f of files) {
-          if (!_filesModal.stagedFiles.find(function (x) { return x.name === f.name && x.size === f.size && x.lastModified === f.lastModified; })) {
-            _filesModal.stagedFiles.push(f);
-          }
-        }
-        renderStagedFiles();
-      }
-
-      async function uploadFiles() {
-        if (_filesModal.loading || !_filesModal.currentNodeId || !_filesModal.stagedFiles.length) return;
-        const nodeId = _filesModal.currentNodeId;
-        const files = _filesModal.stagedFiles.slice();
-        _filesModal.loading = true;
-        _filesModal.uploadBtn.disabled = true;
-        _filesModal.attachBtn.disabled = true;
-        _filesModal.dropzone.classList.add('lc-disabled');
-
-        try {
-          await Promise.resolve(cfg.onAction(nodeId, 'file-upload', { files }));
-          _filesModal.stagedFiles = [];
-          renderStagedFiles();
-          _refreshFilesModalList(nodeId);
-        } catch (err) {
-          _filesModal.staged.innerHTML = '<span class="text-danger">Upload failed: ' + _esc(String((err && err.message) || err)) + '</span>';
-        } finally {
-          _filesModal.loading = false;
-          _filesModal.uploadBtn.disabled = false;
-          _filesModal.attachBtn.disabled = false;
-          _filesModal.dropzone.classList.remove('lc-disabled');
-        }
-      }
-
-      _filesModal.closeBtn.addEventListener('click', close);
+      closeBtn.addEventListener('click', close);
       backdrop.addEventListener('click', function (evt) {
         if (evt.target === backdrop) close();
       });
-      _filesModal.attachBtn.addEventListener('click', function () {
-        _filesModal.fileInput.click();
-      });
-      _filesModal.fileInput.addEventListener('change', function (evt) {
-        addFiles(evt.target && evt.target.files ? evt.target.files : []);
-        evt.target.value = '';
-      });
-      _filesModal.uploadBtn.addEventListener('click', uploadFiles);
-      _filesModal.dropzone.addEventListener('click', function () {
-        if (!_filesModal.loading) _filesModal.fileInput.click();
-      });
-      _filesModal.dropzone.addEventListener('dragover', function (evt) {
-        evt.preventDefault();
-        _filesModal.dropzone.classList.add('lc-drag-over');
-      });
-      _filesModal.dropzone.addEventListener('dragleave', function () {
-        _filesModal.dropzone.classList.remove('lc-drag-over');
-      });
-      _filesModal.dropzone.addEventListener('drop', function (evt) {
-        evt.preventDefault();
-        _filesModal.dropzone.classList.remove('lc-drag-over');
-        addFiles(evt.dataTransfer && evt.dataTransfer.files ? evt.dataTransfer.files : []);
-      });
       document.addEventListener('keydown', function (evt) {
-        if (evt.key === 'Escape' && _filesModal.backdrop && _filesModal.backdrop.classList.contains('lc-open')) close();
+        if (evt.key === 'Escape' && backdrop.classList.contains('lc-open')) close();
       });
-    }
-
-    function _currentNodeFiles(nodeId) {
-      const node = cfg.resolve(nodeId);
-      const files = node && node.card_data && Array.isArray(node.card_data.files) ? node.card_data.files : [];
-      return files.filter(Boolean);
-    }
-
-    function _refreshFilesModalList(nodeId) {
-      if (_filesModal.currentNodeId !== nodeId) return;
-      const files = _currentNodeFiles(nodeId);
-      if (!files.length) {
-        _filesModal.body.innerHTML = '<div class="alert alert-light border small mb-0">No files uploaded yet.</div>';
-        return;
-      }
-
-      let h = '<div class="list-group list-group-flush">';
-      files.forEach(function (f, idx) {
-        const fileName = f && (f.name || f.stored_name) ? (f.name || f.stored_name) : 'file';
-        const sizeText = f && typeof f.size === 'number' ? ('size: ' + f.size + ' bytes') : '';
-        const stored = f && f.stored_name ? String(f.stored_name) : '';
-        const dl = stored
-          ? cfg.fileUrlBase + '/cards/' + encodeURIComponent(nodeId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
-          : null;
-        h += '<div class="list-group-item d-flex align-items-center justify-content-between gap-2">';
-        h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
-        h += '<div class="small text-muted">' + _esc(sizeText) + '</div></div>';
-        if (dl) {
-          h += '<a class="btn btn-sm btn-outline-secondary flex-shrink-0" href="' + dl + '">Download</a>';
-        }
-        h += '</div>';
-      });
-      h += '</div>';
-      _filesModal.body.innerHTML = h;
     }
 
     function openFilesModal(nodeId) {
@@ -976,24 +1266,67 @@ var LiveCard = (function () {
       if (!node) return;
 
       const title = (node.card && node.card.meta && node.card.meta.title) || node.id;
-      _filesModal.currentNodeId = nodeId;
-      _filesModal.title.textContent = 'Files: ' + title;
-      _filesModal.backdrop.classList.add('lc-open');
+      _filesModalRefs.currentNodeId = nodeId;
+      _filesModalRefs.title.textContent = 'Files: ' + title;
+      _filesModalRefs.backdrop.classList.add('lc-open');
 
-      // Disable upload controls when card_data.features.files.disabled is true
-      const filesDisabled = !!(node.card_data && node.card_data.features && node.card_data.features.files && node.card_data.features.files.disabled);
-      _filesModal.dropzone.classList.toggle('lc-disabled', filesDisabled);
-      _filesModal.attachBtn.disabled = filesDisabled;
-      _filesModal.uploadBtn.disabled = filesDisabled;
-      _filesModal.fileInput.disabled = filesDisabled;
+      // Bind the modal panes to the card and refresh.
+      _filesModalUploadPane.cardId = nodeId;
+      _filesModalListPane.cardId = nodeId;
+      _filesModalUploadPane.refresh();
 
-      _refreshFilesModalList(nodeId);
-
-      if (_filesModal.pollingTimer) clearInterval(_filesModal.pollingTimer);
-      _filesModal.pollingTimer = setInterval(function () {
-        _refreshFilesModalList(nodeId);
+      if (_filesModalRefs.pollingTimer) clearInterval(_filesModalRefs.pollingTimer);
+      _filesModalRefs.pollingTimer = setInterval(function () {
+        if (_filesModalListPane) _filesModalListPane.refresh();
       }, 1000);
     }
+
+    // Public: mount an upload pane (drop zone + staged + Upload button, with
+    // optional embedded uploaded-list) inside a caller-owned container. Same
+    // code path as the modal footer.
+    function mountFilesUploadPane(options) {
+      options = options || {};
+      if (!options.container) throw new Error('mountFilesUploadPane: container is required');
+      if (!options.cardId) throw new Error('mountFilesUploadPane: cardId is required');
+      const pane = _buildFilesUploadPane({
+        container: options.container,
+        cardId: options.cardId,
+        isModal: false,
+        options: {
+          placeholder: options.placeholder,
+          accept: options.accept || null,
+          showUploadedList: options.showUploadedList !== false,
+          livePoll: options.livePoll !== false,
+        },
+      });
+      return {
+        refresh: function () { pane.refresh(); },
+        dispose: function () { pane.dispose(); },
+      };
+    }
+
+    // Public: mount a read-only files list pane (list-group with name + size
+    // + Download anchor) inside a caller-owned container. Same code path as
+    // the modal body.
+    function mountFilesListPane(options) {
+      options = options || {};
+      if (!options.container) throw new Error('mountFilesListPane: container is required');
+      if (!options.cardId) throw new Error('mountFilesListPane: cardId is required');
+      const pane = _buildFilesListPane({
+        container: options.container,
+        cardId: options.cardId,
+        isModal: false,
+        options: {
+          emptyText: options.emptyText || 'No files uploaded yet.',
+          livePoll: options.livePoll !== false,
+        },
+      });
+      return {
+        refresh: function () { pane.refresh(); },
+        dispose: function () { pane.dispose(); },
+      };
+    }
+
 
     function _resolveBind(node, bind) {
       if (!bind || typeof bind !== 'string') return undefined;
@@ -1880,276 +2213,6 @@ var LiveCard = (function () {
       el.innerHTML = `<pre class="small mb-0">${_esc(JSON.stringify(data, null, 2))}</pre>`;
     }
 
-    // ---- file-upload ----
-
-    function _renderFileUpload(data, el, elemDef, node) {
-      const cleanup = _getCleanup(node.id);
-      const signal = cleanup.ac.signal;
-      const ed = elemDef.data || {};
-      const uploaded = Array.isArray(data) ? data : [];
-      const showUploadedList = ed.showUploadedList === true;
-      const showUpload = ed.upload !== false;
-      const accept = ed.accept || ['.txt','.csv','.md','.json','.html','.xml','.pdf','.xlsx','.docx','.pptx','.png','.jpg','.jpeg'];
-      const acceptSet = new Set(accept.map(e => e.toLowerCase()));
-      const multiple = ed.multiple !== false;
-      const placeholder = ed.placeholder || 'Drop files here or click to browse';
-      const uid = 'lc-fu-' + (elemDef.id || Math.random().toString(36).slice(2, 8));
-
-      let stagedFiles = el._stagedFiles || [];
-      el._stagedFiles = stagedFiles;
-      let uploadStatus = el._uploadStatus || {};
-      el._uploadStatus = uploadStatus;
-
-      function keyForFile(f) {
-        return `${f.name}::${f.size}::${f.lastModified || 0}`;
-      }
-
-      let h = '';
-
-      // Drop zone
-      if (showUpload) {
-        h += `<div class="lc-dropzone mb-2" id="${uid}-dz">`;
-        h += '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-muted mb-1"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
-        h += `<div class="small text-muted">${_esc(placeholder)}</div>`;
-        h += `<input type="file" id="${uid}-fi" class="d-none"${multiple ? ' multiple' : ''} accept="${accept.join(',')}">`;
-        h += '</div>';
-        h += `<div id="${uid}-staged"></div>`;
-      }
-
-      // Uploaded files list
-      if (showUploadedList && uploaded.length) {
-        h += '<div class="lc-uploaded-files">';
-        uploaded.forEach(f => {
-          const name = typeof f === 'string' ? f : (f.name || '');
-          const url = typeof f === 'string' ? null : f.url;
-          h += '<div class="d-flex align-items-center gap-1 small mb-1">';
-          h += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-          if (url) h += `<a href="${_esc(url)}" class="text-truncate" target="_blank" download>${_esc(name)}</a>`;
-          else h += `<span class="text-truncate">${_esc(name)}</span>`;
-          h += '</div>';
-        });
-        h += '</div>';
-      }
-
-      if (!showUpload && !uploaded.length) {
-        h = `<p class="text-muted small">${_esc(ed.placeholder || 'No files')}</p>`;
-      }
-
-      el.innerHTML = h;
-
-      if (!showUpload) {
-        el._fileUpload = { getFiles: () => [], clear: () => {} };
-        return;
-      }
-
-      const dz = el.querySelector('#' + uid + '-dz');
-      const fi = el.querySelector('#' + uid + '-fi');
-      const stagedEl = el.querySelector('#' + uid + '-staged');
-      if (!dz) return;
-
-      function addFiles(fileList) {
-        const newlyAdded = [];
-        for (const f of fileList) {
-          const ext = '.' + f.name.split('.').pop().toLowerCase();
-          if (!acceptSet.has(ext)) continue;
-          if (!stagedFiles.find(s => s.name === f.name)) {
-            stagedFiles.push(f);
-            newlyAdded.push(f);
-            uploadStatus[keyForFile(f)] = 'uploading';
-          }
-        }
-        renderStaged();
-
-        // Server demos can upload real file blobs immediately via onAction.
-        if (newlyAdded.length && typeof cfg.onAction === 'function') {
-          Promise.resolve(cfg.onAction(node.id, 'file-upload', { files: newlyAdded, elemId: elemDef.id }))
-            .then(() => {
-              const uploadedKeys = new Set(newlyAdded.map(keyForFile));
-              stagedFiles = stagedFiles.filter((f) => !uploadedKeys.has(keyForFile(f)));
-              el._stagedFiles = stagedFiles;
-              newlyAdded.forEach((f) => { delete uploadStatus[keyForFile(f)]; });
-              el._uploadStatus = uploadStatus;
-              renderStaged();
-            })
-            .catch(() => {
-              newlyAdded.forEach((f) => { uploadStatus[keyForFile(f)] = 'error'; });
-              el._uploadStatus = uploadStatus;
-              renderStaged();
-            });
-        }
-      }
-
-      function renderStaged() {
-        if (!stagedFiles.length) { stagedEl.innerHTML = ''; return; }
-        let sh = '';
-        stagedFiles.forEach((f, i) => {
-          const status = uploadStatus[keyForFile(f)] || 'ready';
-          sh += '<div class="lc-staged-file">';
-          sh += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-          sh += `<span class="small flex-grow-1 text-truncate">${_esc(f.name)}</span>`;
-          if (status === 'uploading') {
-            sh += '<span class="spinner-border spinner-border-sm text-secondary me-1" role="status" aria-label="Uploading"></span>';
-          } else if (status === 'error') {
-            sh += '<span class="badge bg-danger-subtle text-danger border border-danger-subtle me-1">Failed</span>';
-          }
-          sh += `<button class="btn btn-sm btn-link text-danger p-0 lc-rm-staged" data-idx="${i}">&times;</button>`;
-          sh += '</div>';
-        });
-        stagedEl.innerHTML = sh;
-        stagedEl.querySelectorAll('.lc-rm-staged').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const idx = parseInt(btn.dataset.idx);
-            const f = stagedFiles[idx];
-            if (f) delete uploadStatus[keyForFile(f)];
-            stagedFiles.splice(idx, 1);
-            el._stagedFiles = stagedFiles;
-            el._uploadStatus = uploadStatus;
-            renderStaged();
-          }, { signal });
-        });
-      }
-
-      dz.addEventListener('click', () => fi.click(), { signal });
-      dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('lc-drag-over'); }, { signal });
-      dz.addEventListener('dragleave', () => dz.classList.remove('lc-drag-over'), { signal });
-      dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('lc-drag-over'); addFiles(e.dataTransfer.files); }, { signal });
-      fi.addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; }, { signal });
-
-      renderStaged();
-
-      el._fileUpload = {
-        getFiles: () => stagedFiles,
-        clear: () => { stagedFiles = []; uploadStatus = {}; el._stagedFiles = []; el._uploadStatus = {}; renderStaged(); },
-        disable: () => { dz.classList.add('lc-disabled'); fi.disabled = true; },
-        enable: () => { dz.classList.remove('lc-disabled'); fi.disabled = false; },
-      };
-    }
-
-    // ---- chat (element kind) ----
-
-    function _renderChatEl(data, el, elemDef, node) {
-      const cleanup = _getCleanup(node.id);
-      const signal = cleanup.ac.signal;
-      const ed = elemDef.data || {};
-      const messages = Array.isArray(data) ? data : [];
-      const placeholder = ed.placeholder || 'Type a message...';
-      const canAttach = ed.fileAttach === true;
-      const accept = ed.fileAccept || ['.txt','.csv','.md','.json','.html','.xml','.pdf','.xlsx','.docx','.pptx','.png','.jpg','.jpeg'];
-      const uid = 'lc-ch-' + (elemDef.id || Math.random().toString(36).slice(2, 8));
-
-      let h = '<div class="lc-chat-el">';
-      h += `<div class="lc-chat-body" id="${uid}-body"></div>`;
-      h += '<div class="lc-chat-input-bar">';
-      if (canAttach) {
-        h += `<input type="file" id="${uid}-fi" class="d-none" multiple accept="${accept.join(',')}">`;
-        h += `<button class="btn btn-sm btn-outline-secondary" id="${uid}-attach" title="Attach files" type="button">`;
-        h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>';
-        h += '</button>';
-      }
-      h += `<input type="text" class="form-control form-control-sm flex-grow-1" id="${uid}-input" placeholder="${_esc(placeholder)}">`;
-      h += `<button class="btn btn-sm btn-outline-primary" id="${uid}-send" type="button">`;
-      h += '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
-      h += '</button></div>';
-      if (canAttach) h += `<div id="${uid}-staged" class="mt-1"></div>`;
-      h += '</div>';
-
-      el.innerHTML = h;
-
-      const body = el.querySelector('#' + uid + '-body');
-      const input = el.querySelector('#' + uid + '-input');
-      const sendBtn = el.querySelector('#' + uid + '-send');
-      const attachBtn = canAttach ? el.querySelector('#' + uid + '-attach') : null;
-      const fileInput = canAttach ? el.querySelector('#' + uid + '-fi') : null;
-      const stagedEl = canAttach ? el.querySelector('#' + uid + '-staged') : null;
-
-      let stagedFiles = [];
-
-      function appendMsg(msg) {
-        const bub = document.createElement('div');
-        const roleClass = msg.role === 'user' ? 'lc-chat-bubble-user'
-          : msg.role === 'assistant' ? 'lc-chat-bubble-assistant'
-          : 'lc-chat-bubble-system';
-        bub.className = 'lc-chat-bubble ' + roleClass;
-        if (msg.role === 'assistant') {
-          bub.innerHTML = _renderMd(msg.text || '');
-        } else {
-          bub.textContent = msg.text || '';
-        }
-        if (msg.files && msg.files.length) {
-          const fDiv = document.createElement('div');
-          fDiv.className = 'small mt-1';
-          msg.files.forEach(f => {
-            const name = typeof f === 'string' ? f : f.name;
-            fDiv.innerHTML += '\uD83D\uDCCE ' + _esc(name) + '<br>';
-          });
-          bub.appendChild(fDiv);
-        }
-        body.appendChild(bub);
-      }
-
-      messages.forEach(appendMsg);
-      body.scrollTop = body.scrollHeight;
-
-      function renderStaged() {
-        if (!stagedEl) return;
-        if (!stagedFiles.length) { stagedEl.innerHTML = ''; return; }
-        stagedEl.innerHTML = stagedFiles.map((f, i) =>
-          `<div class="d-flex align-items-center gap-1 small"><span>\uD83D\uDCCE ${_esc(f.name)}</span><button class="btn btn-sm btn-link text-danger p-0 lc-rm-cs" data-idx="${i}">&times;</button></div>`
-        ).join('');
-        stagedEl.querySelectorAll('.lc-rm-cs').forEach(btn => {
-          btn.addEventListener('click', () => { stagedFiles.splice(parseInt(btn.dataset.idx), 1); renderStaged(); }, { signal });
-        });
-      }
-
-      if (attachBtn && fileInput) {
-        const acceptS = new Set(accept.map(x => x.toLowerCase()));
-        attachBtn.addEventListener('click', () => fileInput.click(), { signal });
-        fileInput.addEventListener('change', e => {
-          for (const f of e.target.files) {
-            const ext = '.' + f.name.split('.').pop().toLowerCase();
-            if (acceptS.has(ext) && !stagedFiles.find(s => s.name === f.name)) stagedFiles.push(f);
-          }
-          e.target.value = '';
-          renderStaged();
-        }, { signal });
-      }
-
-      function doSend() {
-        const text = input.value.trim();
-        if (!text && !stagedFiles.length) return;
-        const msg = { role: 'user', text: text || '' };
-        if (stagedFiles.length) msg.files = stagedFiles.map(f => ({ name: f.name, size: f.size }));
-        appendMsg(msg);
-        body.scrollTop = body.scrollHeight;
-        input.value = '';
-        const filesToSend = stagedFiles.slice();
-        stagedFiles = [];
-        renderStaged();
-        cfg.onAction(node.id, 'chat-send', { text: msg.text, files: filesToSend, elemId: elemDef.id });
-      }
-
-      sendBtn.addEventListener('click', doSend, { signal });
-      input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } }, { signal });
-
-      el._chat = {
-        appendMessage: (role, text, files) => { appendMsg({ role, text, files }); body.scrollTop = body.scrollHeight; },
-        showProcessing: (text) => {
-          let ind = body.querySelector('.lc-chat-processing');
-          if (!ind) {
-            ind = document.createElement('div');
-            ind.className = 'lc-chat-processing';
-            ind.innerHTML = '<span class="spinner-border spinner-border-sm"></span><span class="small">Processing...</span>';
-            body.appendChild(ind);
-          }
-          if (text) ind.querySelector('.small').textContent = text;
-          body.scrollTop = body.scrollHeight;
-        },
-        removeProcessing: () => { const ind = body.querySelector('.lc-chat-processing'); if (ind) ind.remove(); },
-        disable: () => { input.disabled = true; sendBtn.disabled = true; if (attachBtn) attachBtn.disabled = true; },
-        enable: () => { input.disabled = false; sendBtn.disabled = false; if (attachBtn) attachBtn.disabled = false; },
-      };
-    }
-
     // ---- actions ----
 
     function _renderActions(data, el, elemDef, node) {
@@ -2268,8 +2331,6 @@ var LiveCard = (function () {
     _renderers.text      = _renderText;
     _renderers.markdown  = _renderMarkdown;
     _renderers.custom    = _renderCustom;
-    _renderers['file-upload'] = _renderFileUpload;
-    _renderers['chat']        = _renderChatEl;
     _renderers.actions        = _renderActions;
     _renderers.ref            = _renderRef;
 
@@ -2538,63 +2599,72 @@ var LiveCard = (function () {
 
     function destroyAll() {
       Object.keys(_cleanup).forEach(destroy);
-      if (_chatModal.backdrop) _chatModal.backdrop.remove();
-      _chatModal.backdrop = null;
-      _chatModal.title = null;
-      _chatModal.body = null;
-      _chatModal.input = null;
-      _chatModal.fileInput = null;
-      _chatModal.staged = null;
-      _chatModal.sendBtn = null;
-      _chatModal.attachBtn = null;
-      _chatModal.closeBtn = null;
-      _chatModal.currentNodeId = null;
-      _chatModal.stagedFiles = [];
-      _chatModal.loading = false;
-      _chatModal.awaitingProcessingAck = false;
-      _chatModal.sendBtnIdleHtml = '';
+      // Dispose every mounted chat pane (modal + inline). dispose() removes
+      // listeners and unsubscribes auto-subscribed panes.
+      Array.from(_chatPanes).forEach(function (pane) {
+        try { pane.dispose(); } catch (e) { /* noop */ }
+      });
+      _chatPanes.clear();
+      if (_chatModalRefs.backdrop) _chatModalRefs.backdrop.remove();
+      _chatModalRefs.backdrop = null;
+      _chatModalRefs.title = null;
+      _chatModalRefs.closeBtn = null;
+      _modalPane = null;
 
-      if (_filesModal.pollingTimer) clearInterval(_filesModal.pollingTimer);
-      if (_filesModal.backdrop) _filesModal.backdrop.remove();
-      _filesModal.backdrop = null;
-      _filesModal.title = null;
-      _filesModal.body = null;
-      _filesModal.staged = null;
-      _filesModal.fileInput = null;
-      _filesModal.dropzone = null;
-      _filesModal.uploadBtn = null;
-      _filesModal.attachBtn = null;
-      _filesModal.closeBtn = null;
-      _filesModal.currentNodeId = null;
-      _filesModal.stagedFiles = [];
-      _filesModal.pollingTimer = null;
-      _filesModal.loading = false;
+      if (_filesModalRefs.pollingTimer) clearInterval(_filesModalRefs.pollingTimer);
+      Array.from(_filesPanes).forEach(function (pane) {
+        try { pane.dispose(); } catch (e) { /* noop */ }
+      });
+      _filesPanes.clear();
+      if (_filesModalRefs.backdrop) _filesModalRefs.backdrop.remove();
+      _filesModalRefs.backdrop = null;
+      _filesModalRefs.title = null;
+      _filesModalRefs.closeBtn = null;
+      _filesModalRefs.currentNodeId = null;
+      _filesModalRefs.pollingTimer = null;
+      _filesModalUploadPane = null;
+      _filesModalListPane = null;
     }
 
     // ===========================================================================
     // Chat
     // ===========================================================================
 
+    function _isModalOpen() {
+      return !!(_chatModalRefs.backdrop && _chatModalRefs.backdrop.classList.contains('lc-open'));
+    }
+
+    // True for the modal pane only when the modal is currently open; always
+    // true for inline panes (their visibility is the caller's responsibility).
+    function _paneIsActive(pane) {
+      if (!pane || !pane.cardId || pane.disposed) return false;
+      if (pane.isModal) return _isModalOpen();
+      return true;
+    }
+
     function appendChatMessage(nodeId, role, text) {
-      if (_chatModal.currentNodeId !== nodeId) return;
-      _appendModalChatMessage(role, text, []);
+      _chatPanes.forEach(function (pane) {
+        if (!_paneIsActive(pane)) return;
+        if (pane.cardId !== nodeId) return;
+        pane.appendMessage(role, text, []);
+      });
     }
 
     function refreshOpenChatModal() {
-      const nodeId = _chatModal.currentNodeId;
-      if (!nodeId || !_chatModal.backdrop || !_chatModal.backdrop.classList.contains('lc-open')) return;
-      _refreshModalChatHistory(nodeId).catch(function () {});
+      _chatPanes.forEach(function (pane) {
+        if (!_paneIsActive(pane)) return;
+        pane.refresh();
+      });
     }
 
     function onServerSseEvent() {
-      const nodeId = _chatModal.currentNodeId;
-      if (!nodeId || !_chatModal.backdrop || !_chatModal.backdrop.classList.contains('lc-open')) return;
-      if (_chatModal.awaitingProcessingAck) {
-        _setChatSendButtonPending(false);
-      }
-      _clearPendingModalChatMessages();
-      _syncProcessingBar(nodeId);
-      _refreshModalChatHistory(nodeId).catch(function () {});
+      _chatPanes.forEach(function (pane) {
+        if (!_paneIsActive(pane)) return;
+        if (pane.awaitingProcessingAck) pane.setSendButtonPending(false);
+        pane.clearPending();
+        pane.syncProcessingBar();
+        pane.refresh();
+      });
     }
 
     // ===========================================================================
@@ -2621,7 +2691,10 @@ var LiveCard = (function () {
       refreshOpenChatModal,
       onServerSseEvent,
       openChatModal,
+      mountChatPane,
       openFilesModal,
+      mountFilesUploadPane,
+      mountFilesListPane,
       getElement,
       registerRenderer(name, fn) { _renderers[name] = fn; },
       renderers: _renderers,
