@@ -292,6 +292,11 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   const runtimeCardsDir = path.join(path.dirname(boardDir), 'cards');
   const runtimeCardStoreDir = path.join(runtimeCardsDir, 'store');
   fs.mkdirSync(runtimeCardStoreDir, { recursive: true });
+  const runtimeOutDir = path.join(path.dirname(boardDir), 'runtime-out');
+  const scratchDir = path.join(runtimeOutDir, '.tmp');
+  const archiveDir = path.join(runtimeOutDir, 'archive');
+  fs.mkdirSync(scratchDir, { recursive: true });
+  fs.mkdirSync(archiveDir, { recursive: true });
 
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
@@ -301,6 +306,8 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: runtimeCardsDir }));
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, { suppressSpawn: true });
   const cardStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardStoreDir });
+  const scratchStoreRef = serializeRef({ kind: 'fs-path', value: scratchDir });
+  const archiveStoreRef = serializeRef({ kind: 'fs-path', value: archiveDir });
 
   return {
     label,
@@ -308,7 +315,9 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
     artifactsAdapter,
     baseRef,
     cardStoreRef,
-    outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(path.dirname(boardDir), 'runtime-out', '.outputs') }),
+    outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(runtimeOutDir, '.outputs') }),
+    scratchStoreRef,
+    archiveStoreRef,
     notifyRef: { kind: 'named-pipe', value: namedPipePath(notifyChannel) },
     taskExecutorRef: makeExecutionRef(taskExecPath, executionExtra),
     chatHandlerFlow,

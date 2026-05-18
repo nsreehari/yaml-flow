@@ -86,6 +86,8 @@ interface BoardContext {
   boardAdapter: import('./types.js').BoardPlatformAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
+  scratchStoreRef?: string;
+  archiveStoreRef?: string;
   notifyRef?: import('./types.js').KindValueRef;
   taskExecutorRef?: import('./types.js').ExecutionRef;
   chatHandlerRef?: import('./types.js').ExecutionRef;
@@ -188,6 +190,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
+      scratchStoreRef: cfg.scratchStoreRef,
+      archiveStoreRef: cfg.archiveStoreRef,
       notifyRef: cfg.notifyRef,
       taskExecutorRef: cfg.taskExecutorRef,
       chatHandlerRef: cfg.chatHandlerRef,
@@ -253,10 +257,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (!ctx) return;
     if (ctx.initialized) return;
 
-    const params = {
+    const params: Record<string, string> = {
       cardStoreRef: ctx.cardStoreRef,
       outputsStoreRef: ctx.outputsStoreRef,
     };
+    if (ctx.scratchStoreRef) params.scratchStoreRef = ctx.scratchStoreRef;
+    if (ctx.archiveStoreRef) params.archiveStoreRef = ctx.archiveStoreRef;
     const body: Record<string, unknown> = {};
     if (ctx.taskExecutorRef) body['task-executor-ref'] = ctx.taskExecutorRef;
     if (ctx.chatHandlerFlow !== undefined) body['chat-handler-flow'] = ctx.chatHandlerFlow;

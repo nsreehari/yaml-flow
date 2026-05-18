@@ -117,6 +117,10 @@ export interface BoardContextConfig {
   baseRef: KindValueRef;
   cardStoreRef: string;
   outputsStoreRef: string;
+  /** Optional ref pointing scratch storage at a different backend than the board runtime. */
+  scratchStoreRef?: string;
+  /** Optional ref pointing archive storage at a different backend than the board runtime. */
+  archiveStoreRef?: string;
   /** Notification endpoint ref — e.g. ::named-pipe::<path> or ::firestore-watch::<path> */
   notifyRef?: KindValueRef;
   taskExecutorRef?: ExecutionRef;
