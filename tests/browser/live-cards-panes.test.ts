@@ -443,3 +443,96 @@ describe('destroyAll', () => {
     expect(c1.querySelectorAll('.lc-chat-bubble').length).toBe(0);
   });
 });
+
+describe('custom renderer context — pane mounts pinned to current card', () => {
+  it('exposes mountChatPane / mountFilesUploadPane / mountFilesListPane on the renderer context with cardId pre-bound', () => {
+    const LC = loadLiveCards();
+    const captured: any = {};
+    LC.registerCardRenderer('ingest-test', {
+      createShell(_model: any) {
+        const shell = document.createElement('div');
+        shell.className = 'lc-ingest-shell';
+        return shell;
+      },
+      renderBody(_model: any, shell: HTMLElement, ctx: any) {
+        captured.ctx = ctx;
+        const chatHost = shell.appendChild(document.createElement('div'));
+        const uploadHost = shell.appendChild(document.createElement('div'));
+        const listHost = shell.appendChild(document.createElement('div'));
+        // Note: no cardId passed — context pins it.
+        captured.chat = ctx.mountChatPane({ container: chatHost });
+        captured.upload = ctx.mountFilesUploadPane({ container: uploadHost, livePoll: false });
+        captured.list = ctx.mountFilesListPane({ container: listHost, livePoll: false });
+      },
+    });
+    const node = makeNode('ingest-1', { messages: [{ role: 'user', text: 'hello' }], files: [{ name: 'a.txt', size: 1 }] });
+    node.card.meta = { ...(node.card.meta || {}), cardRenderer: 'ingest-test' };
+    node.card.view = node.card.view || { layout: { board: { order: 0 } } };
+    const engine = makeEngine({ 'ingest-1': node });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const board = LC.Board(engine, container, {
+      initialState: { ids: ['ingest-1'], byId: { 'ingest-1': node } },
+      getNodeIds: (s: any) => s.ids,
+      selectNode: (s: any, id: string) => s.byId[id],
+    });
+    try {
+      // Context shape
+      expect(typeof captured.ctx.mountChatPane).toBe('function');
+      expect(typeof captured.ctx.mountFilesUploadPane).toBe('function');
+      expect(typeof captured.ctx.mountFilesListPane).toBe('function');
+      expect(captured.ctx.chatMessages).toEqual([{ role: 'user', text: 'hello', files: [] }]);
+      expect(captured.ctx.isReceivingChats).toBe(false);
+      // Handles
+      for (const h of [captured.chat, captured.upload, captured.list]) {
+        expect(typeof h.refresh).toBe('function');
+        expect(typeof h.dispose).toBe('function');
+      }
+      // Chat pane rendered messages from THIS card (cardId pinning)
+      const bubbles = container.querySelectorAll('.lc-chat-bubble');
+      expect(bubbles.length).toBe(1);
+      expect((bubbles[0].textContent || '')).toContain('hello');
+      // Files list pane rendered the file from THIS card
+      expect(container.textContent || '').toContain('a.txt');
+    } finally {
+      captured.chat?.dispose();
+      captured.upload?.dispose();
+      captured.list?.dispose();
+      board.destroy();
+    }
+  });
+
+  it('ignores caller-supplied cardId — context always pins the rendered node id', () => {
+    const LC = loadLiveCards();
+    const captured: any = {};
+    LC.registerCardRenderer('ingest-test-pin', {
+      createShell() { return document.createElement('div'); },
+      renderBody(_model: any, shell: HTMLElement, ctx: any) {
+        const host = shell.appendChild(document.createElement('div'));
+        // Even if a renderer tries to mount someone else's pane, the context
+        // must overwrite cardId with the current node id.
+        captured.handle = ctx.mountChatPane({ container: host, cardId: 'other' });
+      },
+    });
+    const a = makeNode('a', { messages: [{ role: 'user', text: 'A-msg' }] });
+    const b = makeNode('b', { messages: [{ role: 'user', text: 'B-msg' }] });
+    a.card.meta = { ...(a.card.meta || {}), cardRenderer: 'ingest-test-pin' };
+    a.card.view = a.card.view || { layout: { board: { order: 0 } } };
+    const engine = makeEngine({ a, b });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const board = LC.Board(engine, container, {
+      initialState: { ids: ['a'], byId: { a, b } },
+      getNodeIds: (s: any) => s.ids,
+      selectNode: (s: any, id: string) => s.byId[id],
+    });
+    try {
+      const txt = container.textContent || '';
+      expect(txt).toContain('A-msg');
+      expect(txt).not.toContain('B-msg');
+    } finally {
+      captured.handle?.dispose();
+      board.destroy();
+    }
+  });
+});

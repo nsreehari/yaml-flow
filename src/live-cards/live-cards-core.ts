@@ -3005,11 +3005,17 @@ var LiveCard = (function () {
     function _customRendererCtx(node) {
       return {
         chatState: _chatStateFromCardState(node),
-        get chatMessages() { return _chatStateFromCardState(cfg.resolve(node.id) || node).messages; },
-        get isReceivingChats() { return !!(cfg.resolve(node.id) || node).card_chats && !!(cfg.resolve(node.id) || node).card_chats.receiving; },
+        get chatMessages() { return engine.getChatStateForCard ? engine.getChatStateForCard(node.id).messages : _chatStateFromCardState(node).messages; },
+        get isReceivingChats() { return engine.isReceivingChatsForCard ? engine.isReceivingChatsForCard(node.id) : !!_chatStateFromCardState(node).receiving; },
         startReceivingChats: function () { engine.startReceivingChatsForCard && engine.startReceivingChatsForCard(node.id); },
         stopReceivingChats:  function () { engine.stopReceivingChatsForCard && engine.stopReceivingChatsForCard(node.id); },
         renderBuiltin: function (m, k, v, c, ec) { _renderBuiltin(m || node, k, v, c, ec); },
+        // Inline pane mounts, with cardId pinned to the current card so renderers
+        // can't accidentally mount another card's pane. Delegates to the engine's
+        // own mount* APIs (defined in init()'s closure).
+        mountChatPane:        function (opts) { return engine.mountChatPane       (Object.assign({}, opts, { cardId: node.id })); },
+        mountFilesUploadPane: function (opts) { return engine.mountFilesUploadPane(Object.assign({}, opts, { cardId: node.id })); },
+        mountFilesListPane:   function (opts) { return engine.mountFilesListPane  (Object.assign({}, opts, { cardId: node.id })); },
       };
     }
 

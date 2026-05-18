@@ -172,6 +172,12 @@ const BOARD_LOCK_FILE = '.board.lock';
 type FsBoardAdapterOpts = { onWarn?: (msg: string) => void; suppressSpawn?: boolean; notifyChannel?: string };
 type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void };
 
+function _pathAlreadyEndsWith(dir: string, segment: string): boolean {
+  if (!dir || !segment) return false;
+  const parts = String(dir).replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean);
+  return parts.length > 0 && parts[parts.length - 1] === segment;
+}
+
 function normalizeFsBoardAdapterArgs(
   cliDirOrOpts?: string | FsBoardAdapterOpts,
   opts?: FsBoardAdapterOpts,
@@ -391,14 +397,15 @@ export function createFsBoardChatStorage(
   const chatsSubdir = opts.chatsSubdir ?? 'chats';
   const kvSubdir = opts.kvSubdir ?? '.kv';
   const kvParts = kvSubdir ? [kvSubdir, 'chat'] : ['chat'];
+  const chatsRoot = chatsSubdir && !_pathAlreadyEndsWith(boardDir, chatsSubdir)
+    ? joinPath(boardDir, chatsSubdir)
+    : boardDir;
   const kv = createFsKvStorage(joinPath(boardDir, ...kvParts));
   return createChatStorage(
     (cardId: string) => {
       const safeId = String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
       const fileName = `${safeId}.jsonl`;
-      const journalPath = chatsSubdir
-        ? joinPath(boardDir, chatsSubdir, fileName)
-        : joinPath(boardDir, fileName);
+      const journalPath = joinPath(chatsRoot, fileName);
       return createFsJournalStorage(journalPath);
     },
     kv,
@@ -425,7 +432,7 @@ export function createFsBoardFileArtifactsStore(
   opts: FsBoardFileArtifactsStoreOptions = {},
 ) {
   const filesSubdir = opts.filesSubdir ?? 'files';
-  const root = filesSubdir ? joinPath(baseDir, filesSubdir) : baseDir;
+  const root = filesSubdir && !_pathAlreadyEndsWith(baseDir, filesSubdir) ? joinPath(baseDir, filesSubdir) : baseDir;
   return createArtifactsStore(createFsBlobStorage(root));
 }
 
