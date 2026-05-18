@@ -3817,21 +3817,6 @@ var LiveCard = (function () {
         engine.render(node, built.body, { showChat: false });
       }
       _updateTokenAvailability();
-      if (mode.current === 'board' && boardRenderer && typeof boardRenderer.afterRenderBoard === 'function') {
-        const presentation = _currentBoardPresentation();
-        const cards = nodeList.filter(n => n.card && n.card.view).slice();
-        cards.sort((a, b) => {
-          const ao = (a.card && a.card.view && a.card.view.layout && a.card.view.layout.board && a.card.view.layout.board.order) || 0;
-          const bo = (b.card && b.card.view && b.card.view.layout && b.card.view.layout.board && b.card.view.layout.board.order) || 0;
-          return ao - bo;
-        });
-        boardRenderer.afterRenderBoard(_boardRendererCtx(presentation, {
-          mountEl: _lastBoardHost.mountEl,
-          listEl: _lastBoardHost.listEl,
-          cards: cards,
-          nodeMap: nodeMap,
-        }));
-      }
     }
 
     function clear() {

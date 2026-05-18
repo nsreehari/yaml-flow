@@ -164,7 +164,7 @@ describe('LiveCard.Board (reactive) and LiveCard.BoardCore', () => {
     const hostAfter = container.querySelector('.test-board-host');
     const bAfter = (container.querySelector('[data-node-id="b"]') as HTMLElement).outerHTML;
     expect(createHostCalls).toBe(1);
-    expect(afterRenderCalls).toBe(2);
+    expect(afterRenderCalls).toBe(1);
     expect(hostAfter).toBe(hostBefore);
     expect(bAfter).toBe(bBefore);
     board.destroy();
