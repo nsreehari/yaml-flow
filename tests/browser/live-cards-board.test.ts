@@ -131,6 +131,45 @@ describe('LiveCard.Board (reactive) and LiveCard.BoardCore', () => {
     board.destroy();
   });
 
+  it('setState with boardRenderer updates one card without full board rerender', () => {
+    let createHostCalls = 0;
+    let afterRenderCalls = 0;
+    LiveCard.registerBoardRenderer('test-framed-board', {
+      createBoardHost(ctx: any) {
+        createHostCalls += 1;
+        const host = document.createElement('section');
+        host.className = 'test-board-host';
+        host.appendChild(ctx.defaultListEl);
+        return { mountEl: host, listEl: ctx.defaultListEl };
+      },
+      afterRenderBoard() {
+        afterRenderCalls += 1;
+      },
+    });
+
+    const a1 = makeModel('a', 1);
+    const b1 = makeModel('b', 2);
+    const state1 = makeState([a1, b1]);
+    const board = LiveCard.Board(engine, container, {
+      initialState: state1,
+      getNodeIds: (s: State) => s.ids,
+      selectNode: (s: State, id: string) => s.byId[id],
+      boardRenderer: 'test-framed-board',
+    });
+    const hostBefore = container.querySelector('.test-board-host');
+    const bBefore = (container.querySelector('[data-node-id="b"]') as HTMLElement).outerHTML;
+
+    board.setState(makeState([makeModel('a', 99), b1]));
+
+    const hostAfter = container.querySelector('.test-board-host');
+    const bAfter = (container.querySelector('[data-node-id="b"]') as HTMLElement).outerHTML;
+    expect(createHostCalls).toBe(1);
+    expect(afterRenderCalls).toBe(2);
+    expect(hostAfter).toBe(hostBefore);
+    expect(bAfter).toBe(bBefore);
+    board.destroy();
+  });
+
   it('setState accepts updater function signature', () => {
     const a1 = makeModel('a', 1);
     const state1 = makeState([a1]);
