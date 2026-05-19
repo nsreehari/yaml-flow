@@ -137,7 +137,7 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   // ── del ──────────────────────────────────────────────────────────────────
-  if (cmd === 'del' || cmd === 'delete') {
+  if (cmd === 'del') {
     const ids: string[] = [];
     for (let i = 0; i < rest.length; i++) {
       if (rest[i] === '--id' && rest[i + 1]) {

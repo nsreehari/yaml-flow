@@ -122,7 +122,7 @@ terminal_states:
     expect(run.combinedOutput).toContain('Invalid --initial-data value');
   });
 
-  it('fails fast for invalid --store value', async () => {
+  it('fails fast for invalid --persist-runtime-ref kind', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-store-invalid-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -139,13 +139,13 @@ terminal_states:
     return_intent: success
 `);
 
-    const run = await runCli([flowPath, '--store', 'redis']);
+    const run = await runCli([flowPath, '--persist-runtime-ref', serializeRef({ kind: 'mem', value: 'runtime-store' })]);
 
     expect(run.status).toBe(1);
-    expect(run.combinedOutput).toContain('Invalid --store value');
+    expect(run.combinedOutput).toContain('--persist-runtime-ref must be an fs-path ref');
   });
 
-  it('requires --store-dir when --store file is used', async () => {
+  it('uses memory store when --persist-runtime-ref is omitted', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-store-dir-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
 
@@ -162,16 +162,16 @@ terminal_states:
     return_intent: success
 `);
 
-    const run = await runCli([flowPath, '--store', 'file']);
+    const run = await runCli([flowPath]);
 
-    expect(run.status).toBe(1);
-    expect(run.combinedOutput).toContain('--store file requires --store-dir');
+    expect(run.status).toBe(0);
   });
 
-  it('persists run state when using --store file', async () => {
+  it('persists run state when using --persist-runtime-ref', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-file-store-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const storeDir = path.join(tmpRoot, 'runs');
+    const persistRuntimeRef = fsRef(storeDir);
 
     writeFile(flowPath, `
 id: persist-flow
@@ -191,10 +191,8 @@ terminal_states:
 
     const run = await runCli([
       flowPath,
-      '--store',
-      'file',
-      '--store-dir',
-      storeDir,
+      '--persist-runtime-ref',
+      persistRuntimeRef,
       '--initial-data',
       '{"x":42}',
     ]);
@@ -212,10 +210,11 @@ terminal_states:
     expect(savedState?.status).toBe('completed');
   });
 
-  it('resumes the latest paused run when using --resume with --store file', async () => {
+  it('resumes the latest paused run when using --resume with --persist-runtime-ref', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-resume-'));
     const flowPath = path.join(tmpRoot, 'flow.yaml');
     const storeDir = path.join(tmpRoot, 'runs');
+    const persistRuntimeRef = fsRef(storeDir);
     const runId = 'resume-run-1';
     const startedAt = Date.now() - 1000;
 
@@ -253,10 +252,8 @@ terminal_states:
 
     const run = await runCli([
       flowPath,
-      '--store',
-      'file',
-      '--store-dir',
-      storeDir,
+      '--persist-runtime-ref',
+      persistRuntimeRef,
       '--resume',
     ]);
 
@@ -268,9 +265,10 @@ terminal_states:
     expect(output.data).toEqual({ x: 7 });
   });
 
-  it('writes a pause request marker when using --pause with --store file', async () => {
+  it('writes a pause request marker when using --pause with --persist-runtime-ref', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-pause-'));
     const storeDir = path.join(tmpRoot, 'runs');
+    const persistRuntimeRef = fsRef(storeDir);
     const runId = 'pause-run-1';
     const startedAt = Date.now() - 1000;
 
@@ -290,10 +288,8 @@ terminal_states:
     seedRunData(storeDir, runId, {});
 
     const run = await runCli([
-      '--store',
-      'file',
-      '--store-dir',
-      storeDir,
+      '--persist-runtime-ref',
+      persistRuntimeRef,
       '--pause',
     ]);
 
@@ -301,12 +297,14 @@ terminal_states:
 
     const output = parseLastJsonObject(run.stdout ?? '');
     expect(output.status).toBe('pause-requested');
+    expect(output.persistRuntimeRef).toBe(persistRuntimeRef);
     expect(fs.existsSync(path.join(storeDir, '.pause'))).toBe(true);
   });
 
-  it('shows store status with --status for file store directory', async () => {
+  it('shows persisted runtime status with --status for --persist-runtime-ref', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'step-machine-cli-status-'));
     const storeDir = path.join(tmpRoot, 'runs');
+    const persistRuntimeRef = fsRef(storeDir);
     const runId = 'status-run-1';
     const startedAt = Date.now() - 1000;
 
@@ -326,16 +324,15 @@ terminal_states:
     });
 
     const run = await runCli([
-      '--store',
-      'file',
-      '--store-dir',
-      storeDir,
+      '--persist-runtime-ref',
+      persistRuntimeRef,
       '--status',
     ]);
 
     expect(run.status).toBe(0);
 
     const output = parseLastJsonObject(run.stdout ?? '');
+    expect(output.persistRuntimeRef).toBe(persistRuntimeRef);
     expect(output.totalRuns).toBe(1);
     expect(output.runs[0].runId).toBe(runId);
     expect(output.runs[0].status).toBe('paused');

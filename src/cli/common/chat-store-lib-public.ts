@@ -11,7 +11,7 @@
  *   import { createChatStorePublic } from './chat-store-lib-public.js';
  *   import { createFsBoardChatStorage } from '../node/fs-board-adapter.js';
  *
- *   const store = createChatStorePublic(createFsBoardChatStorage(boardDir));
+ *   const store = createChatStorePublic(createFsBoardChatStorage(parseRef(storeRef).value));
  *   const result = store.append({ params: { cardId: 'c1' }, body: { role: 'user', text: 'hello' } });
  *   const result = store.readAll({ params: { cardId: 'c1' } });
  *   const result = store.readAfter({ params: { cardId: 'c1', cursor: '<id>' } });

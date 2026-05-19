@@ -5,6 +5,7 @@ import { MemoryStore, KVStorageStore } from '../../stores/index.js';
 import { invokeRefSync } from './execution-adapter.js';
 import { createFsKvStorage } from './storage-fs-adapters.js';
 import type { StepMachineStore, StepMachineState } from '../../step-machine/types.js';
+import { parseRef, serializeRef } from '../common/storage-interface.js';
 
 export class CliExitError extends Error {
   constructor(public readonly code: number, message?: string) {
@@ -19,6 +20,7 @@ type StoreContext = {
   storeType: 'memory' | 'file';
   storeDir: string | undefined;
   pauseFilePath: string | undefined;
+  persistRuntimeRef: string | undefined;
   store: StepMachineStore;
 };
 
@@ -33,8 +35,7 @@ export async function cli(args: string[]): Promise<void> {
   const {
     flowArg,
     dataArg,
-    storeArg,
-    storeDirArg,
+    persistRuntimeRefArg,
     resumeRequested,
     pauseRequested,
     statusRequested,
@@ -48,7 +49,7 @@ export async function cli(args: string[]): Promise<void> {
     throw new Error('[step-machine-cli] --initial-data cannot be combined with --resume.');
   }
 
-  const storeContext = createStoreContext(storeArg, storeDirArg);
+  const storeContext = createStoreContext(persistRuntimeRefArg);
 
   if (statusRequested) {
     await printStoreStatus(storeContext);
@@ -93,7 +94,7 @@ export async function cli(args: string[]): Promise<void> {
   if (resumeRequested) {
     runIdToResume = await resolveRunIdToResume(storeContext);
     if (!runIdToResume) {
-      console.warn('[step-machine-cli] No paused run found in store directory.');
+      console.warn('[step-machine-cli] No paused run found in the persisted runtime store.');
       console.log(JSON.stringify({ status: 'noop', reason: 'no-paused-run' }, null, 2));
       return;
     }
@@ -136,7 +137,7 @@ export async function cli(args: string[]): Promise<void> {
 }
 
 function parseCliArgs(args: string[]) {
-  const valueFlags = new Set(['--initial-data', '--store', '--store-dir']);
+  const valueFlags = new Set(['--initial-data', '--persist-runtime-ref']);
   const values: Record<string, string> = {};
   const positionals = [];
   let help = false;
@@ -191,8 +192,7 @@ function parseCliArgs(args: string[]) {
     help,
     flowArg: positionals[0],
     dataArg: values['--initial-data'],
-    storeArg: String(values['--store'] ?? 'memory').toLowerCase(),
-    storeDirArg: values['--store-dir'],
+    persistRuntimeRefArg: values['--persist-runtime-ref'],
     resumeRequested,
     pauseRequested,
     statusRequested,
@@ -205,29 +205,29 @@ function resolveInputPath(inputPath: string): string {
     : path.resolve(process.cwd(), inputPath);
 }
 
-function createStoreContext(storeType: string, storeDirArg: string | undefined): StoreContext {
-  if (storeType !== 'memory' && storeType !== 'file') {
-    throw new Error(`[step-machine-cli] Invalid --store value "${storeType}". Expected "memory" or "file".`);
-  }
-
-  if (storeType === 'memory') {
+function createStoreContext(persistRuntimeRefArg: string | undefined): StoreContext {
+  if (!persistRuntimeRefArg) {
     return {
-      storeType,
+      storeType: 'memory',
       storeDir: undefined,
       pauseFilePath: undefined,
+      persistRuntimeRef: undefined,
       store: new MemoryStore(),
     };
   }
 
-  if (!storeDirArg || storeDirArg.trim().length === 0) {
-    throw new Error('[step-machine-cli] --store file requires --store-dir <directory>.');
+  const parsedRef = parseRef(persistRuntimeRefArg);
+  if (parsedRef.kind !== 'fs-path') {
+    throw new Error(`[step-machine-cli] --persist-runtime-ref must be an fs-path ref. Received kind "${parsedRef.kind}".`);
   }
 
-  const storeDir = resolveInputPath(storeDirArg);
+  const storeDir = resolveInputPath(parsedRef.value);
+  const persistRuntimeRef = serializeRef({ kind: 'fs-path', value: storeDir });
   return {
-    storeType,
+    storeType: 'file',
     storeDir,
     pauseFilePath: path.join(storeDir, PAUSE_FILE_NAME),
+    persistRuntimeRef,
     store: new KVStorageStore(createFsKvStorage(storeDir)),
   };
 }
@@ -266,12 +266,12 @@ function clearPauseRequest(storeContext: StoreContext): void {
 
 async function requestPause(storeContext: StoreContext): Promise<void> {
   if (storeContext.storeType !== 'file' || !storeContext.pauseFilePath) {
-    throw new Error('[step-machine-cli] --pause requires --store file --store-dir <directory>.');
+    throw new Error('[step-machine-cli] --pause requires --persist-runtime-ref <ref>.');
   }
 
   const states = await listRunStates(storeContext.store);
   if (states.length === 0) {
-    console.warn('[step-machine-cli] No runs found in store directory. Pause is a no-op.');
+    console.warn('[step-machine-cli] No runs found in the persisted runtime store. Pause is a no-op.');
     console.log(JSON.stringify({ status: 'noop', reason: 'no-runs' }, null, 2));
     return;
   }
@@ -285,7 +285,7 @@ async function requestPause(storeContext: StoreContext): Promise<void> {
 
   fs.mkdirSync(storeContext.storeDir!, { recursive: true });
   fs.writeFileSync(storeContext.pauseFilePath, JSON.stringify({ requestedAt: Date.now() }), 'utf-8');
-  console.log(JSON.stringify({ status: 'pause-requested', storeDir: storeContext.storeDir }, null, 2));
+  console.log(JSON.stringify({ status: 'pause-requested', persistRuntimeRef: storeContext.persistRuntimeRef }, null, 2));
 }
 
 async function resolveRunIdToResume(storeContext: StoreContext): Promise<string | undefined> {
@@ -317,13 +317,13 @@ async function markRunPaused(store: StepMachineStore, runId: string): Promise<St
 
 async function printStoreStatus(storeContext: StoreContext): Promise<void> {
   if (storeContext.storeType !== 'file') {
-    throw new Error('[step-machine-cli] --status requires --store file --store-dir <directory>.');
+    throw new Error('[step-machine-cli] --status requires --persist-runtime-ref <ref>.');
   }
 
   const states = await listRunStates(storeContext.store);
   const summary = {
     store: 'file',
-    storeDir: storeContext.storeDir,
+    persistRuntimeRef: storeContext.persistRuntimeRef,
     pauseRequested: hasPauseRequest(storeContext),
     totalRuns: states.length,
     runs: states.map((s) => ({
@@ -383,16 +383,16 @@ function buildStepHandlers(flow: unknown, flowDir: string) {
 }
 
 function printUsage() {
-  console.error('Usage: step-machine-cli <step-flow.yaml> [--initial-data <json>] [--store <memory|file>] [--store-dir <directory>] [--resume]');
-  console.error('       step-machine-cli --store file --store-dir <directory> --pause');
-  console.error('       step-machine-cli --store file --store-dir <directory> --status');
+  console.error('Usage: step-machine-cli <step-flow.yaml> [--initial-data <json>] [--persist-runtime-ref <ref>] [--resume]');
+  console.error('       step-machine-cli --persist-runtime-ref <ref> --pause');
+  console.error('       step-machine-cli --persist-runtime-ref <ref> --status');
   console.error('');
   console.error('Example:');
   console.error('  step-machine-cli examples/cli/step-machine-demo/two-step-math.flow.yaml --initial-data "{\"a\":3,\"b\":4}"');
-  console.error('  step-machine-cli ./flow.yaml --store file --store-dir ./.runs');
-  console.error('  step-machine-cli ./flow.yaml --store file --store-dir ./.runs --resume');
-  console.error('  step-machine-cli --store file --store-dir ./.runs --pause');
-  console.error('  step-machine-cli --store file --store-dir ./.runs --status');
+  console.error('  step-machine-cli ./flow.yaml --persist-runtime-ref <b64-fs-path-ref>');
+  console.error('  step-machine-cli ./flow.yaml --persist-runtime-ref <b64-fs-path-ref> --resume');
+  console.error('  step-machine-cli --persist-runtime-ref <b64-fs-path-ref> --pause');
+  console.error('  step-machine-cli --persist-runtime-ref <b64-fs-path-ref> --status');
 }
 
 

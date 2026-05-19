@@ -822,6 +822,7 @@ export function createFsCardStorageAdapter(kvDir: string): {
   writeIndex(index: CardIndex): void;
   readCard(key: string): LiveCard | null;
   writeCard(key: string, card: LiveCard): string;
+  removeCard(key: string): void;
   cardExists(key: string): boolean;
   defaultCardKey(cardId: string): string;
 } {
@@ -839,6 +840,9 @@ export function createFsCardStorageAdapter(kvDir: string): {
     writeCard(id, card) {
       json.write(id, card);
       return computeStableJsonHash(card);
+    },
+    removeCard(id) {
+      json.delete(id);
     },
     cardExists(id) {
       return json.read(id) !== null;

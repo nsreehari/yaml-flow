@@ -380,6 +380,7 @@ export function createBoardLiveCardsPublic(
       writeIndex(index: CardIndex): void { kv.write('_index', index); },
       readCard(id: string): LiveCard | null { return kv.read(id) as LiveCard | null; },
       writeCard(id: string, card: LiveCard): string { kv.write(id, card); return adapter.hashFn(card); },
+      removeCard(id: string): void { kv.delete(id); },
       cardExists(id: string): boolean { return kv.read(id) !== null; },
       defaultCardKey(cardId: string): string { return cardId; },
     };
@@ -1035,6 +1036,7 @@ export function createBoardLiveCardsNonCorePublic(
       writeIndex(index: CardIndex): void { kv.write('_index', index); },
       readCard(id: string): LiveCard | null { return kv.read(id) as LiveCard | null; },
       writeCard(id: string, card: LiveCard): string { kv.write(id, card); return adapter.hashFn(card); },
+      removeCard(id: string): void { kv.delete(id); },
       cardExists(id: string): boolean { return kv.read(id) !== null; },
       defaultCardKey(cardId: string): string { return cardId; },
     };

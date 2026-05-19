@@ -6,16 +6,16 @@
  *
  * Usage (all commands read a JSON envelope from stdin unless flags override):
  *
- *   chat-store append   --board-dir <dir> --card-id <id> --role <role> --text <text> [--files-json <json>]
- *   chat-store read-all --board-dir <dir> --card-id <id>
- *   chat-store read-after --board-dir <dir> --card-id <id> [--cursor <cursor>]
- *   chat-store clear    --board-dir <dir> --card-id <id>
- *   chat-store set-processing --board-dir <dir> --card-id <id> --active <true|false>
- *   chat-store is-processing  --board-dir <dir> --card-id <id>
- *   chat-store get-config --board-dir <dir> --card-id <id>
- *   chat-store set-config --board-dir <dir> --card-id <id> [--system-prompt <text>]
+ *   chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>]
+ *   chat-store read-all --store-ref <ref> --card-id <id>
+ *   chat-store read-after --store-ref <ref> --card-id <id> [--cursor <cursor>]
+ *   chat-store clear    --store-ref <ref> --card-id <id>
+ *   chat-store set-processing --store-ref <ref> --card-id <id> --active <true|false>
+ *   chat-store is-processing  --store-ref <ref> --card-id <id>
+ *   chat-store get-config --store-ref <ref> --card-id <id>
+ *   chat-store set-config --store-ref <ref> --card-id <id> [--system-prompt <text>]
  *
- * Alternative: pipe a JSON object with { boardDir, cardId, ... command fields } to stdin.
+ * Alternative: pass --stdin and pipe a JSON object with { storeRef, cardId, ... command fields } to stdin.
  * The `command` field selects the operation when using stdin-only mode.
  */
 
@@ -26,6 +26,7 @@ import {
   type ChatStoreCommandBatchEnvelope,
   type ChatStoreCommandEnvelope,
 } from '../common/chat-store-lib-public.js';
+import { parseRef } from '../common/storage-interface.js';
 
 type CommandResult = { status: string; data?: unknown; error?: string };
 type CommandEnvelope = Record<string, unknown>;
@@ -53,42 +54,44 @@ async function readStdin(): Promise<string> {
 const HELP = [
   'chat-store — chat history and state operations for a board card',
   '',
-  '  chat-store append --board-dir <dir> --card-id <id> --role <role> --text <text> [--files-json <json>]',
+  '  chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>]',
   '    Append a message. Prints { id } on success.',
   '',
-  '  chat-store read-all --board-dir <dir> --card-id <id>',
+  '  chat-store read-all --store-ref <ref> --card-id <id>',
   '    Print all messages as a JSON array.',
   '',
-  '  chat-store read-after --board-dir <dir> --card-id <id> [--cursor <cursor>]',
+  '  chat-store read-after --store-ref <ref> --card-id <id> [--cursor <cursor>]',
   '    Print messages after cursor as { records, cursor }.',
   '',
-  '  chat-store clear --board-dir <dir> --card-id <id>',
+  '  chat-store clear    --store-ref <ref> --card-id <id>',
   '    Remove all messages for the card.',
   '',
-  '  chat-store set-processing --board-dir <dir> --card-id <id> --active <true|false>',
+  '  chat-store set-processing --store-ref <ref> --card-id <id> --active <true|false>',
   '    Set or clear the processing flag.',
   '',
-  '  chat-store is-processing --board-dir <dir> --card-id <id>',
+  '  chat-store is-processing  --store-ref <ref> --card-id <id>',
   '    Print { active: true|false }.',
   '',
-  '  chat-store get-config --board-dir <dir> --card-id <id>',
+  '  chat-store get-config --store-ref <ref> --card-id <id>',
   '    Print the chat config object.',
   '',
-  '  chat-store set-config --board-dir <dir> --card-id <id> [--system-prompt <text>]',
+  '  chat-store set-config --store-ref <ref> --card-id <id> [--system-prompt <text>]',
   '    Patch the chat config. Extra fields can be piped as JSON to stdin.',
   '',
-  '  Alternatively, pipe a JSON object to stdin:',
-  '    { "command": "<cmd>", "boardDir": "<dir>", "cardId": "<id>", ... }',
+  '  Alternatively, use --stdin and pipe a JSON object to stdin:',
+  '    { "command": "<cmd>", "storeRef": "<ref>", "cardId": "<id>", ... }',
   '  Or pipe a command envelope with defaults plus sequential commands:',
-  '    { "boardDir": "<dir>", "cardId": "<id>", "commands": [{ "command": "append", ... }, { "command": "set-processing", ... }] }',
+  '    { "storeRef": "<ref>", "cardId": "<id>", "commands": [{ "command": "append", ... }, { "command": "set-processing", ... }] }',
 ].join('\n');
 
+function createStorePublic(storeRef: string) {
+  return createChatStorePublic(createFsBoardChatStorage(parseRef(storeRef).value));
+}
+
 export async function cli(argv: string[]): Promise<void> {
-  // ── stdin-JSON mode ─────────────────────────────────────────────────────
-  // If the process has piped stdin and argv is empty (or only --stdin), read
-  // the entire request from a single JSON envelope:
-  //   { command, boardDir, cardId, role?, text?, files?, cursor?, active?, systemPrompt?, ... }
-  if (argv.length === 0 || argv[0] === '--stdin') {
+  // If the process has piped stdin and argv starts with --stdin, read the
+  // entire request from a single JSON envelope.
+  if (argv[0] === '--stdin') {
     const raw = await readStdin();
     if (!raw.trim()) {
       console.error(HELP);
@@ -101,25 +104,18 @@ export async function cli(argv: string[]): Promise<void> {
       console.error('chat-store: stdin is not valid JSON');
       process.exit(1);
     }
-    const boardDir = envelope.boardDir as string | undefined;
-    if (!boardDir) {
-      console.error('chat-store: stdin envelope missing "boardDir"');
+    const storeRef = envelope.storeRef as string | undefined;
+    if (!storeRef) {
+      console.error('chat-store: stdin envelope missing "storeRef"');
       process.exit(1);
     }
-    const chatsSubdir = envelope.chatsSubdir as string | undefined;
-    const kvSubdir = envelope.kvSubdir as string | undefined;
-    const chatOpts: { chatsSubdir?: string; kvSubdir?: string } = {};
-    if (chatsSubdir !== undefined) chatOpts.chatsSubdir = chatsSubdir;
-    if (kvSubdir !== undefined) chatOpts.kvSubdir = kvSubdir;
-    const storePublic = createChatStorePublic(createFsBoardChatStorage(boardDir, chatOpts));
+    const storePublic = createStorePublic(storeRef);
     if (Array.isArray(envelope.commands)) {
-      const batchResult = storePublic.runBatch(toBatchEnvelope(envelope));
-      printResult(batchResult);
+      printResult(storePublic.runBatch(toBatchEnvelope(envelope)));
       return;
     }
 
-    const result = storePublic.run(toCommandEnvelope(envelope));
-    printResult(result);
+    printResult(storePublic.run(toCommandEnvelope(envelope)));
     return;
   }
 
@@ -131,92 +127,74 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  const boardDir = requireFlag(rest, '--board-dir', `chat-store ${cmd} --board-dir <dir> --card-id <id>`);
+  const storeRef = requireFlag(rest, '--store-ref', `chat-store ${cmd} --store-ref <b64-ref> --card-id <id>`);
   const cardId = optFlag(rest, '--card-id');
-  const storePublic = createChatStorePublic(createFsBoardChatStorage(boardDir));
+  const storePublic = createStorePublic(storeRef);
 
-  // ── append ───────────────────────────────────────────────────────────────
   if (cmd === 'append') {
-    const role = requireFlag(rest, '--role', 'chat-store append --board-dir <dir> --card-id <id> --role <role> --text <text>');
-    const text = requireFlag(rest, '--text', 'chat-store append --board-dir <dir> --card-id <id> --role <role> --text <text>');
+    const role = requireFlag(rest, '--role', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
+    const text = requireFlag(rest, '--text', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
     const filesJson = optFlag(rest, '--files-json');
     const files = filesJson ? (JSON.parse(filesJson) as unknown[]) : [];
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store append --board-dir <dir> --card-id <id> --role <role> --text <text>');
-    const result = storePublic.append({ params: { cardId: cid }, body: { role, text, files } });
-    printResult(result);
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
+    printResult(storePublic.append({ params: { cardId: cid }, body: { role, text, files } }));
     return;
   }
 
-  // ── read-all ─────────────────────────────────────────────────────────────
   if (cmd === 'read-all') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-all --board-dir <dir> --card-id <id>');
-    const result = storePublic.readAll({ params: { cardId: cid } });
-    printResult(result);
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-all --store-ref <ref> --card-id <id>');
+    printResult(storePublic.readAll({ params: { cardId: cid } }));
     return;
   }
 
-  // ── read-after ───────────────────────────────────────────────────────────
   if (cmd === 'read-after') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-after --board-dir <dir> --card-id <id>');
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-after --store-ref <ref> --card-id <id>');
     const cursor = optFlag(rest, '--cursor') ?? null;
-    const result = storePublic.readAfter({ params: { cardId: cid }, body: { cursor } });
-    printResult(result);
+    printResult(storePublic.readAfter({ params: { cardId: cid }, body: { cursor } }));
     return;
   }
 
-  // ── clear ────────────────────────────────────────────────────────────────
   if (cmd === 'clear') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store clear --board-dir <dir> --card-id <id>');
-    const result = storePublic.clear({ params: { cardId: cid } });
-    printResult(result);
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store clear --store-ref <ref> --card-id <id>');
+    printResult(storePublic.clear({ params: { cardId: cid } }));
     return;
   }
 
-  // ── set-processing ───────────────────────────────────────────────────────
   if (cmd === 'set-processing') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store set-processing --board-dir <dir> --card-id <id> --active <true|false>');
-    const activeStr = requireFlag(rest, '--active', 'chat-store set-processing --board-dir <dir> --card-id <id> --active <true|false>');
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store set-processing --store-ref <ref> --card-id <id> --active <true|false>');
+    const activeStr = requireFlag(rest, '--active', 'chat-store set-processing --store-ref <ref> --card-id <id> --active <true|false>');
     if (activeStr !== 'true' && activeStr !== 'false') {
       console.error('chat-store set-processing: --active must be "true" or "false"');
       process.exit(1);
     }
-    const result = storePublic.setProcessing({ params: { cardId: cid }, body: { active: activeStr === 'true' } });
-    printResult(result);
+    printResult(storePublic.setProcessing({ params: { cardId: cid }, body: { active: activeStr === 'true' } }));
     return;
   }
 
-  // ── is-processing ────────────────────────────────────────────────────────
   if (cmd === 'is-processing') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store is-processing --board-dir <dir> --card-id <id>');
-    const result = storePublic.isProcessing({ params: { cardId: cid } });
-    printResult(result);
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store is-processing --store-ref <ref> --card-id <id>');
+    printResult(storePublic.isProcessing({ params: { cardId: cid } }));
     return;
   }
 
-  // ── get-config ───────────────────────────────────────────────────────────
   if (cmd === 'get-config') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store get-config --board-dir <dir> --card-id <id>');
-    const result = storePublic.getConfig({ params: { cardId: cid } });
-    printResult(result);
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store get-config --store-ref <ref> --card-id <id>');
+    printResult(storePublic.getConfig({ params: { cardId: cid } }));
     return;
   }
 
-  // ── set-config ───────────────────────────────────────────────────────────
   if (cmd === 'set-config') {
-    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store set-config --board-dir <dir> --card-id <id>');
+    const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store set-config --store-ref <ref> --card-id <id>');
     const systemPrompt = optFlag(rest, '--system-prompt');
-    // Also accept extra fields from stdin
     let patch: Record<string, unknown> = {};
     if (systemPrompt !== undefined) patch.systemPrompt = systemPrompt;
-    // Try reading any additional fields from stdin if there's piped input
     if (!process.stdin.isTTY) {
       const extra = await readStdin();
       if (extra.trim()) {
         try { Object.assign(patch, JSON.parse(extra) as Record<string, unknown>); } catch { /* ignore */ }
       }
     }
-    const result = storePublic.setConfig({ params: { cardId: cid }, body: patch });
-    printResult(result);
+    printResult(storePublic.setConfig({ params: { cardId: cid }, body: patch }));
     return;
   }
 
@@ -225,25 +203,23 @@ export async function cli(argv: string[]): Promise<void> {
 }
 
 function toCommandEnvelope(envelope: CommandEnvelope): ChatStoreCommandEnvelope {
-  const { boardDir: _boardDir, commands: _commands, ...command } = envelope;
+  const { storeRef: _storeRef, commands: _commands, ...command } = envelope;
   return command as ChatStoreCommandEnvelope;
 }
 
 function toBatchEnvelope(envelope: CommandEnvelope): ChatStoreCommandBatchEnvelope {
-  const { boardDir: _boardDir, commands, cardId } = envelope;
+  const { storeRef: _storeRef, commands, cardId } = envelope;
   return {
     cardId: typeof cardId === 'string' ? cardId : undefined,
     commands: Array.isArray(commands)
       ? commands.map((item) => {
           if (!item || typeof item !== 'object' || Array.isArray(item)) return item as ChatStoreCommandEnvelope;
-          const { boardDir: _itemBoardDir, commands: _itemCommands, ...command } = item as CommandEnvelope;
+          const { storeRef: _itemStoreRef, commands: _itemCommands, ...command } = item as CommandEnvelope;
           return command as ChatStoreCommandEnvelope;
         })
       : [],
   };
 }
-
-// ── output helpers ──────────────────────────────────────────────────────────
 
 function printResult(result: CommandResult): void {
   if (result.status !== 'success') {
@@ -254,8 +230,6 @@ function printResult(result: CommandResult): void {
     process.stdout.write(JSON.stringify(result.data, null, 2) + '\n');
   }
 }
-
-// ── entry point ─────────────────────────────────────────────────────────────
 
 const isMain = process.argv[1] && resolvePath(process.argv[1]) === resolvePath(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 if (isMain) {

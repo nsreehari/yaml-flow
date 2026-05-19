@@ -181,6 +181,7 @@ function buildRuntime(adapter: ReturnType<typeof createTestAdapter>) {
     writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
     readCard: (id: string) => preloadKv.read(id),
     writeCard: (id: string, card: unknown) => { preloadKv.write(id, card); return id; },
+    removeCard: (id: string) => preloadKv.delete(id),
     cardExists: (id: string) => preloadKv.read(id) !== null,
     defaultCardKey: (id: string) => id,
   } as any));

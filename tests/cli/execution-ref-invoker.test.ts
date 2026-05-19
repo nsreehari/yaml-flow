@@ -93,12 +93,13 @@ describe('ExecutionRef public invoker API', () => {
       howToRun: 'local-node',
       whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'chat-store-cli.js' }),
       argsMassaging: {
-        stdinTemplate: "{ 'command': 'append', 'boardDir': boardDir, 'cardId': cardId, 'role': 'assistant', 'text': text, 'files': [] }",
+        cmdTemplate: ["'--stdin'"],
+        stdinTemplate: "{ 'command': 'append', 'storeRef': storeRef, 'cardId': cardId, 'role': 'assistant', 'text': text, 'files': [] }",
       },
     };
 
     const appendResult = invokeExecutionRefSync(appendRef, {
-      boardDir: tmpDir,
+      storeRef: serializeRef({ kind: 'fs-path', value: tmpDir }),
       cardId: 'card-yaml-flow-cli',
       text: 'hello from yaml-flow-cli',
     });
@@ -112,12 +113,13 @@ describe('ExecutionRef public invoker API', () => {
       howToRun: 'local-node',
       whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'chat-store-cli.js' }),
       argsMassaging: {
-        stdinTemplate: "{ 'command': 'read-all', 'boardDir': boardDir, 'cardId': cardId }",
+        cmdTemplate: ["'--stdin'"],
+        stdinTemplate: "{ 'command': 'read-all', 'storeRef': storeRef, 'cardId': cardId }",
       },
     };
 
     const readResult = invokeExecutionRefSync(readRef, {
-      boardDir: tmpDir,
+      storeRef: serializeRef({ kind: 'fs-path', value: tmpDir }),
       cardId: 'card-yaml-flow-cli',
     });
 

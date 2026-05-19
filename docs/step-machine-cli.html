@@ -86,9 +86,9 @@
 
     <section class="card">
       <h2>Invocation</h2>
-      <pre><code>step-machine-cli &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--initial-data &lt;json&gt;] [--store &lt;memory|file&gt;] [--store-dir &lt;dir&gt;] [--resume]
-    step-machine-cli --store file --store-dir &lt;dir&gt; --pause
-    step-machine-cli --store file --store-dir &lt;dir&gt; --status</code></pre>
+      <pre><code>step-machine-cli &lt;step-flow.yaml&gt; [--handlers &lt;step-handlers.js&gt;] [--initial-data &lt;json&gt;] [--persist-runtime-ref &lt;ref&gt;] [--resume]
+    step-machine-cli --persist-runtime-ref &lt;ref&gt; --pause
+    step-machine-cli --persist-runtime-ref &lt;ref&gt; --status</code></pre>
       <p class="muted">Equivalent repo wrapper usage: <code>node step-machine-cli.js ...</code> with the same flags.</p>
       <p class="muted">When authoring an ExecutionRef that targets the packaged yaml-flow CLI, prefer <code>whatToRun: { kind: "yaml-flow-cli", value: "step-machine-cli.js" }</code> over a script path.</p>
     </section>
@@ -104,10 +104,10 @@
           <tr><td><code>--handlers &lt;step-handlers.js&gt;</code></td><td>Optional module exporting inline step handlers.</td><td>Used when steps declare <code>handler.inline</code>.</td></tr>
           <tr><td><code>--initial-data &lt;json&gt;</code></td><td>Optional initial input object for the run.</td><td>Must parse as a JSON object, not an array or scalar.</td></tr>
           <tr><td><code>--store &lt;memory|file&gt;</code></td><td>Optional store backend selector.</td><td>Default is <code>memory</code>. Use <code>file</code> for durable run state.</td></tr>
-          <tr><td><code>--store-dir &lt;dir&gt;</code></td><td>Directory for file-backed run state.</td><td>Required when <code>--store file</code> is used.</td></tr>
+          <tr><td><code>--persist-runtime-ref &lt;ref&gt;</code></td><td>FS-path ref for persisted runtime state.</td><td>When omitted, the CLI uses in-memory runtime state.</td></tr>
           <tr><td><code>--resume</code></td><td>Resume the latest paused run from the configured store directory.</td><td>No run ID is required. Cannot be combined with <code>--initial-data</code>, <code>--pause</code>, or <code>--status</code>.</td></tr>
-          <tr><td><code>--pause</code></td><td>Request a pause via the store directory sentinel file.</td><td>Store-level operation; used with <code>--store file --store-dir</code>. Cannot be combined with flow execution flags.</td></tr>
-          <tr><td><code>--status</code></td><td>Print store-level run status summary for the configured store directory.</td><td>Store-level operation; used with <code>--store file --store-dir</code>.</td></tr>
+          <tr><td><code>--pause</code></td><td>Request a pause via the persisted runtime sentinel file.</td><td>Store-level operation; used with <code>--persist-runtime-ref</code>. Cannot be combined with flow execution flags.</td></tr>
+          <tr><td><code>--status</code></td><td>Print store-level run status summary for the configured persisted runtime ref.</td><td>Store-level operation; used with <code>--persist-runtime-ref</code>.</td></tr>
         </tbody>
       </table>
     </section>

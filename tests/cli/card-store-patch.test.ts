@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
+import { createFsJsonStorage } from '../../src/cli/node/storage-fs-adapters.js';
 
 describe('card-store patch API', () => {
   let tmpDir = '';
@@ -45,5 +46,21 @@ describe('card-store patch API', () => {
     const store = freshStore();
     expect(store.patch({ params: { path: 'x.y' }, body: { value: 1 } }).status).toBe('fail');
     expect(store.patch({ params: { id: 'c1' }, body: { value: 1 } }).status).toBe('fail');
+  });
+
+  it('deletes both the index entry and the backing card file', () => {
+    const store = freshStore();
+    const json = createFsJsonStorage(tmpDir);
+
+    expect(store.set({ body: { id: 'c1', title: 'hello' } }).status).toBe('success');
+    expect(json.read('_index')).not.toBeNull();
+    expect(json.read('c1')).toEqual(expect.objectContaining({ id: 'c1', title: 'hello' }));
+
+    const delResult = store.del({ body: { ids: ['c1'] } });
+    expect(delResult.status).toBe('success');
+
+    expect(json.read('c1')).toBeNull();
+    expect(store.get({ params: { id: 'c1' } }).status).toBe('fail');
+    expect(json.read('_index')).toEqual({});
   });
 });

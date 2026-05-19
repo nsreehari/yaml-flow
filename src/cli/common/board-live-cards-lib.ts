@@ -77,6 +77,7 @@ export interface CardStorageAdapter {
   readCard(key: string): LiveCard | null;
   /** Write card content; returns checksum of what was written. */
   writeCard(key: string, card: LiveCard): string;
+  removeCard(key: string): void;
   cardExists(key: string): boolean;
   defaultCardKey(cardId: string): string;
 }
@@ -219,7 +220,9 @@ export function createCardStore(adapter: CardStorageAdapter, onWarn?: (msg: stri
 
     removeCard(id: string): void {
       const index = loadIndex();
-      if (!index[id]) return;
+      const entry = index[id];
+      if (!entry) return;
+      adapter.removeCard(entry.key);
       delete index[id];
       adapter.writeIndex(index);
     },

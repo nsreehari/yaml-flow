@@ -107,6 +107,7 @@ beforeAll(async () => {
       preloadKv.write(id, card);
       return id;
     },
+    removeCard: (id: string) => preloadKv.delete(id),
     cardExists: (id: string) => preloadKv.read(id) !== null,
     defaultCardKey: (id: string) => id,
   } as any));
@@ -367,6 +368,7 @@ describe('platform-free server runtime (Node host)', () => {
         preloadKv.write(id, card);
         return id;
       },
+      removeCard: (id: string) => preloadKv.delete(id),
       cardExists: (id: string) => preloadKv.read(id) !== null,
       defaultCardKey: (id: string) => id,
     } as any));
@@ -460,6 +462,7 @@ describe('platform-free server runtime (Node host)', () => {
         preloadKv.write(id, card);
         return id;
       },
+      removeCard: (id: string) => preloadKv.delete(id),
       cardExists: (id: string) => preloadKv.read(id) !== null,
       defaultCardKey: (id: string) => id,
     } as any));

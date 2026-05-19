@@ -627,6 +627,9 @@ export function createLocalStorageCardStorageAdapter(prefix: string): CardStorag
       json.write(id, card);
       return computeStableJsonHashBrowser(card);
     },
+    removeCard(id: string): void {
+      json.delete(id);
+    },
     cardExists(id: string): boolean {
       return json.read(id) !== null;
     },
