@@ -653,6 +653,11 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
+  function drainFireAndForget(): void {
+    void drain();
+    adapter.requestProcessAccumulated?.();
+  }
+
   function init(input: CommandInput): CommandResult {
     try {
       // cardStoreRef is required — create a card store with card-store-cli first
@@ -695,7 +700,7 @@ export function createBoardLiveCardsPublic(
       const id = input.params?.['id'] as string | undefined;
       if (!id) return fail('removeCard requires params.id');
       appendJournalEvent({ type: 'task-removal', taskName: id, timestamp: nowIso() });
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -705,7 +710,7 @@ export function createBoardLiveCardsPublic(
       const id = input.params?.['id'] as string | undefined;
       if (!id) return fail('retrigger requires params.id');
       appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -746,7 +751,7 @@ export function createBoardLiveCardsPublic(
         if (restart) appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
       }
 
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -760,7 +765,7 @@ export function createBoardLiveCardsPublic(
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-failed', taskName: decoded.taskName, error, timestamp: nowIso() });
       try { archive().stream('exec-history').append({ taskName: decoded.taskName, status: 'failed', error, completedAt: nowIso() }); } catch { /* best-effort */ }
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -774,7 +779,7 @@ export function createBoardLiveCardsPublic(
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-progress', taskName: decoded.taskName, update, timestamp: nowIso() });
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -807,7 +812,7 @@ export function createBoardLiveCardsPublic(
         update: { bindTo: b, outputFile: d, fetchedAt, deliveryToken, sourceChecksum: cs, rqt },
         timestamp: fetchedAt,
       });
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }
@@ -830,7 +835,7 @@ export function createBoardLiveCardsPublic(
         update: { bindTo: b, outputFile: d, failure: true, reason, sourceChecksum: cs, rqt },
         timestamp: nowIso(),
       });
-      void drain();
+      drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
   }

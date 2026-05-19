@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -185,6 +186,21 @@ async function pollBoard(dir: string, pred: (tasks: Record<string, unknown>) => 
   throw new Error('pollBoard timed out');
 }
 
+async function pollBoardStatus(dir: string, pred: (status: { cards?: Array<{ id?: string }> }) => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const statusPath = path.join(dir, '.output', 'status.json');
+  let lastSeen = 'missing';
+  while (Date.now() < deadline) {
+    if (fs.existsSync(statusPath)) {
+      lastSeen = fs.readFileSync(statusPath, 'utf-8');
+      const status = JSON.parse(lastSeen) as { cards?: Array<{ id?: string }> };
+      if (pred(status)) return;
+    }
+    await ticks(100);
+  }
+  throw new Error(`pollBoardStatus timed out; lastSeen=${lastSeen}`);
+}
+
 async function pollForFile(filePath: string, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -206,6 +222,30 @@ function schemaErrors(validate: { errors?: Array<{ instancePath?: string; messag
   return (validate.errors ?? [])
     .map((err) => `${err.instancePath || '/'}: ${err.message || 'unknown error'}`)
     .join('\n');
+}
+
+function runBoardCli(args: string[]): void {
+  execFileSync(process.execPath, [
+    path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
+    ...args,
+  ], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    windowsHide: true,
+  });
+}
+
+function runTsxEval(script: string): void {
+  execFileSync(process.execPath, [
+    path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    '-e',
+    script,
+  ], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    windowsHide: true,
+  });
 }
 
 // ============================================================================
@@ -750,6 +790,54 @@ describe('cli remove-card', () => {
     await pollBoard(dir, t => !t['temp']);
     expect(removeResult.status).toBe('success');
   });
+
+  it('eventually removes the card from board status after CLI remove-card', async () => {
+    const script = [
+      "(async () => {",
+      "  const fs = await import('node:fs');",
+      "  const os = await import('node:os');",
+      "  const path = await import('node:path');",
+      "  const cp = await import('node:child_process');",
+      "  const pub = await import('./src/cli/common/board-live-cards-public.js');",
+      "  const fsAdapter = await import('./src/cli/node/fs-board-adapter.js');",
+      "  const cardStorePub = await import('./src/cli/common/card-store-lib-public.js');",
+      "  const lib = await import('./src/cli/common/board-live-cards-lib.js');",
+      "  const storage = await import('./src/cli/node/storage-fs-adapters.js');",
+      "  const storageIfc = await import('./src/cli/common/storage-interface.js');",
+      "  const testDir = path.resolve('tests/cli');",
+      "  const repoRoot = process.cwd();",
+      "  const ref = (d) => ({ kind: 'fs-path', value: d });",
+      "  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));",
+      "  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rmcard-test-')), 'board');",
+      "  const br = ref(dir);",
+      "  try {",
+      "    const board = pub.createBoardLiveCardsPublic(br, fsAdapter.createFsBoardPlatformAdapter(br, testDir, { onWarn: () => {} }));",
+      "    board.init({ params: { cardStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.cards') }), outputsStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.output') }) } });",
+      "    cardStorePub.createCardStorePublic(lib.createCardStore(storage.createFsCardStorageAdapter(path.join(dir, '.cards')))).set({ body: { id: 'temp', card_data: {} } });",
+      "    board.upsertCard({ params: { cardId: 'temp' } });",
+      "    const statusPath = path.join(dir, '.output', 'status.json');",
+      "    let sawTemp = false;",
+      "    for (let i = 0; i < 40; i++) {",
+      "      const statusText = fs.existsSync(statusPath) ? fs.readFileSync(statusPath, 'utf8') : 'missing';",
+      "      if (statusText.includes('\\\"temp\\\"')) { sawTemp = true; break; }",
+      "      await sleep(250);",
+      "    }",
+      "    if (!sawTemp) throw new Error('pre-remove status never showed temp');",
+      "    cp.execFileSync(process.execPath, [path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'), 'remove-card', '--base-ref', storageIfc.serializeRef(br), '--id', 'temp'], { cwd: repoRoot, stdio: 'pipe', windowsHide: true });",
+      "    for (let i = 0; i < 40; i++) {",
+      "      const statusText = fs.existsSync(statusPath) ? fs.readFileSync(statusPath, 'utf8') : 'missing';",
+      "      if (statusText.indexOf('\\\"temp\\\"') === -1) return;",
+      "      await sleep(250);",
+      "    }",
+      "    throw new Error(`post-remove status never converged: ${fs.existsSync(statusPath) ? fs.readFileSync(statusPath, 'utf8') : 'missing'}`);",
+      "  } finally {",
+      "    fs.rmSync(path.dirname(dir), { recursive: true, force: true });",
+      "  }",
+      "})().catch((err) => { console.error(err); process.exit(1); });",
+    ].join('\n');
+
+    runTsxEval(script);
+  }, 10000);
 });
 
 // ============================================================================

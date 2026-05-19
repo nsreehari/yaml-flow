@@ -294,9 +294,13 @@ export function buildBoardCliInvocation(
   }
 
   const tsPath = path.join(cliDir, 'board-live-cards-cli.ts');
-  const tsxMjs = path.join(cliDir, '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const tsxBin = path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx');
-  const tsx = fs.existsSync(tsxMjs) ? tsxMjs : tsxBin;
+  const tsxCandidates = [
+    path.join(cliDir, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    path.join(cliDir, '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    path.join(cliDir, '..', '..', '..', 'node_modules', '.bin', 'tsx'),
+    path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx'),
+  ];
+  const tsx = tsxCandidates.find(candidate => fs.existsSync(candidate));
   if (fs.existsSync(tsPath) && fs.existsSync(tsx)) {
     return { cmd: process.execPath, args: [tsx, tsPath, command, ...args] };
   }
