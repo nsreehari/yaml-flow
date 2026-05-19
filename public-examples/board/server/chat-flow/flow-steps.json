@@ -23,7 +23,8 @@
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "stdinTemplate": "{ 'command': 'read-all', 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId }"
+          "cmdTemplate": ["'--stdin'"],
+          "stdinTemplate": "{ 'command': 'read-all', 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId }"
         },
         "outputTransforms": {
           "dataTemplate": "{ 'chatMessages': output.data.records }"
@@ -106,7 +107,8 @@
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "stdinTemplate": "{ 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'in-progress', 'files': [] }] }"
+          "cmdTemplate": ["'--stdin'"],
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'in-progress', 'files': [] }] }"
         }
       },
       "transitions": {
@@ -180,7 +182,8 @@
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "stdinTemplate": "{ 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
+          "cmdTemplate": ["'--stdin'"],
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
         },
         "outputTransforms": {
           "dataTemplate": "{ 'replyId': output.data.results[0].data.id }"
@@ -208,7 +211,8 @@
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "stdinTemplate": "{ 'boardDir': boardSetupRoot & '/' & boardRuntimeDir, 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
+          "cmdTemplate": ["'--stdin'"],
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
         }
       },
       "transitions": {

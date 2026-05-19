@@ -17,6 +17,7 @@ const _require = createRequire(import.meta.url);
 
 export type JsonataExpression = {
   evaluate: (data: unknown) => unknown;
+  registerFunction: (name: string, impl: (...args: unknown[]) => unknown, signature?: string) => void;
 };
 
 function _jsonataCjsPath(): string {

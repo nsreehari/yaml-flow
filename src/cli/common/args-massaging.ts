@@ -11,9 +11,16 @@
  * `cmdArgs` / `body` / `url`.
  */
 
-import { jsonata } from './jsonata-loader.js';
+import { jsonata, type JsonataExpression } from './jsonata-loader.js';
+import { serializeRef } from './storage-interface.js';
 import type { ArgsMassaging, OutputTransforms } from './execution-interface.js';
 import type { NormalizedHandlerResult } from '../../step-machine-public/types.js';
+
+/** Register built-in helper functions available in all JSONata template expressions. */
+function registerHelpers(expr: JsonataExpression): void {
+  // $fsPathRef(path) — serialize a filesystem path as a KindValueRef string
+  expr.registerFunction('fsPathRef', (path: unknown) => serializeRef({ kind: 'fs-path', value: String(path) }), '<s:s>');
+}
 
 export interface MassagedArgs {
   /** Resolved argv tail for local transports. */
@@ -49,7 +56,8 @@ export function resolveArgsMassaging(
     const resolved: string[] = [];
     for (const expr of argsMassaging.cmdTemplate) {
       try {
-        resolved.push(String(jsonata(expr).evaluate(context)));
+        const _ce = jsonata(expr); registerHelpers(_ce);
+        resolved.push(String(_ce.evaluate(context)));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(
@@ -62,7 +70,8 @@ export function resolveArgsMassaging(
 
   if (typeof argsMassaging.stdinTemplate === 'string') {
     try {
-      out.stdin = jsonata(argsMassaging.stdinTemplate).evaluate(context);
+      const _se = jsonata(argsMassaging.stdinTemplate); registerHelpers(_se);
+      out.stdin = _se.evaluate(context);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -75,7 +84,8 @@ export function resolveArgsMassaging(
 
   if (typeof argsMassaging.urlTemplate === 'string') {
     try {
-      out.url = String(jsonata(argsMassaging.urlTemplate).evaluate(context));
+      const _ue = jsonata(argsMassaging.urlTemplate); registerHelpers(_ue);
+      out.url = String(_ue.evaluate(context));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -86,7 +96,8 @@ export function resolveArgsMassaging(
 
   if (typeof argsMassaging.headerTemplate === 'string') {
     try {
-      const evaluated = jsonata(argsMassaging.headerTemplate).evaluate(context);
+      const _he = jsonata(argsMassaging.headerTemplate); registerHelpers(_he);
+      const evaluated = _he.evaluate(context);
       if (typeof evaluated !== 'object' || evaluated === null) {
         throw new Error(`headerTemplate must produce an object, got: ${JSON.stringify(evaluated)}`);
       }
@@ -101,7 +112,8 @@ export function resolveArgsMassaging(
 
   if (typeof argsMassaging.bodyTemplate === 'string') {
     try {
-      out.body = jsonata(argsMassaging.bodyTemplate).evaluate(context);
+      const _be = jsonata(argsMassaging.bodyTemplate); registerHelpers(_be);
+      out.body = _be.evaluate(context);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -136,7 +148,8 @@ export function resolveOutputTransforms(
 
   if (typeof transforms.resultExpr === 'string') {
     try {
-      const val = jsonata(transforms.resultExpr).evaluate(ctx);
+      const _re = jsonata(transforms.resultExpr); registerHelpers(_re);
+      const val = _re.evaluate(ctx);
       if (typeof val !== 'string' || !val.trim()) {
         throw new Error(`resultExpr did not produce a non-empty string (got ${JSON.stringify(val)})`);
       }
@@ -149,7 +162,8 @@ export function resolveOutputTransforms(
 
   if (typeof transforms.dataTemplate === 'string') {
     try {
-      const val = jsonata(transforms.dataTemplate).evaluate(ctx);
+      const _dt = jsonata(transforms.dataTemplate); registerHelpers(_dt);
+      const val = _dt.evaluate(ctx);
       if (!val || typeof val !== 'object' || Array.isArray(val)) {
         throw new Error(`dataTemplate did not produce an object (got ${JSON.stringify(val)})`);
       }
@@ -162,7 +176,8 @@ export function resolveOutputTransforms(
 
   if (typeof transforms.errorExpr === 'string') {
     try {
-      const val = jsonata(transforms.errorExpr).evaluate(ctx);
+      const _ee = jsonata(transforms.errorExpr); registerHelpers(_ee);
+      const val = _ee.evaluate(ctx);
       // $undefined() evaluates to undefined — clears the error field
       error = val != null ? String(val) : undefined;
     } catch (err) {
