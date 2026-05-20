@@ -276,8 +276,8 @@ describe('mountFilesListPane', () => {
   it('renders a list-group with download anchor per file using cfg.fileUrlBase', () => {
     const node = makeNode('a', {
       files: [
-        { name: 'doc.pdf', size: 1234, stored_name: '0001-doc.pdf' },
-        { name: 'data.csv', size: 5678, stored_name: '0002-data.csv' },
+        { name: 'doc.pdf', size: 1234, stored_name: '0001-doc.pdf', chat: true },
+        { name: 'data.csv', size: 5678, stored_name: '0002-data.csv', chat: false },
       ],
     });
     const engine = makeEngine({ a: node });
@@ -293,6 +293,9 @@ describe('mountFilesListPane', () => {
       expect(href0).toBe('/api/boards/test/cards/a/files/0?sn=' + encodeURIComponent('0001-doc.pdf'));
       expect((items[0].textContent || '')).toContain('doc.pdf');
       expect((items[0].textContent || '')).toContain('1234');
+      expect((items[0].querySelector('[data-lc-file-origin]') as HTMLElement)?.dataset.lcFileOrigin).toBe('chat');
+      expect((items[0].textContent || '')).toContain('Chat');
+      expect((items[1].querySelector('[data-lc-file-origin]') as HTMLElement)?.dataset.lcFileOrigin).toBe('card');
     } finally {
       handle.dispose();
     }

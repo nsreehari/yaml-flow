@@ -69,15 +69,22 @@ describe('artifacts-store-lib helpers', () => {
     const now = '2026-05-05T00:00:00.000Z';
 
     const incoming = meta.normalizeIncoming([
-      { stored_name: '001-a.txt', name: 'A.txt', size: 12, mime_type: 'text/plain', path: 'card/files/001-a.txt' },
+      { stored_name: '001-a.txt', name: 'A.txt', size: 12, mime_type: 'text/plain' },
       { stored_name: '001-a.txt', name: 'duplicate should be ignored' },
       { stored_name: '002-b.txt' },
       { bad: 'row' },
     ], now);
 
     expect(incoming).toHaveLength(3);
+    expect(incoming[0].chat).toBe(false);
     expect(incoming[1].uploaded_at).toBe(now);
     expect(incoming[2].name).toBe('002-b.txt');
+    expect(incoming[2].chat).toBe(false);
+
+    const withChat = meta.normalizeIncoming([
+      { stored_name: '003-c.txt', name: 'C.txt', chat: true },
+    ], now);
+    expect(withChat[0].chat).toBe(true);
 
     const cardData: Record<string, unknown> = {
       files: [{ stored_name: '001-a.txt', name: 'existing' }],
@@ -86,7 +93,9 @@ describe('artifacts-store-lib helpers', () => {
     const merged = meta.merge(cardData, incoming);
     expect(merged).toHaveLength(2);
     expect(merged[0].stored_name).toBe('001-a.txt');
+    expect(merged[0].chat).toBe(false);
     expect(merged[1].stored_name).toBe('002-b.txt');
+    expect(merged[1].chat).toBe(false);
   });
 
   it('resolves card file lookups with stale and bounds checks', () => {

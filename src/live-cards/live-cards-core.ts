@@ -968,11 +968,15 @@ var LiveCard = (function () {
           const fileName = f && (f.name || f.stored_name) ? (f.name || f.stored_name) : 'file';
           const sizeText = f && typeof f.size === 'number' ? ('size: ' + f.size + ' bytes') : '';
           const stored = f && f.stored_name ? String(f.stored_name) : '';
+          const isChatFile = !!(f && f.chat === true);
+          const originBadge = isChatFile
+            ? '<span class="badge text-bg-info-subtle border border-info-subtle text-info-emphasis ms-2" data-lc-file-origin="chat">Chat</span>'
+            : '<span class="badge text-bg-light border ms-2" data-lc-file-origin="card">Card</span>';
           const dl = stored
             ? cfg.fileUrlBase + '/cards/' + encodeURIComponent(pane.cardId) + '/files/' + idx + '?sn=' + encodeURIComponent(stored)
             : null;
           h += '<div class="list-group-item d-flex align-items-center justify-content-between gap-2">';
-          h += '<div class="text-truncate"><div class="small fw-medium">' + _esc(fileName) + '</div>';
+          h += '<div class="text-truncate"><div class="small fw-medium d-flex align-items-center flex-wrap">' + _esc(fileName) + originBadge + '</div>';
           h += '<div class="small text-muted">' + _esc(sizeText) + '</div></div>';
           if (dl) {
             h += '<a class="btn btn-sm btn-outline-secondary flex-shrink-0" href="' + dl + '">Download</a>';
@@ -2180,7 +2184,11 @@ var LiveCard = (function () {
           const cardId = elemDef.data && elemDef.data.cardId ? elemDef.data.cardId : 'unknown';
           const downloadUrl = `${cfg.fileUrlBase}/cards/${encodeURIComponent(cardId)}/files/${idx}?sn=${encodeURIComponent(file.stored_name)}`;
           const size = file.size ? ` (${Math.round(file.size / 1024)}KB)` : '';
-          htmlParts.push(`<div class="mb-2"><a href="${downloadUrl}" class="btn btn-sm btn-outline-secondary">${_esc(name)}${_esc(size)}</a></div>`);
+          const originAttr = file.chat === true ? 'chat' : 'card';
+          const originBadge = file.chat === true
+            ? '<span class="badge text-bg-info-subtle border border-info-subtle text-info-emphasis ms-2" data-lc-file-origin="chat">Chat</span>'
+            : '<span class="badge text-bg-light border ms-2" data-lc-file-origin="card">Card</span>';
+          htmlParts.push(`<div class="mb-2 d-flex align-items-center flex-wrap gap-2" data-lc-file-link-origin="${originAttr}"><a href="${downloadUrl}" class="btn btn-sm btn-outline-secondary">${_esc(name)}${_esc(size)}</a>${originBadge}</div>`);
         });
         const html = htmlParts.join('');
         el.innerHTML = html;

@@ -36,8 +36,8 @@ export interface CardFileMetadata {
   stored_name: string;
   size: number | null;
   mime_type: string | null;
-  path: string | null;
   uploaded_at: string | null;
+  chat: boolean;
 }
 
 export type CardFileLookupResult =
@@ -269,8 +269,8 @@ export function createCardFileMetadataStore(): CardFileMetadataStore {
         stored_name: row.stored_name,
         size: typeof row.size === 'number' && Number.isFinite(row.size) ? row.size : null,
         mime_type: typeof row.mime_type === 'string' ? row.mime_type : null,
-        path: typeof row.path === 'string' ? row.path : null,
         uploaded_at: typeof row.uploaded_at === 'string' ? row.uploaded_at : (defaultUploadedAt || null),
+        chat: row.chat === true,
       });
     }
     return out;

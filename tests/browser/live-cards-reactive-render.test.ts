@@ -153,8 +153,8 @@ describe('reactive rendering — text element', () => {
       }],
       card_data: {
         files: [
-          { name: 'a.txt', size: 1024, stored_name: 's-a.txt' },
-          { name: 'b.csv', size: 2048, stored_name: 's-b.csv' },
+          { name: 'a.txt', size: 1024, stored_name: 's-a.txt', chat: true },
+          { name: 'b.csv', size: 2048, stored_name: 's-b.csv', chat: false },
         ],
       },
     });
@@ -166,6 +166,11 @@ describe('reactive rendering — text element', () => {
       expect(h0).toBe('/api/test-board/cards/a/files/0?sn=' + encodeURIComponent('s-a.txt'));
       expect((anchors[0].textContent || '')).toContain('a.txt');
       expect((anchors[0].textContent || '')).toContain('1KB');
+      const origins = container.querySelectorAll('[data-node-id="a"] [data-lc-file-origin]');
+      expect(origins.length).toBe(2);
+      expect((origins[0] as HTMLElement).dataset.lcFileOrigin).toBe('chat');
+      expect((origins[0].textContent || '')).toContain('Chat');
+      expect((origins[1] as HTMLElement).dataset.lcFileOrigin).toBe('card');
     } finally { board.destroy(); }
   });
 

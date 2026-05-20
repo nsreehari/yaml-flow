@@ -647,7 +647,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       stored_name: storedName,
       size: buffer.length,
       mime_type: contentType || 'application/octet-stream',
-      path: `${cardId}/files/${storedName}`,
       uploaded_at: new Date().toISOString(),
     };
   }
@@ -764,7 +763,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             if (typeof f === 'string') { files.push({ name: f }); continue; }
             if (typeof f === 'object') {
               const fo = f as Record<string, unknown>;
-              if (typeof fo.name === 'string') files.push({ name: fo.name, size: fo.size, mime_type: fo.mime_type, path: fo.path, uploaded_at: fo.uploaded_at, stored_name: fo.stored_name });
+              if (typeof fo.name === 'string') files.push({ name: fo.name, size: fo.size, mime_type: fo.mime_type, uploaded_at: fo.uploaded_at, stored_name: fo.stored_name, chat: fo.chat === true });
             }
           }
         }
@@ -788,13 +787,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const processingAlreadySet = true;
 
           chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet };
-          for (const file of files) {
-            if (!file || typeof file !== 'object') continue;
-            const display = typeof file.name === 'string' ? file.name : 'file';
-            const stored = typeof file.stored_name === 'string' ? file.stored_name : null;
-            if (!stored) continue;
-            writeChatRecord(cardId, 'system', `File ${display} uploaded as ${stored}.`, []);
-          }
           // Emit SSE notification so connected clients receive updated chat state immediately
           try {
             const allRecords = readChatRecords(cardId);
@@ -1234,20 +1226,23 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const file = persistUploadedFile(cardId, requestedName, contentType, body);
         // Always register the file in card_data.files regardless of inChat flag,
         // so GET /cards/:id and GET /cards/:id/files/:idx work unconditionally.
+        let uploadedFileIndex: number | null = null;
         updateCardLocalOnly(cardId, (card) => {
           const now = new Date().toISOString();
           const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
           card.card_data = cardData;
           const incoming = cardFileMetadataStoreInstance().normalizeIncoming([{
             name: file.name, stored_name: file.stored_name, size: file.size,
-            mime_type: file.mime_type, path: file.path, uploaded_at: file.uploaded_at || now,
+            mime_type: file.mime_type, uploaded_at: file.uploaded_at || now, chat: inChat,
           }], now);
-          cardFileMetadataStoreInstance().merge(cardData, incoming);
+          const merged = cardFileMetadataStoreInstance().merge(cardData, incoming);
+          uploadedFileIndex = merged.findIndex((entry) => entry.stored_name === file.stored_name);
           return card;
         });
         // inChat: additionally record a system chat message so the upload appears in the chat thread.
         if (inChat) {
-          writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}`, []);
+          const idxSuffix = typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? ` #${uploadedFileIndex}` : '';
+          writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, []);
         }
         json(res, 200, { ok: true, file });
         return true;

@@ -255,6 +255,15 @@ describe('platform-free server runtime (Node host)', () => {
     expect(file).toHaveProperty('name', 'test-upload.txt');
     expect(file).toHaveProperty('stored_name');
     expect(file).toHaveProperty('size');
+
+    const cardRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`);
+    expect(cardRes.ok).toBe(true);
+    const cardData = await cardRes.json() as { card_data?: { files?: Array<Record<string, unknown>> } };
+    const uploaded = Array.isArray(cardData.card_data?.files)
+      ? cardData.card_data.files.find((entry) => entry?.stored_name === file.stored_name)
+      : undefined;
+    expect(uploaded).toBeTruthy();
+    expect(uploaded?.chat).toBe(false);
   });
 
   it('GET /api/board/sse returns event-stream', async () => {
@@ -514,6 +523,140 @@ describe('platform-free server runtime (Node host)', () => {
     expect(chatRes.ok).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(flowRuns).toBe(1);
+
+    await new Promise<void>((resolve) => server2.close(() => resolve()));
+    try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('keeps upload-route system chat but does not add a second upload system chat on chat-send', async () => {
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-srt-upload-chat-'));
+    const isolatedBoardDir = path.join(isolatedRoot, 'runtime');
+    const isolatedCardStoreDir = path.join(isolatedRoot, 'card-store');
+    const isolatedOutputsDir = path.join(isolatedRoot, 'outputs');
+    fs.mkdirSync(isolatedBoardDir, { recursive: true });
+    fs.mkdirSync(isolatedCardStoreDir, { recursive: true });
+    fs.mkdirSync(isolatedOutputsDir, { recursive: true });
+
+    const isolatedCardsDir = path.join(isolatedRoot, 'cards');
+    fs.mkdirSync(isolatedCardsDir, { recursive: true });
+    for (const entry of fs.readdirSync(SOURCE_CARDS_DIR, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        fs.copyFileSync(path.join(SOURCE_CARDS_DIR, entry.name), path.join(isolatedCardsDir, entry.name));
+      }
+    }
+
+    const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: isolatedBoardDir }));
+    const boardAdapter = createFsBoardPlatformAdapter(baseRef, repoRoot, { suppressSpawn: true });
+    const cardStoreRef = serializeRef({ kind: 'fs-path', value: isolatedCardStoreDir });
+    const outputsStoreRef = serializeRef({ kind: 'fs-path', value: isolatedOutputsDir });
+    const preloadKv = boardAdapter.kvStorageForRef(cardStoreRef);
+    const preloadStore = createCardStorePublic(createCardStore({
+      readIndex: () => preloadKv.read('_index'),
+      writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+      readCard: (id: string) => preloadKv.read(id),
+      writeCard: (id: string, card: unknown) => {
+        preloadKv.write(id, card);
+        return id;
+      },
+      removeCard: (id: string) => preloadKv.delete(id),
+      cardExists: (id: string) => preloadKv.read(id) !== null,
+      defaultCardKey: (id: string) => id,
+    } as any));
+    const preloadCards = createFsCardSource(isolatedCardsDir).listCards();
+    for (const card of preloadCards) {
+      const setResult = preloadStore.set({ body: card });
+      expect(setResult.status).toBe('success');
+    }
+
+    const isolatedChatStorage = createInMemoryChatStorage();
+    const runtime = createSingleBoardServerRuntime({
+      apiBasePath: '/api/board',
+      boardId: 'upload-chat-board',
+      chatStorage: isolatedChatStorage,
+      boards: [{
+        label: 'base',
+        boardAdapter,
+        baseRef,
+        cardStoreRef,
+        outputsStoreRef,
+        chatHandlerFlow: { steps: [{ id: 'append-chat', type: 'noop' }], transitions: [] },
+      }],
+      chatFlowRunner: {
+        async run(_flow, args) {
+          const cardId = String(args.cardId || '');
+          isolatedChatStorage.append(cardId, 'system', 'in-progress', []);
+          isolatedChatStorage.append(cardId, 'assistant', 'Echo: attached file processed', []);
+          isolatedChatStorage.setProcessing(cardId, false);
+          return { dispatched: true };
+        },
+      },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      serverUrl: 'http://127.0.0.1:0',
+    });
+
+    const server2 = http.createServer(async (req, res) => {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      const handled = await runtime.handleRuntimeApi(req as unknown as RuntimeRequest, res as unknown as RuntimeResponse, url);
+      if (!handled) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      }
+    });
+    await new Promise<void>((resolve) => server2.listen(0, '127.0.0.1', resolve));
+    const addr = server2.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const cardId = 'card-portfolio';
+
+    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/files?inChat=true`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        'x-file-name': encodeURIComponent('q1.txt'),
+      },
+      body: Buffer.from('what is the capital of japan', 'utf-8'),
+    });
+    expect(uploadRes.ok).toBe(true);
+    const uploadData = await uploadRes.json() as { file?: Record<string, unknown> };
+    const uploadedFile = uploadData.file;
+    expect(uploadedFile).toBeTruthy();
+
+    const afterUploadMessages = isolatedChatStorage.readAll(cardId);
+    expect(afterUploadMessages).toHaveLength(1);
+    expect(afterUploadMessages[0]?.role).toBe('system');
+    expect(afterUploadMessages[0]?.text).toContain('file uploaded: q1.txt as ');
+    expect(afterUploadMessages[0]?.text).toMatch(/#0$/);
+
+    const afterUploadCardRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}`);
+    expect(afterUploadCardRes.ok).toBe(true);
+    const afterUploadCard = await afterUploadCardRes.json() as { card_data?: { files?: Array<Record<string, unknown>> } };
+    const storedUpload = Array.isArray(afterUploadCard.card_data?.files)
+      ? afterUploadCard.card_data.files.find((entry) => entry?.stored_name === uploadedFile?.stored_name)
+      : undefined;
+    expect(storedUpload).toBeTruthy();
+    expect(storedUpload?.chat).toBe(true);
+
+    const baselineCount = afterUploadMessages.length;
+    const sendRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionType: 'chat-send',
+        payload: {
+          text: 'please use the uploaded file',
+          files: [uploadedFile],
+        },
+      }),
+    });
+    expect(sendRes.ok).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const newMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
+    expect(newMessages.map((message) => message.role)).toEqual(['user', 'system', 'assistant']);
+    expect(newMessages[0]?.files).toHaveLength(1);
+    expect(newMessages[1]?.text).toBe('in-progress');
+    expect(newMessages[2]?.text).toBe('Echo: attached file processed');
+    expect(newMessages.some((message) => message.text.includes('File q1.txt uploaded as'))).toBe(false);
 
     await new Promise<void>((resolve) => server2.close(() => resolve()));
     try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch { /* ignore */ }
