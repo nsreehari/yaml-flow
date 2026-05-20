@@ -78,6 +78,9 @@ export function validateFlowConfig(flow: unknown): string[] {
     if (settings.timeout_ms !== undefined && typeof settings.timeout_ms !== 'number') {
       errors.push('settings.timeout_ms must be a number');
     }
+    if (settings.invoke_timeout_ms !== undefined && typeof settings.invoke_timeout_ms !== 'number') {
+      errors.push('settings.invoke_timeout_ms must be a number');
+    }
   }
 
   // Check steps

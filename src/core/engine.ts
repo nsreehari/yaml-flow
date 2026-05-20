@@ -233,7 +233,7 @@ export class FlowEngine {
     runState: RunState,
     startedAt: number
   ): Promise<FlowResult> {
-    const maxSteps = this.flow.settings.max_total_steps ?? 100;
+    const maxSteps = this.flow.settings.max_total_steps ?? 1_000_000;
     const timeoutMs = this.flow.settings.timeout_ms;
     let iterations = 0;
 

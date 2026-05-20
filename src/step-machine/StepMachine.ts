@@ -192,7 +192,7 @@ export class StepMachine {
   }
 
   private async executeLoop(runId: string, runState: StepMachineState): Promise<StepMachineResult> {
-    const maxSteps = this.flow.settings.max_total_steps ?? 100;
+    const maxSteps = this.flow.settings.max_total_steps ?? 1_000_000;
     const timeoutMs = this.flow.settings.timeout_ms;
     let current = runState;
     let iterations = 0;

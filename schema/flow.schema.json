@@ -22,13 +22,18 @@
         "max_total_steps": {
           "type": "integer",
           "minimum": 1,
-          "default": 100,
+          "default": 1000000,
           "description": "Maximum steps before forced termination"
         },
         "timeout_ms": {
           "type": "integer",
           "minimum": 0,
           "description": "Flow timeout in milliseconds"
+        },
+        "invoke_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-ref invocation timeout in milliseconds"
         }
       },
       "additionalProperties": false

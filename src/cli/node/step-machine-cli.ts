@@ -4,7 +4,7 @@ import { loadStepFlow, createStepMachine, buildStepHandlersForFlow } from '../..
 import { MemoryStore, KVStorageStore } from '../../stores/index.js';
 import { invokeRefSync } from './execution-adapter.js';
 import { createFsKvStorage } from './storage-fs-adapters.js';
-import type { StepMachineStore, StepMachineState } from '../../step-machine/types.js';
+import type { StepFlowConfig, StepMachineStore, StepMachineState } from '../../step-machine/types.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
 
 export class CliExitError extends Error {
@@ -15,6 +15,8 @@ export class CliExitError extends Error {
 }
 
 const PAUSE_FILE_NAME = '.pause';
+const DEFAULT_STEP_INVOKE_TIMEOUT_MS = 300_000;
+const STEP_INVOKE_TIMEOUT_ENV_VAR = 'YAML_FLOW_STEP_INVOKE_TIMEOUT_MS';
 
 type StoreContext = {
   storeType: 'memory' | 'file';
@@ -375,9 +377,27 @@ function normalizeExecutionRef(ref: unknown): unknown {
   }
 }
 
-function buildStepHandlers(flow: unknown, flowDir: string) {
+export function resolveStepInvokeTimeoutMs(flow: Pick<StepFlowConfig, 'settings'>): number {
+  const flowTimeout = flow.settings?.invoke_timeout_ms;
+  if (typeof flowTimeout === 'number' && Number.isFinite(flowTimeout) && flowTimeout >= 0) {
+    return Math.trunc(flowTimeout);
+  }
+
+  const envTimeoutRaw = process.env[STEP_INVOKE_TIMEOUT_ENV_VAR];
+  if (envTimeoutRaw) {
+    const envTimeout = Number(envTimeoutRaw);
+    if (Number.isFinite(envTimeout) && envTimeout >= 0) {
+      return Math.trunc(envTimeout);
+    }
+  }
+
+  return DEFAULT_STEP_INVOKE_TIMEOUT_MS;
+}
+
+function buildStepHandlers(flow: StepFlowConfig, flowDir: string) {
+  const timeoutMs = resolveStepInvokeTimeoutMs(flow);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invoke = (ref: unknown, args: unknown) => invokeRefSync(normalizeExecutionRef(ref) as any, args as any, { cliDir: flowDir, cwd: flowDir });
+  const invoke = (ref: unknown, args: unknown) => invokeRefSync(normalizeExecutionRef(ref) as any, args as any, { cliDir: flowDir, cwd: flowDir, timeoutMs });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return buildStepHandlersForFlow(flow as any, { invoke });
 }

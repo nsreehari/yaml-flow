@@ -23,7 +23,7 @@ describe('validateFlowSchema', () => {
     it('flow with all optional step fields', () => {
       const r = validateFlowSchema({
         id: 'my-flow',
-        settings: { start_step: 'a', max_total_steps: 50, timeout_ms: 30000 },
+        settings: { start_step: 'a', max_total_steps: 50, timeout_ms: 30000, invoke_timeout_ms: 45000 },
         steps: {
           a: {
             description: 'First step',
@@ -42,6 +42,15 @@ describe('validateFlowSchema', () => {
           success: { return_intent: 'success', return_artifacts: ['output'], description: 'All good' },
           fail: { return_intent: 'error', return_artifacts: false },
         },
+      });
+      expect(r.ok).toBe(true);
+    });
+
+    it('accepts invoke_timeout_ms in flow settings', () => {
+      const r = validateFlowSchema({
+        settings: { start_step: 's', invoke_timeout_ms: 1234 },
+        steps: { s: { transitions: { ok: 'done' } } },
+        terminal_states: { done: { return_intent: 'ok' } },
       });
       expect(r.ok).toBe(true);
     });

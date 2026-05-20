@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cli, CliExitError } from '../../src/cli/node/step-machine-cli.js';
+import { cli, CliExitError, resolveStepInvokeTimeoutMs } from '../../src/cli/node/step-machine-cli.js';
 import { KVStorageStore } from '../../src/stores/kv.js';
 import { createFsKvStorage } from '../../src/cli/node/storage-fs-adapters.js';
 import { serializeRef } from '../../src/cli/common/storage-interface.js';
@@ -85,6 +85,46 @@ function seedRunData(storeDir: string, runId: string, data: Record<string, unkno
 const fsRef = (p: string) => serializeRef({ kind: 'fs-path', value: p });
 
 describe('step-machine-cli', async () => {
+  it('uses flow settings.invoke_timeout_ms when present', () => {
+    const timeoutMs = resolveStepInvokeTimeoutMs({
+      settings: { start_step: 's1', invoke_timeout_ms: 4321 },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    expect(timeoutMs).toBe(4321);
+  });
+
+  it('uses global env timeout when flow does not set invoke_timeout_ms', () => {
+    const prev = process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS;
+    process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS = '6543';
+    try {
+      const timeoutMs = resolveStepInvokeTimeoutMs({
+        settings: { start_step: 's1' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(timeoutMs).toBe(6543);
+    } finally {
+      if (prev === undefined) delete process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS;
+      else process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('falls back to the default invoke timeout when flow and env are unset', () => {
+    const prev = process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS;
+    delete process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS;
+    try {
+      const timeoutMs = resolveStepInvokeTimeoutMs({
+        settings: { start_step: 's1' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(timeoutMs).toBe(300_000);
+    } finally {
+      if (prev !== undefined) process.env.YAML_FLOW_STEP_INVOKE_TIMEOUT_MS = prev;
+    }
+  });
+
   it('prints usage with --help', async () => {
     const run = await runCli(['--help']);
 

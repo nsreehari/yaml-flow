@@ -21,6 +21,7 @@ export interface StepFlowSettings {
   start_step: string;
   max_total_steps?: number;
   timeout_ms?: number;
+  invoke_timeout_ms?: number;
 }
 
 export interface StepConfig {
