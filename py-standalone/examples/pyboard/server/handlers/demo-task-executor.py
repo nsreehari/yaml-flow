@@ -491,11 +491,27 @@ def _resolve_dot_path(obj: Any, path_str: str) -> Any:
     return val
 
 
+def _validate_run_source_preflight_projections(source_def: Dict[str, Any]) -> None:
+    projections = source_def.get("_projections")
+    if not isinstance(projections, dict):
+        raise ValueError("Missing _projections object for run-source-preflight")
+
+    declared = source_def.get("projections")
+    if not isinstance(declared, dict):
+        return
+
+    for key in declared.keys():
+        if key not in projections:
+            raise ValueError(f'Required projection "{key}" is missing')
+        if projections.get(key) is None:
+            raise ValueError(f'Projection "{key}" resolved to undefined')
+
+
 def _probe_source_preflight_from_stdin(extra: Optional[Dict[str, Any]] = None) -> int:
-    """Preflight probe using the same flow execution path as run-source-fetch.
+    """Probe-source-preflight path for demo runtimes.
 
     Input (stdin JSON): source def object with optional _projections.
-    Output: { ok, reachable, latencyMs, error? }
+    Output: { ok, reachable, latencyMs, error?, note?, resultValue? }
     Always exits 0 (matches JS demo-task-executor behavior).
     """
     raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
@@ -530,14 +546,30 @@ def _probe_source_preflight_from_stdin(extra: Optional[Dict[str, Any]] = None) -
         return 0
 
     try:
+        projections = source_def.get("_projections")
+        mock_projections_missing = (
+            not isinstance(projections, dict)
+            or len(projections) == 0
+        )
+        mock_projection_warning = (
+            "Mock projections / _projections missing. Hence mock run not performed."
+            if mock_projections_missing
+            else None
+        )
+
         registry = _load_registry()
         kind = _resolve_source_kind(source_def, registry)
-        _execute_via_step_machine_flow(kind, registry, source_def, None, extra)
-        print(json.dumps({
+        flow_result, _wrote_directly = _execute_via_step_machine_flow(kind, registry, source_def, None, extra)
+        payload = {
             "ok": True,
             "reachable": True,
             "latencyMs": int(time.time() * 1000) - started_at_ms,
-        }, ensure_ascii=True))
+        }
+        if mock_projection_warning is not None:
+            payload["note"] = mock_projection_warning
+        else:
+            payload["resultValue"] = flow_result
+        print(json.dumps(payload, ensure_ascii=True))
         return 0
     except Exception as exc:
         detail = ""
@@ -554,6 +586,87 @@ def _probe_source_preflight_from_stdin(extra: Optional[Dict[str, Any]] = None) -
         return 0
 
 
+def _run_source_preflight_from_stdin(extra: Optional[Dict[str, Any]] = None) -> int:
+    """Run-source-preflight path for demo runtimes.
+
+    Input (stdin JSON): source def object with required _projections.
+    Output: { ok, reachable, latencyMs, bindTo?, kind?, resultValue?, note?, error? }
+    Always exits 0 (matches JS demo-task-executor behavior).
+    """
+    raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+    started_at_ms = int(time.time() * 1000)
+    bind_to: Optional[str] = None
+    kind: Optional[str] = None
+
+    if not raw:
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": "Missing run-source-preflight input JSON on stdin",
+        }, ensure_ascii=True))
+        return 0
+
+    try:
+        source_def = json.loads(raw)
+    except Exception as exc:
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": f"Invalid run-source-preflight JSON: {exc}",
+        }, ensure_ascii=True))
+        return 0
+
+    if not isinstance(source_def, dict):
+        print(json.dumps({
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": "Invalid run-source-preflight JSON: input must be a JSON object",
+        }, ensure_ascii=True))
+        return 0
+
+    bind_to = source_def.get("bindTo") if isinstance(source_def.get("bindTo"), str) else None
+
+    try:
+        _validate_run_source_preflight_projections(source_def)
+        registry = _load_registry()
+        kind = _resolve_source_kind(source_def, registry)
+        flow_result, _wrote_directly = _execute_via_step_machine_flow(kind, registry, source_def, None, extra)
+        payload: Dict[str, Any] = {
+            "ok": True,
+            "reachable": True,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "resultValue": flow_result,
+            "note": "Actual fetch preflight passed",
+        }
+        if bind_to:
+            payload["bindTo"] = bind_to
+        if kind:
+            payload["kind"] = kind
+        print(json.dumps(payload, ensure_ascii=True))
+        return 0
+    except Exception as exc:
+        detail = ""
+        stderr_val = getattr(exc, "stderr", None)
+        stdout_val = getattr(exc, "stdout", None)
+        if stderr_val or stdout_val:
+            detail = f"\n{str(stderr_val or stdout_val).rstrip()}"
+        payload = {
+            "ok": False,
+            "reachable": False,
+            "latencyMs": int(time.time() * 1000) - started_at_ms,
+            "error": f"{str(exc)}{detail}",
+        }
+        if bind_to:
+            payload["bindTo"] = bind_to
+        if kind:
+            payload["kind"] = kind
+        print(json.dumps(payload, ensure_ascii=True))
+        return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Python demo task executor")
     parser.add_argument(
@@ -564,6 +677,7 @@ def main() -> int:
             "validate-source-def",
             "validate-card-preflight",
             "probe-source-preflight",
+            "run-source-preflight",
         ],
     )
     parser.add_argument("--in-ref", dest="in_ref")
@@ -586,6 +700,14 @@ def main() -> int:
             except Exception:
                 extra = None
         return _probe_source_preflight_from_stdin(extra)
+    if args.subcommand == "run-source-preflight":
+        extra = None
+        if args.extra:
+            try:
+                extra = json.loads(base64.b64decode(args.extra).decode("utf-8"))
+            except Exception:
+                extra = None
+        return _run_source_preflight_from_stdin(extra)
     if not args.in_ref or not args.out_ref:
         print("run-source-fetch requires --in-ref and --out-ref", file=sys.stderr)
         return 2

@@ -256,7 +256,7 @@ def _board_handler(command: str):
                 token = getattr(args, "token", None)
                 if isinstance(token, str) and token:
                     base_ref = _decode_board_ref_from_token(token)
-            if not base_ref and command in ("validateCardPreflight", "probeSourcePreflight", "evalCardCompute", "simulateCardCycle", "probeTmpSource"):
+            if not base_ref and command in ("validateCardPreflight", "probeSourcePreflight", "runSourcePreflight", "evalCardCompute", "simulateCardCycle", "probeTmpSource"):
                 base_ref = serialize_storage_ref({"kind": "fs-path", "value": os.path.abspath('.')})
 
             input_obj: Dict[str, Any] = {"params": {}, "body": None}
@@ -641,6 +641,13 @@ def build_parser() -> argparse.ArgumentParser:
     probe_source_preflight_cmd.add_argument("--out-ref", required=False, help="Output ref")
     _add_notify_channel_arg(probe_source_preflight_cmd)
     probe_source_preflight_cmd.set_defaults(handler=_board_handler("probeSourcePreflight"))
+
+    run_source_preflight_cmd = sub.add_parser("run-source-preflight", help="Run real-flow preflight for a source def")
+    run_source_preflight_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")
+    run_source_preflight_cmd.add_argument("--source-idx", required=True, help="Source index")
+    run_source_preflight_cmd.add_argument("--out-ref", required=False, help="Output ref")
+    _add_notify_channel_arg(run_source_preflight_cmd)
+    run_source_preflight_cmd.set_defaults(handler=_board_handler("runSourcePreflight"))
 
     probe_tmp_cmd = sub.add_parser("probe-tmp-source", help="Probe temporary source body")
     probe_tmp_cmd.add_argument("--base-ref", required=False, help="Board base ref (b64:<base64url(json)>)")

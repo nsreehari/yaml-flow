@@ -354,6 +354,7 @@ def invoke_board_command_native(payload: Dict[str, Any]) -> Dict[str, Any]:
         "validateCardPreflight": board.validate_card_preflight,
         "probeSource": board.probe_source,
         "probeSourcePreflight": board.probe_source_preflight,
+        "runSourcePreflight": board.run_source_preflight,
         "probeTmpSource": board.probe_tmp_source,
         "evalCardCompute": board.eval_card_compute,
         "simulateCardCycle": board.simulate_card_cycle,

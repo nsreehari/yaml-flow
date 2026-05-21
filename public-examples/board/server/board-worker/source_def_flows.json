@@ -7,7 +7,8 @@
     "describe-capabilities",
     "validate-source-def",
     "validate-card-preflight",
-    "probe-source-preflight"
+    "probe-source-preflight",
+    "run-source-preflight"
   ],
   "extraSchema": {
     "description": "Board topology context passed via --extra (base64-encoded JSON, baked at init).",

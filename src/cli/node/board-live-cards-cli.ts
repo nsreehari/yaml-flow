@@ -122,6 +122,19 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
+  // ── run-source-preflight — card JSON + sourceIdx arrive via stdin, no board state needed ─────
+  if (cmd === 'run-source-preflight') {
+    const idxRaw  = requireFlag(rest, '--source-idx', 'run-source-preflight --source-idx <n>');
+    const outRef  = optFlag(rest, '--out-ref');
+    const tmpRef  = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const body    = await readStdinBody();
+    const params: Record<string, string | number | boolean> = { sourceIdx: parseInt(idxRaw, 10) };
+    if (outRef) params['outRef'] = outRef;
+    printResult(nonCore.runSourcePreflight({ params, body }));
+    return;
+  }
+
   // ── eval-card-compute — card + mock data arrive via stdin, no board state needed ────
   if (cmd === 'eval-card-compute') {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };

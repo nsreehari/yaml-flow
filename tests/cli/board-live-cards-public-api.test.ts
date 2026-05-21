@@ -17,7 +17,7 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../../src/cli/node/fs-board-adapter.js';
-import { serializeRef } from '../../src/cli/common/storage-interface.js';
+import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
 
 const adapterOpts = { onWarn: () => {}, suppressSpawn: true };
 
@@ -1043,6 +1043,119 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 1 }, body: card });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
+  });
+
+  it('does not fall back to run-source-fetch when the lightweight executor hook is unsupported', () => {
+    const taskExecutorRef = {
+      meta: 'task-executor',
+      howToRun: 'local-node',
+      whatToRun: serializeRef({ kind: 'fs-path', value: 'fake-executor.js' }),
+    };
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-psp-hook-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({
+      params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) },
+      body: { 'task-executor-ref': taskExecutorRef },
+    });
+    const adapter = createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} });
+    let runSourceFetchCalled = false;
+    adapter.invokeExecutorSync = ((refArg, subcommand) => {
+      if (subcommand === 'probe-source-preflight') throw new Error('unsupported');
+      if (subcommand === 'run-source-fetch') {
+        runSourceFetchCalled = true;
+        throw new Error('should not have attempted run-source-fetch');
+      }
+      throw new Error(`unexpected subcommand: ${subcommand}`);
+    }) as typeof adapter.invokeExecutorSync;
+
+    const nonCore = createBoardLiveCardsNonCorePublic(br, adapter);
+    const card = minCard('c', { source_defs: [{ mock: 'quotes', bindTo: 'first', outputFile: 'first.json' }] });
+    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    expect(result.status).toBe('fail');
+    expect(runSourceFetchCalled).toBe(false);
+    if (result.status === 'fail') expect(result.error).toMatch(/does not support probe-source-preflight/);
+  });
+});
+
+describe('BoardLiveCardsNonCorePublic — runSourcePreflight', () => {
+  let tmpDir = '';
+
+  function freshNonCoreWithExecutorStub(
+    invokeStub: ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync'],
+  ) {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-rsp-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({
+      params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) },
+      body: {
+        'task-executor-ref': {
+          meta: 'task-executor',
+          howToRun: 'local-node',
+          whatToRun: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'fake-executor.js') }),
+        },
+      },
+    });
+    const adapter = createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} });
+    adapter.invokeExecutorSync = invokeStub;
+    const nonCore = createBoardLiveCardsNonCorePublic(br, adapter);
+    return { nonCore };
+  }
+
+  afterEach(() => {
+    if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
+  });
+
+  it('returns executor output when run-source-preflight is supported', () => {
+    const { nonCore } = freshNonCoreWithExecutorStub(((refArg, subcommand) => {
+      expect(subcommand).toBe('run-source-preflight');
+      return JSON.stringify({
+        ok: true,
+        reachable: true,
+        latencyMs: 12,
+        bindTo: 'prices',
+        kind: 'urls',
+        resultValue: { ok: true },
+        note: 'Actual fetch preflight passed',
+      });
+    }) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+
+    const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
+    const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data).toMatchObject({
+        bindTo: 'prices',
+        kind: 'urls',
+        reachable: true,
+        latencyMs: 12,
+        resultValue: { ok: true },
+      });
+    }
+  });
+
+  it('falls back to run-source-fetch when run-source-preflight is unsupported', () => {
+    const { nonCore } = freshNonCoreWithExecutorStub((((refArg, subcommand, argv) => {
+      if (subcommand === 'run-source-preflight') throw new Error('unsupported');
+      if (subcommand !== 'run-source-fetch') throw new Error(`unexpected subcommand: ${subcommand}`);
+      const outIdx = argv.indexOf('--out-ref');
+      const outRef = parseRef(argv[outIdx + 1]);
+      fs.writeFileSync(outRef.value, JSON.stringify({ hello: 'world' }));
+      return '';
+    }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+
+    const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
+    const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data).toMatchObject({
+        bindTo: 'prices',
+        reachable: true,
+        resultValue: { hello: 'world' },
+        note: 'Actual fetch preflight passed',
+      });
+    }
   });
 });
 

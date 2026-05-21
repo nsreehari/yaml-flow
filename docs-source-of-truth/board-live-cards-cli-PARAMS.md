@@ -109,8 +109,15 @@ probe-tmp-source --out-ref <ref>
 probe-source-preflight --source-idx <n>
   params: { sourceIdx }
   body: { "card-content": <card object>, "mock-projections"?: <object> }  # stdin
-  # Lightweight reachability check. Delegates to executor's probe-source-preflight
-  # subcommand (if registered). Falls back to full source execution otherwise.
+  # Lightweight readiness / reachability check. Delegates to executor's
+  # probe-source-preflight subcommand (if registered). Does not fall back
+  # to full source execution.
+
+run-source-preflight --source-idx <n>
+  params: { sourceIdx, outRef? }
+  body: { "card-content": <card object>, "mock-projections"?: <object> }  # stdin
+  # Real-flow source preflight. Delegates to executor's run-source-preflight
+  # subcommand when supported. Falls back to full source execution otherwise.
 ```
 
 ## Compute evaluation

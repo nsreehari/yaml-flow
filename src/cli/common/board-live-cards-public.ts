@@ -963,7 +963,7 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
    * Each field can also be overridden per-source via source_def.timeout.
    *
    *   validationMs — validate-source-def, validate-card-preflight (structural, fast). Default: 10_000.
-   *   preflightMs  — probe-source-preflight (runs a real source fetch). Default: 60_000.
+  *   preflightMs  — source preflight executor hooks (probe-source-preflight / run-source-preflight). Default: 60_000.
    *   probeMs      — run-source-fetch in probe/simulation paths. Default: 60_000.
    *   describeMs   — describe-capabilities introspection. Default: 10_000.
    */
@@ -994,6 +994,9 @@ export interface BoardLiveCardsNonCorePublic {
 
   /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
   probeSourcePreflight(input: CommandInput): CommandResult;
+
+  /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — runs the real source fetch flow as a preflight */
+  runSourcePreflight(input: CommandInput): CommandResult;
 
   /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — evaluates compute expressions with supplied data; no board state needed */
   evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
@@ -1090,13 +1093,12 @@ export function createBoardLiveCardsNonCorePublic(
 
   // ── Shared probe helper ────────────────────────────────────────────────────
 
-  function runSourceProbe(
+  function executeSourceProbe(
     src: Record<string, unknown>,
     mockProjections: Record<string, unknown>,
-    outRef?: string,
-  ): CommandResult {
+  ): { bindTo: string; result: string } {
     const teRef = configStore().readTaskExecutorRef();
-    if (!teRef) return fail('No task-executor registered for this board');
+    if (!teRef) throw new Error('No task-executor registered for this board');
 
     const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
     const scratch = scratchStore();
@@ -1122,23 +1124,59 @@ export function createBoardLiveCardsNonCorePublic(
         { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.probeMs ?? 60_000 },
       );
       result = scratch.read(outFile);
-      if (result === null) return fail('Executor produced no output file');
+      if (result === null) throw new Error('Executor produced no output file');
     } catch (e) {
       const errMsg = scratch.read(errFile)?.trim()
         ?? (e instanceof Error ? e.message : String(e));
-      return fail(`Probe failed: ${errMsg}`);
+      throw new Error(`Probe failed: ${errMsg}`);
     } finally {
       try { scratch.remove(inFile); } catch { /* best-effort */ }
       try { scratch.remove(errFile); } catch { /* best-effort */ }
     }
 
+    return { bindTo, result };
+  }
+
+  function runSourceProbe(
+    src: Record<string, unknown>,
+    mockProjections: Record<string, unknown>,
+    outRef?: string,
+  ): CommandResult {
+    let executed: { bindTo: string; result: string };
+    try {
+      executed = executeSourceProbe(src, mockProjections);
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+
     if (outRef) {
       const parsed = parseRef(outRef);
-      adapter.absoluteBlob.write(parsed.value, result);
+      adapter.absoluteBlob.write(parsed.value, executed.result);
     }
-    try { scratch.remove(outFile); } catch { /* best-effort */ }
 
-    return ok({ bindTo, resultSizeBytes: result.length });
+    return ok({ bindTo: executed.bindTo, resultSizeBytes: executed.result.length });
+  }
+
+  function resolvePreflightSource(
+    input: CommandInput,
+    methodName: string,
+  ): { src: Record<string, unknown>; bindTo: string; outRef?: string; mockProjections: Record<string, unknown> } | CommandResult {
+    const sourceIdx = input.params?.['sourceIdx'] as number | undefined;
+    const outRef = input.params?.['outRef'] as string | undefined;
+    if (sourceIdx === undefined) return fail(`${methodName} requires params.sourceIdx`);
+    if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+      return fail(`${methodName} requires card JSON object in body`);
+    }
+    const body = input.body as Record<string, unknown>;
+    const card = (body['card-content'] ?? body) as Record<string, unknown>;
+    const mockProjections = (body['mock-projections'] ?? {}) as Record<string, unknown>;
+    const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
+    if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
+      return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
+    }
+    const src = sourceDefs[sourceIdx];
+    const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
+    return { src, bindTo, outRef, mockProjections };
   }
 
   // ── Public methods ─────────────────────────────────────────────────────────
@@ -1229,40 +1267,77 @@ export function createBoardLiveCardsNonCorePublic(
 
   function probeSourcePreflight(input: CommandInput): CommandResult {
     try {
-      const sourceIdx = input.params?.['sourceIdx'] as number | undefined;
-      const outRef    = input.params?.['outRef']    as string | undefined;
-      if (sourceIdx === undefined) return fail('probeSourcePreflight requires params.sourceIdx');
-      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
-        return fail('probeSourcePreflight requires card JSON object in body');
-      }
-      const body = input.body as Record<string, unknown>;
-      const card = (body['card-content'] ?? body) as Record<string, unknown>;
-      const mockProjections = (body['mock-projections'] ?? {}) as Record<string, unknown>;
-      const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
-      if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
-        return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
-      }
-      const src = sourceDefs[sourceIdx];
+      const resolved = resolvePreflightSource(input, 'probeSourcePreflight');
+      if ('status' in resolved) return resolved;
 
-      // Try the lightweight probe-source-preflight executor hook first.
-      // Falls back to the full runSourceProbe if the hook is unavailable.
+      // Lightweight probe only. Do not silently degrade into a real fetch path.
+      const teRef = configStore().readTaskExecutorRef();
+      if (!teRef) return fail('No task-executor registered for this board');
+      try {
+        const inPayload = { ...resolved.src, _projections: resolved.mockProjections };
+        const stdout = adapter.invokeExecutorSync(teRef, 'probe-source-preflight', [],
+          { timeout: (resolved.src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
+        const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; note?: string };
+        if (!result.ok) return fail(result.error ?? 'Preflight probe failed');
+        return ok({ bindTo: resolved.bindTo, reachable: result.reachable, latencyMs: result.latencyMs, note: result.note });
+      } catch {
+        return fail('Executor does not support probe-source-preflight');
+      }
+    } catch (e) { return err(e); }
+  }
+
+  function runSourcePreflight(input: CommandInput): CommandResult {
+    try {
+      const resolved = resolvePreflightSource(input, 'runSourcePreflight');
+      if ('status' in resolved) return resolved;
+
       const teRef = configStore().readTaskExecutorRef();
       if (teRef) {
-        const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
         try {
-          const inPayload = { ...src, _projections: mockProjections };
-          const stdout = adapter.invokeExecutorSync(teRef, 'probe-source-preflight', [],
-            { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
-          const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; note?: string };
-          if (!result.ok) return fail(result.error ?? 'Preflight probe failed');
-          return ok({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, note: result.note });
+          const inPayload = { ...resolved.src, _projections: resolved.mockProjections };
+          const stdout = adapter.invokeExecutorSync(teRef, 'run-source-preflight', [],
+            { timeout: (resolved.src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
+          const result = JSON.parse(stdout.trim()) as {
+            ok: boolean;
+            reachable: boolean;
+            latencyMs?: number;
+            bindTo?: string;
+            kind?: string;
+            resultValue?: unknown;
+            note?: string;
+            error?: string;
+          };
+          if (!result.ok) return fail(result.error ?? 'Source preflight failed');
+          return ok({
+            bindTo: result.bindTo ?? resolved.bindTo,
+            reachable: result.reachable,
+            latencyMs: result.latencyMs,
+            kind: result.kind,
+            resultValue: result.resultValue,
+            note: result.note,
+          });
         } catch {
-          /* executor doesn't support subcommand — fall through to full probe */
+          /* executor doesn't support run-source-preflight — fall back to real fetch execution */
         }
       }
 
-      // Fallback: full source execution (original behaviour).
-      return runSourceProbe(src, mockProjections, outRef);
+      const startedAt = Date.now();
+      const executed = executeSourceProbe(resolved.src, resolved.mockProjections);
+      if (resolved.outRef) {
+        const parsed = parseRef(resolved.outRef);
+        adapter.absoluteBlob.write(parsed.value, executed.result);
+      }
+
+      let resultValue: unknown = executed.result;
+      try { resultValue = JSON.parse(executed.result); } catch { /* keep raw string result */ }
+
+      return ok({
+        bindTo: executed.bindTo,
+        reachable: true,
+        latencyMs: Date.now() - startedAt,
+        resultValue,
+        note: 'Actual fetch preflight passed',
+      });
     } catch (e) { return err(e); }
   }
 
@@ -1403,7 +1478,7 @@ export function createBoardLiveCardsNonCorePublic(
         }
       }
 
-      // 3. Probe each source using a task executor when available.
+      // 3. Run each source through the real preflight executor hook when available.
       //    Resolved from (in priority order):
       //      a) body['task-executor-ref']  — passed inline by the caller
       //      b) configStore()              — written when --base-ref points at an
@@ -1422,12 +1497,12 @@ export function createBoardLiveCardsNonCorePublic(
         }
         try {
           const inPayload = { ...src };
-          const stdout = adapter.invokeExecutorSync(teRef!, 'probe-source-preflight', [],
+          const stdout = adapter.invokeExecutorSync(teRef!, 'run-source-preflight', [],
             { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
           const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string };
           sourceProbes.push({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, error: result.ok ? undefined : result.error });
         } catch {
-          sourceProbes.push({ bindTo, skipped: true, error: 'Executor does not support probe-source-preflight' });
+          sourceProbes.push({ bindTo, skipped: true, error: 'Executor does not support run-source-preflight' });
         }
       }
 
@@ -1467,7 +1542,7 @@ export function createBoardLiveCardsNonCorePublic(
 
   return {
     validateCard, validateCardPreflight,
-    probeSource, probeTmpSource, probeSourcePreflight,
+    probeSource, probeTmpSource, probeSourcePreflight, runSourcePreflight,
     evalCardCompute,
     simulateCardCycle,
     describeTaskExecutorCapabilities,

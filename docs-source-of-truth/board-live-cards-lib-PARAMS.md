@@ -118,8 +118,15 @@ probeSourcePreflight(input: CommandInput): CommandResult
   params: { sourceIdx, outRef? }
   body:   { "card-content": <card object>, "mock-projections"?: <object> }
   // If a task-executor is registered and supports `probe-source-preflight`,
-  // delegates to it via stdin for a lightweight reachability check (no full data fetch).
-  // Falls back to full runSourceProbe (same as probeSource) if unsupported.
+  // delegates to it via stdin for a lightweight readiness / reachability check.
+  // Does not fall back to the full source fetch path.
+
+runSourcePreflight(input: CommandInput): CommandResult
+  params: { sourceIdx, outRef? }
+  body:   { "card-content": <card object>, "mock-projections"?: <object> }
+  // Runs the selected source through the real fetch flow preflight.
+  // Uses the executor `run-source-preflight` hook when supported.
+  // Falls back to full runSourceProbe (same fetch path as probeSource) when unsupported.
 ```
 
 ### Compute evaluation

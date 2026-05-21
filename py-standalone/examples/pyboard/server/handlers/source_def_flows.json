@@ -4,6 +4,7 @@
   "executor": "demo-task-executor.py",
   "subcommands": [
     "run-source-fetch",
+    "run-source-preflight",
     "describe-capabilities",
     "validate-source-def",
     "validate-card-preflight",

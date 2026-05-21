@@ -789,8 +789,8 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
             except Exception as e:
                 return _err(e)
 
-        def _run_source_probe(self, src: dict, mock_projections: dict, out_ref: str | None) -> dict:
-            """Port of runSourceProbe — invoke the task executor for a source fetch probe."""
+        def _execute_source_probe(self, src: dict, mock_projections: dict) -> dict:
+            """Execute the real run-source-fetch path and return the raw result payload."""
             te_ref = config_store().read_task_executor_ref()
             if not te_ref:
                 return _fail("No task-executor registered for this board")
@@ -831,14 +831,61 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 try: adapter.absolute_blob.remove(err_file)
                 except Exception: pass
 
+            try:
+                adapter.absolute_blob.remove(out_file)
+            except Exception:
+                pass
+
+            return _ok({"bindTo": bind_to, "result": result_text})
+
+        def _run_source_probe(self, src: dict, mock_projections: dict, out_ref: str | None) -> dict:
+            """Port of runSourceProbe — invoke the task executor for a source fetch probe."""
+            executed = self._execute_source_probe(src, mock_projections)
+            if executed.get("status") != "success":
+                return executed
+
+            payload = executed.get("data") or {}
+            result_text = payload.get("result", "")
             if out_ref:
                 parsed = parse_ref(out_ref)
                 adapter.absolute_blob.write(parsed["value"], result_text)
-            else:
-                try: adapter.absolute_blob.remove(out_file)
-                except Exception: pass
 
-            return _ok({"bindTo": bind_to, "resultSizeBytes": len(result_text)})
+            return _ok({"bindTo": payload.get("bindTo", "source"), "resultSizeBytes": len(result_text)})
+
+        def _resolve_preflight_source(self, input_data: dict | None, method_name: str) -> dict:
+            params = (input_data or {}).get("params", {})
+            source_idx = params.get("sourceIdx")
+            out_ref = params.get("outRef")
+            if source_idx is None:
+                return _fail(f"{method_name} requires params.sourceIdx")
+
+            try:
+                source_idx = int(source_idx)
+            except Exception:
+                return _fail(f"{method_name} requires params.sourceIdx")
+
+            body = (input_data or {}).get("body")
+            if not body or not isinstance(body, dict):
+                return _fail(f"{method_name} requires card JSON object in body")
+            card = body.get("card-content", body)
+            if not isinstance(card, dict):
+                return _fail(f"{method_name} requires card JSON object in body")
+
+            mock_projections = body.get("mock-projections", {})
+            source_defs = card.get("source_defs") or []
+            if source_idx < 0 or source_idx >= len(source_defs):
+                return _fail(
+                    f"sourceIdx {source_idx} out of range (card has {len(source_defs)} source(s))"
+                )
+
+            src = source_defs[source_idx]
+            bind_to = src.get("bindTo", "source") if isinstance(src.get("bindTo"), str) else "source"
+            return {
+                "src": src,
+                "bindTo": bind_to,
+                "outRef": out_ref,
+                "mockProjections": mock_projections if isinstance(mock_projections, dict) else {},
+            }
 
         def probe_source(self, input_data: dict | None = None) -> dict:
             """Port of probeSource — probe a named source_def of a card."""
@@ -881,59 +928,94 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                 return _err(e)
 
         def probe_source_preflight(self, input_data: dict | None = None) -> dict:
-            """Port of probeSourcePreflight — lightweight preflight probe for a source.
-
-            Accepts card JSON + sourceIdx in the body/params. Tries the executor's
-            probe-source-preflight subcommand first, falls back to a full source
-            probe via _run_source_probe.
-            """
+            """Port of probeSourcePreflight — lightweight preflight probe for a source."""
             try:
-                params = (input_data or {}).get("params", {})
-                source_idx = params.get("sourceIdx")
-                out_ref = params.get("outRef")
-                if source_idx is None:
-                    return _fail("probeSourcePreflight requires params.sourceIdx")
-                source_idx = int(source_idx)
-                body = (input_data or {}).get("body")
-                if not body or not isinstance(body, dict):
-                    return _fail("probeSourcePreflight requires card JSON object in body")
-                card = body.get("card-content", body)
-                if not isinstance(card, dict):
-                    return _fail("probeSourcePreflight requires card JSON object in body")
-                mock_projections = body.get("mock-projections", {})
-                source_defs = card.get("source_defs") or []
-                if source_idx < 0 or source_idx >= len(source_defs):
-                    return _fail(
-                        f"sourceIdx {source_idx} out of range (card has {len(source_defs)} source(s))"
-                    )
-                src = source_defs[source_idx]
+                resolved = self._resolve_preflight_source(input_data, "probeSourcePreflight")
+                if resolved.get("status") == "fail":
+                    return resolved
 
-                # Try the lightweight probe-source-preflight executor hook first.
+                te_ref = config_store().read_task_executor_ref()
+                if not te_ref:
+                    return _fail("No task-executor registered for this board")
+
+                try:
+                    src = resolved["src"]
+                    in_payload = {**src, "_projections": resolved["mockProjections"]}
+                    stdout = adapter.invoke_executor_sync(
+                        te_ref, "probe-source-preflight", [],
+                        {"timeout": src.get("timeout", _t_preflight), "input": json.dumps(in_payload)},
+                    )
+                    result = json.loads(stdout.strip())
+                    if not result.get("ok"):
+                        return _fail(result.get("error", "Preflight probe failed"))
+                    payload = {
+                        "bindTo": resolved["bindTo"],
+                        "reachable": result.get("reachable"),
+                        "latencyMs": result.get("latencyMs"),
+                    }
+                    if result.get("note") is not None:
+                        payload["note"] = result.get("note")
+                    return _ok(payload)
+                except Exception:
+                    return _fail("Executor does not support probe-source-preflight")
+            except Exception as e:
+                return _err(e)
+
+        def run_source_preflight(self, input_data: dict | None = None) -> dict:
+            """Port of runSourcePreflight — run the real source flow as preflight."""
+            try:
+                resolved = self._resolve_preflight_source(input_data, "runSourcePreflight")
+                if resolved.get("status") == "fail":
+                    return resolved
+
+                src = resolved["src"]
                 te_ref = config_store().read_task_executor_ref()
                 if te_ref:
-                    bind_to = src.get("bindTo", "source") if isinstance(src.get("bindTo"), str) else "source"
                     try:
-                        in_payload = {**src, "_projections": mock_projections}
+                        in_payload = {**src, "_projections": resolved["mockProjections"]}
                         stdout = adapter.invoke_executor_sync(
-                            te_ref, "probe-source-preflight", [],
+                            te_ref, "run-source-preflight", [],
                             {"timeout": src.get("timeout", _t_preflight), "input": json.dumps(in_payload)},
                         )
                         result = json.loads(stdout.strip())
                         if not result.get("ok"):
-                            return _fail(result.get("error", "Preflight probe failed"))
-                        payload = {
-                            "bindTo": bind_to,
+                            return _fail(result.get("error", "Source preflight failed"))
+                        return _ok({
+                            "bindTo": result.get("bindTo") or resolved["bindTo"],
                             "reachable": result.get("reachable"),
                             "latencyMs": result.get("latencyMs"),
-                        }
-                        if result.get("note") is not None:
-                            payload["note"] = result.get("note")
-                        return _ok(payload)
+                            "kind": result.get("kind"),
+                            "resultValue": result.get("resultValue"),
+                            "note": result.get("note"),
+                        })
                     except Exception:
-                        pass  # executor doesn't support subcommand — fall through
+                        pass
 
-                # Fallback: full source execution (original behaviour).
-                return self._run_source_probe(src, mock_projections, out_ref)
+                started_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                executed = self._execute_source_probe(src, resolved["mockProjections"])
+                if executed.get("status") != "success":
+                    return executed
+
+                payload = executed.get("data") or {}
+                result_text = payload.get("result", "")
+                out_ref = resolved.get("outRef")
+                if out_ref:
+                    parsed = parse_ref(out_ref)
+                    adapter.absolute_blob.write(parsed["value"], result_text)
+
+                result_value: Any = result_text
+                try:
+                    result_value = json.loads(result_text)
+                except Exception:
+                    pass
+
+                return _ok({
+                    "bindTo": payload.get("bindTo") or resolved["bindTo"],
+                    "reachable": True,
+                    "latencyMs": int(datetime.now(timezone.utc).timestamp() * 1000) - started_at_ms,
+                    "resultValue": result_value,
+                    "note": "Actual fetch preflight passed",
+                })
             except Exception as e:
                 return _err(e)
 
@@ -1064,7 +1146,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                     try:
                         in_payload = {**src}
                         stdout = adapter.invoke_executor_sync(
-                            te_ref, "probe-source-preflight", [],
+                            te_ref, "run-source-preflight", [],
                             {"timeout": src.get("timeout", _t_preflight), "input": json.dumps(in_payload)},
                         )
                         result = json.loads(stdout.strip())
@@ -1077,7 +1159,7 @@ def create_board_live_cards_public(base_ref: dict, adapter: Any) -> Any:
                             probe_item["error"] = result.get("error")
                         source_probes.append(probe_item)
                     except Exception:
-                        source_probes.append({"bindTo": bind_to, "skipped": True, "error": "Executor does not support probe-source-preflight"})
+                        source_probes.append({"bindTo": bind_to, "skipped": True, "error": "Executor does not support run-source-preflight"})
 
                 # 4. Run compute expressions
                 compute_steps = card.get("compute")

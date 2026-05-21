@@ -8,11 +8,13 @@
  *   describe-capabilities    — emit registry-derived kinds, schemas, and probe info as JSON
  *   validate-source-def      — validate one source_def against registry rules from stdin
  *   probe-source-preflight   — perform a lightweight preflight for one source_def from stdin
+ *   run-source-preflight     — execute one source_def through its real fetch flow from stdin
  *
  * Runtime invocation shapes used by board-live-cards:
  *   run-source-fetch --in-ref <b64ref> --out-ref <b64ref> [--err-ref <b64ref>] [--extra <base64json>]
  *   validate-source-def       <stdin: source JSON>
  *   probe-source-preflight    <stdin: source JSON> [--extra <base64json>]
+ *   run-source-preflight      <stdin: source JSON> [--extra <base64json>]
  *
  * Payload read from --in-ref (raw source definition or { source_def, callback } envelope):
  *   {
@@ -322,13 +324,93 @@ async function probeSourcePreflightSubcommand(argv) {
       ok: true,
       reachable: true,
       latencyMs: Date.now() - startedAt,
-      ...(mockProjectionWarning ? { error: mockProjectionWarning } : {}),
+      ...(mockProjectionWarning ? { note: mockProjectionWarning } : {}),
       ...(!mockProjectionWarning ? { resultValue: flowResult?.resultValue } : {}),
     }));
     return;
   } catch (err) {
     const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
     console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `source invocation failed: ${String(err && err.message || err)}${detail}` }));
+    return;
+  }
+}
+
+function validateRunSourcePreflightProjections(sourceDef) {
+  const projections = sourceDef?._projections;
+  if (!projections || typeof projections !== 'object' || Array.isArray(projections)) {
+    throw new Error('Missing _projections object for run-source-preflight');
+  }
+
+  const declared = sourceDef?.projections;
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return;
+
+  for (const key of Object.keys(declared)) {
+    if (!Object.prototype.hasOwnProperty.call(projections, key)) {
+      throw new Error(`Required projection "${key}" is missing`);
+    }
+    if (projections[key] === undefined) {
+      throw new Error(`Projection "${key}" resolved to undefined`);
+    }
+  }
+}
+
+async function runSourcePreflightSubcommand(argv) {
+  const extraIdx = argv.indexOf('--extra');
+  const extraB64 = extraIdx !== -1 ? argv[extraIdx + 1] : undefined;
+
+  let extra = {};
+  if (extraB64) {
+    try { extra = JSON.parse(Buffer.from(extraB64, 'base64').toString('utf-8')); }
+    catch { /* ignore malformed extra */ }
+  }
+
+  const startedAt = Date.now();
+  let bindTo;
+  let kind;
+  try {
+    const chunks = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const raw = Buffer.concat(chunks).toString('utf-8').trim();
+    if (!raw) {
+      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: 'Missing run-source-preflight input JSON on stdin' }));
+      return;
+    }
+
+    let sourceDef;
+    try {
+      sourceDef = JSON.parse(raw);
+    } catch (err) {
+      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `Invalid run-source-preflight JSON: ${String(err && err.message || err)}` }));
+      return;
+    }
+
+    bindTo = typeof sourceDef?.bindTo === 'string' ? sourceDef.bindTo : undefined;
+    validateRunSourcePreflightProjections(sourceDef);
+
+    const resolved = await resolveAndExecuteSourceFlow(sourceDef, extra);
+    kind = resolved.kind;
+    console.log(JSON.stringify({
+      ok: true,
+      reachable: true,
+      latencyMs: Date.now() - startedAt,
+      ...(bindTo ? { bindTo } : {}),
+      ...(kind ? { kind } : {}),
+      resultValue: resolved.flowResult?.resultValue,
+      note: 'Actual fetch preflight passed',
+    }));
+    return;
+  } catch (err) {
+    const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
+    console.log(JSON.stringify({
+      ok: false,
+      reachable: false,
+      latencyMs: Date.now() - startedAt,
+      ...(bindTo ? { bindTo } : {}),
+      ...(kind ? { kind } : {}),
+      error: `${String(err && err.message || err)}${detail}`,
+    }));
     return;
   }
 }
@@ -439,7 +521,7 @@ function describeCapabilities() {
     executor: registry?.executor || EXECUTOR_NAME,
     subcommands: Array.isArray(registry?.subcommands)
       ? registry.subcommands
-      : ['run-source-fetch', 'probe-source-preflight', 'describe-capabilities', 'validate-source-def'],
+      : ['run-source-fetch', 'probe-source-preflight', 'run-source-preflight', 'describe-capabilities', 'validate-source-def'],
     sourceKinds,
     ...(registry?.extraSchema ? { extraSchema: registry.extraSchema } : {}),
   };
@@ -454,6 +536,10 @@ async function main() {
   }
   if (sub === 'probe-source-preflight') {
     await probeSourcePreflightSubcommand(process.argv.slice(3));
+    return;
+  }
+  if (sub === 'run-source-preflight') {
+    await runSourcePreflightSubcommand(process.argv.slice(3));
     return;
   }
   if (sub === 'describe' || sub === 'describe-capabilities') {
