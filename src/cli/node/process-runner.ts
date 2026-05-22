@@ -256,12 +256,12 @@ export function runDetached(spec: CommandSpec): void {
   const { command, args = [] } = spec;
 
   if (process.platform === 'win32') {
-    const hideConsoleDuringTests = Boolean(process.env.VITEST) || process.env.NODE_ENV === 'test';
+    // On Windows, `detached: true` sets the DETACHED_PROCESS flag which allocates
+    // a new console window for the child — flashing a CMD window — regardless of
+    // `windowsHide: true`. On Windows, `unref()` alone is sufficient to fire-and-forget:
+    // the child runs independently and the parent's event loop does not wait for it.
+    // `detached` is intentionally omitted (defaults to false) on this platform.
     const child = spawn(command, args, {
-      // On Windows, detached children are given their own console window.
-      // Keep test-time background board/task work hidden to avoid flashing cmd
-      // windows during vitest runs, while preserving detached semantics outside tests.
-      detached: !hideConsoleDuringTests,
       stdio: 'ignore',
       windowsHide: true,
       shell: _needsWindowsShell(command),
