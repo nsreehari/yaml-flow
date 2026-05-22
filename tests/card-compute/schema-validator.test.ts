@@ -131,6 +131,80 @@ describe('validateLiveCardSchema', () => {
         expect(r.ok, `status "${status}" should be valid`).toBe(true);
       }
     });
+
+    it('card_data.files entry with chat: true is valid', () => {
+      const r = validateLiveCardSchema({
+        id: 'files-chat-true',
+        card_data: {
+          files: [
+            {
+              name: 'transcript.pdf',
+              stored_name: '001-transcript.pdf',
+              chat: true,
+            },
+          ],
+        },
+      });
+      expect(r.ok).toBe(true);
+      expect(r.errors).toHaveLength(0);
+    });
+
+    it('card_data.files entry with chat: false is valid', () => {
+      const r = validateLiveCardSchema({
+        id: 'files-chat-false',
+        card_data: {
+          files: [
+            {
+              name: 'report.docx',
+              stored_name: '002-report.docx',
+              chat: false,
+            },
+          ],
+        },
+      });
+      expect(r.ok).toBe(true);
+      expect(r.errors).toHaveLength(0);
+    });
+
+    it('card_data.files entry with all fields including chat is valid', () => {
+      const r = validateLiveCardSchema({
+        id: 'files-chat-full',
+        card_data: {
+          files: [
+            {
+              name: 'notes.txt',
+              stored_name: '003-notes.txt',
+              size: 1024,
+              mime_type: 'text/plain',
+              path: '/boards/my-board/files/003-notes.txt',
+              uploaded_at: '2026-05-23T10:00:00Z',
+              chat: true,
+            },
+          ],
+        },
+      });
+      expect(r.ok).toBe(true);
+      expect(r.errors).toHaveLength(0);
+    });
+  });
+
+  describe('invalid nodes — card_data.files.chat', () => {
+    it('card_data.files entry with chat as a non-boolean is invalid', () => {
+      const r = validateLiveCardSchema({
+        id: 'files-chat-invalid',
+        card_data: {
+          files: [
+            {
+              name: 'doc.pdf',
+              stored_name: '001-doc.pdf',
+              chat: 'yes',
+            },
+          ],
+        },
+      });
+      expect(r.ok).toBe(false);
+      expect(r.errors.some(e => e.includes('chat'))).toBe(true);
+    });
   });
 
   // ---------- invalid nodes ----------

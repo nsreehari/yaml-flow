@@ -554,6 +554,10 @@
               "uploaded_at": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "chat": {
+                "type": "boolean",
+                "description": "Whether this file entry is associated with a chat interaction"
               }
             },
             "additionalProperties": false
