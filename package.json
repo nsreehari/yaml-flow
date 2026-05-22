@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "8.4.10",
+  "version": "8.4.11",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -9,12 +9,12 @@
   "module": "./lib/board-live-cards-public.js",
   "types": "./lib/board-live-cards-public.d.ts",
   "bin": {
-    "board-live-cards-cli": "./cli/node/board-live-cards-cli.js",
-    "card-store": "./cli/node/card-store-cli.js",
-    "artifacts-store": "./cli/node/artifacts-store-cli.js",
-    "chat-store": "./cli/node/chat-store-cli.js",
-    "step-machine-cli": "./cli/node/step-machine-cli.js",
-    "batch-runner-cli": "./cli/node/batch-runner-cli.js"
+    "board-live-cards-cli": "./cli/bundled/board-live-cards-cli.mjs",
+    "card-store": "./cli/bundled/card-store-cli.mjs",
+    "artifacts-store": "./cli/bundled/artifacts-store-cli.mjs",
+    "chat-store": "./cli/bundled/chat-store-cli.mjs",
+    "step-machine-cli": "./cli/bundled/step-machine-cli.mjs",
+    "batch-runner-cli": "./cli/bundled/batch-runner-cli.mjs"
   },
   "exports": {
     ".": {
@@ -67,6 +67,7 @@
       "import": "./lib/board-live-cards-server-runtime.js",
       "require": "./lib/board-live-cards-server-runtime.cjs"
     },
+    "./cli-bundled/*": "./cli/bundled/*",
     "./package.json": "./package.json"
   },
   "browser": {
@@ -75,6 +76,7 @@
   "files": [
     "lib",
     "cli",
+    "!cli/node/**",
     "examples",
     "schema",
     "browser",
@@ -91,14 +93,16 @@
     "!examples/**/cards/**/files/**"
   ],
   "scripts": {
-    "build": "npm run -s build:lib && npm run -s build:cli && npm run -s build:public-examples",
+    "build": "npm run -s build:lib && npm run -s build:cli && npm run -s build:cli-bundled && npm run -s build:public-examples",
     "build:lib": "tsup --config tsup.config.ts",
     "build:cli": "tsup --config tsup.cli.config.ts",
+    "build:cli-bundled": "node scripts/build-cli-bundled.mjs",
     "build:public-examples": "node scripts/generate-public-examples.mjs",
     "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
-    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s test:run && npm run -s test:e2e && npm run -s check:bundle-budget && npm run -s check:browser-bundle",
+    "check:minified": "node scripts/check-minified.mjs",
+    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s test:run && npm run -s test:e2e && npm run -s check:bundle-budget && npm run -s check:browser-bundle && npm run -s check:minified",
     "standalone": "echo standalone is canonical; no assembly step required",
     "pycli:install": "python -m pip install -r py-standalone/requirements.txt",
     "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r py-standalone/requirements.txt",
@@ -114,11 +118,12 @@
     "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run build:browser && npm run build:public-examples && npm run check:bundle-budget && npm run check:browser-bundle"
+    "prepublishOnly": "npm run build && npm run build:browser && npm run build:public-examples && npm run check:bundle-budget && npm run check:browser-bundle && npm run check:minified"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/proper-lockfile": "^4.1.4",
+    "esbuild": "^0.27.0",
     "jsdom": "^24.0.0",
     "tsup": "^8.0.0",
     "tsx": "^4.21.0",

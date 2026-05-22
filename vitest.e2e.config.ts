@@ -6,6 +6,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/e2e/**/*.test.ts', 'tests/examples/*e2e*.test.ts'],
     exclude: ['tests/e2e/python/**', '**/py-*.test.ts'],
+    fileParallelism: false,
     forceExit: true,
     testTimeout: 120_000,
   },

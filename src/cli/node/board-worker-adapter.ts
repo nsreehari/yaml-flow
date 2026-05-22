@@ -163,11 +163,13 @@ function _parseWhatToRun(whatToRun: string): string {
       throw new Error(`Invalid yaml-flow-cli ref: expected non-empty cli file name, got ${JSON.stringify(parsed.value)}`);
     }
     const packageRoot = path.dirname(require.resolve('yaml-flow/package.json'));
-    const resolved = path.join(packageRoot, 'cli', 'node', trimmed);
-    if (!fs.existsSync(resolved)) {
-      throw new Error(`Invalid yaml-flow-cli ref: could not find ${trimmed} under ${path.join(packageRoot, 'cli', 'node')}`);
-    }
-    return resolved;
+    // Prefer cli/bundled/<stem>.mjs (shipped); fall back to cli/node/<trimmed> for dev/legacy.
+    const stem = trimmed.replace(/\.[^.]+$/, '');
+    const bundled = path.join(packageRoot, 'cli', 'bundled', `${stem}.mjs`);
+    if (fs.existsSync(bundled)) return bundled;
+    const legacy = path.join(packageRoot, 'cli', 'node', trimmed);
+    if (fs.existsSync(legacy)) return legacy;
+    throw new Error(`Invalid yaml-flow-cli ref: could not find ${trimmed} under cli/bundled or cli/node in ${packageRoot}`);
   }
   return parsed.value;
 }

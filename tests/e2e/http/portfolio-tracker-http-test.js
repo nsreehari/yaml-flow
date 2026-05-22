@@ -213,6 +213,11 @@ function applyFrame(payload) {
       const proc = spawn(cmd, cmdArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        env: {
+          ...process.env,
+          VITEST: process.env.VITEST ?? '1',
+          NODE_ENV: process.env.NODE_ENV ?? 'test',
+        },
       });
       let ready = false;
       proc.stdout.on('data', (chunk) => {
