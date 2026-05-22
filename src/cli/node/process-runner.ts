@@ -317,10 +317,13 @@ export function buildBoardCliInvocation(
  * Resolve a stable script path for callback-style invocations where the callee
  * only accepts `node <script> ...` (no separate runtime args like tsx).
  *
- * Prefer the repo wrapper when present because it can bridge src/dist modes.
- * Fall back to the compiled JS CLI entrypoint in cliDir when available.
+ * Prefer the published bundled artifact when available. Fall back to the repo
+ * wrapper for local dev/test modes, then to the compiled JS CLI entrypoint.
  */
 export function resolveBoardCliCallbackTarget(cliDir: string): string {
+  const mjsPath = path.join(cliDir, 'board-live-cards-cli.mjs');
+  if (fs.existsSync(mjsPath)) return mjsPath;
+
   // 3 levels up: dist/cli/node -> repo root, then into dev/ (compiled mode)
   const repoBoardCliWrapper = path.join(cliDir, '..', '..', '..', 'dev', 'board-live-cards-cli.js');
   if (fs.existsSync(repoBoardCliWrapper)) return repoBoardCliWrapper;
@@ -334,7 +337,7 @@ export function resolveBoardCliCallbackTarget(cliDir: string): string {
 
   throw new Error(
     `resolveBoardCliCallbackTarget: cannot find callback target in ${cliDir} ` +
-    `(expected dev/board-live-cards-cli.js wrapper or ${jsPath})`
+    `(expected dev/board-live-cards-cli.js wrapper, ${jsPath}, or ${mjsPath})`
   );
 }
 
