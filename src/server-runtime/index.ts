@@ -509,15 +509,21 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Card mutations ───────────────────────────────────────────────────────
 
-  function mutateCard(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void, opts?: { syncBoard?: boolean }): void {
+  function mutateCard(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void, opts?: { syncBoard?: boolean; restartOnlyIfChanged?: boolean }): void {
     const syncBoard = opts?.syncBoard !== false;
+    const restartOnlyIfChanged = opts?.restartOnlyIfChanged === true;
     const ctx = cardContextForCard(cardId);
     if (!ctx) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
 
     const card = readCardFromStore(cardId);
     if (!card) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
 
+    const beforeJson = restartOnlyIfChanged ? JSON.stringify(card) : null;
     const nextCard = updateFn(card) || card;
+
+    // If restartOnlyIfChanged and the card content is identical, skip the write and the board sync entirely.
+    if (restartOnlyIfChanged && JSON.stringify(nextCard) === beforeJson) return;
+
     const setResult = ctx.cardStore.set({ body: nextCard });
     if (setResult.status !== 'success') {
       throw Object.assign(new Error((setResult as any).error || `Failed to persist card: ${cardId}`), { statusCode: 500 });
@@ -539,8 +545,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     mutateCard(cardId, updateFn, { syncBoard: false });
   }
 
+  function retriggerCard(cardId: string): void {
+    const ctx = cardContextForCard(cardId);
+    if (!ctx) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
+    const card = readCardFromStore(cardId);
+    if (!card) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
+    const upsertResult = ctx.board.upsertCard({ params: { cardId, restart: true } });
+    if (upsertResult.status !== 'success') {
+      throw Object.assign(new Error((upsertResult as any).error || `Failed to retrigger card: ${cardId}`), { statusCode: 500 });
+    }
+  }
+
   function patchCard(cardId: string, patch: Record<string, unknown>): void {
-    updateCard(cardId, (card) => {
+    mutateCard(cardId, (card) => {
       if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) return card;
 
       function deepSet(obj: Record<string, unknown>, dottedPath: string, value: unknown): void {
@@ -586,7 +603,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         }
       }
       return card;
-    });
+    }, { syncBoard: true, restartOnlyIfChanged: true });
   }
 
   // ── Chat & file operations ───────────────────────────────────────────────
@@ -1121,6 +1138,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         patchCard(cardId, body);
         // No immediate broadcast — patchCard triggers an async drain that will
         // produce card_refreshed + other notifications via the transport subscription.
+        // upsertCard restart:true is skipped when the card content is unchanged.
+        json(res, 200, { ok: true });
+        return true;
+      }
+
+      const cardRetriggerMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/retrigger$`));
+      if (method === 'POST' && cardRetriggerMatch) {
+        await bootstrapBoard();
+        const cardId = decodeURIComponent(cardRetriggerMatch[1]);
+        retriggerCard(cardId);
         json(res, 200, { ok: true });
         return true;
       }

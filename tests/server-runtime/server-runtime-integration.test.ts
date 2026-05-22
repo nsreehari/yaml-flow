@@ -208,6 +208,49 @@ describe('platform-free server runtime (Node host)', () => {
     expect(patchData).toHaveProperty('ok', true);
   });
 
+  it('POST /api/board/cards/:id/retrigger triggers a forced refresh', async () => {
+    const statusRes = await fetch(`${API_BASE}/board-status`);
+    const statusData = await statusRes.json() as Record<string, unknown>;
+    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const cardId = cards[0].id as string;
+
+    const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/retrigger`, {
+      method: 'POST',
+    });
+    expect(res.ok).toBe(true);
+    const data = await res.json() as Record<string, unknown>;
+    expect(data).toHaveProperty('ok', true);
+  });
+
+  it('PATCH /api/board/cards/:id with unchanged content still returns ok', async () => {
+    const statusRes = await fetch(`${API_BASE}/board-status`);
+    const statusData = await statusRes.json() as Record<string, unknown>;
+    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const cardId = cards[0].id as string;
+
+    // First set a known value
+    await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_data: { noChangeKey: 'stable' } }),
+    });
+
+    // PATCH again with the exact same value — content unchanged, no restart should fire
+    const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_data: { noChangeKey: 'stable' } }),
+    });
+    expect(res.ok).toBe(true);
+    const data = await res.json() as Record<string, unknown>;
+    expect(data).toHaveProperty('ok', true);
+  });
+
+  it('POST /api/board/cards/:id/retrigger returns 404 for an unknown card', async () => {
+    const res = await fetch(`${API_BASE}/cards/no-such-card/retrigger`, { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
   it('POST /api/board/cards/:id/actions returns an error when chat-send has no handler', async () => {
     const statusRes = await fetch(`${API_BASE}/board-status`);
     const statusData = await statusRes.json() as Record<string, unknown>;

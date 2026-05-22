@@ -100,3 +100,38 @@ describe('board-livecards-client runtime session', () => {
     });
   });
 });
+
+describe('defaultBoardPaths — retriggerCard', () => {
+  it('includes retriggerCard path builder', () => {
+    const paths = defaultBoardPaths('my-board');
+    expect(typeof paths.retriggerCard).toBe('function');
+    expect(paths.retriggerCard('my-card')).toBe('/api/boards/my-board/cards/my-card/retrigger');
+  });
+
+  it('encodes card id in retriggerCard URL', () => {
+    const paths = defaultBoardPaths('b');
+    expect(paths.retriggerCard('card with spaces')).toBe('/api/boards/b/cards/card%20with%20spaces/retrigger');
+  });
+});
+
+describe('session.retriggerCard', () => {
+  it('issues POST to the retrigger endpoint', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    const session = createBoardRuntimeSession({
+      fetchServer: async (path, init) => {
+        calls.push({ path, init });
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      boardPaths: (boardId: string) => defaultBoardPaths(boardId),
+      getServerOrigin: () => 'http://localhost:7799',
+    });
+    session.attachProvidedState({ boardId: 'board-1', payload: PAYLOAD });
+
+    await session.retriggerCard('card-a');
+
+    const call = calls.find((c) => c.path.includes('/retrigger'));
+    expect(call).toBeTruthy();
+    expect(call?.path).toBe('/api/boards/board-1/cards/card-a/retrigger');
+    expect(call?.init?.method).toBe('POST');
+  });
+});

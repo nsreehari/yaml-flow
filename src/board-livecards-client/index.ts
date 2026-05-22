@@ -48,6 +48,7 @@ export interface BoardPaths {
   initBoard: string;
   stream: string;
   patchCard: (id: string) => string;
+  retriggerCard: (id: string) => string;
   cardAction: (id: string) => string;
   cardChats: (id: string) => string;
   chatSubscribeSse: (id: string) => string;
@@ -117,6 +118,7 @@ export interface BoardRuntimeSession {
   getClientId(): string;
   getSseClientId(): string;
   patchCardState(cardId: string, patch: Record<string, unknown>): Promise<void>;
+  retriggerCard(cardId: string): Promise<void>;
   dispatchCardAction(cardId: string, actionType: string, payload?: Record<string, unknown> | null): Promise<{ payload: Record<string, unknown> }>;
   uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null>;
   subscribeCardChats(cardId: string): Promise<void>;
@@ -133,6 +135,7 @@ export interface DerivedBoardRuntime {
   getClientId(): string;
   getSseClientId(): string;
   patchCardState(cardId: string, patch: Record<string, unknown>): Promise<void>;
+  retriggerCard(cardId: string): Promise<void>;
   dispatchCardAction(cardId: string, actionType: string, payload?: Record<string, unknown> | null): Promise<{ payload: Record<string, unknown> }>;
   uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null>;
   subscribeCardChats(cardId: string): Promise<void>;
@@ -165,8 +168,9 @@ export function defaultBoardPaths(boardId: string, apiBase = '/api/boards'): Boa
   return {
     initBoard: `${base}/init-board`,
     stream:    `${base}/sse`,
-    patchCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
-    cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
+    patchCard:       (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
+    retriggerCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/retrigger`,
+    cardAction:      (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
     cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
     cardChats:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats`,
     chatSubscribeSse:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/subscribe-sse`,
@@ -180,8 +184,9 @@ export function singleBoardPaths(apiBase = '/api/board'): BoardPaths {
   return {
     initBoard: `${base}/init-board`,
     stream:    `${base}/sse`,
-    patchCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
-    cardAction:  (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
+    patchCard:       (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
+    retriggerCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/retrigger`,
+    cardAction:      (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
     cardFile:    (id: string) => `${base}/cards/${encodeURIComponent(id)}/files`,
     cardChats:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats`,
     chatSubscribeSse:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/chats/subscribe-sse`,
@@ -289,6 +294,21 @@ export async function patchCardState(opts: {
     body: JSON.stringify(opts.patch || {}),
   });
   if (!res.ok) throw new Error(`PATCH failed for ${opts.cardId} (${res.status})`);
+}
+
+/**
+ * Trigger a forced card refresh (upsertCard restart:true) via the server's
+ * POST /cards/:id/retrigger endpoint. Does not require a body.
+ */
+export async function retriggerCard(opts: {
+  fetchServer: FetchServerFn;
+  boardPaths: BoardPathsFn;
+  boardId: string;
+  cardId: string;
+}): Promise<void> {
+  const paths = opts.boardPaths(opts.boardId);
+  const res = await opts.fetchServer(paths.retriggerCard(opts.cardId), { method: 'POST' });
+  if (!res.ok) throw new Error(`retrigger failed for ${opts.cardId} (${res.status})`);
 }
 
 /**
@@ -497,6 +517,11 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
     await patchCardState({ fetchServer, boardPaths, boardId, cardId, patch });
   }
 
+  async function retriggerCardForSession(cardId: string): Promise<void> {
+    const { boardId } = requireBoardContext();
+    await retriggerCard({ fetchServer, boardPaths, boardId, cardId });
+  }
+
   async function subscribeCardChats(cardId: string): Promise<void> {
     const { paths } = requireBoardContext();
     const pending = pendingChatSubscriptions[cardId];
@@ -681,6 +706,7 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
     getClientId: () => sseClientId,
     getSseClientId: () => sseClientId,
     patchCardState: patchCardStateForSession,
+    retriggerCard: retriggerCardForSession,
     dispatchCardAction: dispatchCardActionForSession,
     uploadCardFile: uploadCardFileForSession,
     subscribeCardChats,
@@ -746,7 +772,7 @@ export function createDerivedBoardRuntime(options: DerivedBoardRuntimeOptions): 
         ? (html: string) => (globalThis as unknown as { DOMPurify: { sanitize: (h: string) => string } }).DOMPurify.sanitize(html)
         : null,
       onPatchState: (id: string, patch: Record<string, unknown>) => session.patchCardState(id, patch),
-      onRefresh: (id: string) => session.patchCardState(id, {}),
+      onRefresh: (id: string) => session.retriggerCard(id),
       onAction: (id: string, actionType: string, actionPayload: Record<string, unknown> | null) =>
         session.dispatchCardAction(id, actionType, actionPayload).then(() => undefined),
       startReceivingChats: (id: string) => { void session.subscribeCardChats(id); },
@@ -805,6 +831,7 @@ export function createDerivedBoardRuntime(options: DerivedBoardRuntimeOptions): 
     getClientId: () => session.getClientId(),
     getSseClientId: () => session.getSseClientId(),
     patchCardState: (cardId, patch) => session.patchCardState(cardId, patch),
+    retriggerCard: (cardId) => session.retriggerCard(cardId),
     dispatchCardAction: (cardId, actionType, payload) => session.dispatchCardAction(cardId, actionType, payload),
     uploadCardFile: (cardId, file, opts) => session.uploadCardFile(cardId, file, opts),
     subscribeCardChats: (cardId) => session.subscribeCardChats(cardId),
