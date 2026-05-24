@@ -43,6 +43,21 @@ const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/board`;
 
 let server: http.Server | null = null;
 const testChatStorage = createInMemoryChatStorage();
+const sseConnected: string[] = [];
+const sseDisconnected: string[] = [];
+const sseWriters = new Map<string, (payload: unknown) => void>();
+const channelSubscribed: Array<{ clientId: string; channelName: string; params: { cardId?: string } }> = [];
+const channelUnsubscribed: Array<{ clientId: string; channelName: string; params: { cardId?: string } }> = [];
+
+async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 // ── CardSourceAdapter from FS ──────────────────────────────────────────────
 function createFsCardSource(cardsDir: string): CardSourceAdapter {
@@ -95,6 +110,20 @@ beforeAll(async () => {
       error: console.error,
     },
     serverUrl: `http://127.0.0.1:${TEST_PORT}`,
+    onSseClientConnected(clientId, writer) {
+      sseConnected.push(clientId);
+      sseWriters.set(clientId, writer);
+    },
+    onSseClientDisconnected(clientId) {
+      sseDisconnected.push(clientId);
+      sseWriters.delete(clientId);
+    },
+    onChannelSubscribed(clientId, channelName, params) {
+      channelSubscribed.push({ clientId, channelName, params });
+    },
+    onChannelUnsubscribed(clientId, channelName, params) {
+      channelUnsubscribed.push({ clientId, channelName, params });
+    },
   };
 
   // Preload cards into the persisted card store used by runtime bootstrap.
@@ -386,6 +415,100 @@ describe('platform-free server runtime (Node host)', () => {
     expect(payload).toHaveProperty('cardDefinitions');
 
     controller2.abort();
+  });
+
+  it('invokes SSE lifecycle hooks and allows host-written frames', async () => {
+    const clientId = 'test-sse-hooks';
+    const controller = new AbortController();
+    const res = await fetch(`${API_BASE}/sse?clientId=${encodeURIComponent(clientId)}`, { signal: controller.signal });
+    expect(res.ok).toBe(true);
+
+    const reader = res.body!.getReader();
+    const { value: firstValue } = await reader.read();
+    const firstText = new TextDecoder().decode(firstValue);
+    expect(firstText).toContain('data: ');
+
+    await waitFor(() => sseConnected.includes(clientId) && sseWriters.has(clientId));
+    sseWriters.get(clientId)!({ kind: 'server_notice', message: 'hello from host' });
+
+    const { value: secondValue } = await reader.read();
+    const secondText = new TextDecoder().decode(secondValue);
+    expect(secondText).toContain('server_notice');
+
+    controller.abort();
+    await waitFor(() => sseDisconnected.includes(clientId));
+  });
+
+  it('supports board-scoped and card-scoped watch-channel subscribe/unsubscribe hooks', async () => {
+    const statusRes = await fetch(`${API_BASE}/board-status`);
+    const statusData = await statusRes.json() as Record<string, unknown>;
+    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const cardId = cards[0].id as string;
+    const clientId = 'test-watch-channel';
+    const controller = new AbortController();
+    const res = await fetch(`${API_BASE}/sse?clientId=${encodeURIComponent(clientId)}`, { signal: controller.signal });
+    expect(res.ok).toBe(true);
+    const reader = res.body!.getReader();
+    await reader.read();
+    await waitFor(() => sseWriters.has(clientId));
+
+    const subscribedBefore = channelSubscribed.length;
+    const unsubscribedBefore = channelUnsubscribed.length;
+
+    const boardSubscribe = await fetch(`${API_BASE}/watch-channel/watchparty/subscribe-sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId }),
+    });
+    expect(boardSubscribe.ok).toBe(true);
+    await expect(boardSubscribe.json()).resolves.toMatchObject({ ok: true, clientId, channelName: 'watchparty', subscribed: true });
+
+    const cardSubscribe = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/watch-channel/watchparty/subscribe-sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId }),
+    });
+    expect(cardSubscribe.ok).toBe(true);
+    await expect(cardSubscribe.json()).resolves.toMatchObject({ ok: true, clientId, cardId, channelName: 'watchparty', subscribed: true });
+
+    expect(channelSubscribed.slice(subscribedBefore)).toEqual([
+      { clientId, channelName: 'watchparty', params: {} },
+      { clientId, channelName: 'watchparty', params: { cardId } },
+    ]);
+
+    const cardUnsubscribe = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/watch-channel/watchparty/unsubscribe-sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId }),
+    });
+    expect(cardUnsubscribe.ok).toBe(true);
+    await expect(cardUnsubscribe.json()).resolves.toMatchObject({ ok: true, clientId, cardId, channelName: 'watchparty', subscribed: false });
+
+    const boardUnsubscribe = await fetch(`${API_BASE}/watch-channel/watchparty/unsubscribe-sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId }),
+    });
+    expect(boardUnsubscribe.ok).toBe(true);
+    await expect(boardUnsubscribe.json()).resolves.toMatchObject({ ok: true, clientId, channelName: 'watchparty', subscribed: false });
+
+    expect(channelUnsubscribed.slice(unsubscribedBefore)).toEqual([
+      { clientId, channelName: 'watchparty', params: { cardId } },
+      { clientId, channelName: 'watchparty', params: {} },
+    ]);
+
+    controller.abort();
+    await waitFor(() => sseDisconnected.includes(clientId));
+  });
+
+  it('returns 404 for watch-channel subscription when SSE client is not connected', async () => {
+    const res = await fetch(`${API_BASE}/watch-channel/watchparty/subscribe-sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'missing-sse-client' }),
+    });
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toMatchObject({ error: 'SSE client not connected: missing-sse-client' });
   });
 
   // ── Chat handler failure / .processing marker cleanup ────────────────────

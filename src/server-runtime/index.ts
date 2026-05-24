@@ -106,6 +106,11 @@ interface NotificationState {
   cards: Record<string, unknown>;
 }
 
+interface SseClientState {
+  res: RuntimeResponse;
+  subscribedChatCardIds: Set<string>;
+}
+
 // ============================================================================
 // Notification helpers
 // ============================================================================
@@ -155,8 +160,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const notificationTransport = options.notificationTransport || null;
   const serverUrl = options.serverUrl || null;
   const executionExtra = options.executionExtra || {};
+  const onSseClientConnected = options.onSseClientConnected;
+  const onSseClientDisconnected = options.onSseClientDisconnected;
+  const onChannelSubscribed = options.onChannelSubscribed;
+  const onChannelUnsubscribed = options.onChannelUnsubscribed;
 
-  const sseClients = new Map<string, { res: RuntimeResponse; subscribedChatCardIds: Set<string> }>();
+  const sseClients = new Map<string, SseClientState>();
   const lastChatCursorByCardId = new Map<string, string | null>();
   const lastChatProcessingByCardId = new Map<string, boolean>();
   let chatSubscriptionScanTimer: ReturnType<typeof setInterval> | null = null;
@@ -907,6 +916,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     try { resWithTransport.socket?.uncork?.(); } catch { /* ignore */ }
   }
 
+  function disconnectSseClient(clientId: string, expectedRes?: RuntimeResponse): void {
+    const client = sseClients.get(clientId);
+    if (!client) return;
+    if (expectedRes && client.res !== expectedRes) return;
+    sseClients.delete(clientId);
+    stopChatSubscriptionScanIfIdle();
+    try { onSseClientDisconnected?.(clientId); } catch { /* ignore host hook failures */ }
+    try { client.res.end(); } catch { /* ignore */ }
+  }
+
   function writeSseFrame(clientId: string, payload: unknown): void {
     const client = sseClients.get(clientId);
     if (!client) return;
@@ -915,8 +934,33 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       client.res.write(frame);
       flushSseTransport(client.res);
     } catch {
-      sseClients.delete(clientId);
+      disconnectSseClient(clientId, client.res);
     }
+  }
+
+  function handleChannelSubscription(
+    res: RuntimeResponse,
+    clientId: string,
+    channelName: string,
+    params: { cardId?: string },
+    subscribed: boolean,
+  ): void {
+    if (!sseClients.has(clientId)) {
+      json(res, 404, { error: `SSE client not connected: ${clientId}` });
+      return;
+    }
+    if (subscribed) {
+      onChannelSubscribed?.(clientId, channelName, params);
+    } else {
+      onChannelUnsubscribed?.(clientId, channelName, params);
+    }
+    json(res, 200, {
+      ok: true,
+      clientId,
+      channelName,
+      ...(params.cardId ? { cardId: params.cardId } : {}),
+      subscribed,
+    });
   }
 
   function currentSubscribedChatCardIds(): string[] {
@@ -1053,7 +1097,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const existing = sseClients.get(clientId);
     const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
     if (existing) {
-      try { existing.res.end(); } catch { /* ignore */ }
+      disconnectSseClient(clientId, existing.res);
     }
     res.writeHead(200, {
       ...corsHeaders,
@@ -1069,18 +1113,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const payload = buildPublishedRuntimePayload();
     const frame = buildSseFrame(payload);
     res.write(frame);
+    try { onSseClientConnected?.(clientId, (customPayload: unknown) => { writeSseFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
 
     const keepAlive = setInterval(() => {
       try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
     }, 15_000);
     req.on('close', () => {
       clearInterval(keepAlive);
-      const current = sseClients.get(clientId);
-      if (current?.res === res) {
-        sseClients.delete(clientId);
-        stopChatSubscriptionScanIfIdle();
-      }
-      try { res.end(); } catch { /* ignore */ }
+      disconnectSseClient(clientId, res);
     });
   }
 
@@ -1235,6 +1275,31 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           return true;
         }
         json(res, 200, { ok: true, clientId, cardId, subscribed: false });
+        return true;
+      }
+
+      const boardWatchChannelMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/watch-channel/([^/]+)/(subscribe|unsubscribe)-sse$`));
+      if (method === 'POST' && boardWatchChannelMatch) {
+        await bootstrapBoard();
+        const channelName = decodeURIComponent(boardWatchChannelMatch[1]);
+        const subscribed = boardWatchChannelMatch[2] === 'subscribe';
+        const body = await readJsonBody(req);
+        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
+        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
+        handleChannelSubscription(res, clientId, channelName, {}, subscribed);
+        return true;
+      }
+
+      const cardWatchChannelMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/watch-channel/([^/]+)/(subscribe|unsubscribe)-sse$`));
+      if (method === 'POST' && cardWatchChannelMatch) {
+        await bootstrapBoard();
+        const cardId = decodeURIComponent(cardWatchChannelMatch[1]);
+        const channelName = decodeURIComponent(cardWatchChannelMatch[2]);
+        const subscribed = cardWatchChannelMatch[3] === 'subscribe';
+        const body = await readJsonBody(req);
+        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
+        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
+        handleChannelSubscription(res, clientId, channelName, { cardId }, subscribed);
         return true;
       }
 

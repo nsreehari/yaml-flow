@@ -151,6 +151,14 @@ export interface SingleBoardRuntimeOptions {
   serverUrl?: string;
   /** Extra host-specific fields baked into execution ref extras */
   executionExtra?: Record<string, unknown>;
+  /** Called when an SSE client connects. The writer injects a single SSE data frame. */
+  onSseClientConnected?: (clientId: string, writer: (payload: unknown) => void) => void;
+  /** Called when an SSE client disconnects due to close, reconnect replacement, or write error. */
+  onSseClientDisconnected?: (clientId: string) => void;
+  /** Called when a connected SSE client subscribes to a host-defined named channel. */
+  onChannelSubscribed?: (clientId: string, channelName: string, params: { cardId?: string }) => void;
+  /** Called when a connected SSE client unsubscribes from a host-defined named channel. */
+  onChannelUnsubscribed?: (clientId: string, channelName: string, params: { cardId?: string }) => void;
 }
 
 // ============================================================================
