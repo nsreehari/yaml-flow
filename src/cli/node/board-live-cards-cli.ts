@@ -199,6 +199,14 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().getArchiveStoreRef({}));
       return;
     }
+    case 'get-chat-store-ref': {
+      printResult(board().getChatStoreRef({}));
+      return;
+    }
+    case 'get-artifacts-store-ref': {
+      printResult(board().getArtifactsStoreRef({}));
+      return;
+    }
     case 'get-outputs': {
       const type = requireFlag(rest, '--type', 'get-outputs --base-ref <ref> --type <data-object|computed-values> [--key <key>] [--all]');
       const all = rest.includes('--all');
@@ -216,8 +224,15 @@ export async function cli(argv: string[]): Promise<void> {
           const key = requireFlag(rest, '--key', 'get-outputs --type computed-values --base-ref <ref> --key <card-id>');
           printResult(board().getOutputsComputedValues({ params: { key } }));
         }
+      } else if (type === 'fetched_sources') {
+        if (all) {
+          printResult(board().getAllOutputsFetchedSources({}));
+        } else {
+          const key = requireFlag(rest, '--key', 'get-outputs --type fetched_sources --base-ref <ref> --key <card-id>');
+          printResult(board().getOutputsFetchedSources({ params: { key } }));
+        }
       } else {
-        throw new Error(`get-outputs: unknown --type "${type}", expected data-object | computed-values`);
+        throw new Error(`get-outputs: unknown --type "${type}", expected data-object | computed-values | fetched_sources`);
       }
       return;
     }

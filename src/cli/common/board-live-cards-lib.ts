@@ -246,6 +246,8 @@ export interface FetchedSourcesStore {
   commitSourceData(cardId: string, outputFile: string, deliveryToken: string): boolean;
   /** True if live (committed) source data exists for this outputFile. */
   hasSource(cardId: string, outputFile: string): boolean;
+  /** List the outputFile names for all committed source files belonging to a card. */
+  listSources(cardId: string): string[];
 }
 
 export function createFetchedSourcesStore(
@@ -274,6 +276,11 @@ export function createFetchedSourcesStore(
     },
     hasSource(cardId, outputFile): boolean {
       return blob.exists(`${cardId}/${outputFile}`);
+    },
+    listSources(cardId: string): string[] {
+      return blob.listKeys(`${cardId}/`)
+        .filter(k => !k.includes('/.staged/'))
+        .map(k => k.slice(`${cardId}/`.length));
     },
   };
 }
@@ -511,6 +518,10 @@ export interface BoardConfigStore {
   writeScratchStoreRef(ref: string): void;
   readArchiveStoreRef(): string | null;
   writeArchiveStoreRef(ref: string): void;
+  readChatStoreRef(): string | null;
+  writeChatStoreRef(ref: string): void;
+  readArtifactsStoreRef(): string | null;
+  writeArtifactsStoreRef(ref: string): void;
 }
 
 export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
@@ -569,6 +580,22 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 
     writeArchiveStoreRef(ref: string): void {
       kv.write('archive-store-ref', ref);
+    },
+
+    readChatStoreRef(): string | null {
+      return readKey('chat-store-ref');
+    },
+
+    writeChatStoreRef(ref: string): void {
+      kv.write('chat-store-ref', ref);
+    },
+
+    readArtifactsStoreRef(): string | null {
+      return readKey('artifacts-store-ref');
+    },
+
+    writeArtifactsStoreRef(ref: string): void {
+      kv.write('artifacts-store-ref', ref);
     },
   };
 }

@@ -67,6 +67,14 @@ export interface BlobStorage {
 
   /** Optional metadata lookup. */
   stat?(key: string): BlobStat | null;
+
+  /**
+   * Optional: resolve a key to a transport-neutral KindValueRef (e.g. for
+   * handing the underlying location to a spawned child process or remote worker).
+   *   FS: { kind: 'fs-path', value: <absolute path under rootDir> }
+   *   Other backends: backend-specific ref
+   */
+  keyRef?(key: string): KindValueRef;
 }
 
 // ============================================================================

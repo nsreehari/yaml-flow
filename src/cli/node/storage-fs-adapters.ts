@@ -46,9 +46,11 @@ import type {
   JournalStorage,
   JSONStorage,
   KVStorage,
+  KindValueRef,
   ScratchStorage,
   StorageProvider,
 } from '../common/storage-interface.js';
+import { serializeRef } from '../common/storage-interface.js';
 import type {
   CardIndex,
   LiveCard,
@@ -145,6 +147,10 @@ export function createFsBlobStorage(rootDir: string): BlobStorage {
       } catch {
         return null;
       }
+    },
+
+    keyRef(key: string): KindValueRef {
+      return { kind: 'fs-path', value: resolve(key) };
     },
   };
 }

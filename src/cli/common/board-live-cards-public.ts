@@ -263,7 +263,9 @@ export interface BoardLiveCardsPublic {
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getScratchStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
   getArchiveStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
-  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref', 'archive-store-ref'
+  getChatStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
+  getArtifactsStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
+  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref', 'archive-store-ref', 'chat-store-ref', 'artifacts-store-ref'
   getConfig(input: CommandInput): CommandResult<{ value: unknown }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
@@ -273,6 +275,10 @@ export interface BoardLiveCardsPublic {
   getOutputsComputedValues(input: CommandInput): CommandResult;
   // no params needed
   getAllOutputsComputedValues(input: CommandInput): CommandResult<Record<string, unknown>>;
+  // params: key (card-id)
+  getOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, string>>;
+  // no params needed
+  getAllOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, Record<string, string>>>;
   // params: id
   removeCard(input: CommandInput): CommandResult;
   // params: id
@@ -509,6 +515,15 @@ export function createBoardLiveCardsPublic(
         if (sxCache.has(key)) return true;
         return realFetchedSourcesStore.hasSource(cardId, outputFile);
       },
+      listSources(cardId) {
+        const real = realFetchedSourcesStore.listSources(cardId);
+        const overlayFiles = new Set<string>();
+        for (const k of sxCache.keys()) {
+          if (k.startsWith(`${cardId}/`)) overlayFiles.add(k.slice(`${cardId}/`.length));
+        }
+        const merged = new Set([...real, ...overlayFiles]);
+        return Array.from(merged);
+      },
     };
 
     const cardHandlerAdapters = {
@@ -672,11 +687,15 @@ export function createBoardLiveCardsPublic(
       if (!outputsStoreRef) return fail('init requires params.outputsStoreRef — pass the outputs store ref here');
       const scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
       const archiveStoreRef = input.params?.['archiveStoreRef'] as string | undefined;
+      const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
+      const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;
       const cfg = configStore();
       cfg.writeCardStoreRef(storeRef);
       cfg.writeOutputsStoreRef(outputsStoreRef);
       if (scratchStoreRef) cfg.writeScratchStoreRef(scratchStoreRef);
       if (archiveStoreRef) cfg.writeArchiveStoreRef(archiveStoreRef);
+      if (chatStoreRef) cfg.writeChatStoreRef(chatStoreRef);
+      if (artifactsStoreRef) cfg.writeArtifactsStoreRef(artifactsStoreRef);
       const body = (input.body ?? {}) as Record<string, unknown>;
       if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
       if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) cfg.writeChatHandlerFlow(body['chat-handler-flow']);
@@ -871,6 +890,20 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
   }
 
+  function getChatStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
+    try {
+      const storeRef = configStore().readChatStoreRef();
+      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
+  }
+
+  function getArtifactsStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
+    try {
+      const storeRef = configStore().readArtifactsStoreRef();
+      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
+  }
+
   function getConfig(input: CommandInput): CommandResult<{ value: unknown }> {
     try {
       const key = input.params?.['key'] as string | undefined;
@@ -883,7 +916,9 @@ export function createBoardLiveCardsPublic(
         case 'card-store-ref':    value = cfg.readCardStoreRef(); break;
         case 'outputs-store-ref': value = cfg.readOutputsStoreRef(); break;
         case 'scratch-store-ref': value = cfg.readScratchStoreRef(); break;
-        case 'archive-store-ref': value = cfg.readArchiveStoreRef(); break;
+        case 'archive-store-ref':    value = cfg.readArchiveStoreRef(); break;
+        case 'chat-store-ref':        value = cfg.readChatStoreRef(); break;
+        case 'artifacts-store-ref':   value = cfg.readArtifactsStoreRef(); break;
         default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
       }
       return ok({ value }) as CommandResult<{ value: unknown }>;
@@ -920,10 +955,54 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<Record<string, unknown>>; }
   }
 
+  function sourcesStore() {
+    return createFetchedSourcesStore(
+      adapter.blobStorage('sources'),
+      (ref) => adapter.resolveBlob(ref),
+    );
+  }
+
+  function toSourceRef(blobKey: string): string {
+    const ref = adapter.blobStorage('sources').keyRef?.(blobKey);
+    return ref ? serializeRef(ref) : blobKey;
+  }
+
+  function getOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, string>> {
+    try {
+      const key = input.params?.['key'] as string | undefined;
+      if (!key) return fail('getOutputsFetchedSources requires params.key') as CommandResult<Record<string, string>>;
+      const files = sourcesStore().listSources(key);
+      const result: Record<string, string> = {};
+      for (const outputFile of files) result[outputFile] = toSourceRef(`${key}/${outputFile}`);
+      return ok(result) as CommandResult<Record<string, string>>;
+    } catch (e) { return err(e) as CommandResult<Record<string, string>>; }
+  }
+
+  function getAllOutputsFetchedSources(_input: CommandInput): CommandResult<Record<string, Record<string, string>>> {
+    try {
+      const store = sourcesStore();
+      const cardIds = new Set<string>();
+      for (const key of adapter.blobStorage('sources').listKeys()) {
+        const slash = key.indexOf('/');
+        if (slash > 0 && !key.includes('/.staged/')) cardIds.add(key.slice(0, slash));
+      }
+      const result: Record<string, Record<string, string>> = {};
+      for (const cardId of cardIds) {
+        const files = store.listSources(cardId);
+        if (files.length > 0) {
+          result[cardId] = {};
+          for (const outputFile of files) result[cardId][outputFile] = toSourceRef(`${cardId}/${outputFile}`);
+        }
+      }
+      return ok(result) as CommandResult<Record<string, Record<string, string>>>;
+    } catch (e) { return err(e) as CommandResult<Record<string, Record<string, string>>>; }
+  }
+
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getArchiveStoreRef, getConfig,
+    init, status, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getArchiveStoreRef, getChatStoreRef, getArtifactsStoreRef, getConfig,
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
+    getOutputsFetchedSources, getAllOutputsFetchedSources,
     removeCard, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,
