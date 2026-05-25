@@ -841,6 +841,37 @@ describe('cli remove-card', () => {
 });
 
 // ============================================================================
+// CLI card-refreshed-notify
+// ============================================================================
+
+describe('cli card-refreshed-notify', () => {
+  let tmpDir: string;
+
+  function freshDir() {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-notify-test-'));
+    return tmpDir;
+  }
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('exits successfully for a card present in the card store', () => {
+    const dir = path.join(freshDir(), 'board');
+    initBoard(ref(dir));
+    writeCardToStore(dir, { id: 'temp', card_data: {} });
+
+    runBoardCli([
+      'card-refreshed-notify',
+      '--base-ref',
+      serializeRef(ref(dir)),
+      '--card-id',
+      'temp',
+    ]);
+  });
+});
+
+// ============================================================================
 // CLI validate-card
 // ============================================================================
 
