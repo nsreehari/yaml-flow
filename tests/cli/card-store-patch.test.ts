@@ -48,6 +48,46 @@ describe('card-store patch API', () => {
     expect(store.patch({ params: { id: 'c1' }, body: { value: 1 } }).status).toBe('fail');
   });
 
+  it('appends file metadata to card_data.files', () => {
+    const store = freshStore();
+    const setResult = store.set({ body: { id: 'c1', card_data: { files: [{ name: 'a.txt' }] } } });
+    expect(setResult.status).toBe('success');
+
+    const appendResult = store.appendFiles({
+      params: { id: 'c1' },
+      body: { name: 'b.txt', size: 20 },
+    });
+    expect(appendResult.status).toBe('success');
+    if (appendResult.status === 'success') {
+      expect(appendResult.data.count).toBe(1);
+    }
+
+    const getResult = store.get({ params: { id: 'c1' } });
+    expect(getResult.status).toBe('success');
+    if (getResult.status === 'success') {
+      const card = getResult.data.cards[0] as Record<string, unknown>;
+      const cardData = card.card_data as Record<string, unknown>;
+      expect(cardData.files).toEqual([
+        { name: 'a.txt' },
+        { name: 'b.txt', size: 20 },
+      ]);
+    }
+  });
+
+  it('accepts body.files arrays for appendFiles', () => {
+    const store = freshStore();
+    expect(store.set({ body: { id: 'c1', card_data: {} } }).status).toBe('success');
+
+    const appendResult = store.appendFiles({
+      params: { id: 'c1' },
+      body: { files: [{ name: 'a.txt' }, { name: 'b.txt' }] },
+    });
+    expect(appendResult.status).toBe('success');
+    if (appendResult.status === 'success') {
+      expect(appendResult.data.count).toBe(2);
+    }
+  });
+
   it('deletes both the index entry and the backing card file', () => {
     const store = freshStore();
     const json = createFsJsonStorage(tmpDir);

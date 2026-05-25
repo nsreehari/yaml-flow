@@ -62,4 +62,32 @@ describe('card-store-cli', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('card-store: unknown command "delete"');
   });
+
+  it('append-files appends file metadata to card_data.files', () => {
+    const { storeRef } = makeStoreRef();
+
+    const setRun = runCardStore(['set', '--store-ref', storeRef], JSON.stringify({ id: 'c1', card_data: { files: [{ name: 'a.txt' }] } }));
+    expect(setRun.status).toBe(0);
+
+    const appendRun = runCardStore([
+      'append-files',
+      '--store-ref',
+      storeRef,
+      '--id',
+      'c1',
+      '--value-json',
+      JSON.stringify({ name: 'b.txt', size: 20 }),
+    ]);
+    expect(appendRun.status).toBe(0);
+    expect(appendRun.stderr).toContain('card-store append-files: appended 1 file(s)');
+
+    const getRun = runCardStore(['get', '--store-ref', storeRef, '--id', 'c1']);
+    expect(getRun.status).toBe(0);
+    const cards = JSON.parse(getRun.stdout) as Array<Record<string, unknown>>;
+    const cardData = cards[0].card_data as Record<string, unknown>;
+    expect(cardData.files).toEqual([
+      { name: 'a.txt' },
+      { name: 'b.txt', size: 20 },
+    ]);
+  });
 });

@@ -52,6 +52,13 @@ export interface CardStorePublic {
    * body.value: value to assign (or body itself if value is omitted)
    */
   patch(input: CommandInput): CommandResult<{ count: number }>;
+
+  /**
+   * Append one or more file metadata objects to card_data.files.
+   * params.id: string
+   * body: file metadata object, array of file metadata objects, or { files: [...] }
+   */
+  appendFiles(input: CommandInput): CommandResult<{ count: number }>;
 }
 
 // ============================================================================
@@ -68,6 +75,16 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
   }
   function oops<T>(e: unknown): CommandResult<T> {
     return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>;
+  }
+
+  function normalizeFilesBody(body: unknown): LiveCard[] | null {
+    if (Array.isArray(body)) return body as LiveCard[];
+    if (body && typeof body === 'object') {
+      const obj = body as { files?: unknown };
+      if (Array.isArray(obj.files)) return obj.files as LiveCard[];
+      return [body as LiveCard];
+    }
+    return null;
   }
 
   return {
@@ -123,6 +140,31 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
 
         store.patchCard(id, jsonPath, value);
         return ok({ count: 1 });
+      } catch (e) { return oops(e); }
+    },
+
+    appendFiles(input: CommandInput): CommandResult<{ count: number }> {
+      try {
+        const id = input.params?.['id'] as string | undefined;
+        if (!id) return fail('appendFiles requires params.id');
+
+        const card = store.readCard(id);
+        if (!card) return fail(`card "${id}" not found`);
+
+        const files = normalizeFilesBody(input.body);
+        if (!files || files.length === 0) {
+          return fail('appendFiles requires a file metadata object, array, or body.files array');
+        }
+
+        const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
+          ? card.card_data as Record<string, unknown>
+          : {};
+        const existingFiles = Array.isArray(cardData.files) ? cardData.files : [];
+        const nextFiles = [...existingFiles, ...files];
+
+        const patchResult = this.patch({ params: { id, path: 'card_data.files' }, body: { value: nextFiles } });
+        if (patchResult.status !== 'success') return patchResult;
+        return ok({ count: files.length });
       } catch (e) { return oops(e); }
     },
   };

@@ -9,6 +9,7 @@
  *   card-store set --store-ref <ref> [--ref <jsonfile> | --ref-yaml <yamlfile>] [--yaml]
  *   card-store del --store-ref <ref> --id <card-id> [--id <card-id> ...]
  *   card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]
+ *   card-store append-files --store-ref <ref> --id <card-id> [--value-json <json>]
  */
 
 import * as fs from 'node:fs';
@@ -60,6 +61,10 @@ const HELP = [
   '',
   '  card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]',
   '    Patch one card field by dot-path assignment.',
+  '    If --value-json is omitted, stdin is parsed as JSON value.',
+  '',
+  '  card-store append-files --store-ref <ref> --id <card-id> [--value-json <json>]',
+  '    Append one file metadata object or an array of file metadata objects to card_data.files.',
   '    If --value-json is omitted, stdin is parsed as JSON value.',
 ].join('\n');
 
@@ -181,6 +186,36 @@ export async function cli(argv: string[]): Promise<void> {
       process.exit(1);
     }
     console.error('card-store patch: ok');
+    return;
+  }
+
+  // ── append-files ───────────────────────────────────────────────────────
+  if (cmd === 'append-files') {
+    const id = requireFlag(rest, '--id', 'card-store append-files --store-ref <ref> --id <card-id> [--value-json <json>]');
+    const valueJson = optFlag(rest, '--value-json');
+    let value: unknown;
+    try {
+      if (typeof valueJson === 'string') {
+        value = JSON.parse(valueJson);
+      } else {
+        const text = await readStdin();
+        if (!text.trim()) {
+          console.error('card-store append-files: provide --value-json or JSON value via stdin');
+          process.exit(1);
+        }
+        value = JSON.parse(text);
+      }
+    } catch (e) {
+      console.error(`card-store append-files: JSON parse error: ${(e as Error).message}`);
+      process.exit(1);
+    }
+
+    const result = storePublic.appendFiles({ params: { id }, body: value });
+    if (result.status !== 'success') {
+      console.error(`card-store append-files: ${result.error}`);
+      process.exit(1);
+    }
+    console.error(`card-store append-files: appended ${result.data.count} file(s)`);
     return;
   }
 
