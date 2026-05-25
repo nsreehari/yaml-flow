@@ -7,7 +7,7 @@
  * Usage (all commands read a JSON envelope from stdin unless flags override):
  *
  *   chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>]
- *   chat-store read-all --store-ref <ref> --card-id <id>
+ *   chat-store read-all --store-ref <ref> --card-id <id> [--last-user-turns <n>]
  *   chat-store read-after --store-ref <ref> --card-id <id> [--cursor <cursor>]
  *   chat-store clear    --store-ref <ref> --card-id <id>
  *   chat-store set-processing --store-ref <ref> --card-id <id> --active <true|false>
@@ -57,8 +57,8 @@ const HELP = [
   '  chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>]',
   '    Append a message. Prints { id } on success.',
   '',
-  '  chat-store read-all --store-ref <ref> --card-id <id>',
-  '    Print all messages as a JSON array.',
+  '  chat-store read-all --store-ref <ref> --card-id <id> [--last-user-turns <n>]',
+  '    Print all messages, or the suffix starting at the Nth-last user message.',
   '',
   '  chat-store read-after --store-ref <ref> --card-id <id> [--cursor <cursor>]',
   '    Print messages after cursor as { records, cursor }.',
@@ -143,7 +143,8 @@ export async function cli(argv: string[]): Promise<void> {
 
   if (cmd === 'read-all') {
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-all --store-ref <ref> --card-id <id>');
-    printResult(storePublic.readAll({ params: { cardId: cid } }));
+    const lastUserTurns = optFlag(rest, '--last-user-turns');
+    printResult(storePublic.readAll({ params: { cardId: cid }, body: lastUserTurns ? { lastUserTurns } : undefined }));
     return;
   }
 

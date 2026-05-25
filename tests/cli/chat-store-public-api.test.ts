@@ -48,6 +48,29 @@ describe('chat-store public API command dispatch', () => {
     });
   });
 
+  it('returns the suffix starting at the Nth-last user message through the public API', () => {
+    const store = makeStore();
+
+    store.append({ params: { cardId: 'card-last' }, body: { role: 'system', text: 'setup', files: [] } });
+    store.append({ params: { cardId: 'card-last' }, body: { role: 'user', text: 'first', files: [] } });
+    store.append({ params: { cardId: 'card-last' }, body: { role: 'assistant', text: 'first reply', files: [] } });
+    store.append({ params: { cardId: 'card-last' }, body: { role: 'user', text: 'second', files: [] } });
+    store.append({ params: { cardId: 'card-last' }, body: { role: 'assistant', text: 'second reply', files: [] } });
+    store.append({ params: { cardId: 'card-last' }, body: { role: 'tool', text: 'tool output', files: [] } });
+
+    const read = store.run({ command: 'read-all', cardId: 'card-last', lastUserTurns: 1 });
+    expect(read).toEqual({
+      status: 'success',
+      data: {
+        records: [
+          expect.objectContaining({ role: 'user', text: 'second' }),
+          expect.objectContaining({ role: 'assistant', text: 'second reply' }),
+          expect.objectContaining({ role: 'tool', text: 'tool output' }),
+        ],
+      },
+    });
+  });
+
   it('runs a batch envelope with a shared cardId through the public API', () => {
     const store = makeStore();
 

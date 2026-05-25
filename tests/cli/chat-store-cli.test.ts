@@ -83,6 +83,45 @@ describe('chat-store-cli stdin mode', () => {
     });
   });
 
+  it('reads the suffix from the Nth-last user message via the CLI and stdin envelope', () => {
+    const boardDir = makeBoardDir();
+    const storeRef = makeStoreRef(boardDir);
+
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-last', '--role', 'system', '--text', 'setup']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-last', '--role', 'user', '--text', 'first']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-last', '--role', 'assistant', '--text', 'first reply']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-last', '--role', 'user', '--text', 'second']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-last', '--role', 'assistant', '--text', 'second reply']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-last', '--role', 'tool', '--text', 'tool output']).status).toBe(0);
+
+    const flagRun = runChatStore(['read-all', '--store-ref', storeRef, '--card-id', 'card-last', '--last-user-turns', '1']);
+    expect(flagRun.status).toBe(0);
+    expect(parseStdout(flagRun.stdout)).toEqual({
+      records: [
+        expect.objectContaining({ role: 'user', text: 'second' }),
+        expect.objectContaining({ role: 'assistant', text: 'second reply' }),
+        expect.objectContaining({ role: 'tool', text: 'tool output' }),
+      ],
+    });
+
+    const stdinRun = runChatStoreStdin({
+      command: 'read-all',
+      storeRef,
+      cardId: 'card-last',
+      lastUserTurns: 2,
+    });
+    expect(stdinRun.status).toBe(0);
+    expect(parseStdout(stdinRun.stdout)).toEqual({
+      records: [
+        expect.objectContaining({ role: 'user', text: 'first' }),
+        expect.objectContaining({ role: 'assistant', text: 'first reply' }),
+        expect.objectContaining({ role: 'user', text: 'second' }),
+        expect.objectContaining({ role: 'assistant', text: 'second reply' }),
+        expect.objectContaining({ role: 'tool', text: 'tool output' }),
+      ],
+    });
+  });
+
   it('accepts a command envelope with shared defaults and sequential commands', () => {
     const boardDir = makeBoardDir();
     const storeRef = makeStoreRef(boardDir);

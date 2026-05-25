@@ -14,6 +14,7 @@
  *   const store = createChatStorePublic(createFsBoardChatStorage(parseRef(storeRef).value));
  *   const result = store.append({ params: { cardId: 'c1' }, body: { role: 'user', text: 'hello' } });
  *   const result = store.readAll({ params: { cardId: 'c1' } });
+ *   const result = store.readAll({ params: { cardId: 'c1' }, body: { lastUserTurns: 5 } });
  *   const result = store.readAfter({ params: { cardId: 'c1', cursor: '<id>' } });
  *   const result = store.clear({ params: { cardId: 'c1' } });
  *   const result = store.setProcessing({ params: { cardId: 'c1' }, body: { active: true } });
@@ -41,6 +42,7 @@ export type ChatStoreCommandEnvelope = {
   role?: unknown;
   text?: unknown;
   files?: unknown;
+  lastUserTurns?: unknown;
   cursor?: unknown;
   active?: unknown;
   [key: string]: unknown;
@@ -70,8 +72,9 @@ export interface ChatStorePublic {
   append(input: CommandInput): CommandResult<{ id: string }>;
 
   /**
-   * Read all messages for a card in insertion order.
+    * Read all messages for a card in insertion order.
    * params.cardId: string
+    * body.lastUserTurns?: positive integer
    */
   readAll(input: CommandInput): CommandResult<{ records: ChatRecord[] }>;
 
@@ -133,6 +136,21 @@ export interface ChatStorePublic {
 // ============================================================================
 
 export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
+  function parsePositiveInteger(value: unknown): number | null {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function sliceLastUserTurns(records: ChatRecord[], lastUserTurns: number): ChatRecord[] {
+    let remainingUserTurns = lastUserTurns;
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      if (records[index]?.role !== 'user') continue;
+      remainingUserTurns -= 1;
+      if (remainingUserTurns === 0) return records.slice(index);
+    }
+    return records;
+  }
+
   function ok<T>(data: T): CommandResult<T> {
     return { status: 'success', data } as CommandResult<T>;
   }
@@ -155,7 +173,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
       });
     }
     if (envelope.command === 'read-all') {
-      return api.readAll({ params: { cardId } });
+      return api.readAll({ params: { cardId }, body: { lastUserTurns: envelope.lastUserTurns } });
     }
     if (envelope.command === 'read-after') {
       return api.readAfter({ params: { cardId }, body: { cursor: envelope.cursor ?? null } });
@@ -222,7 +240,12 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('readAll requires params.cardId');
-        return ok({ records: store.readAll(cardId) });
+        const body = (input.body ?? {}) as Record<string, unknown>;
+        const records = store.readAll(cardId);
+        if (body.lastUserTurns === undefined) return ok({ records });
+        const lastUserTurns = parsePositiveInteger(body.lastUserTurns);
+        if (lastUserTurns === null) return fail('readAll requires body.lastUserTurns (positive integer)');
+        return ok({ records: sliceLastUserTurns(records, lastUserTurns) });
       } catch (e) { return oops(e); }
     },
 
