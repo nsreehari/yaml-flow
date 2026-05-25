@@ -335,6 +335,33 @@ describe('reactive — dynamic nodes', () => {
 
     expect(rg.getState().state.tasks.b).toBeUndefined();
   });
+
+  it('calls onNodeRemoved when a task-removal event is applied', async () => {
+    const config = makeConfig({
+      a: { provides: ['x'], taskHandlers: ['a'] },
+      b: { requires: ['x'], provides: ['y'], taskHandlers: ['b'] },
+    });
+
+    const g = makeGraphRef();
+    const removed: string[] = [];
+
+    rg = createReactiveGraph(config, {
+      handlers: {
+        a: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
+        b: async ({ callbackToken }) => { g.resolve(callbackToken, {}); return 'task-initiated'; },
+      },
+      onNodeRemoved: (nodeName) => {
+        removed.push(nodeName);
+      },
+    });
+    g.ref = rg;
+
+    rg.removeNode('b');
+    await ticks(50);
+
+    expect(removed).toEqual(['b']);
+    expect(rg.getState().state.tasks.b).toBeUndefined();
+  });
 });
 
 // ============================================================================

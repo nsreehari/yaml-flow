@@ -292,6 +292,14 @@ export function applyNotification(
       if (!cardIds.includes(cardId)) cardIds = [...cardIds, cardId];
       changed = true;
 
+    } else if (note.kind === 'card_removed') {
+      const cardId = note.cardId as string;
+      if (!modelsById[cardId]) continue;
+      ensureClone();
+      delete modelsById[cardId];
+      cardIds = cardIds.filter((id) => id !== cardId);
+      changed = true;
+
     } else if (note.kind === 'card_chats') {
       const cardId = note.cardId as string;
       const prev = modelsById[cardId];

@@ -199,6 +199,8 @@ export type TaskHandlerFn = (input: TaskHandlerInput) => Promise<TaskHandlerRetu
 export interface ReactiveGraphOptions {
   /** Named handler registry — handler name → handler function */
   handlers: Record<string, TaskHandlerFn>;
+  /** Called synchronously for each task-removal event processed during a drain cycle. */
+  onNodeRemoved?: (nodeName: string) => void;
   /** Called after each drain cycle — for observability */
   onDrain?: (events: GraphEvent[], live: LiveGraph, scheduleResult: ScheduleResult) => void;
 }
@@ -272,6 +274,7 @@ export function createReactiveGraph(
 ): ReactiveGraph {
   const {
     handlers: initialHandlers,
+    onNodeRemoved,
     onDrain,
   } = options;
 
@@ -332,6 +335,16 @@ export function createReactiveGraph(
     // 2. Apply events atomically (if any)
     if (events.length > 0) {
       live = applyEvents(live, events);
+      if (onNodeRemoved) {
+        for (const event of events) {
+          if (event.type !== 'task-removal') continue;
+          try {
+            onNodeRemoved(event.taskName);
+          } catch (error) {
+            console.warn('[reactive] onNodeRemoved failed:', error instanceof Error ? error.message : String(error));
+          }
+        }
+      }
     }
 
     // 3. Schedule — what can run?

@@ -142,6 +142,10 @@ function appendNotification(state: NotificationState, event: unknown): void {
   if (e.kind === 'computed_values' && e.cardId) state.computedValues[e.cardId as string] = e.values;
   if (e.kind === 'data_object' && e.key) state.dataObjects[e.key as string] = e.payload;
   if (e.kind === 'card_refreshed' && e.cardId) state.cards[e.cardId as string] = e.card;
+  if (e.kind === 'card_removed' && e.cardId) {
+    delete state.cards[e.cardId as string];
+    delete state.computedValues[e.cardId as string];
+  }
 }
 
 // ============================================================================

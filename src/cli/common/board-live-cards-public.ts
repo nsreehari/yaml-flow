@@ -302,7 +302,8 @@ export interface BoardLiveCardsPublic {
 
 export type BoardChangeNotification =
   | OutputStoreEvent
-  | { kind: 'card_refreshed'; cardId: string; card: LiveCard };
+  | { kind: 'card_refreshed'; cardId: string; card: LiveCard }
+  | { kind: 'card_removed'; cardId: string };
 
 // ============================================================================
 // Internal pure helpers — no platform deps
@@ -543,6 +544,7 @@ export function createBoardLiveCardsPublic(
     const DX: Record<string, unknown>[] = [];
     // NX: card refreshes — Map so last write per cardId wins, deduplicating rapid updates.
     const NX = new Map<string, LiveCard>();
+    const RemX = new Set<string>();
 
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
       TX.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
@@ -564,6 +566,11 @@ export function createBoardLiveCardsPublic(
     const rg = createReactiveGraph(live, {
       handlers: {
         'card-handler': createCardHandlerFn(baseRef, newCursor, cardHandlerAdapters, taskCompletedFn, taskFailedFn, writeComputedValuesFn, writeDataObjectsFn),
+      },
+      onNodeRemoved: (cardId) => {
+        NX.delete(cardId);
+        RX.delete(cardId);
+        RemX.add(cardId);
       },
     });
 
@@ -615,6 +622,7 @@ export function createBoardLiveCardsPublic(
       }
     }
     for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
+    for (const cardId of RemX) batch.push({ kind: 'card_removed', cardId });
     if (statusObj !== undefined) batch.push({ kind: 'status', status: statusObj });
     flushBoardChangeNotifications(batch);
 

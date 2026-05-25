@@ -138,6 +138,34 @@ describe('BoardLiveCardsPublic — init and status', () => {
     expect(result.status).toBe('success');
   });
 
+  it('removeCard emits a card_removed notification', async () => {
+    const { boardDir, br } = freshBoard();
+    const notifications: Array<Array<{ kind: string; [key: string]: unknown }>> = [];
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, {
+      ...adapter,
+      publishBoardChangeNotifications(batch) {
+        notifications.push(batch);
+      },
+    });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts));
+
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+    expect(nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'my-card', 'card-content': minCard('my-card') }] } }).status).toBe('success');
+
+    expect(board.upsertCard({ params: { cardId: 'my-card' } }).status).toBe('success');
+    await board.processAccumulatedEvents({});
+    notifications.length = 0;
+
+    expect(board.removeCard({ params: { id: 'my-card' } }).status).toBe('success');
+    for (let i = 0; i < 20; i++) {
+      if (notifications.flat().some((note) => note.kind === 'card_removed' && note.cardId === 'my-card')) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(notifications.flat()).toContainEqual({ kind: 'card_removed', cardId: 'my-card' });
+  });
+
   it('getAllOutputsDataObjects({}) returns success with a map payload', () => {
     const { board, boardDir } = freshBoard();
     board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
