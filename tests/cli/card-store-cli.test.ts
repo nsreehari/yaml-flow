@@ -79,7 +79,7 @@ describe('card-store-cli', () => {
       JSON.stringify({ name: 'b.txt', size: 20 }),
     ]);
     expect(appendRun.status).toBe(0);
-    expect(appendRun.stderr).toContain('card-store append-files: appended 1 file(s)');
+    expect(appendRun.stderr).toContain('card-store append-files: {"files_added":[{"idx":1,"entry":{"name":"b.txt","size":20}}]}');
 
     const getRun = runCardStore(['get', '--store-ref', storeRef, '--id', 'c1']);
     expect(getRun.status).toBe(0);

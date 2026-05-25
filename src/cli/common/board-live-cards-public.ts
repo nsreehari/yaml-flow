@@ -74,6 +74,7 @@ import type {
   FetchedSourcesStore,
   OutputStoreEvent,
 } from './board-live-cards-lib.js';
+import { createCardStorePublic } from './card-store-lib-public.js';
 
 // Re-export constants so platform adapter files can import them without going through lib directly.
 export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from './board-live-cards-lib.js';
@@ -281,6 +282,8 @@ export interface BoardLiveCardsPublic {
   getAllOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, Record<string, string>>>;
   // params: id
   removeCard(input: CommandInput): CommandResult;
+  // params: cardId; body matches card-store appendFiles input
+  addCardFiles(input: CommandInput): CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>;
   // params: cardId
   cardRefreshedNotify(input: CommandInput): CommandResult;
   // params: id
@@ -735,6 +738,24 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
+  function addCardFiles(input: CommandInput): CommandResult {
+    try {
+      const cardId = input.params?.['cardId'] as string | undefined;
+      if (!cardId) return fail('addCardFiles requires params.cardId');
+
+      const appendResult = createCardStorePublic(cardStore()).appendFiles({
+        params: { id: cardId },
+        body: input.body,
+      });
+      if (appendResult.status !== 'success') return appendResult;
+
+      const notifyResult = cardRefreshedNotify({ params: { cardId } });
+      if (notifyResult.status !== 'success') return notifyResult;
+
+      return ok({ cardId, files_added: appendResult.data.files_added, notified: true });
+    } catch (e) { return err(e); }
+  }
+
   function cardRefreshedNotify(input: CommandInput): CommandResult {
     try {
       const cardId = input.params?.['cardId'] as string | undefined;
@@ -1024,7 +1045,7 @@ export function createBoardLiveCardsPublic(
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     getOutputsFetchedSources, getAllOutputsFetchedSources,
-    removeCard, cardRefreshedNotify, retrigger, processAccumulatedEvents,
+    removeCard, addCardFiles, cardRefreshedNotify, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,

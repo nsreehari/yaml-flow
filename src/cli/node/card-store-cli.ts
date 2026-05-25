@@ -215,7 +215,7 @@ export async function cli(argv: string[]): Promise<void> {
       console.error(`card-store append-files: ${result.error}`);
       process.exit(1);
     }
-    console.error(`card-store append-files: appended ${result.data.count} file(s)`);
+    console.error(`card-store append-files: ${JSON.stringify(result.data)}`);
     return;
   }
 

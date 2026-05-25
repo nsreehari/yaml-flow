@@ -58,7 +58,7 @@ export interface CardStorePublic {
    * params.id: string
    * body: file metadata object, array of file metadata objects, or { files: [...] }
    */
-  appendFiles(input: CommandInput): CommandResult<{ count: number }>;
+  appendFiles(input: CommandInput): CommandResult<{ files_added: Array<{ idx: number; entry: unknown }> }>;
 }
 
 // ============================================================================
@@ -143,7 +143,7 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
       } catch (e) { return oops(e); }
     },
 
-    appendFiles(input: CommandInput): CommandResult<{ count: number }> {
+    appendFiles(input: CommandInput): CommandResult<{ files_added: Array<{ idx: number; entry: unknown }> }> {
       try {
         const id = input.params?.['id'] as string | undefined;
         if (!id) return fail('appendFiles requires params.id');
@@ -161,10 +161,14 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
           : {};
         const existingFiles = Array.isArray(cardData.files) ? cardData.files : [];
         const nextFiles = [...existingFiles, ...files];
+        const filesAdded = files.map((entry, offset) => ({
+          idx: existingFiles.length + offset,
+          entry,
+        }));
 
         const patchResult = this.patch({ params: { id, path: 'card_data.files' }, body: { value: nextFiles } });
         if (patchResult.status !== 'success') return patchResult;
-        return ok({ count: files.length });
+        return ok({ files_added: filesAdded });
       } catch (e) { return oops(e); }
     },
   };

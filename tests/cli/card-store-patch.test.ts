@@ -59,7 +59,9 @@ describe('card-store patch API', () => {
     });
     expect(appendResult.status).toBe('success');
     if (appendResult.status === 'success') {
-      expect(appendResult.data.count).toBe(1);
+      expect(appendResult.data).toEqual({
+        files_added: [{ idx: 1, entry: { name: 'b.txt', size: 20 } }],
+      });
     }
 
     const getResult = store.get({ params: { id: 'c1' } });
@@ -84,7 +86,12 @@ describe('card-store patch API', () => {
     });
     expect(appendResult.status).toBe('success');
     if (appendResult.status === 'success') {
-      expect(appendResult.data.count).toBe(2);
+      expect(appendResult.data).toEqual({
+        files_added: [
+          { idx: 0, entry: { name: 'a.txt' } },
+          { idx: 1, entry: { name: 'b.txt' } },
+        ],
+      });
     }
   });
 

@@ -224,8 +224,8 @@ function schemaErrors(validate: { errors?: Array<{ instancePath?: string; messag
     .join('\n');
 }
 
-function runBoardCli(args: string[]): void {
-  execFileSync(process.execPath, [
+function runBoardCli(args: string[]): string {
+  return execFileSync(process.execPath, [
     path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
     ...args,
@@ -233,6 +233,7 @@ function runBoardCli(args: string[]): void {
     cwd: repoRoot,
     stdio: 'pipe',
     windowsHide: true,
+    encoding: 'utf-8',
   });
 }
 
@@ -868,6 +869,39 @@ describe('cli card-refreshed-notify', () => {
       '--card-id',
       'temp',
     ]);
+  });
+
+  it('add-card-files appends files for a card in the card store', () => {
+    const dir = path.join(freshDir(), 'board');
+    initBoard(ref(dir));
+    writeCardToStore(dir, { id: 'temp', card_data: { files: [{ name: 'a.txt' }] } });
+
+    const stdout = runBoardCli([
+      'add-card-files',
+      '--base-ref',
+      serializeRef(ref(dir)),
+      '--card-id',
+      'temp',
+      '--value-json',
+      JSON.stringify({ name: 'b.txt', size: 20 }),
+    ]);
+    expect(JSON.parse(stdout)).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'temp',
+        files_added: [{ idx: 1, entry: { name: 'b.txt', size: 20 } }],
+        notified: true,
+      },
+    });
+
+    const store = createCardStorePublic(createCardStore(createFsCardStorageAdapter(path.join(dir, '.cards'))));
+    const result = store.get({ params: { id: 'temp' } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      const card = result.data.cards[0] as Record<string, unknown>;
+      const cardData = card.card_data as Record<string, unknown>;
+      expect(cardData.files).toEqual([{ name: 'a.txt' }, { name: 'b.txt', size: 20 }]);
+    }
   });
 });
 

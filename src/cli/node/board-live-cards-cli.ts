@@ -241,6 +241,13 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().removeCard({ params: { id } }));
       return;
     }
+    case 'add-card-files': {
+      const cardId = requireFlag(rest, '--card-id', 'add-card-files --base-ref <ref> --card-id <card-id> [--value-json <json>]');
+      const valueJson = optFlag(rest, '--value-json');
+      const body = valueJson ? JSON.parse(valueJson) as unknown : await readStdinBody();
+      printResult(board().addCardFiles({ params: { cardId }, body }));
+      return;
+    }
     case 'card-refreshed-notify': {
       const cardId = requireFlag(rest, '--card-id', 'card-refreshed-notify --base-ref <ref> --card-id <card-id>');
       printResult(board().cardRefreshedNotify({ params: { cardId } }));

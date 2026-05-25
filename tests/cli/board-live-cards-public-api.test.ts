@@ -191,6 +191,43 @@ describe('BoardLiveCardsPublic — init and status', () => {
     });
   });
 
+  it('addCardFiles appends files and emits card_refreshed notification', () => {
+    const { boardDir, br } = freshBoard();
+    const notifications: Array<Array<{ kind: string; [key: string]: unknown }>> = [];
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, {
+      ...adapter,
+      publishBoardChangeNotifications(batch) {
+        notifications.push(batch);
+      },
+    });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts));
+
+    board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+    expect(nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'file-card', 'card-content': minCard('file-card', { card_data: { files: [{ name: 'a.txt' }] } }) }] } }).status).toBe('success');
+
+    const result = board.addCardFiles({ params: { cardId: 'file-card' }, body: { name: 'b.txt', size: 20 } });
+
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data).toEqual({
+        cardId: 'file-card',
+        files_added: [{ idx: 1, entry: { name: 'b.txt', size: 20 } }],
+        notified: true,
+      });
+    }
+    expect(board.getCardStoreRef({}).status).toBe('success');
+    const refreshed = notifications.flat().find((note) => note.kind === 'card_refreshed' && note.cardId === 'file-card');
+    expect(refreshed).toEqual(expect.objectContaining({
+      kind: 'card_refreshed',
+      cardId: 'file-card',
+      card: expect.objectContaining({
+        id: 'file-card',
+        card_data: { files: [{ name: 'a.txt' }, { name: 'b.txt', size: 20 }] },
+      }),
+    }));
+  });
+
   it('getAllOutputsDataObjects({}) returns success with a map payload', () => {
     const { board, boardDir } = freshBoard();
     board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
