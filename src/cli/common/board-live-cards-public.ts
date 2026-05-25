@@ -738,22 +738,23 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e); }
   }
 
-  function addCardFiles(input: CommandInput): CommandResult {
+  function addCardFiles(input: CommandInput): CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }> {
+    type R = CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>;
     try {
       const cardId = input.params?.['cardId'] as string | undefined;
-      if (!cardId) return fail('addCardFiles requires params.cardId');
+      if (!cardId) return fail('addCardFiles requires params.cardId') as R;
 
       const appendResult = createCardStorePublic(cardStore()).appendFiles({
         params: { id: cardId },
         body: input.body,
       });
-      if (appendResult.status !== 'success') return appendResult;
+      if (appendResult.status !== 'success') return appendResult as unknown as R;
 
       const notifyResult = cardRefreshedNotify({ params: { cardId } });
-      if (notifyResult.status !== 'success') return notifyResult;
+      if (notifyResult.status !== 'success') return notifyResult as unknown as R;
 
       return ok({ cardId, files_added: appendResult.data.files_added, notified: true });
-    } catch (e) { return err(e); }
+    } catch (e) { return err(e) as R; }
   }
 
   function cardRefreshedNotify(input: CommandInput): CommandResult {
