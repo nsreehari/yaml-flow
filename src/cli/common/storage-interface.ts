@@ -91,11 +91,6 @@ export interface KindValueRef {
   readonly value: string;
 }
 
-export interface ArtifactsStoreEntryRef {
-  readonly storeRef: string;
-  readonly key: string;
-}
-
 const REF_PREFIX = 'b64:';
 
 function toBase64Url(raw: string): string {
@@ -150,38 +145,6 @@ export function parseRef(s: string): KindValueRef {
     throw new Error(`Invalid ref format (payload must contain string kind/value): ${s}`);
   }
   return { kind: candidate.kind, value: candidate.value };
-}
-
-export function serializeArtifactsStoreEntryRef(ref: ArtifactsStoreEntryRef): string {
-  return serializeRef({
-    kind: 'artifacts-store-entry',
-    value: JSON.stringify({ storeRef: ref.storeRef, key: ref.key }),
-  });
-}
-
-export function parseArtifactsStoreEntryRef(s: string): ArtifactsStoreEntryRef {
-  const parsed = parseRef(s);
-  if (parsed.kind !== 'artifacts-store-entry') {
-    throw new Error(`Invalid artifact entry ref kind: ${parsed.kind}`);
-  }
-
-  let payload: unknown;
-  try {
-    payload = JSON.parse(parsed.value);
-  } catch {
-    throw new Error(`Invalid artifact entry ref payload: ${s}`);
-  }
-
-  if (!payload || typeof payload !== 'object') {
-    throw new Error(`Invalid artifact entry ref payload: ${s}`);
-  }
-
-  const candidate = payload as { storeRef?: unknown; key?: unknown };
-  if (typeof candidate.storeRef !== 'string' || typeof candidate.key !== 'string') {
-    throw new Error(`Invalid artifact entry ref payload: ${s}`);
-  }
-
-  return { storeRef: candidate.storeRef, key: candidate.key };
 }
 
 // ============================================================================

@@ -5,7 +5,7 @@
  */
 
 import * as fs from 'node:fs';
-import { parseArtifactsStoreEntryRef, parseRef } from '../common/storage-interface.js';
+import { parseRef } from '../common/storage-interface.js';
 import { createFsBlobStorage } from './storage-fs-adapters.js';
 import { createArtifactsStore } from '../common/artifacts-store-lib.js';
 import { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
@@ -24,8 +24,6 @@ function optFlag(args: string[], flag: string): string | undefined {
 }
 
 function resolveArtifactLocation(args: string[], usage: string): { storeRef: string; key: string } {
-  const ref = optFlag(args, '--ref');
-  if (ref) return parseArtifactsStoreEntryRef(ref);
   return {
     storeRef: requireFlag(args, '--store-ref', usage),
     key: requireFlag(args, '--key', usage),
@@ -43,11 +41,11 @@ async function readStdinBytes(): Promise<Uint8Array> {
 const HELP = [
   'artifacts-store — generic artifact CRUD on a blob-backed store',
   '',
-  '  artifacts-store put (--store-ref <ref> --key <key> | --ref <full-ref>) [--file <path> | --text <text>] [--content-type <mime>]',
-  '  artifacts-store get (--store-ref <ref> --key <key> | --ref <full-ref>) [--out <path>] [--as text|bytes]',
-  '  artifacts-store head (--store-ref <ref> --key <key> | --ref <full-ref>)',
+  '  artifacts-store put --store-ref <ref> --key <key> [--file <path> | --text <text>] [--content-type <mime>]',
+  '  artifacts-store get --store-ref <ref> --key <key> [--out <path>] [--as text|bytes]',
+  '  artifacts-store head --store-ref <ref> --key <key>',
   '  artifacts-store list --store-ref <ref> [--prefix <prefix>]',
-  '  artifacts-store del (--store-ref <ref> --key <key> | --ref <full-ref>)',
+  '  artifacts-store del --store-ref <ref> --key <key>',
 ].join('\n');
 
 export async function cli(argv: string[]): Promise<void> {
@@ -60,7 +58,7 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'put') {
-    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store put (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store put --store-ref <ref> --key <key>');
     const root = parseRef(storeRef).value;
     const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const contentType = optFlag(rest, '--content-type');
@@ -87,7 +85,7 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'get') {
-    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store get (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store get --store-ref <ref> --key <key>');
     const root = parseRef(storeRef).value;
     const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const as = (optFlag(rest, '--as') || 'bytes').toLowerCase();
@@ -109,7 +107,7 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'head') {
-    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store head (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store head --store-ref <ref> --key <key>');
     const root = parseRef(storeRef).value;
     const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const result = store.head({ params: { key } });
@@ -130,7 +128,7 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'del' || cmd === 'delete' || cmd === 'rm') {
-    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store del (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store del --store-ref <ref> --key <key>');
     const root = parseRef(storeRef).value;
     const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const result = store.del({ params: { key } });

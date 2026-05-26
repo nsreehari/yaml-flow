@@ -63,8 +63,6 @@ export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from '../co
 export {
   parseRef,
   serializeRef,
-  parseArtifactsStoreEntryRef,
-  serializeArtifactsStoreEntryRef,
 } from '../common/storage-interface.js';
 export type { KindValueRef } from '../common/storage-interface.js';
 export {

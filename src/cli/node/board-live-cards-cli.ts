@@ -22,10 +22,10 @@ import {
   createFsBoardPlatformAdapter,
   createFsBoardNonCorePlatformAdapter,
   parseRef,
-  parseArtifactsStoreEntryRef,
   decodeBoardRefFromToken,
+  type KindValueRef,
 } from './fs-board-adapter.js';
-import { createArtifactsStore } from '../common/artifacts-store-lib.js';
+import { createBoardConfigStore } from '../common/board-live-cards-lib.js';
 import { createFsBlobStorage } from './storage-fs-adapters.js';
 import { resolveModuleDir, resolvePath } from './process-runner.js';
 
@@ -60,10 +60,55 @@ async function readStdinBody(): Promise<unknown> {
   return JSON.parse(text) as unknown;
 }
 
-function readAttachmentBytes(ref: string): Uint8Array {
-  const { storeRef, key } = parseArtifactsStoreEntryRef(ref);
-  const root = parseRef(storeRef).value;
-  const bytes = createArtifactsStore(createFsBlobStorage(root)).getBytes(key);
+function safeAttachmentCardKey(cardId: string): string {
+  return String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
+}
+
+function readAttachmentBytes(baseRef: KindValueRef | undefined, notifyChannel: string | undefined, cardId: string, fileIdxRaw?: string): Uint8Array {
+  if (!baseRef) throw new Error('get-attachment-content requires --base-ref <ref>');
+
+  const adapter = createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn, notifyChannel });
+  const cfg = createBoardConfigStore(adapter.kvStorage('config'));
+  const cardStoreRef = cfg.readCardStoreRef();
+  if (!cardStoreRef) throw new Error(`Board at ${baseRef.value} has no card store configured`);
+
+  const card = adapter.kvStorageForRef(cardStoreRef).read(cardId) as { card_data?: unknown } | null;
+  if (!card) throw new Error(`Card "${cardId}" not found in board at ${baseRef.value}`);
+
+  const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
+    ? card.card_data as Record<string, unknown>
+    : {};
+  const files = Array.isArray(cardData.files) ? cardData.files : [];
+  const fileIdx = fileIdxRaw === undefined ? 0 : Number(fileIdxRaw);
+  if (!Number.isInteger(fileIdx) || fileIdx < 0) {
+    throw new Error('get-attachment-content requires --file-idx to be a non-negative integer');
+  }
+  if (fileIdx >= files.length) {
+    throw new Error(`attachment index ${fileIdx} is out of range for card "${cardId}"`);
+  }
+
+  const file = files[fileIdx];
+  if (!file || typeof file !== 'object' || Array.isArray(file)) {
+    throw new Error(`attachment index ${fileIdx} for card "${cardId}" is not an object`);
+  }
+  const storedName = (file as { stored_name?: unknown }).stored_name;
+  if (typeof storedName !== 'string' || !storedName) {
+    throw new Error(`attachment index ${fileIdx} for card "${cardId}" has no stored_name`);
+  }
+
+  const key = `${safeAttachmentCardKey(cardId)}/${storedName}`;
+  const artifactsStoreRef = cfg.readArtifactsStoreRef();
+  const bytes = artifactsStoreRef
+    ? (() => {
+        const readBytes = createFsBlobStorage(parseRef(artifactsStoreRef).value).readBytes;
+        if (!readBytes) throw new Error('configured artifacts store does not support byte reads');
+        return readBytes(key);
+      })()
+    : (() => {
+        const readBytes = adapter.blobStorage('files').readBytes;
+        if (!readBytes) throw new Error('board files storage does not support byte reads');
+        return readBytes(key);
+      })();
   if (bytes === null) throw new Error(`attachment content not found for key "${key}"`);
   return bytes;
 }
@@ -260,24 +305,10 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().addCardFiles({ params: { cardId }, body }));
       return;
     }
-    case 'get-attachment-ref': {
-      const cardId = requireFlag(rest, '--card-id', 'get-attachment-ref --base-ref <ref> --card-id <card-id> [--file-idx <n>]');
-      const fileIdx = optFlag(rest, '--file-idx');
-      printResult(board().getAttachmentRef({ params: fileIdx ? { cardId, fileIdx } : { cardId } }));
-      return;
-    }
     case 'get-attachment-content': {
       const cardId = requireFlag(rest, '--card-id', 'get-attachment-content --base-ref <ref> --card-id <card-id> [--file-idx <n>]');
       const fileIdx = optFlag(rest, '--file-idx');
-      const result = board().getAttachmentRef({ params: fileIdx ? { cardId, fileIdx } : { cardId } });
-      if (result.status !== 'success') {
-        printResult(result);
-        process.exitCode = 1;
-        return;
-      }
-      const attachment = result.data.attachments[0];
-      if (!attachment) throw new Error(`No attachment found for card "${cardId}"`);
-      process.stdout.write(Buffer.from(readAttachmentBytes(attachment.ref)));
+      process.stdout.write(Buffer.from(readAttachmentBytes(baseRef, notifyChannel, cardId, fileIdx)));
       return;
     }
     case 'card-refreshed-notify': {
