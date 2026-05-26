@@ -86,6 +86,7 @@ interface BoardContext {
   boardAdapter: import('./types.js').BoardPlatformAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
+  artifactsStoreRef?: string;
   scratchStoreRef?: string;
   archiveStoreRef?: string;
   notifyRef?: import('./types.js').KindValueRef;
@@ -190,6 +191,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const cardStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
     const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
     const callerFilesArtifactsStore = cfg.filesArtifactsStore ?? null;
+    const filesBlob = cfg.artifactsAdapter ? artAdapter.blobStorage('') : artAdapter.blobStorage('files');
 
     // Lazy artifact stores — only created on first access (saves ~5KB in bundles
     // that never use file features).
@@ -199,10 +201,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       label: cfg.label,
       board,
       cardStore,
-      get filesArtifacts() { return _filesArtifacts ??= (callerFilesArtifactsStore ?? createArtifactsStore(artAdapter.blobStorage('files'))); },
+      get filesArtifacts() { return _filesArtifacts ??= (callerFilesArtifactsStore ?? createArtifactsStore(filesBlob)); },
       boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
+      artifactsStoreRef: cfg.artifactsStoreRef,
       scratchStoreRef: cfg.scratchStoreRef,
       archiveStoreRef: cfg.archiveStoreRef,
       notifyRef: cfg.notifyRef,
@@ -274,6 +277,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardStoreRef: ctx.cardStoreRef,
       outputsStoreRef: ctx.outputsStoreRef,
     };
+    if (ctx.artifactsStoreRef) params.artifactsStoreRef = ctx.artifactsStoreRef;
     if (ctx.scratchStoreRef) params.scratchStoreRef = ctx.scratchStoreRef;
     if (ctx.archiveStoreRef) params.archiveStoreRef = ctx.archiveStoreRef;
     const body: Record<string, unknown> = {};

@@ -38,7 +38,7 @@
     },
     "open_turn": {
       "description": "Resolve the current user turn from flow-provided chat messages and parse any chat envelope options",
-      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs"],
+      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx"],
       "input_validations": [
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(chatMessages) = \"array\"",
@@ -51,6 +51,7 @@
           "data.boardId = $type(expects_data.boardId) = \"string\" ? expects_data.boardId : \"\"",
           "data.cardId = $type(expects_data.cardId) = \"string\" ? expects_data.cardId : \"\"",
           "data.boardSetupRoot = $type(expects_data.boardSetupRoot) = \"string\" ? expects_data.boardSetupRoot : \"\"",
+          "data.boardBaseRef = $type(expects_data.boardBaseRef) = \"string\" ? expects_data.boardBaseRef : \"\"",
           "data.boardRuntimeDir = ($type(expects_data.boardRuntimeDir) = \"string\" and $length(expects_data.boardRuntimeDir) > 0) ? expects_data.boardRuntimeDir : \"runtime\"",
           "data.runtimeStatusDir = ($type(expects_data.runtimeStatusDir) = \"string\" and $length(expects_data.runtimeStatusDir) > 0) ? expects_data.runtimeStatusDir : \"runtime-out\"",
           "data.cardsDir = ($type(expects_data.cardsDir) = \"string\" and $length(expects_data.cardsDir) > 0) ? expects_data.cardsDir : \"cards\"",
@@ -58,7 +59,9 @@
           "data.chatFlowRoot = $type(expects_data.chatFlowRoot) = \"string\" ? expects_data.chatFlowRoot : \"\"",
           "data.chatMessages = expects_data.chatMessages",
           "data.lastChatEntryId = expects_data.lastChatEntryId",
-          "data._rawMessageText = $trim($string($filter(expects_data.chatMessages, function($message) { $message.id = expects_data.lastChatEntryId and $message.role = \"user\" })[0].text))",
+          "data._currentUserMessage = $filter(expects_data.chatMessages, function($message) { $message.id = expects_data.lastChatEntryId and $message.role = \"user\" })[0]",
+          "data._rawMessageText = $trim($string(data._currentUserMessage.text))",
+          "data.probeAttachmentFileIdx = ($type(data._currentUserMessage.files) = \"array\" and $count(data._currentUserMessage.files) > 0) ? 0 : null",
           "data._marker = \"__probe__echo__probe__\"",
           "data._markerLen = $length(data._marker)",
           "data._isEchoProbe = $length(data._rawMessageText) >= (data._markerLen * 2) and $substring(data._rawMessageText, 0, data._markerLen) = data._marker and $substring(data._rawMessageText, $length(data._rawMessageText) - data._markerLen) = data._marker",
@@ -91,7 +94,25 @@
       },
       "transitions": {
         "copilot": "copilot_assistant",
-        "probe": "probe_assistant",
+        "probe": "select_probe_reply_source",
+        "failure": "cleanup_failure",
+        "error": "cleanup_failure"
+      }
+    },
+    "select_probe_reply_source": {
+      "description": "Use attached file content for probe replies when the current user message carries a file",
+      "expects_data": ["probeAttachmentFileIdx"],
+      "produces_data": ["probeReplySource"],
+      "handler": {
+        "type": "compute-jsonata",
+        "expr": [
+          "data.probeReplySource = $type(expects_data.probeAttachmentFileIdx) = \"number\" ? \"attachment\" : \"echo\"",
+          "result = data.probeReplySource"
+        ]
+      },
+      "transitions": {
+        "attachment": "probe_attachment_reply",
+        "echo": "probe_assistant",
         "failure": "cleanup_failure",
         "error": "cleanup_failure"
       }
@@ -113,6 +134,44 @@
       },
       "transitions": {
         "success": "write_reply",
+        "failure": "cleanup_failure",
+        "error": "cleanup_failure"
+      }
+    },
+    "probe_attachment_reply": {
+      "description": "Read the current probe attachment via board-live-cards-cli and use its content as the assistant reply",
+      "expects_data": ["boardBaseRef", "cardId", "probeAttachmentFileIdx"],
+      "produces_data": ["replyText"],
+      "input_validations": [
+        "$type(boardBaseRef) = \"string\" and $length(boardBaseRef) > 0",
+        "$type(cardId) = \"string\" and $length(cardId) > 0",
+        "$type(probeAttachmentFileIdx) = \"number\" and probeAttachmentFileIdx >= 0"
+      ],
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-node",
+        "whatToRun": {
+          "kind": "yaml-flow-cli",
+          "value": "board-live-cards-cli.js"
+        },
+        "meta": "chat-handler",
+        "argsMassaging": {
+          "cmdTemplate": [
+            "'get-attachment-content'",
+            "'--base-ref'",
+            "boardBaseRef",
+            "'--card-id'",
+            "cardId",
+            "'--file-idx'",
+            "$string(probeAttachmentFileIdx)"
+          ]
+        },
+        "outputTransforms": {
+          "dataTemplate": "{ 'replyText': $string(output.data.stdout) }"
+        }
+      },
+      "transitions": {
+        "success": "probe_in_progress",
         "failure": "cleanup_failure",
         "error": "cleanup_failure"
       }

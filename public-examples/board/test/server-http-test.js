@@ -236,6 +236,7 @@ function deriveProbeLifecycleMilestones(events, opts) {
   let prevMessageCount = Number(opts.beforeCount || 0);
   let prevProcessing = Boolean(opts.beforeProcessing);
   const prompt = String(opts.prompt || '');
+  const assistantText = opts.assistantText == null ? `Echo: ${prompt}` : String(opts.assistantText);
   const inProgressText = String(opts.inProgressText || PROBE_IN_PROGRESS_TEXT);
 
   for (const event of events) {
@@ -250,7 +251,7 @@ function deriveProbeLifecycleMilestones(events, opts) {
       const text = String(message?.text || '');
       if (role === 'user' && text.includes(prompt)) milestones.push('user');
       else if (role === 'system' && text.trim().toLowerCase() === inProgressText) milestones.push('in-progress');
-      else if (role === 'assistant' && text.includes(`Echo: ${prompt}`)) milestones.push('assistant');
+      else if (role === 'assistant' && text.includes(assistantText)) milestones.push('assistant');
     }
 
     const processing = Boolean(event?.processing);
@@ -663,7 +664,7 @@ try {
     const t2bUploadRes = await httpUploadChatFile(
       `${BASE}/cards/${CHAT_CARD_ID}/files?inChat=true`,
       'q1.txt',
-      'what is the capital of japan',
+      'tokyo',
     );
     assert(t2bUploadRes.status === 200, `T3b file upload returned ${t2bUploadRes.status}`);
     const uploadedFile = t2bUploadRes.data?.file;
@@ -676,6 +677,20 @@ try {
     const t2bUploadSystem = t2bUploadNewMessages.find((m) => m?.role === 'system');
     assert(!!t2bUploadSystem, 'T3b upload protocol missing system chat file');
     assert(String(t2bUploadSystem?.text || '').toLowerCase().includes('file uploaded:'), 'T3b upload system message does not describe uploaded file');
+
+    const t2bCardAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    assert(t2bCardAfterUpload.status === 200, `T3b card read after upload returned ${t2bCardAfterUpload.status}`);
+    const t2bFilesAfterUpload = Array.isArray(t2bCardAfterUpload.data?.card_data?.files)
+      ? t2bCardAfterUpload.data.card_data.files
+      : [];
+    const t2bFileIndex = t2bFilesAfterUpload.findIndex((f) => String(f?.stored_name || '') === String(uploadedFile?.stored_name || ''));
+    assert(t2bFileIndex >= 0, 'T3b uploaded file metadata not found in card_data.files');
+
+    const t2bDownloadRes = await httpGetRaw(
+      `${BASE}/cards/${CHAT_CARD_ID}/files/${t2bFileIndex}?sn=${encodeURIComponent(String(uploadedFile?.stored_name || ''))}`,
+    );
+    assert(t2bDownloadRes.status === 200, `T3b file download returned ${t2bDownloadRes.status}`);
+    assert(t2bDownloadRes.body.toString('utf-8') === 'tokyo', 'T3b downloaded content mismatch');
 
     const t2bSendBaseline = t2bUploadMessages.length;
     const t2bEventStart = NS.chatEvents.length;
@@ -695,6 +710,7 @@ try {
         beforeCount: t2bSendBaseline,
         beforeProcessing: false,
         prompt: t2bPrompt,
+        assistantText: 'tokyo',
         inProgressText: PROBE_IN_PROGRESS_TEXT,
       });
     }, 60_000, 'T3b ordered lifecycle');
@@ -714,8 +730,8 @@ try {
     assert(!!t2bInProgress && typeof t2bInProgress.id === 'string', 'T3b missing in-progress system chat message');
     assert(!!t2bAssistantMsg && typeof t2bAssistantMsg.id === 'string', 'T3b missing assistant chat message notification');
     assert(Array.isArray(t2bUser?.files) && t2bUser.files.length === 1, 'T3b user chat message missing uploaded file metadata');
-    assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant file content mismatch');
-    console.log('[T3b] ok: upload protocol and ordered probe lifecycle observed (user+processing, in-progress, assistant+processing clear)');
+    assert(String(t2bAssistantMsg?.text || '').trim() === 'tokyo', 'T3b assistant attachment content mismatch');
+    console.log('[T3b] ok: upload protocol and ordered probe lifecycle observed with attachment-derived assistant reply');
   }
   }
 

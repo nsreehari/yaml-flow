@@ -107,6 +107,8 @@ export interface BoardContextConfig {
   boardAdapter: BoardPlatformAdapter;
   /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
   artifactsAdapter?: BoardPlatformAdapter;
+  /** Optional explicit blob root ref for persisted card/file attachments. */
+  artifactsStoreRef?: string;
   /**
    * Optional caller-supplied file artifacts store. When provided, this is used
    * verbatim and the runtime does NOT consult artifactsAdapter.blobStorage('files').

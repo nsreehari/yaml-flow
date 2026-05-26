@@ -305,6 +305,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
 
   const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: runtimeCardsDir }));
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, { suppressSpawn: true });
+  const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardsDir });
   const cardStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardStoreDir });
   const scratchStoreRef = serializeRef({ kind: 'fs-path', value: scratchDir });
   const archiveStoreRef = serializeRef({ kind: 'fs-path', value: archiveDir });
@@ -316,6 +317,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
     baseRef,
     cardStoreRef,
     outputsStoreRef: serializeRef({ kind: 'fs-path', value: runtimeOutDir }),
+    artifactsStoreRef,
     scratchStoreRef,
     archiveStoreRef,
     notifyRef: { kind: 'named-pipe', value: namedPipePath(notifyChannel) },
@@ -422,6 +424,7 @@ const runtime = createMultiBoardServerRuntime({
     });
     const baseExecutionExtra = {
       boardSetupRoot: boardRoot,
+      boardBaseRef: serializeRef({ kind: 'fs-path', value: boardDir }),
       boardRuntimeDir: 'runtime',
       runtimeStatusDir: 'runtime-out',
       cardsDir: 'cards',
@@ -452,6 +455,7 @@ const runtime = createMultiBoardServerRuntime({
       serverUrl: `http://127.0.0.1:${PORT}`,
       executionExtra: {
         boardSetupRoot: boardRoot,
+        boardBaseRef: serializeRef({ kind: 'fs-path', value: boardDir }),
         boardRuntimeDir: 'runtime',
         runtimeStatusDir: 'runtime-out',
         cardsDir: 'cards',

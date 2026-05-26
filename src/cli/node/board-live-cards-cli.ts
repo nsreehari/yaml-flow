@@ -98,17 +98,12 @@ function readAttachmentBytes(baseRef: KindValueRef | undefined, notifyChannel: s
 
   const key = `${safeAttachmentCardKey(cardId)}/${storedName}`;
   const artifactsStoreRef = cfg.readArtifactsStoreRef();
-  const bytes = artifactsStoreRef
-    ? (() => {
-        const readBytes = createFsBlobStorage(parseRef(artifactsStoreRef).value).readBytes;
-        if (!readBytes) throw new Error('configured artifacts store does not support byte reads');
-        return readBytes(key);
-      })()
-    : (() => {
-        const readBytes = adapter.blobStorage('files').readBytes;
-        if (!readBytes) throw new Error('board files storage does not support byte reads');
-        return readBytes(key);
-      })();
+  if (!artifactsStoreRef) {
+    throw new Error(`Board at ${baseRef.value} has no artifacts store configured`);
+  }
+  const readBytes = createFsBlobStorage(parseRef(artifactsStoreRef).value).readBytes;
+  if (!readBytes) throw new Error('configured artifacts store does not support byte reads');
+  const bytes = readBytes(key);
   if (bytes === null) throw new Error(`attachment content not found for key "${key}"`);
   return bytes;
 }
