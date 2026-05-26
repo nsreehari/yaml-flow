@@ -50,6 +50,7 @@ const BOARD_DIR = path.resolve(__dirname, '..');
 const SERVER_SCRIPT = path.resolve(BOARD_DIR, 'server', 'board-server.js');
 const SSE_WORKER_SCRIPT = path.join(__dirname, 'sse-worker.js');
 const CARD_PATTERN = 'cardT*';
+const T2_FILE_CARD_ID = 'card-market-prices';
 const CHAT_CARD_ID = 'card-portfolio';
 
 function findFreePort() {
@@ -511,7 +512,7 @@ try {
     console.log('\n=== T2: skipped (--skip-t2) ===');
   } else {
     console.log('\n=== T2: plain file upload -> card_data.files -> download ===');
-    const t2CardBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    const t2CardBefore = await httpGet(`${BASE}/cards/${T2_FILE_CARD_ID}`);
     assert(t2CardBefore.status === 200, `T2 pre card read returned ${t2CardBefore.status}`);
     const t2FilesBefore = Array.isArray(t2CardBefore.data?.card_data?.files)
       ? t2CardBefore.data.card_data.files
@@ -521,7 +522,7 @@ try {
     const t2UploadText = `plain-file-upload-${Date.now()}`;
     const t2UploadName = 't2-upload.txt';
     const t2UploadRes = await httpUploadChatFile(
-      `${BASE}/cards/${CHAT_CARD_ID}/files`,
+      `${BASE}/cards/${T2_FILE_CARD_ID}/files`,
       t2UploadName,
       t2UploadText,
     );
@@ -530,7 +531,7 @@ try {
     assert(t2UploadedFile && typeof t2UploadedFile === 'object', 'T2 upload response missing file metadata');
     assert(String(t2UploadedFile?.name || '') === t2UploadName, 'T2 uploaded file name mismatch');
 
-    const t2CardAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    const t2CardAfter = await httpGet(`${BASE}/cards/${T2_FILE_CARD_ID}`);
     assert(t2CardAfter.status === 200, `T2 post card read returned ${t2CardAfter.status}`);
     const t2FilesAfter = Array.isArray(t2CardAfter.data?.card_data?.files)
       ? t2CardAfter.data.card_data.files
@@ -541,7 +542,7 @@ try {
     assert(t2FileIndex >= 0, 'T2 uploaded file metadata not found in card_data.files');
 
     const t2DownloadRes = await httpGetRaw(
-      `${BASE}/cards/${CHAT_CARD_ID}/files/${t2FileIndex}?sn=${encodeURIComponent(String(t2UploadedFile?.stored_name || ''))}`,
+      `${BASE}/cards/${T2_FILE_CARD_ID}/files/${t2FileIndex}?sn=${encodeURIComponent(String(t2UploadedFile?.stored_name || ''))}`,
     );
     assert(t2DownloadRes.status === 200, `T2 file download returned ${t2DownloadRes.status}`);
     const t2DownloadedText = t2DownloadRes.body.toString('utf-8');
