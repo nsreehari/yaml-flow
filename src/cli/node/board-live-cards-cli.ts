@@ -248,6 +248,12 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().addCardFiles({ params: { cardId }, body }));
       return;
     }
+    case 'get-attachment-ref': {
+      const cardId = requireFlag(rest, '--card-id', 'get-attachment-ref --base-ref <ref> --card-id <card-id> [--file-idx <n>]');
+      const fileIdx = optFlag(rest, '--file-idx');
+      printResult(board().getAttachmentRef({ params: fileIdx ? { cardId, fileIdx } : { cardId } }));
+      return;
+    }
     case 'card-refreshed-notify': {
       const cardId = requireFlag(rest, '--card-id', 'card-refreshed-notify --base-ref <ref> --card-id <card-id>');
       printResult(board().cardRefreshedNotify({ params: { cardId } }));

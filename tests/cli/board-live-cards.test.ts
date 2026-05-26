@@ -903,6 +903,68 @@ describe('cli card-refreshed-notify', () => {
       expect(cardData.files).toEqual([{ name: 'a.txt' }, { name: 'b.txt', size: 20 }]);
     }
   });
+
+  it('get-attachment-ref returns one attachment when file idx is provided and all attachments when omitted', () => {
+    const dir = path.join(freshDir(), 'board');
+    initBoard(ref(dir));
+    writeCardToStore(dir, {
+      id: 'attach-card',
+      card_data: {
+        v: 1,
+        files: [
+          { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
+          { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
+        ],
+      },
+    });
+
+    const single = JSON.parse(runBoardCli([
+      'get-attachment-ref',
+      '--base-ref',
+      serializeRef(ref(dir)),
+      '--card-id',
+      'attach-card',
+      '--file-idx',
+      '1',
+    ]));
+    expect(single).toEqual({
+      status: 'success',
+      data: {
+        attachments: [
+          {
+            idx: 1,
+            ref: serializeRef({ kind: 'fs-path', value: path.join(dir, 'files', 'attach-card', '002-b.txt') }),
+            file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
+          },
+        ],
+      },
+    });
+
+    const all = JSON.parse(runBoardCli([
+      'get-attachment-ref',
+      '--base-ref',
+      serializeRef(ref(dir)),
+      '--card-id',
+      'attach-card',
+    ]));
+    expect(all).toEqual({
+      status: 'success',
+      data: {
+        attachments: [
+          {
+            idx: 0,
+            ref: serializeRef({ kind: 'fs-path', value: path.join(dir, 'files', 'attach-card', '001-a.txt') }),
+            file: { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
+          },
+          {
+            idx: 1,
+            ref: serializeRef({ kind: 'fs-path', value: path.join(dir, 'files', 'attach-card', '002-b.txt') }),
+            file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
+          },
+        ],
+      },
+    });
+  });
 });
 
 // ============================================================================

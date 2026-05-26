@@ -284,6 +284,8 @@ export interface BoardLiveCardsPublic {
   removeCard(input: CommandInput): CommandResult;
   // params: cardId; body matches card-store appendFiles input
   addCardFiles(input: CommandInput): CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>;
+  // params: cardId, fileIdx?
+  getAttachmentRef(input: CommandInput): CommandResult<{ attachments: Array<{ idx: number; ref: string; file: unknown }> }>;
   // params: cardId
   cardRefreshedNotify(input: CommandInput): CommandResult;
   // params: id
@@ -351,6 +353,10 @@ function decodeSourceToken(token: string): SourceTokenPayload | null {
 }
 
 function nowIso(): string { return new Date().toISOString(); }
+
+function safeAttachmentCardKey(cardId: string): string {
+  return String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
+}
 
 // ============================================================================
 // createBoardLiveCardsPublic — factory
@@ -757,6 +763,52 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as R; }
   }
 
+  function getAttachmentRef(input: CommandInput): CommandResult<{ attachments: Array<{ idx: number; ref: string; file: unknown }> }> {
+    type R = CommandResult<{ attachments: Array<{ idx: number; ref: string; file: unknown }> }>;
+    try {
+      const cardId = input.params?.['cardId'] as string | undefined;
+      if (!cardId) return fail('getAttachmentRef requires params.cardId') as R;
+
+      const card = cardStore().readCard(cardId);
+      if (!card) return fail(`Card "${cardId}" not found in board at ${baseRef.value}`) as R;
+
+      const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
+        ? card.card_data as Record<string, unknown>
+        : {};
+      const files = Array.isArray(cardData.files) ? cardData.files : [];
+      const fileIdxRaw = input.params?.['fileIdx'];
+      const requestedIdx = fileIdxRaw === undefined ? null : Number(fileIdxRaw);
+      if (requestedIdx !== null && (!Number.isInteger(requestedIdx) || requestedIdx < 0)) {
+        return fail('getAttachmentRef requires params.fileIdx to be a non-negative integer') as R;
+      }
+
+      const indexes = requestedIdx === null ? files.map((_, idx) => idx) : [requestedIdx];
+      const attachments: Array<{ idx: number; ref: string; file: unknown }> = [];
+      const filesBlob = adapter.blobStorage('files');
+      const cardPrefix = safeAttachmentCardKey(cardId);
+
+      for (const idx of indexes) {
+        if (idx < 0 || idx >= files.length) {
+          return fail(`attachment index ${idx} is out of range for card "${cardId}"`) as R;
+        }
+        const file = files[idx];
+        if (!file || typeof file !== 'object' || Array.isArray(file)) {
+          return fail(`attachment index ${idx} for card "${cardId}" is not an object`) as R;
+        }
+        const storedName = (file as { stored_name?: unknown }).stored_name;
+        if (typeof storedName !== 'string' || !storedName) {
+          return fail(`attachment index ${idx} for card "${cardId}" has no stored_name`) as R;
+        }
+
+        const blobKey = `${cardPrefix}/${storedName}`;
+        const ref = filesBlob.keyRef?.(blobKey);
+        attachments.push({ idx, ref: ref ? serializeRef(ref) : blobKey, file });
+      }
+
+      return ok({ attachments });
+    } catch (e) { return err(e) as R; }
+  }
+
   function cardRefreshedNotify(input: CommandInput): CommandResult {
     try {
       const cardId = input.params?.['cardId'] as string | undefined;
@@ -1046,7 +1098,7 @@ export function createBoardLiveCardsPublic(
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     getOutputsFetchedSources, getAllOutputsFetchedSources,
-    removeCard, addCardFiles, cardRefreshedNotify, retrigger, processAccumulatedEvents,
+    removeCard, addCardFiles, getAttachmentRef, cardRefreshedNotify, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,

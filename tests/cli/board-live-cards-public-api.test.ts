@@ -228,6 +228,51 @@ describe('BoardLiveCardsPublic — init and status', () => {
     }));
   });
 
+    it('getAttachmentRef returns one attachment when fileIdx is provided and all when omitted', () => {
+      const { boardDir, br } = freshBoard();
+      const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts));
+      const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts));
+
+      board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+      expect(nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'attach-card', 'card-content': minCard('attach-card', { card_data: { files: [
+        { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
+        { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
+      ] } }) }] } }).status).toBe('success');
+
+      const single = board.getAttachmentRef({ params: { cardId: 'attach-card', fileIdx: 1 } });
+      expect(single.status).toBe('success');
+      if (single.status === 'success') {
+        expect(single.data).toEqual({
+          attachments: [
+            {
+              idx: 1,
+              ref: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files', 'attach-card', '002-b.txt') }),
+              file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
+            },
+          ],
+        });
+      }
+
+      const all = board.getAttachmentRef({ params: { cardId: 'attach-card' } });
+      expect(all.status).toBe('success');
+      if (all.status === 'success') {
+        expect(all.data).toEqual({
+          attachments: [
+            {
+              idx: 0,
+              ref: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files', 'attach-card', '001-a.txt') }),
+              file: { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
+            },
+            {
+              idx: 1,
+              ref: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files', 'attach-card', '002-b.txt') }),
+              file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
+            },
+          ],
+        });
+      }
+    });
+
   it('getAllOutputsDataObjects({}) returns success with a map payload', () => {
     const { board, boardDir } = freshBoard();
     board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
