@@ -22,8 +22,11 @@ import {
   createFsBoardPlatformAdapter,
   createFsBoardNonCorePlatformAdapter,
   parseRef,
+  parseArtifactsStoreEntryRef,
   decodeBoardRefFromToken,
 } from './fs-board-adapter.js';
+import { createArtifactsStore } from '../common/artifacts-store-lib.js';
+import { createFsBlobStorage } from './storage-fs-adapters.js';
 import { resolveModuleDir, resolvePath } from './process-runner.js';
 
 const __dirname = resolveModuleDir(import.meta.url);
@@ -55,6 +58,14 @@ async function readStdinBody(): Promise<unknown> {
   const text = Buffer.concat(parts).toString('utf-8').trim();
   if (!text) return undefined;
   return JSON.parse(text) as unknown;
+}
+
+function readAttachmentBytes(ref: string): Uint8Array {
+  const { storeRef, key } = parseArtifactsStoreEntryRef(ref);
+  const root = parseRef(storeRef).value;
+  const bytes = createArtifactsStore(createFsBlobStorage(root)).getBytes(key);
+  if (bytes === null) throw new Error(`attachment content not found for key "${key}"`);
+  return bytes;
 }
 
 // ============================================================================
@@ -175,8 +186,9 @@ export async function cli(argv: string[]): Promise<void> {
       const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
       const scratchStoreRef = optFlag(rest, '--scratch-store-ref');
       const archiveStoreRef = optFlag(rest, '--archive-store-ref');
+      const artifactsStoreRef = optFlag(rest, '--artifacts-store-ref');
       const body = await readStdinBody();
-      printResult(board().init({ params: { cardStoreRef, outputsStoreRef, ...(scratchStoreRef ? { scratchStoreRef } : {}), ...(archiveStoreRef ? { archiveStoreRef } : {}) }, body }));
+      printResult(board().init({ params: { cardStoreRef, outputsStoreRef, ...(scratchStoreRef ? { scratchStoreRef } : {}), ...(archiveStoreRef ? { archiveStoreRef } : {}), ...(artifactsStoreRef ? { artifactsStoreRef } : {}) }, body }));
       return;
     }
     case 'status': {
@@ -252,6 +264,20 @@ export async function cli(argv: string[]): Promise<void> {
       const cardId = requireFlag(rest, '--card-id', 'get-attachment-ref --base-ref <ref> --card-id <card-id> [--file-idx <n>]');
       const fileIdx = optFlag(rest, '--file-idx');
       printResult(board().getAttachmentRef({ params: fileIdx ? { cardId, fileIdx } : { cardId } }));
+      return;
+    }
+    case 'get-attachment-content': {
+      const cardId = requireFlag(rest, '--card-id', 'get-attachment-content --base-ref <ref> --card-id <card-id> [--file-idx <n>]');
+      const fileIdx = optFlag(rest, '--file-idx');
+      const result = board().getAttachmentRef({ params: fileIdx ? { cardId, fileIdx } : { cardId } });
+      if (result.status !== 'success') {
+        printResult(result);
+        process.exitCode = 1;
+        return;
+      }
+      const attachment = result.data.attachments[0];
+      if (!attachment) throw new Error(`No attachment found for card "${cardId}"`);
+      process.stdout.write(Buffer.from(readAttachmentBytes(attachment.ref)));
       return;
     }
     case 'card-refreshed-notify': {

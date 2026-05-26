@@ -17,7 +17,7 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../../src/cli/node/fs-board-adapter.js';
-import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
+import { parseRef, serializeRef, serializeArtifactsStoreEntryRef } from '../../src/cli/common/storage-interface.js';
 
 const adapterOpts = { onWarn: () => {}, suppressSpawn: true };
 
@@ -232,8 +232,9 @@ describe('BoardLiveCardsPublic — init and status', () => {
       const { boardDir, br } = freshBoard();
       const board = createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts));
       const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts));
+      const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files') });
 
-      board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
+      board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir), artifactsStoreRef } });
       expect(nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'attach-card', 'card-content': minCard('attach-card', { card_data: { files: [
         { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
         { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
@@ -246,7 +247,7 @@ describe('BoardLiveCardsPublic — init and status', () => {
           attachments: [
             {
               idx: 1,
-              ref: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files', 'attach-card', '002-b.txt') }),
+              ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key: 'attach-card/002-b.txt' }),
               file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
             },
           ],
@@ -260,12 +261,12 @@ describe('BoardLiveCardsPublic — init and status', () => {
           attachments: [
             {
               idx: 0,
-              ref: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files', 'attach-card', '001-a.txt') }),
+              ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key: 'attach-card/001-a.txt' }),
               file: { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
             },
             {
               idx: 1,
-              ref: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'files', 'attach-card', '002-b.txt') }),
+              ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key: 'attach-card/002-b.txt' }),
               file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
             },
           ],

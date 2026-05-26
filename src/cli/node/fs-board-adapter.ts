@@ -60,7 +60,12 @@ export type {
   BoardLiveCardsNonCorePublic,
 } from '../common/board-live-cards-public.js';
 export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from '../common/board-live-cards-public.js';
-export { parseRef, serializeRef } from '../common/storage-interface.js';
+export {
+  parseRef,
+  serializeRef,
+  parseArtifactsStoreEntryRef,
+  serializeArtifactsStoreEntryRef,
+} from '../common/storage-interface.js';
 export type { KindValueRef } from '../common/storage-interface.js';
 export {
   executionRefFromScriptPath,

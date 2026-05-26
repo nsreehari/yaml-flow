@@ -26,7 +26,7 @@ import {
 import type { BoardLiveCard, BoardEnvelope, CardInventoryEntry } from '../../src/cli/common/board-live-cards-lib.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createFsJournalStorageAdapter, createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
-import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
+import { parseRef, serializeRef, serializeArtifactsStoreEntryRef } from '../../src/cli/common/storage-interface.js';
 import type { KindValueRef } from '../../src/cli/common/storage-interface.js';
 import { createReactiveGraph, restore, createLiveGraph, snapshot } from '../../src/continuous-event-graph/index.js';
 import type { ReactiveGraph } from '../../src/continuous-event-graph/index.js';
@@ -228,6 +228,19 @@ function runBoardCli(args: string[]): string {
   return execFileSync(process.execPath, [
     path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
+    ...args,
+  ], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    windowsHide: true,
+    encoding: 'utf-8',
+  });
+}
+
+function runArtifactsCli(args: string[]): string {
+  return execFileSync(process.execPath, [
+    path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    path.join(repoRoot, 'src', 'cli', 'node', 'artifacts-store-cli.ts'),
     ...args,
   ], {
     cwd: repoRoot,
@@ -906,7 +919,8 @@ describe('cli card-refreshed-notify', () => {
 
   it('get-attachment-ref returns one attachment when file idx is provided and all attachments when omitted', () => {
     const dir = path.join(freshDir(), 'board');
-    initBoard(ref(dir));
+    const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(dir, 'files') });
+    expect(board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir), artifactsStoreRef } }).status).toBe('success');
     writeCardToStore(dir, {
       id: 'attach-card',
       card_data: {
@@ -933,7 +947,7 @@ describe('cli card-refreshed-notify', () => {
         attachments: [
           {
             idx: 1,
-            ref: serializeRef({ kind: 'fs-path', value: path.join(dir, 'files', 'attach-card', '002-b.txt') }),
+            ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key: 'attach-card/002-b.txt' }),
             file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
           },
         ],
@@ -953,17 +967,67 @@ describe('cli card-refreshed-notify', () => {
         attachments: [
           {
             idx: 0,
-            ref: serializeRef({ kind: 'fs-path', value: path.join(dir, 'files', 'attach-card', '001-a.txt') }),
+            ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key: 'attach-card/001-a.txt' }),
             file: { name: 'a.txt', stored_name: '001-a.txt', size: 10, mime_type: 'text/plain' },
           },
           {
             idx: 1,
-            ref: serializeRef({ kind: 'fs-path', value: path.join(dir, 'files', 'attach-card', '002-b.txt') }),
+            ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key: 'attach-card/002-b.txt' }),
             file: { name: 'b.txt', stored_name: '002-b.txt', size: 20, mime_type: 'text/plain' },
           },
         ],
       },
     });
+  });
+
+  it('get-attachment-ref round-trips through artifacts-store and get-attachment-content writes raw content', () => {
+    const dir = path.join(freshDir(), 'board');
+    const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(dir, 'files') });
+    expect(board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir), artifactsStoreRef } }).status).toBe('success');
+
+    writeCardToStore(dir, {
+      id: 'attach-card',
+      card_data: {
+        v: 1,
+        files: [
+          { name: 'hello.txt', stored_name: '001-hello.txt', size: 11, mime_type: 'text/plain' },
+        ],
+      },
+    });
+    fs.mkdirSync(path.join(dir, 'files', 'attach-card'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'files', 'attach-card', '001-hello.txt'), 'hello world', 'utf-8');
+
+    const attachment = JSON.parse(runBoardCli([
+      'get-attachment-ref',
+      '--base-ref',
+      serializeRef(ref(dir)),
+      '--card-id',
+      'attach-card',
+      '--file-idx',
+      '0',
+    ]));
+    expect(attachment.status).toBe('success');
+    const fullRef = attachment.data.attachments[0].ref as string;
+
+    expect(runArtifactsCli(['get', '--ref', fullRef, '--as', 'text'])).toBe('hello world');
+
+    const raw = execFileSync(process.execPath, [
+      path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+      path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
+      'get-attachment-content',
+      '--base-ref',
+      serializeRef(ref(dir)),
+      '--card-id',
+      'attach-card',
+      '--file-idx',
+      '0',
+    ], {
+      cwd: repoRoot,
+      stdio: 'pipe',
+      windowsHide: true,
+      encoding: 'utf-8',
+    });
+    expect(raw).toBe('hello world');
   });
 });
 

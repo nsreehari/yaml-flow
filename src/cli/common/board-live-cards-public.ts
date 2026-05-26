@@ -32,7 +32,7 @@
  */
 
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory } from './storage-interface.js';
-import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import { withRelayLock, serializeRef, parseRef, serializeArtifactsStoreEntryRef } from './storage-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
 import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
@@ -784,8 +784,9 @@ export function createBoardLiveCardsPublic(
 
       const indexes = requestedIdx === null ? files.map((_, idx) => idx) : [requestedIdx];
       const attachments: Array<{ idx: number; ref: string; file: unknown }> = [];
+  const artifactsStoreRef = configStore().readArtifactsStoreRef();
       const filesBlob = adapter.blobStorage('files');
-      const cardPrefix = safeAttachmentCardKey(cardId);
+  const safeCardId = safeAttachmentCardKey(cardId);
 
       for (const idx of indexes) {
         if (idx < 0 || idx >= files.length) {
@@ -800,9 +801,14 @@ export function createBoardLiveCardsPublic(
           return fail(`attachment index ${idx} for card "${cardId}" has no stored_name`) as R;
         }
 
-        const blobKey = `${cardPrefix}/${storedName}`;
-        const ref = filesBlob.keyRef?.(blobKey);
-        attachments.push({ idx, ref: ref ? serializeRef(ref) : blobKey, file });
+        const key = `${safeCardId}/${storedName}`;
+        if (artifactsStoreRef) {
+          attachments.push({ idx, ref: serializeArtifactsStoreEntryRef({ storeRef: artifactsStoreRef, key }), file });
+          continue;
+        }
+
+        const ref = filesBlob.keyRef?.(key);
+        attachments.push({ idx, ref: ref ? serializeRef(ref) : key, file });
       }
 
       return ok({ attachments });

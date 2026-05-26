@@ -5,7 +5,7 @@
  */
 
 import * as fs from 'node:fs';
-import { parseRef } from '../common/storage-interface.js';
+import { parseArtifactsStoreEntryRef, parseRef } from '../common/storage-interface.js';
 import { createFsBlobStorage } from './storage-fs-adapters.js';
 import { createArtifactsStore } from '../common/artifacts-store-lib.js';
 import { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
@@ -23,6 +23,15 @@ function optFlag(args: string[], flag: string): string | undefined {
   return idx !== -1 ? args[idx + 1] : undefined;
 }
 
+function resolveArtifactLocation(args: string[], usage: string): { storeRef: string; key: string } {
+  const ref = optFlag(args, '--ref');
+  if (ref) return parseArtifactsStoreEntryRef(ref);
+  return {
+    storeRef: requireFlag(args, '--store-ref', usage),
+    key: requireFlag(args, '--key', usage),
+  };
+}
+
 async function readStdinBytes(): Promise<Uint8Array> {
   const parts: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -34,11 +43,11 @@ async function readStdinBytes(): Promise<Uint8Array> {
 const HELP = [
   'artifacts-store — generic artifact CRUD on a blob-backed store',
   '',
-  '  artifacts-store put --store-ref <ref> --key <key> [--file <path> | --text <text>] [--content-type <mime>]',
-  '  artifacts-store get --store-ref <ref> --key <key> [--out <path>] [--as text|bytes]',
-  '  artifacts-store head --store-ref <ref> --key <key>',
+  '  artifacts-store put (--store-ref <ref> --key <key> | --ref <full-ref>) [--file <path> | --text <text>] [--content-type <mime>]',
+  '  artifacts-store get (--store-ref <ref> --key <key> | --ref <full-ref>) [--out <path>] [--as text|bytes]',
+  '  artifacts-store head (--store-ref <ref> --key <key> | --ref <full-ref>)',
   '  artifacts-store list --store-ref <ref> [--prefix <prefix>]',
-  '  artifacts-store del --store-ref <ref> --key <key>',
+  '  artifacts-store del (--store-ref <ref> --key <key> | --ref <full-ref>)',
 ].join('\n');
 
 export async function cli(argv: string[]): Promise<void> {
@@ -50,12 +59,10 @@ export async function cli(argv: string[]): Promise<void> {
     return;
   }
 
-  const ref = requireFlag(rest, '--store-ref', `artifacts-store ${cmd} --store-ref <b64-ref>`);
-  const root = parseRef(ref).value;
-  const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
-
   if (cmd === 'put') {
-    const key = requireFlag(rest, '--key', 'artifacts-store put --store-ref <ref> --key <key>');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store put (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const root = parseRef(storeRef).value;
+    const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const contentType = optFlag(rest, '--content-type');
     const filePath = optFlag(rest, '--file');
     const text = optFlag(rest, '--text');
@@ -80,7 +87,9 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'get') {
-    const key = requireFlag(rest, '--key', 'artifacts-store get --store-ref <ref> --key <key>');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store get (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const root = parseRef(storeRef).value;
+    const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const as = (optFlag(rest, '--as') || 'bytes').toLowerCase();
     const outPath = optFlag(rest, '--out');
     const result = store.get({ params: { key, as } });
@@ -100,7 +109,9 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'head') {
-    const key = requireFlag(rest, '--key', 'artifacts-store head --store-ref <ref> --key <key>');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store head (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const root = parseRef(storeRef).value;
+    const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const result = store.head({ params: { key } });
     if (result.status !== 'success') throw new Error(result.error || 'head failed');
     process.stdout.write(JSON.stringify(result.data, null, 2) + '\n');
@@ -108,6 +119,9 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'list') {
+    const ref = requireFlag(rest, '--store-ref', 'artifacts-store list --store-ref <ref> [--prefix <prefix>]');
+    const root = parseRef(ref).value;
+    const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const prefix = optFlag(rest, '--prefix') || '';
     const result = store.list({ params: prefix ? { prefix } : {} });
     if (result.status !== 'success') throw new Error(result.error || 'list failed');
@@ -116,7 +130,9 @@ export async function cli(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'del' || cmd === 'delete' || cmd === 'rm') {
-    const key = requireFlag(rest, '--key', 'artifacts-store del --store-ref <ref> --key <key>');
+    const { storeRef, key } = resolveArtifactLocation(rest, 'artifacts-store del (--store-ref <ref> --key <key> | --ref <full-ref>)');
+    const root = parseRef(storeRef).value;
+    const store = createArtifactsStorePublic(createArtifactsStore(createFsBlobStorage(root)));
     const result = store.del({ params: { key } });
     if (result.status !== 'success') throw new Error(result.error || 'del failed');
     process.stdout.write(JSON.stringify(result.data, null, 2) + '\n');
