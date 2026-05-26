@@ -940,7 +940,7 @@ describe('cli card-refreshed-notify', () => {
     expect(raw).toBe('hello world');
   });
 
-  it('get-attachment-content falls back to the board files store when no artifacts store is configured', () => {
+  it('get-attachment-content fails with a clear error when no artifacts store is configured', () => {
     const dir = path.join(freshDir(), 'board');
     expect(board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } }).status).toBe('success');
 
@@ -953,10 +953,8 @@ describe('cli card-refreshed-notify', () => {
         ],
       },
     });
-    fs.mkdirSync(path.join(dir, 'files', 'attach-card'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'files', 'attach-card', '001-hello.txt'), 'hello world', 'utf-8');
 
-    const raw = execFileSync(process.execPath, [
+    expect(() => execFileSync(process.execPath, [
       path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
       path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
       'get-attachment-content',
@@ -971,8 +969,7 @@ describe('cli card-refreshed-notify', () => {
       stdio: 'pipe',
       windowsHide: true,
       encoding: 'utf-8',
-    });
-    expect(raw).toBe('hello world');
+    })).toThrow(/no artifacts store configured/i);
   });
 });
 
