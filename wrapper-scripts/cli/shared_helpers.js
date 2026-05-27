@@ -5,31 +5,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const logFilePath = path.join(__dirname, 'log.jsonl');
 const knownConstantsPath = path.join(__dirname, 'known_constants.json');
-const initialProcessCwd = process.cwd();
-const expectedWorkspaceRoot = path.resolve(__dirname, '..', '..');
-
-function normalizeDirPath(dirPath) {
-  return path.resolve(dirPath).replace(/[\\/]+$/, '').toLowerCase();
-}
-
-export function getExpectedWorkspaceRoot() {
-  return expectedWorkspaceRoot;
-}
-
-export function ensureWorkspaceRootCwd() {
-  const currentCwd = process.cwd();
-  if (normalizeDirPath(currentCwd) !== normalizeDirPath(expectedWorkspaceRoot)) {
-    process.chdir(expectedWorkspaceRoot);
-  }
-
-  return {
-    invokedFromCwd: currentCwd,
-    workspaceRoot: expectedWorkspaceRoot,
-    cwdChanged: normalizeDirPath(currentCwd) !== normalizeDirPath(expectedWorkspaceRoot),
-  };
-}
-
-ensureWorkspaceRootCwd();
 
 function toLogText(value) {
   if (typeof value === 'string') {
@@ -57,9 +32,6 @@ export function log_it(cmd, message = '') {
       ts: new Date().toISOString(),
       cmd: toLogText(cmd),
       msg: toLogText(message),
-    //   invokedFromCwd: initialProcessCwd,
-    //   cwd: process.cwd(),
-      workspaceRoot: expectedWorkspaceRoot,
     };
 
     const outputPath = resolveLogOutputPath();
@@ -70,7 +42,7 @@ export function log_it(cmd, message = '') {
   }
 }
 
-export function loadKnownConstants() {
+function loadKnownConstants() {
   let rawText;
   try {
     rawText = fs.readFileSync(knownConstantsPath, 'utf8');
@@ -104,16 +76,6 @@ export function readKnownBaseRef() {
   return baseRef.trim();
 }
 
-export function readKnownScratchDir() {
-  const knownConstants = loadKnownConstants();
-  const scratchDir = knownConstants.scratch_dir;
-  if (typeof scratchDir !== 'string' || !scratchDir.trim()) {
-    throw new Error(`known_constants.json must contain a non-empty string scratch_dir: ${knownConstantsPath}`);
-  }
-
-  return scratchDir.trim();
-}
-
 export function readKnownFinalResponseRootDir() {
   const knownConstants = loadKnownConstants();
   const finalResponseRootDir = knownConstants.final_response_root_dir;
@@ -124,7 +86,7 @@ export function readKnownFinalResponseRootDir() {
   return finalResponseRootDir.trim();
 }
 
-export function readKnownYamlFlowCliBundledDir() {
+function readKnownYamlFlowCliBundledDir() {
   const knownConstants = loadKnownConstants();
   const bundledDir = knownConstants.yaml_flow_cli_bundled_dir;
   if (typeof bundledDir !== 'string' || !bundledDir.trim()) {
@@ -140,116 +102,4 @@ export function resolveKnownYamlFlowCliPath(fileName) {
   }
 
   return path.join(readKnownYamlFlowCliBundledDir(), fileName.trim());
-}
-
-export function buildStoredFileIndex(storedCard) {
-  const files = Array.isArray(storedCard?.card_data?.files) ? storedCard.card_data.files : [];
-  return files.filter((fileEntry) => fileEntry && typeof fileEntry === 'object');
-}
-
-export function parseSystemMessageFileIndex(messageText) {
-  if (typeof messageText !== 'string' || !messageText.trim()) {
-    return null;
-  }
-
-  const match = /^(file uploaded|AI generated|AI geneterated):\s*.*?#(\d+)\s*$/i.exec(messageText.trim());
-  if (!match) {
-    return null;
-  }
-
-  const fileIndex = Number.parseInt(match[2], 10);
-  if (!Number.isInteger(fileIndex) || fileIndex < 0) {
-    return null;
-  }
-
-  return fileIndex;
-}
-
-export function extractFileRef(fileEntry) {
-  if (!fileEntry || typeof fileEntry !== 'object' || Array.isArray(fileEntry)) {
-    return null;
-  }
-
-  const candidateKeys = ['path', 'stored_name', 'key', 'file_ref', 'fileRef', 'ref'];
-  for (const key of candidateKeys) {
-    const value = fileEntry[key];
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim();
-    }
-  }
-
-  return null;
-}
-
-export function serializeFsPathRef(filePath) {
-  return `b64:${Buffer.from(JSON.stringify({ kind: 'fs-path', value: filePath }), 'utf8').toString('base64url')}`;
-}
-
-export function toPublicFileRef(fileEntry) {
-  const candidate = extractFileRef(fileEntry);
-  if (typeof candidate !== 'string' || !candidate) {
-    return null;
-  }
-
-  if (path.isAbsolute(candidate)) {
-    return serializeFsPathRef(candidate);
-  }
-
-  return candidate;
-}
-
-export function enhanceChatMessageWithFileRefs(message, storedFiles = []) {
-  const enhanced = {
-    ...message,
-  };
-
-  const files = Array.isArray(message?.files)
-    ? message.files
-    : Array.isArray(message?.payload?.files)
-      ? message.payload.files
-      : null;
-
-  if (Array.isArray(files)) {
-    const fileRefs = files
-      .map((fileEntry) => toPublicFileRef(fileEntry))
-      .filter((fileRef) => typeof fileRef === 'string' && fileRef.length > 0);
-
-    enhanced.file_refs = fileRefs;
-    if (message?.payload && !Array.isArray(message?.files)) {
-      enhanced.payload = {
-        ...message.payload,
-        file_refs: fileRefs,
-      };
-    }
-  }
-
-  const role = typeof message?.role === 'string'
-    ? message.role
-    : typeof message?.payload?.role === 'string'
-      ? message.payload.role
-      : '';
-  const messageText = typeof message?.text === 'string'
-    ? message.text
-    : typeof message?.payload?.text === 'string'
-      ? message.payload.text
-      : '';
-
-  if (role === 'system') {
-    const fileIndex = parseSystemMessageFileIndex(messageText);
-    if (fileIndex !== null) {
-      const fileEntry = storedFiles[fileIndex];
-      const fileRef = fileEntry ? toPublicFileRef(fileEntry) : null;
-      if (fileRef) {
-        enhanced.file_ref = fileRef;
-        if (message?.payload && typeof message?.role !== 'string') {
-          enhanced.payload = {
-            ...message.payload,
-            file_ref: fileRef,
-          };
-        }
-      }
-    }
-  }
-
-  return enhanced;
 }

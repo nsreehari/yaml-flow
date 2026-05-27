@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "name": "yaml-flow-wrapper-scripts-cli",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test-scripts.js"
+  }
+}

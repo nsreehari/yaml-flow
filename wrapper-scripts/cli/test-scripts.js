@@ -20,7 +20,7 @@ import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const CLI_DIR = __dirname;  // the scripts live in the same directory
+const CLI_DIR = process.env.WRAPPER_SCRIPTS_DIR ?? __dirname;
 
 // ── Resolve yaml-flow CLI bundled dir ────────────────────────────────────────
 
