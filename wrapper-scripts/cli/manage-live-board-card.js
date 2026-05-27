@@ -214,12 +214,23 @@ function handleUpsertCard(flags) {
     throw boardErr;
   }
 
+  // Notify the board that the card was refreshed
+  let refreshNotify = null;
+  try {
+    const notifyRaw = runJsonScript(boardLiveCardsCliPath, ['card-refreshed-notify', '--base-ref', baseRef, '--card-id', cardId]);
+    unwrapSuccessfulEnvelope(notifyRaw, 'Card refresh notification');
+    refreshNotify = notifyRaw;
+  } catch {
+    // Best-effort — the upsert already succeeded, so don't fail the whole operation
+  }
+
   printJson({
     status: 'success',
     data: {
       validation,
       card_saved: storeUpdate,
       board_result: boardUpdate,
+      refresh_notify: refreshNotify,
     },
   });
 }
