@@ -236,7 +236,7 @@ assert(cardInspect.cardId === TEST_CARD_ID, 'cardId mismatch');
 assert(cardInspect.card_definition_and_static_data, 'missing card_definition_and_static_data');
 assert(cardInspect.card_status_in_board, 'missing card_status_in_board');
 assert(typeof cardInspect.runtime_data === 'object', 'missing runtime_data');
-assert(typeof cardInspect.runtime_data.view_model === 'object', 'missing view_model');
+assert(typeof cardInspect.runtime_data.rendered_view === 'object', 'missing rendered_view');
 ok('inspect card returns card definition and runtime data');
 
 // verify missing card-id exits non-zero

@@ -9,8 +9,8 @@ const usageLines = [
   'Usage:',
   '  node discover-source-kinds.js',
   '',
-  'Returns the source-authoring subset of describe-task-executor-capabilities:',
-  '  { "version": "1.0", "commonSourceDefFields": {...}, "sourceKinds": {...} }',
+  'Returns the available source kinds and their configuration fields:',
+  '  { "version": "1.0", "commonSourceFields": {...}, "sourceKinds": {...} }',
 ];
 
 function parseArgs(argv) {
@@ -62,19 +62,19 @@ function main() {
   }
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.trim() : '';
-    throw new Error(stderr || `describe-task-executor-capabilities failed with exit code ${result.status}`);
+    throw new Error(stderr || `Failed to retrieve source kinds (exit code ${result.status})`);
   }
 
   const parsed = JSON.parse(result.stdout.trim());
   const capabilityReport = parsed?.status === 'success' && parsed.data != null ? parsed.data : parsed;
   if (parsed?.status === 'fail' || parsed?.status === 'error') {
-    throw new Error(parsed.error || 'describe-task-executor-capabilities failed');
+    throw new Error(parsed.error || 'Failed to retrieve source kinds');
   }
   process.stdout.write(
     `${JSON.stringify(
       {
         version: capabilityReport.version,
-        commonSourceDefFields: capabilityReport.commonSourceDefFields ?? {},
+        commonSourceFields: capabilityReport.commonSourceDefFields ?? {},
         sourceKinds: capabilityReport.sourceKinds ?? {},
       },
       null,

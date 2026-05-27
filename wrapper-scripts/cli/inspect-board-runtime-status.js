@@ -56,7 +56,7 @@ function runBoardLiveCardsCli(args) {
 
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.trim() : '';
-    throw new Error(stderr || `board-live-cards-cli.mjs failed with exit code ${result.status}`);
+    throw new Error(stderr || `Board status request failed (exit code ${result.status})`);
   }
 
   return JSON.parse(result.stdout.trim());
@@ -71,7 +71,7 @@ function unwrapSuccessfulEnvelope(result, commandName) {
     throw new Error(result.error || `${commandName} failed`);
   }
 
-  throw new Error(`${commandName} returned an unexpected response shape`);
+  throw new Error(`${commandName} returned an unexpected response`);
 }
 
 function printJson(value) {

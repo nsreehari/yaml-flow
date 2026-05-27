@@ -17,7 +17,7 @@ const usageLines = [
   '  cat payload.json | node manage-live-board-card.js upsert-card [--base-ref <board-ref>] --card-id <card-id>',
   '  node manage-live-board-card.js deprecate [--base-ref <board-ref>] --card-id <card-id>',
   '',
-  'Upsert payload shape:',
+  'Create/update payload shape:',
   '  { "candidate_card_content": <card> }',
 ];
 
@@ -107,7 +107,7 @@ function runJsonScript(scriptPath, scriptArgs, payload) {
 
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.trim() : '';
-    throw new Error(stderr || `${path.basename(scriptPath)} failed with exit code ${result.status}`);
+    throw new Error(stderr || `Request failed (exit code ${result.status})`);
   }
 
   const out = result.stdout.trim();
@@ -123,15 +123,15 @@ function unwrapSuccessfulEnvelope(result, commandName) {
     throw new Error(result.error || `${commandName} failed`);
   }
 
-  throw new Error(`${commandName} returned an unexpected response shape`);
+  throw new Error(`${commandName} returned an unexpected response`);
 }
 
 function readCardStoreRef(baseRef) {
   const result = runJsonScript(boardLiveCardsCliPath, ['get-card-store-ref', '--base-ref', baseRef]);
-  const data = unwrapSuccessfulEnvelope(result, 'get-card-store-ref');
+  const data = unwrapSuccessfulEnvelope(result, 'Card storage lookup');
   const storeRef = data?.storeRef ?? data?.value;
   if (typeof storeRef !== 'string' || !storeRef.trim()) {
-    throw new Error('get-card-store-ref did not return a card store ref');
+    throw new Error('Board configuration is incomplete (card storage unavailable)');
   }
   return storeRef.trim();
 }
@@ -146,7 +146,7 @@ function resolveBaseRef(flags) {
 
 function resolveCardStoreRef(flags) {
   if (typeof flags['store-ref'] === 'string' && flags['store-ref'].trim()) {
-    throw new Error('--store-ref is no longer supported; use --base-ref or staged known constants instead');
+    throw new Error('--store-ref is no longer supported; use --base-ref instead');
   }
 
   return readCardStoreRef(resolveBaseRef(flags));
@@ -202,7 +202,7 @@ function handleUpsertCard(flags) {
   let boardUpdate;
   try {
     const boardRaw = runJsonScript(boardLiveCardsCliPath, ['upsert-card', '--base-ref', baseRef, '--card-id', cardId, '--restart']);
-    unwrapSuccessfulEnvelope(boardRaw, 'upsert-card');
+    unwrapSuccessfulEnvelope(boardRaw, 'Card update');
     boardUpdate = boardRaw;
   } catch (boardErr) {
     // Rollback card store to previous state
@@ -218,8 +218,8 @@ function handleUpsertCard(flags) {
     status: 'success',
     data: {
       validation,
-      store_update: storeUpdate,
-      board_update: boardUpdate,
+      card_saved: storeUpdate,
+      board_result: boardUpdate,
     },
   });
 }
@@ -228,7 +228,7 @@ function handleDeprecate(flags) {
   const baseRef = resolveBaseRef(flags);
   const cardId = requireArgText(flags, 'card-id');
   const result = runJsonScript(boardLiveCardsCliPath, ['remove-card', '--base-ref', baseRef, '--id', cardId]);
-  unwrapSuccessfulEnvelope(result, 'remove-card');
+  unwrapSuccessfulEnvelope(result, 'Card removal');
   printJson(result);
 }
 

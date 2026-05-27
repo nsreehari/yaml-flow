@@ -48,7 +48,7 @@ function loadKnownConstants() {
     rawText = fs.readFileSync(knownConstantsPath, 'utf8');
   } catch (error) {
     throw new Error(
-      `Missing staged constants file at ${knownConstantsPath}. Recreate the Copilot workspace so board-server can copy scripts and emit known constants.`,
+      `Workspace configuration is missing (expected ${knownConstantsPath}). Please recreate the workspace.`,
     );
   }
 
@@ -56,11 +56,11 @@ function loadKnownConstants() {
   try {
     parsed = JSON.parse(rawText);
   } catch {
-    throw new Error(`known_constants.json is not valid JSON: ${knownConstantsPath}`);
+    throw new Error(`Workspace configuration is corrupted (invalid JSON at ${knownConstantsPath}).`);
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`known_constants.json must contain a JSON object: ${knownConstantsPath}`);
+    throw new Error(`Workspace configuration is corrupted (expected a JSON object at ${knownConstantsPath}).`);
   }
 
   return parsed;
@@ -70,7 +70,7 @@ export function readKnownBaseRef() {
   const knownConstants = loadKnownConstants();
   const baseRef = knownConstants.base_ref;
   if (typeof baseRef !== 'string' || !baseRef.trim()) {
-    throw new Error(`known_constants.json must contain a non-empty string base_ref: ${knownConstantsPath}`);
+    throw new Error('Workspace configuration is incomplete (missing board reference).');
   }
 
   return baseRef.trim();
@@ -80,7 +80,7 @@ export function readKnownFinalResponseRootDir() {
   const knownConstants = loadKnownConstants();
   const finalResponseRootDir = knownConstants.final_response_root_dir;
   if (typeof finalResponseRootDir !== 'string' || !finalResponseRootDir.trim()) {
-    throw new Error(`known_constants.json must contain a non-empty string final_response_root_dir: ${knownConstantsPath}`);
+    throw new Error('Workspace configuration is incomplete (missing response directory).');
   }
 
   return finalResponseRootDir.trim();
@@ -90,7 +90,7 @@ function readKnownYamlFlowCliBundledDir() {
   const knownConstants = loadKnownConstants();
   const bundledDir = knownConstants.yaml_flow_cli_bundled_dir;
   if (typeof bundledDir !== 'string' || !bundledDir.trim()) {
-    throw new Error(`known_constants.json must contain a non-empty string yaml_flow_cli_bundled_dir: ${knownConstantsPath}`);
+    throw new Error('Workspace configuration is incomplete (missing CLI path).');
   }
 
   return bundledDir.trim();

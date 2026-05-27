@@ -115,17 +115,26 @@ function runNodeScript(scriptPath, scriptArgs, payload) {
   }
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.trim() : '';
-    throw new Error(stderr || `${path.basename(scriptPath)} failed with exit code ${result.status}`);
+    throw new Error(stderr || `Request failed (exit code ${result.status})`);
   }
 
   const out = result.stdout.trim();
   return out ? JSON.parse(out) : null;
 }
 
+const subcommandLabels = {
+  'eval-card-compute': 'Card compute evaluation',
+  'probe-source-preflight': 'Source probe',
+  'run-source-preflight': 'Source preflight run',
+  'simulate-card-cycle': 'Card cycle simulation',
+  'validate-card-preflight': 'Card validation',
+};
+
 export function runBoardLiveCardsCli(subcommand, args, payload) {
   const result = runNodeScript(boardLiveCardsCliPath, [subcommand, ...args], payload);
   if (result?.status === 'fail' || result?.status === 'error') {
-    throw new Error(result.error || `${subcommand} failed`);
+    const label = subcommandLabels[subcommand] ?? subcommand;
+    throw new Error(result.error || `${label} failed`);
   }
   return result;
 }

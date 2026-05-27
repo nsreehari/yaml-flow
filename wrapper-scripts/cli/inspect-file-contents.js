@@ -83,7 +83,7 @@ function readAttachmentContents(cardId, fileIdx) {
 
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.toString('utf8').trim() : '';
-    throw new Error(stderr || `get-attachment-content failed with exit code ${result.status}`);
+    throw new Error(stderr || `Failed to read file contents (exit code ${result.status})`);
   }
 
   return result.stdout;

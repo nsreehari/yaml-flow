@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   log_it,
@@ -86,7 +85,7 @@ function runJsonScript(scriptPath, scriptArgs, input) {
 
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.trim() : '';
-    throw new Error(stderr || `${path.basename(scriptPath)} failed with exit code ${result.status}`);
+    throw new Error(stderr || `Request failed (exit code ${result.status})`);
   }
 
   return JSON.parse(result.stdout.trim());
@@ -101,7 +100,7 @@ function unwrapSuccessfulEnvelope(result, commandName) {
     throw new Error(result.error || `${commandName} failed`);
   }
 
-  throw new Error(`${commandName} returned an unexpected response shape`);
+  throw new Error(`${commandName} returned an unexpected response`);
 }
 
 function readStoreRef(baseRef, getterCommand, commandName) {
@@ -109,14 +108,14 @@ function readStoreRef(baseRef, getterCommand, commandName) {
   const data = unwrapSuccessfulEnvelope(result, commandName);
   const storeRef = data?.storeRef ?? data?.value;
   if (typeof storeRef !== 'string' || !storeRef.trim()) {
-    throw new Error(`${commandName} did not return a store ref`);
+    throw new Error('Chat storage is not available');
   }
   return storeRef.trim();
 }
 
 function readAttachmentRefs(baseRef, cardId) {
   const cardStoreRefResult = runJsonScript(boardLiveCardsCliPath, ['get-card-store-ref', '--base-ref', baseRef]);
-  const cardStoreData = unwrapSuccessfulEnvelope(cardStoreRefResult, 'get-card-store-ref');
+  const cardStoreData = unwrapSuccessfulEnvelope(cardStoreRefResult, 'Card storage lookup');
   const storeRef = cardStoreData?.storeRef ?? cardStoreData?.value;
   if (typeof storeRef !== 'string' || !storeRef.trim()) {
     return [];
@@ -208,7 +207,7 @@ function handleGetMessages(flags) {
   const cardId = requireArgText(flags, 'card-id');
   const lastUserTurns = parseOptionalPositiveInteger(flags, 'last-user-turns');
   const tail = parseOptionalPositiveInteger(flags, 'tail');
-  const chatStoreRef = readStoreRef(baseRef, 'get-chat-store-ref', 'get-chat-store-ref');
+  const chatStoreRef = readStoreRef(baseRef, 'get-chat-store-ref', 'Chat storage lookup');
   const attachments = readAttachmentRefs(baseRef, cardId);
   const messages = readChatRecords(chatStoreRef, cardId, lastUserTurns)
     .map((message) => enhanceChatMessageWithAttachmentHint(message, cardId, attachments));

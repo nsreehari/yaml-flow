@@ -67,7 +67,7 @@ function runJsonScript(scriptPath, scriptArgs) {
 
   if (result.status !== 0) {
     const stderr = result.stderr ? result.stderr.trim() : '';
-    throw new Error(stderr || `${path.basename(scriptPath)} failed with exit code ${result.status}`);
+    throw new Error(stderr || `Request failed (exit code ${result.status})`);
   }
 
   return JSON.parse(result.stdout.trim());
@@ -82,7 +82,7 @@ function unwrapSuccessfulEnvelope(result, commandName) {
     throw new Error(result.error || `${commandName} failed`);
   }
 
-  throw new Error(`${commandName} returned an unexpected response shape`);
+  throw new Error(`${commandName} returned an unexpected response`);
 }
 
 function getAtPath(objectValue, ref) {
@@ -154,10 +154,10 @@ function readBoardStatus(baseRef) {
 
 function readCardStoreRef(baseRef) {
   const result = runJsonScript(boardLiveCardsCliPath, ['get-card-store-ref', '--base-ref', baseRef]);
-  const data = unwrapSuccessfulEnvelope(result, 'get-card-store-ref');
+  const data = unwrapSuccessfulEnvelope(result, 'Card storage lookup');
   const storeRef = data?.storeRef ?? data?.value;
   if (typeof storeRef !== 'string' || !storeRef.trim()) {
-    throw new Error('board did not return a card store ref');
+    throw new Error('Board configuration is incomplete');
   }
   return storeRef.trim();
 }
@@ -165,20 +165,20 @@ function readCardStoreRef(baseRef) {
 function readStoredCard(storeRef, cardId) {
   const result = runJsonScript(cardStoreCliPath, ['get', '--store-ref', storeRef, '--id', cardId]);
   if (!Array.isArray(result) || result.length === 0) {
-    throw new Error(`card "${cardId}" not found in card store`);
+    throw new Error(`Card "${cardId}" not found`);
   }
   return result[0];
 }
 
 function readComputedValues(baseRef, cardId) {
   const result = runJsonScript(boardLiveCardsCliPath, ['get-outputs', '--base-ref', baseRef, '--type', 'computed-values', '--key', cardId]);
-  const data = unwrapSuccessfulEnvelope(result, 'get-outputs computed-values');
+  const data = unwrapSuccessfulEnvelope(result, 'Computed values retrieval');
   return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
 }
 
 function readFetchedSourceFileRefs(baseRef, cardId) {
   const result = runJsonScript(boardLiveCardsCliPath, ['get-outputs', '--base-ref', baseRef, '--type', 'fetched_sources', '--key', cardId]);
-  const data = unwrapSuccessfulEnvelope(result, 'get-outputs fetched_sources');
+  const data = unwrapSuccessfulEnvelope(result, 'Source data retrieval');
   return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
 }
 
@@ -216,7 +216,7 @@ function readFetchedSourcesData(baseRef, fileRefs, card) {
 
 function readDataObject(baseRef, outputKey) {
   const result = runJsonScript(boardLiveCardsCliPath, ['get-outputs', '--base-ref', baseRef, '--type', 'data-object', '--key', outputKey]);
-  return unwrapSuccessfulEnvelope(result, `get-outputs data-object ${outputKey}`);
+  return unwrapSuccessfulEnvelope(result, `Data retrieval for ${outputKey}`);
 }
 
 function readOutputMap(baseRef, keys) {
@@ -274,12 +274,12 @@ function main() {
     cardId,
     card_status_in_board: cardStatusInBoard,
     card_definition_and_static_data: storedCard,
-    refs_for_fetched_sources_files: fetchedSourceFileRefs,
+    refs_for_fetched_source_files: fetchedSourceFileRefs,
     runtime_data: {
       requires,
       provides,
       computed_values: computedValues,
-      view_model: materializeView(storedCard, runtimeNode),
+      rendered_view: materializeView(storedCard, runtimeNode),
     },
   });
 }
