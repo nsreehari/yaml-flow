@@ -37,8 +37,6 @@ for (const file of entries) {
     platform: 'node',
     target: 'node18',
     minify: true,
-    // Keep the shebang for scripts that have one
-    banner: { js: '#!/usr/bin/env node' },
     // Don't bundle — preserve sibling ./imports and node: imports
     bundle: false,
   });
