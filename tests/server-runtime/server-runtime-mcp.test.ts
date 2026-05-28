@@ -676,7 +676,7 @@ process.exit(1);
         rendered_view: {
           layout: { kind: 'stack' },
           features: {},
-          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'computed_values.total', resolved: 6 }],
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 6 }],
         },
       },
     });
@@ -787,7 +787,7 @@ process.exit(1);
         provides_outputs: { 'cycle-card-summary': 'Cycle Card' },
         rendered_view: {
           layout: { kind: 'stack' },
-          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'card_data.title', resolved: 'Cycle Card' }],
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 'Cycle Card' }],
         },
       },
     });

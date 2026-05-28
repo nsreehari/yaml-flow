@@ -1513,6 +1513,7 @@ export function createBoardLiveCardsNonCorePublic(
     validation: { isValid: boolean; issues: string[] };
     source_probes: Array<{ bindTo: string; reachable?: boolean; latencyMs?: number; error?: string; skipped?: boolean }>;
     projection_errors: Array<{ bindTo: string; key: string; error: string }>;
+    fetched_sources: Record<string, unknown>;
     computed_values: Record<string, unknown>;
     compute_errors: Array<{ bindTo: string; error: string }>;
   };
@@ -1566,6 +1567,7 @@ export function createBoardLiveCardsNonCorePublic(
       //                                     initialised board runtime directory
       //    If no executor is available, probes are marked as skipped.
       const sourceProbes: SimulateResult['source_probes'] = [];
+      const fetchedSources: Record<string, unknown> = { ...mockFetchedSources };
       const bodyTeRef = body['task-executor-ref'] as ExecutionRef | undefined;
       const teRef = (bodyTeRef?.howToRun && bodyTeRef?.whatToRun ? bodyTeRef : undefined)
         ?? configStore().readTaskExecutorRef();
@@ -1580,7 +1582,10 @@ export function createBoardLiveCardsNonCorePublic(
           const inPayload = { ...src };
           const stdout = adapter.invokeExecutorSync(teRef!, 'run-source-preflight', [],
             { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
-          const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string };
+          const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; resultValue?: unknown };
+          if (result.ok && !Object.prototype.hasOwnProperty.call(mockFetchedSources, bindTo) && Object.prototype.hasOwnProperty.call(result, 'resultValue')) {
+            fetchedSources[bindTo] = result.resultValue;
+          }
           sourceProbes.push({ bindTo, reachable: result.reachable, latencyMs: result.latencyMs, error: result.ok ? undefined : result.error });
         } catch {
           sourceProbes.push({ bindTo, skipped: true, error: 'Executor does not support run-source-preflight' });
@@ -1599,7 +1604,7 @@ export function createBoardLiveCardsNonCorePublic(
           source_defs: card['source_defs'] as ComputeNode['source_defs'],
           compute: computeSteps,
         };
-        const result = CardCompute.runSync(node, { sourcesData: mockFetchedSources });
+        const result = CardCompute.runSync(node, { sourcesData: fetchedSources });
         computedValues = result.node.computed_values ?? {};
         computeErrors = result.errors ?? [];
       }
@@ -1615,6 +1620,7 @@ export function createBoardLiveCardsNonCorePublic(
         validation,
         source_probes: sourceProbes,
         projection_errors: projectionErrors,
+        fetched_sources: fetchedSources,
         computed_values: computedValues,
         compute_errors: computeErrors,
       }) as CommandResult<SimulateResult>;

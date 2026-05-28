@@ -298,6 +298,7 @@ function materializeView(card: UnknownRecord, runtimeNode: UnknownRecord): Board
         ? Boolean(getAtPath(runtimeNode, elementObj.visible))
         : true;
       const bind = typeof dataObj.bind === 'string' ? dataObj.bind : undefined;
+      const maxRows = typeof dataObj.maxRows === 'number' ? dataObj.maxRows : undefined;
       const resolved = bind ? getAtPath(runtimeNode, bind) : undefined;
       const model: BoardLiveCardsMcpRenderedViewElement = {
         id: typeof elementObj.id === 'string' && elementObj.id ? elementObj.id : `element-${index}`,
@@ -306,12 +307,9 @@ function materializeView(card: UnknownRecord, runtimeNode: UnknownRecord): Board
         visible,
       };
 
-      if (bind) model.bind = bind;
-      if (Array.isArray(dataObj.columns)) model.columns = dataObj.columns;
-      if (typeof dataObj.maxRows === 'number') model.maxRows = dataObj.maxRows;
       if (resolved !== undefined) {
-        model.resolved = Array.isArray(resolved) && typeof model.maxRows === 'number'
-          ? resolved.slice(0, model.maxRows)
+        model.resolved = Array.isArray(resolved) && typeof maxRows === 'number'
+          ? resolved.slice(0, maxRows)
           : resolved;
       }
 
@@ -728,12 +726,13 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const validation = ensureRecord(result.validation);
     const sourceProbes = ensureArray(result.source_probes);
     const projectionErrors = ensureArray(result.projection_errors);
+    const fetchedSources = ensureRecord(result.fetched_sources);
     const computeErrors = ensureArray(result.compute_errors);
     const computedValues = ensureRecord(result.computed_values);
     const runtimeNode: UnknownRecord = {
       card_data: ensureRecord(card.card_data),
       requires: args.mockRequires,
-      fetched_sources: {},
+      fetched_sources: fetchedSources,
       computed_values: computedValues,
     };
 

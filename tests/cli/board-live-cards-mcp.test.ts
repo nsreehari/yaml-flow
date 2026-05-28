@@ -137,7 +137,7 @@ describe('BoardLiveCardsMcp', () => {
         rendered_view: {
           layout: 'stack',
           features: { dense: true },
-          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'computed_values.total', resolved: 6 }],
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 6 }],
         },
       },
     });
@@ -195,7 +195,7 @@ describe('BoardLiveCardsMcp', () => {
           layout: 'stack',
           features: { dense: true },
           elements: [
-            { id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'computed_values.total', resolved: 3 },
+            { id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 3 },
           ],
         },
       },

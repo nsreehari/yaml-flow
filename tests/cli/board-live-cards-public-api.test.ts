@@ -1422,6 +1422,28 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     return { nonCore };
   }
 
+  function freshNonCoreWithExecutorStub(
+    invokeStub: ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync'],
+  ) {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-scc-exec-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({
+      params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) },
+      body: {
+        'task-executor-ref': {
+          meta: 'task-executor',
+          howToRun: 'local-node',
+          whatToRun: serializeRef({ kind: 'fs-path', value: path.join(boardDir, 'fake-executor.js') }),
+        },
+      },
+    });
+    const adapter = createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} });
+    adapter.invokeExecutorSync = invokeStub;
+    const nonCore = createBoardLiveCardsNonCorePublic(br, adapter);
+    return { nonCore };
+  }
+
   afterEach(() => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
@@ -1449,6 +1471,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
       expect(result.data.validation.isValid).toBe(true);
       expect(result.data.source_probes).toEqual([]);
       expect(result.data.projection_errors).toEqual([]);
+      expect(result.data.fetched_sources).toEqual({});
       expect(result.data.computed_values).toEqual({});
       expect(result.data.compute_errors).toEqual([]);
     }
@@ -1484,8 +1507,31 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
+      expect(result.data.fetched_sources).toEqual({ data: { values: [10, 20, 30] } });
       expect(result.data.computed_values.total).toBe(60);
       expect(result.data.computed_values.dep).toBe(99);
+      expect(result.data.compute_errors).toEqual([]);
+    }
+  });
+
+  it('uses run-source-preflight resultValue as fetched source input for compute', () => {
+    const { nonCore } = freshNonCoreWithExecutorStub((((_refArg, subcommand) => {
+      expect(subcommand).toBe('run-source-preflight');
+      return JSON.stringify({ ok: true, reachable: true, latencyMs: 4, resultValue: { values: [10, 20, 30] } });
+    }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+    const card = {
+      ...minCard('compute-live-sim'),
+      source_defs: [{ bindTo: 'data', outputFile: 'data.json', mock: 'quotes' }],
+      compute: [{ bindTo: 'total', expr: '$sum(fetched_sources.data.values)' }],
+    };
+    const result = nonCore.simulateCardCycle({ body: { 'card-content': card } });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.source_probes).toEqual([
+        expect.objectContaining({ bindTo: 'data', reachable: true }),
+      ]);
+      expect(result.data.fetched_sources).toEqual({ data: { values: [10, 20, 30] } });
+      expect(result.data.computed_values.total).toBe(60);
       expect(result.data.compute_errors).toEqual([]);
     }
   });

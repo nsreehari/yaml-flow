@@ -1115,6 +1115,21 @@ try {
           assert(Array.isArray(body.provides_outputs?.positions) && body.provides_outputs.positions.length === 2, 'T4 run-cycle portfolio-value subset length mismatch');
         },
       },
+      {
+        name: 'market-prices with live source simulation',
+        card: marketCard,
+        mockRequires: { holdings: baseHoldings.slice(0, 3) },
+        verify: (body) => {
+          const quoteRows = body.provides_outputs?.quotes?.quoteResponse?.result;
+          assert(Array.isArray(quoteRows) && quoteRows.length === 3, 'T4 run-cycle market-prices provides result length mismatch');
+          assert(typeof quoteRows[0]?.symbol === 'string' && quoteRows[0].symbol.length > 0, 'T4 run-cycle market-prices provides symbol missing');
+
+          const resolvedRows = body.rendered_view?.elements?.[0]?.resolved;
+          assert(Array.isArray(resolvedRows) && resolvedRows.length === 3, 'T4 run-cycle market-prices rendered resolved length mismatch');
+          assert(typeof resolvedRows[0]?.ticker === 'string' && resolvedRows[0].ticker.length > 0, 'T4 run-cycle market-prices rendered ticker missing');
+          assert(typeof resolvedRows[0]?.price === 'number', 'T4 run-cycle market-prices rendered price missing');
+        },
+      },
     ];
     for (const tc of runCycleSuccessCases) {
       const body = expectPreflightSuccess(await httpMcp('preflight.run-one-cycle-with-candidate-card', {
