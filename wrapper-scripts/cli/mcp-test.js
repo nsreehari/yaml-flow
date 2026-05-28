@@ -525,3 +525,5 @@ assert(writtenText === responsePayload.text, 'response text mismatch on disk');
 ok('provide-response-to-user writes response and files to disk');
 
 console.log(`\n=== All ${passed} checks passed ===\n`);
+cleanup();
+process.exit(0);

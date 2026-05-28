@@ -1733,7 +1733,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           json(res, 400, { error: readResult.error || 'Failed to read chats' });
           return true;
         }
-        let messages = (readResult.data.records as Array<Record<string, unknown>>).filter((message) => !turnId || String(message.turn || '') === turnId);
+        let messages = (readResult.data.records as unknown as Array<Record<string, unknown>>).filter((message) => !turnId || String(message.turn || '') === turnId);
         if (tailTurnsBeforeId) {
           if (lastUserTurns === undefined || !Number.isInteger(lastUserTurns) || lastUserTurns <= 0) {
             json(res, 400, { error: 'tail-turns is required when tail-turns-before-id is provided' });
@@ -1746,7 +1746,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           }
           const byTurn = new Map<string, Array<Record<string, unknown>>>();
           const orderedTurns: string[] = [];
-          for (const message of allRecords.data.records as Array<Record<string, unknown>>) {
+          for (const message of allRecords.data.records as unknown as Array<Record<string, unknown>>) {
             const turn = String(message.turn || '');
             if (!byTurn.has(turn)) {
               byTurn.set(turn, []);
