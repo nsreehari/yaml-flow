@@ -295,7 +295,8 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         let visible = records.filter((record) => !turnId || String(record.turn || '') === turnId);
 
         if (tailTurnsBeforeId) {
-          if (tailTurns === undefined || !Number.isInteger(tailTurns) || tailTurns <= 0) {
+          const tailTurnsCount = tailTurns;
+          if (typeof tailTurnsCount !== 'number' || !Number.isInteger(tailTurnsCount) || tailTurnsCount <= 0) {
             return fail('readAll requires body.tailTurns (positive integer) when body.tailTurnsBeforeId is provided');
           }
 
@@ -311,13 +312,13 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
           }
 
           const anchorIndex = orderedTurns.findIndex((value) => value === tailTurnsBeforeId);
-          const sliceStart = Math.max(0, anchorIndex - tailTurns);
+          const sliceStart = Math.max(0, anchorIndex - tailTurnsCount);
           const selectedTurns = anchorIndex === -1 ? [] : orderedTurns.slice(sliceStart, anchorIndex);
           visible = selectedTurns.flatMap((turn) => byTurn.get(turn) ?? []);
           return ok({ records: visible });
         }
 
-        if (tailTurns !== undefined) {
+        if (typeof tailTurns === 'number') {
           return ok({ records: sliceLastTurns(visible, tailTurns) });
         }
 

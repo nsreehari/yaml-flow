@@ -189,6 +189,12 @@ function httpMcpRaw(baseUrl, tool, args = {}) {
   return httpRequest('POST', `${baseUrl}/mcp-raw`, { tool, args });
 }
 
+function expectMcpSuccess(result, label) {
+  assert(result.status === 200, `${label} returned ${result.status}: ${JSON.stringify(result.data)}`);
+  assert(result.data?.status === 'success', `${label} failed: ${JSON.stringify(result.data)}`);
+  return Object.prototype.hasOwnProperty.call(result.data ?? {}, 'data') ? result.data.data : {};
+}
+
 const TEMP_ROOT = path.join(os.tmpdir(), `test-mcp-scripts-${Date.now()}-${process.pid}`);
 const BOARD_DIR = path.join(TEMP_ROOT, 'board');
 const CARDS_DIR = path.join(TEMP_ROOT, 'cards');
@@ -349,12 +355,12 @@ await startRuntimeServer(PORT);
 
 console.log('\n--- inspect-board-runtime-status.js ---');
 const statusResult = await httpMcp(BASE, 'inspect.board-runtime-status', {});
-assert(statusResult.status === 200, `inspect.board-runtime-status returned ${statusResult.status}: ${JSON.stringify(statusResult.data)}`);
-assert(typeof statusResult.data?.summary === 'object', 'missing summary in status');
-assert(typeof statusResult.data?.summary?.card_count === 'number', 'missing card_count');
-assert(statusResult.data.summary.card_count >= 1, `expected at least 1 card, got ${statusResult.data.summary.card_count}`);
-assert(Array.isArray(statusResult.data?.cards), 'missing cards array');
-const statusCard = statusResult.data.cards.find((card) => card['card-id'] === TEST_CARD_ID);
+const statusData = expectMcpSuccess(statusResult, 'inspect.board-runtime-status');
+assert(typeof statusData.summary === 'object', 'missing summary in status');
+assert(typeof statusData.summary?.card_count === 'number', 'missing card_count');
+assert(statusData.summary.card_count >= 1, `expected at least 1 card, got ${statusData.summary.card_count}`);
+assert(Array.isArray(statusData.cards), 'missing cards array');
+const statusCard = statusData.cards.find((card) => card['card-id'] === TEST_CARD_ID);
 assert(statusCard, `test card ${TEST_CARD_ID} not found in board status`);
 ok('read-status returns well-shaped summary with test card');
 
@@ -364,12 +370,12 @@ ok('--help exits 0');
 
 console.log('\n--- inspect-card-definition-and-runtime.js ---');
 const cardInspect = await httpMcp(BASE, 'inspect.card-definition-and-runtime', { card_id: TEST_CARD_ID });
-assert(cardInspect.status === 200, `inspect.card-definition-and-runtime returned ${cardInspect.status}: ${JSON.stringify(cardInspect.data)}`);
-assert(cardInspect.data.cardId === TEST_CARD_ID, 'cardId mismatch');
-assert(cardInspect.data.card_definition_and_static_data, 'missing card_definition_and_static_data');
-assert(cardInspect.data.card_status_in_board, 'missing card_status_in_board');
-assert(typeof cardInspect.data.runtime_data === 'object', 'missing runtime_data');
-assert(typeof cardInspect.data.runtime_data.rendered_view === 'object', 'missing rendered_view');
+const cardInspectData = expectMcpSuccess(cardInspect, 'inspect.card-definition-and-runtime');
+assert(cardInspectData.cardId === TEST_CARD_ID, 'cardId mismatch');
+assert(cardInspectData.card_definition_and_static_data, 'missing card_definition_and_static_data');
+assert(cardInspectData.card_status_in_board, 'missing card_status_in_board');
+assert(typeof cardInspectData.runtime_data === 'object', 'missing runtime_data');
+assert(typeof cardInspectData.runtime_data.rendered_view === 'object', 'missing rendered_view');
 ok('inspect card returns card definition and runtime data');
 
 const noCardId = await httpMcp(BASE, 'inspect.card-definition-and-runtime', {});
@@ -380,7 +386,8 @@ console.log('\n--- discover-source-kinds.js ---');
 const discoverResult = await httpMcp(BASE, 'discover.source-kinds', {});
 assert(discoverResult.status === 200 || discoverResult.status === 500, 'discover-source-kinds should return cleanly');
 if (discoverResult.status === 200) {
-  assert(typeof discoverResult.data === 'object', 'discover-source-kinds should output JSON');
+  const discoverData = expectMcpSuccess(discoverResult, 'discover.source-kinds');
+  assert(typeof discoverData === 'object', 'discover-source-kinds should output JSON');
 } else {
   assert(typeof discoverResult.data?.error === 'string', 'discover-source-kinds error should be JSON-shaped');
 }
@@ -424,17 +431,17 @@ runOk(CHAT_CLI, ['--stdin'], {
 });
 
 const chatResult = await httpMcp(BASE, 'inspect.chat-messages-on-cards', { card_id: TEST_CARD_ID });
-assert(chatResult.status === 200, `inspect.chat-messages-on-cards returned ${chatResult.status}: ${JSON.stringify(chatResult.data)}`);
-assert(chatResult.data.cardId === TEST_CARD_ID, 'chat cardId mismatch');
-assert(Array.isArray(chatResult.data.messages), 'chat messages not an array');
-assert(chatResult.data.messages.length >= 2, `expected at least 2 chat messages, got ${chatResult.data.messages.length}`);
-const userMsg = chatResult.data.messages.find((message) => message.role === 'user');
+const chatData = expectMcpSuccess(chatResult, 'inspect.chat-messages-on-cards');
+assert(chatData.cardId === TEST_CARD_ID, 'chat cardId mismatch');
+assert(Array.isArray(chatData.messages), 'chat messages not an array');
+assert(chatData.messages.length >= 2, `expected at least 2 chat messages, got ${chatData.messages.length}`);
+const userMsg = chatData.messages.find((message) => message.role === 'user');
 assert(userMsg && userMsg.text === 'hello from test', 'user chat message text mismatch');
 ok('get-messages returns seeded chat records');
 
 const tailResult = await httpMcp(BASE, 'inspect.chat-messages-on-cards', { card_id: TEST_CARD_ID, tail: 1 });
-assert(tailResult.status === 200, `tail chat result returned ${tailResult.status}`);
-assert(tailResult.data.messages.length === 1, `--tail 1 returned ${tailResult.data.messages.length} messages`);
+const tailData = expectMcpSuccess(tailResult, 'inspect.chat-messages-on-cards tail');
+assert(tailData.messages.length === 1, `--tail 1 returned ${tailData.messages.length} messages`);
 ok('--tail filters to last N messages');
 
 const noCmd = await httpRequest('POST', `${BASE}/mcp`, { args: { card_id: TEST_CARD_ID } });
@@ -443,39 +450,39 @@ ok('missing command exits non-zero');
 
 console.log('\n--- manage-live-board-card.js ---');
 const readCardResult = await httpMcp(BASE, 'manage.read-card', { card_id: TEST_CARD_ID });
-assert(readCardResult.status === 200, `manage.read-card returned ${readCardResult.status}: ${JSON.stringify(readCardResult.data)}`);
-const readCard = Array.isArray(readCardResult.data) ? readCardResult.data[0] : readCardResult.data;
+const readCardData = expectMcpSuccess(readCardResult, 'manage.read-card');
+const readCard = Array.isArray(readCardData) ? readCardData[0] : readCardData;
 assert(readCard?.id === TEST_CARD_ID, 'read-card id mismatch');
 ok('read-card returns stored card');
 
 const UPSERT_CARD_ID = 'test-card-upsert';
 const upsertCard = { id: UPSERT_CARD_ID, card_data: { v: 1 } };
 const upsertRes = await httpMcp(BASE, 'manage.upsert-card', { card_id: UPSERT_CARD_ID, candidate_card_content: upsertCard });
-assert(upsertRes.status === 200, `upsert-card returned ${upsertRes.status}: ${JSON.stringify(upsertRes.data)}`);
-assert(upsertRes.data.status === 'success', `upsert-card failed: ${JSON.stringify(upsertRes.data)}`);
+expectMcpSuccess(upsertRes, 'manage.upsert-card');
 ok('upsert-card validates, stores, and registers');
 
 const postUpsertStatus = await httpMcp(BASE, 'inspect.board-runtime-status', {});
-assert(postUpsertStatus.status === 200, `post upsert status returned ${postUpsertStatus.status}`);
-const upsertedInStatus = postUpsertStatus.data.cards.find((card) => card['card-id'] === UPSERT_CARD_ID);
+const postUpsertStatusData = expectMcpSuccess(postUpsertStatus, 'inspect.board-runtime-status after upsert');
+const upsertedInStatus = postUpsertStatusData.cards.find((card) => card['card-id'] === UPSERT_CARD_ID);
 assert(upsertedInStatus, `upserted card ${UPSERT_CARD_ID} not found in board status`);
 ok('upserted card visible in board status');
 
 const deprecateRes = await httpMcp(BASE, 'manage.deprecate', { card_id: UPSERT_CARD_ID });
-assert(deprecateRes.status === 200, `deprecate returned ${deprecateRes.status}: ${JSON.stringify(deprecateRes.data)}`);
-assert(deprecateRes.data.status === 'success', `deprecate failed: ${JSON.stringify(deprecateRes.data)}`);
+expectMcpSuccess(deprecateRes, 'manage.deprecate');
 ok('deprecate removes card from board');
 
 console.log('\n--- preflight-validate-candidate-card-definition.js ---');
 const validCard = { id: 'candidate-1', card_data: { v: 1 } };
 const validateResult = await httpMcp(BASE, 'preflight.validate-candidate-card-definition', { candidate_card_content: validCard });
-assert(validateResult.status === 200, `validate returned ${validateResult.status}`);
-assert(validateResult.data.status === 'success', `validate returned ${validateResult.data.status}`);
+expectMcpSuccess(validateResult, 'preflight.validate-candidate-card-definition');
 ok('valid card passes preflight validation');
 
 const invalidCard = { card_data: { v: 1 } };
 const invalidResult = await httpMcp(BASE, 'preflight.validate-candidate-card-definition', { candidate_card_content: invalidCard });
 assert(invalidResult.status === 200 || invalidResult.status === 500, 'validate should return cleanly even for invalid cards');
+if (invalidResult.status === 200) {
+  expectMcpSuccess(invalidResult, 'preflight.validate-candidate-card-definition invalid');
+}
 ok('invalid card does not crash the validator');
 
 console.log('\n--- preflight-materialize-candidate-card.js ---');
@@ -490,8 +497,12 @@ const materializePayload = {
 };
 const materializeResult = await httpMcp(BASE, 'preflight.materialize-candidate-card', materializePayload);
 assert(materializeResult.status === 200 || materializeResult.status === 500, 'preflight-materialize should not crash');
-assert(!String(materializeResult.data?.error || '').includes('Cannot find module'), 'preflight-materialize references a missing script');
-assert(!String(materializeResult.data?.error || '').includes('ENOENT'), 'preflight-materialize references a missing file');
+if (materializeResult.status === 200) {
+  expectMcpSuccess(materializeResult, 'preflight.materialize-candidate-card');
+} else {
+  assert(!String(materializeResult.data?.error || '').includes('Cannot find module'), 'preflight-materialize references a missing script');
+  assert(!String(materializeResult.data?.error || '').includes('ENOENT'), 'preflight-materialize references a missing file');
+}
 ok('preflight-materialize-candidate-card runs without missing-script error');
 
 console.log('\n--- preflight-run-one-cycle-with-candidate-card.js ---');
@@ -504,8 +515,12 @@ const cyclePayload = {
 };
 const cycleResult = await httpMcp(BASE, 'preflight.run-one-cycle-with-candidate-card', cyclePayload);
 assert(cycleResult.status === 200 || cycleResult.status === 500, 'preflight-run-one-cycle should not crash');
-assert(!String(cycleResult.data?.error || '').includes('Cannot find module'), 'preflight-run-one-cycle references a missing script');
-assert(!String(cycleResult.data?.error || '').includes('ENOENT'), 'preflight-run-one-cycle references a missing file');
+if (cycleResult.status === 200) {
+  expectMcpSuccess(cycleResult, 'preflight.run-one-cycle-with-candidate-card');
+} else {
+  assert(!String(cycleResult.data?.error || '').includes('Cannot find module'), 'preflight-run-one-cycle references a missing script');
+  assert(!String(cycleResult.data?.error || '').includes('ENOENT'), 'preflight-run-one-cycle references a missing file');
+}
 ok('preflight-run-one-cycle-with-candidate-card runs without missing-script error');
 
 console.log('\n--- provide-response-to-user.js ---');
