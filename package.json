@@ -87,6 +87,7 @@
     "browser",
     "!browser/card-compute.js",
     "!browser/board-livegraph-engine.js",
+    "!browser/board-livecards-localstorage.js",
     "!lib/**/*.map",
     "!cli/**/*.map",
     "!browser/**/*.map",
