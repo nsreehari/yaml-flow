@@ -1085,7 +1085,7 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
    * Each field can also be overridden per-source via source_def.timeout.
    *
    *   validationMs — validate-source-def, validate-card-preflight (structural, fast). Default: 10_000.
-  *   preflightMs  — source preflight executor hooks (probe-source-preflight / run-source-preflight). Default: 60_000.
+    *   preflightMs  — source preflight executor hooks (probe-source-preflight). Default: 60_000.
    *   probeMs      — run-source-fetch in probe/simulation paths. Default: 60_000.
    *   describeMs   — describe-capabilities introspection. Default: 10_000.
    */
@@ -1118,7 +1118,7 @@ export interface BoardLiveCardsNonCorePublic {
   probeSourcePreflight(input: CommandInput): CommandResult;
 
   /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — runs the real source fetch flow as a preflight */
-  runSourcePreflight(input: CommandInput): CommandResult;
+  runSourcePreflight(input: CommandInput): CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
 
   /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — evaluates compute expressions with supplied data; no board state needed */
   evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
@@ -1386,59 +1386,40 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
-  function runSourcePreflight(input: CommandInput): CommandResult {
+  function runSourcePreflight(input: CommandInput): CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }> {
     try {
       const resolved = resolvePreflightSource(input, 'runSourcePreflight');
-      if ('status' in resolved) return resolved;
+      if ('status' in resolved) return resolved as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
 
-      const teRef = configStore().readTaskExecutorRef();
-      if (teRef) {
-        try {
-          const inPayload = { ...resolved.src, _projections: resolved.mockProjections };
-          const stdout = adapter.invokeExecutorSync(teRef, 'run-source-preflight', [],
-            { timeout: (resolved.src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
-          const result = JSON.parse(stdout.trim()) as {
-            ok: boolean;
-            reachable: boolean;
-            latencyMs?: number;
-            bindTo?: string;
-            kind?: string;
-            resultValue?: unknown;
-            note?: string;
-            error?: string;
-          };
-          if (!result.ok) return fail(result.error ?? 'Source preflight failed');
-          return ok({
-            bindTo: result.bindTo ?? resolved.bindTo,
-            reachable: result.reachable,
-            latencyMs: result.latencyMs,
-            kind: result.kind,
-            resultValue: result.resultValue,
-            note: result.note,
-          });
-        } catch {
-          /* executor doesn't support run-source-preflight — fall back to real fetch execution */
+      try {
+        const executed = executeSourceProbe(resolved.src, resolved.mockProjections);
+        if (resolved.outRef) {
+          const parsed = parseRef(resolved.outRef);
+          adapter.absoluteBlob.write(parsed.value, executed.result);
         }
+
+        let resultValue: unknown = executed.result;
+        try { resultValue = JSON.parse(executed.result); } catch { /* keep raw string result */ }
+
+        return ok({
+          bindTo: executed.bindTo,
+          ok: true,
+          result: resultValue,
+          issues: [],
+        });
+      } catch (e) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        if (errorMessage === 'No task-executor registered for this board') {
+          return fail(errorMessage) as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
+        }
+        return ok({
+          bindTo: resolved.bindTo,
+          ok: false,
+          result: null,
+          issues: [errorMessage],
+        });
       }
-
-      const startedAt = Date.now();
-      const executed = executeSourceProbe(resolved.src, resolved.mockProjections);
-      if (resolved.outRef) {
-        const parsed = parseRef(resolved.outRef);
-        adapter.absoluteBlob.write(parsed.value, executed.result);
-      }
-
-      let resultValue: unknown = executed.result;
-      try { resultValue = JSON.parse(executed.result); } catch { /* keep raw string result */ }
-
-      return ok({
-        bindTo: executed.bindTo,
-        reachable: true,
-        latencyMs: Date.now() - startedAt,
-        resultValue,
-        note: 'Actual fetch preflight passed',
-      });
-    } catch (e) { return err(e); }
+    } catch (e) { return err(e) as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>; }
   }
 
   function describeTaskExecutorCapabilities(_input: CommandInput): CommandResult {

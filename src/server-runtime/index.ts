@@ -701,7 +701,46 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (!handler) {
       throw Object.assign(new Error(`Unknown MCP tool: ${tool}`), { statusCode: 400 });
     }
-    return handler(args);
+    const result = handler(args);
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      const record = result as Record<string, unknown>;
+      const status = record.status;
+      if (status === 'success') {
+        return Object.prototype.hasOwnProperty.call(record, 'data')
+          ? result
+          : { status: 'success', data: {} };
+      }
+      if (status === 'fail' || status === 'error') {
+        return result;
+      }
+    }
+    return { status: 'success', data: result };
+  }
+
+  function extractMcpFailureMessage(result: unknown, fallback: string): string {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return fallback;
+    const record = result as Record<string, unknown>;
+    if (typeof record.error === 'string' && record.error.trim()) return record.error;
+    if (record.step === 'validate') {
+      const validation = record.validation;
+      if (validation && typeof validation === 'object' && !Array.isArray(validation)) {
+        const validationRecord = validation as Record<string, unknown>;
+        const validationData = validationRecord.data;
+        if (validationData && typeof validationData === 'object' && !Array.isArray(validationData)) {
+          const issues = (validationData as Record<string, unknown>).issues;
+          if (Array.isArray(issues)) {
+            const firstIssue = issues.find((issue) => typeof issue === 'string' && issue.trim());
+            if (typeof firstIssue === 'string') return `Validation failed: ${firstIssue}`;
+          }
+          const errors = (validationData as Record<string, unknown>).errors;
+          if (Array.isArray(errors) && errors.length > 0) {
+            return 'Validation failed';
+          }
+        }
+      }
+      return 'Validation failed';
+    }
+    return fallback;
   }
 
   // ── Status & runtime artifacts ───────────────────────────────────────────
@@ -1588,7 +1627,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           json(res, 400, { error: 'inspect.file-contents is only available on /mcp-raw' });
           return true;
         }
-        json(res, 200, invokeMcpTool(tool, args));
+          const result = invokeMcpTool(tool, args);
+          if (result && typeof result === 'object' && !Array.isArray(result)) {
+            const record = result as Record<string, unknown>;
+            if (record.status === 'fail') {
+              json(res, 400, { error: extractMcpFailureMessage(result, 'Request failed') });
+              return true;
+            }
+            if (record.status === 'error') {
+              json(res, 500, { error: extractMcpFailureMessage(result, 'Internal error') });
+              return true;
+            }
+          }
+          json(res, 200, result);
         return true;
       }
 

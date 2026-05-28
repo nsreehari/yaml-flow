@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * server-http-mcp-test.js
- *
+        name: 'portfolio variant B',
+        card: portfolioVariantB,
  * Smoke test for demo-board/server/board-server.js over HTTP + SSE.
  * Targets the 'live' board with --cards-pattern cardT* to load only the 3
- * test cards (cardT-portfolio, cardT-market-prices, cardT-portfolio-value).
- *
+          assert(Array.isArray(body.provides_outputs?.holdings) && body.provides_outputs.holdings.length === baseHoldings.length + 1, 'T4 run-cycle portfolio variant B provides mismatch');
+          assert(body.rendered_view?.elements?.[0]?.kind === 'editable-table', 'T4 run-cycle portfolio variant B rendered_view mismatch');
  * T0: init-board -> SSE initial payload -> wait for all cards to complete
  * T1: mutate holdings in memory -> manage.upsert-card over MCP -> verify recomputation
  *
@@ -34,6 +34,7 @@ const cliPort = portArg !== -1 ? parseInt(cliArgs[portArg + 1], 10) : NaN;
 const skipT1 = cliArgs.includes('--skip-t1');
 const skipT2 = cliArgs.includes('--skip-t2');
 const skipT3 = cliArgs.includes('--skip-t3');
+const skipT4 = cliArgs.includes('--skip-t4');
 function isCopilotAvailable() {
   try {
     const r = spawnSync('copilot', ['--version'], { timeout: 5_000, stdio: 'ignore', windowsHide: true });
@@ -378,6 +379,16 @@ function httpUploadChatFile(url, fileName, content, contentType = 'text/plain; c
   });
 }
 
+function deepCloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function expectMcpSuccess(httpResult, label) {
+  assert(httpResult.status === 200, `${label} returned ${httpResult.status}`);
+  assert(httpResult.data?.status === 'success', `${label} expected status=success, got ${JSON.stringify(httpResult.data)}`);
+  return httpResult.data.data;
+}
+
 function startServer(port) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [SERVER_SCRIPT], {
@@ -456,8 +467,8 @@ try {
 
   console.log('\n=== T0 Step 4: board-status cross-check ===');
   const statusRes = await httpMcp('inspect.board-runtime-status', {});
-  assert(statusRes.status === 200, `inspect.board-runtime-status returned ${statusRes.status}`);
-  const httpSummary = statusRes.data?.summary;
+  const statusData = expectMcpSuccess(statusRes, 'inspect.board-runtime-status');
+  const httpSummary = statusData?.summary;
   assert(httpSummary, 'statusSnapshot.summary missing from board-status');
   assert(httpSummary.completed === httpSummary.card_count, `not all complete: ${JSON.stringify(httpSummary)}`);
   console.log(`[T0.4] board-status: ${JSON.stringify(httpSummary)}`);
@@ -471,9 +482,8 @@ try {
   } else {
     console.log('\n=== T1: local mutation + manage.upsert-card (+1 row) ===');
 
-    const portfolioCardRes = await httpMcp('manage.read-card', { card_id: 'card-portfolio' });
-    assert(portfolioCardRes.status === 200, `manage.read-card returned ${portfolioCardRes.status}`);
-    const existingCard = Array.isArray(portfolioCardRes.data) ? portfolioCardRes.data[0] : null;
+    const portfolioCardRes = await httpMcp('inspect.card-definition-and-runtime', { card_id: 'card-portfolio' });
+    const existingCard = expectMcpSuccess(portfolioCardRes, 'inspect.card-definition-and-runtime')?.card_definition_and_static_data ?? null;
     const existingHoldings = existingCard?.card_data?.holdings;
     assert(Array.isArray(existingHoldings), 'card-portfolio.card_data.holdings missing');
     const t0HoldingsCount = existingHoldings.length;
@@ -510,9 +520,8 @@ try {
     const t1Summary = await waitForAllCompleted(30_000, 'T1 holdings upsert');
     assert(t1Summary.failed === 0, `T1 failed=${t1Summary.failed}`);
 
-    const t1PortfolioRes = await httpMcp('manage.read-card', { card_id: 'card-portfolio' });
-    assert(t1PortfolioRes.status === 200, `manage.read-card after upsert returned ${t1PortfolioRes.status}`);
-    const afterCard = Array.isArray(t1PortfolioRes.data) ? t1PortfolioRes.data[0] : null;
+    const t1PortfolioRes = await httpMcp('inspect.card-definition-and-runtime', { card_id: 'card-portfolio' });
+    const afterCard = expectMcpSuccess(t1PortfolioRes, 'inspect.card-definition-and-runtime after upsert')?.card_definition_and_static_data ?? null;
     const afterHoldings = afterCard?.card_data?.holdings;
     const afterHoldingsCount = Array.isArray(afterHoldings) ? afterHoldings.length : 0;
 
@@ -532,8 +541,8 @@ try {
   } else {
     console.log('\n=== T2: plain file upload -> card_data.files -> download ===');
     const t2CardBefore = await httpMcp('manage.read-card', { card_id: T2_FILE_CARD_ID });
-    assert(t2CardBefore.status === 200, `T2 pre card read returned ${t2CardBefore.status}`);
-    const t2CardBeforeObj = Array.isArray(t2CardBefore.data) ? t2CardBefore.data[0] : null;
+    const t2CardBeforeData = expectMcpSuccess(t2CardBefore, 'T2 pre card read');
+    const t2CardBeforeObj = Array.isArray(t2CardBeforeData) ? t2CardBeforeData[0] : null;
     const t2FilesBefore = Array.isArray(t2CardBeforeObj?.card_data?.files) ? t2CardBeforeObj.card_data.files : [];
     const t2BeforeCount = t2FilesBefore.length;
 
@@ -545,14 +554,14 @@ try {
       content_type: 'text/plain; charset=utf-8',
       text: t2UploadText,
     });
-    assert(t2UploadRes.status === 200, `T2 file upload returned ${t2UploadRes.status}`);
-    const t2UploadedFile = t2UploadRes.data?.file;
+    const t2UploadData = expectMcpSuccess(t2UploadRes, 'T2 file upload');
+    const t2UploadedFile = t2UploadData?.file;
     assert(t2UploadedFile && typeof t2UploadedFile === 'object', 'T2 upload response missing file metadata');
     assert(String(t2UploadedFile?.name || '') === t2UploadName, 'T2 uploaded file name mismatch');
 
     const t2CardAfter = await httpMcp('manage.read-card', { card_id: T2_FILE_CARD_ID });
-    assert(t2CardAfter.status === 200, `T2 post card read returned ${t2CardAfter.status}`);
-    const t2CardAfterObj = Array.isArray(t2CardAfter.data) ? t2CardAfter.data[0] : null;
+    const t2CardAfterData = expectMcpSuccess(t2CardAfter, 'T2 post card read');
+    const t2CardAfterObj = Array.isArray(t2CardAfterData) ? t2CardAfterData[0] : null;
     const t2FilesAfter = Array.isArray(t2CardAfterObj?.card_data?.files) ? t2CardAfterObj.card_data.files : [];
     assert(t2FilesAfter.length === t2BeforeCount + 1, `T2 expected files +1 (before=${t2BeforeCount}, after=${t2FilesAfter.length})`);
 
@@ -584,8 +593,8 @@ try {
       assert(subRes.status === 200, `chat subscribe returned ${subRes.status}`);
 
       const t3Before = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3Before.status === 200, `T3 MCP pre chats returned ${t3Before.status}`);
-      const t3BeforeMessages = Array.isArray(t3Before.data?.messages) ? t3Before.data.messages : [];
+      const t3BeforeData = expectMcpSuccess(t3Before, 'T3 MCP pre chats');
+      const t3BeforeMessages = Array.isArray(t3BeforeData?.messages) ? t3BeforeData.messages : [];
       const t3BeforeCount = t3BeforeMessages.length;
       const t3EventStart = NS.chatEvents.length;
       const t3ProbePrompt = `Probe protocol validation ${Date.now()}`;
@@ -611,8 +620,8 @@ try {
       assert(!!t3Lifecycle, 'T3 ordered lifecycle not observed');
 
       const t3After = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3After.status === 200, `T3 MCP post chats returned ${t3After.status}`);
-      const t3AfterMessages = Array.isArray(t3After.data?.messages) ? t3After.data.messages : [];
+      const t3AfterData = expectMcpSuccess(t3After, 'T3 MCP post chats');
+      const t3AfterMessages = Array.isArray(t3AfterData?.messages) ? t3AfterData.messages : [];
       const t3NewMessages = t3AfterMessages.slice(t3BeforeCount);
       assert(t3NewMessages.length >= 3, `T3 expected at least 3 new chat messages, got ${t3NewMessages.length}`);
       const t3User = t3NewMessages.find((m) => m?.role === 'user');
@@ -634,8 +643,8 @@ try {
     } else {
       console.log('\n=== T3a: non-probe chat protocol (expect paris) ===');
       const t3aBefore = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3aBefore.status === 200, `T3a MCP pre chats returned ${t3aBefore.status}`);
-      const t3aBeforeMessages = Array.isArray(t3aBefore.data?.messages) ? t3aBefore.data.messages : [];
+      const t3aBeforeData = expectMcpSuccess(t3aBefore, 'T3a MCP pre chats');
+      const t3aBeforeMessages = Array.isArray(t3aBeforeData?.messages) ? t3aBeforeData.messages : [];
       const t3aBeforeCount = t3aBeforeMessages.length;
       const t3aPrompt = 'Just answer what is the capital of France. No Fluff. No COmmentary.  No Markup Respond in lower case in one word.';
       const t3aTurnId = randomTurnId();
@@ -664,8 +673,8 @@ try {
       assert(!!t3aAssistant, 'T3a assistant response with paris not observed on SSE');
 
       const t3aAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3aAfter.status === 200, `T3a MCP post chats returned ${t3aAfter.status}`);
-      const t3aAfterMessages = Array.isArray(t3aAfter.data?.messages) ? t3aAfter.data.messages : [];
+      const t3aAfterData = expectMcpSuccess(t3aAfter, 'T3a MCP post chats');
+      const t3aAfterMessages = Array.isArray(t3aAfterData?.messages) ? t3aAfterData.messages : [];
       const t3aNewMessages = t3aAfterMessages.slice(t3aBeforeCount);
       assert(t3aNewMessages.length >= 2, `T3a expected at least 2 new chat messages, got ${t3aNewMessages.length}`);
       const t3aUser = t3aNewMessages.find((m) => m?.role === 'user');
@@ -686,8 +695,8 @@ try {
     } else {
       console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
       const t3bBefore = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3bBefore.status === 200, `T3b MCP pre chats returned ${t3bBefore.status}`);
-      const t3bBeforeMessages = Array.isArray(t3bBefore.data?.messages) ? t3bBefore.data.messages : [];
+      const t3bBeforeData = expectMcpSuccess(t3bBefore, 'T3b MCP pre chats');
+      const t3bBeforeMessages = Array.isArray(t3bBeforeData?.messages) ? t3bBeforeData.messages : [];
       const t3bBeforeCount = t3bBeforeMessages.length;
       const t3bTurnId = randomTurnId();
 
@@ -701,8 +710,8 @@ try {
       assert(uploadedFile && typeof uploadedFile === 'object', 'T3b upload response missing file metadata');
 
       const t3bAfterUpload = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3bAfterUpload.status === 200, `T3b MCP chats after upload returned ${t3bAfterUpload.status}`);
-      const t3bUploadMessages = Array.isArray(t3bAfterUpload.data?.messages) ? t3bAfterUpload.data.messages : [];
+      const t3bAfterUploadData = expectMcpSuccess(t3bAfterUpload, 'T3b MCP chats after upload');
+      const t3bUploadMessages = Array.isArray(t3bAfterUploadData?.messages) ? t3bAfterUploadData.messages : [];
       const t3bUploadNewMessages = t3bUploadMessages.slice(t3bBeforeCount);
       const t3bUploadSystem = t3bUploadNewMessages.find((m) => m?.role === 'system');
       assert(!!t3bUploadSystem, 'T3b upload protocol missing system chat file');
@@ -710,8 +719,8 @@ try {
       assert(String(t3bUploadSystem?.turn || '') === t3bTurnId, 'T3b upload system turn id mismatch');
 
       const t3bCardAfterUpload = await httpMcp('manage.read-card', { card_id: CHAT_CARD_ID });
-      assert(t3bCardAfterUpload.status === 200, `T3b manage.read-card after upload returned ${t3bCardAfterUpload.status}`);
-      const t3bCardAfterUploadValue = Array.isArray(t3bCardAfterUpload.data) ? t3bCardAfterUpload.data[0] : null;
+      const t3bCardAfterUploadData = expectMcpSuccess(t3bCardAfterUpload, 'T3b manage.read-card after upload');
+      const t3bCardAfterUploadValue = Array.isArray(t3bCardAfterUploadData) ? t3bCardAfterUploadData[0] : null;
       const t3bFilesAfterUpload = Array.isArray(t3bCardAfterUploadValue?.card_data?.files)
         ? t3bCardAfterUploadValue.card_data.files
         : [];
@@ -751,8 +760,8 @@ try {
       assert(!!t3bLifecycle, 'T3b ordered lifecycle not observed');
 
       const t3bAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, 'all-turns': true });
-      assert(t3bAfter.status === 200, `T3b MCP post chats returned ${t3bAfter.status}`);
-      const t3bAfterMessages = Array.isArray(t3bAfter.data?.messages) ? t3bAfter.data.messages : [];
+      const t3bAfterData = expectMcpSuccess(t3bAfter, 'T3b MCP post chats');
+      const t3bAfterMessages = Array.isArray(t3bAfterData?.messages) ? t3bAfterData.messages : [];
       const t3bNewMessages = t3bAfterMessages.slice(t3bSendBaseline);
       assert(t3bNewMessages.length >= 3, `T3b expected at least 3 chat messages after send, got ${t3bNewMessages.length}`);
 
@@ -770,6 +779,313 @@ try {
       assert(String(t3bAssistantMsg?.turn || '') === t3bTurnId, 'T3b assistant turn id mismatch');
       console.log('[T3b] ok: upload protocol and ordered probe lifecycle observed with attachment-derived assistant reply');
     }
+  }
+
+  if (skipT4) {
+    console.log('\n=== T4: skipped (--skip-t4) ===');
+  } else {
+    console.log('\n=== T4: preflight MCP smoke checks ===');
+
+    const discoverSourceKindsData = expectMcpSuccess(
+      await httpMcp('discover.source-kinds', {}),
+      'T4 discover.source-kinds',
+    );
+    assert(discoverSourceKindsData && typeof discoverSourceKindsData === 'object', 'T4 discover.source-kinds missing payload');
+    assert(discoverSourceKindsData.sourceKinds && typeof discoverSourceKindsData.sourceKinds === 'object', 'T4 discover.source-kinds missing sourceKinds');
+    const discoveredSourceKinds = Object.keys(discoverSourceKindsData.sourceKinds).sort();
+    assert(
+      JSON.stringify(discoveredSourceKinds) === JSON.stringify(['mock', 'sqlite', 'urls']),
+      `T4 discover.source-kinds mismatch: ${JSON.stringify(discoveredSourceKinds)}`,
+    );
+    console.log('[T4.discover] ok: source kinds match demo task executor');
+
+    const getCardDefinition = (fileName) => {
+      const filePath = path.join(BOARD_DIR, 'cards', fileName);
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(raw);
+    };
+
+    const expectPreflightSuccess = (res, label) => {
+      assert(res.status === 200, `${label} returned ${res.status}`);
+      assert(res.data?.status === 'success', `${label} expected status=success, got ${JSON.stringify(res.data)}`);
+      assert(res.data?.data && typeof res.data.data === 'object', `${label} missing success data`);
+      return res.data.data;
+    };
+
+    const portfolioCard = getCardDefinition('cardT-portfolio.json');
+    const marketCard = getCardDefinition('cardT-market-prices.json');
+    const portfolioValueCard = getCardDefinition('cardT-portfolio-value.json');
+    const baseHoldings = Array.isArray(portfolioCard?.card_data?.holdings) ? deepCloneJson(portfolioCard.card_data.holdings) : [];
+
+    const mockQuotes = {
+      quoteResponse: {
+        result: [
+          { symbol: 'AAPL', shortName: 'Apple Inc.', regularMarketPrice: 198.15, regularMarketChange: 2.15, regularMarketChangePercent: 1.10 },
+          { symbol: 'MSFT', shortName: 'Microsoft Corp.', regularMarketPrice: 415.32, regularMarketChange: -1.23, regularMarketChangePercent: -0.30 },
+          { symbol: 'GOOGL', shortName: 'Alphabet Inc.', regularMarketPrice: 174.89, regularMarketChange: 0.89, regularMarketChangePercent: 0.51 },
+          { symbol: 'TSLA', shortName: 'Tesla Inc.', regularMarketPrice: 247.12, regularMarketChange: 5.43, regularMarketChangePercent: 2.25 },
+        ],
+        error: null,
+      },
+    };
+
+    const makePortfolioVariant = (id, extraHolding) => {
+      const card = deepCloneJson(portfolioCard);
+      card.id = id;
+      card.card_data.holdings = [...baseHoldings, extraHolding];
+      return card;
+    };
+
+    const makeMockSourceCard = ({ id, bindTo = 'quotes', secondBindTo = null, includeProjection = false, missingMock = false }) => {
+      const card = deepCloneJson(marketCard);
+      card.id = id;
+      card.requires = [];
+      card.source_defs = [
+        { bindTo, mock: missingMock ? 'missing-mock-key' : 'quotes' },
+        ...(secondBindTo ? [{ bindTo: secondBindTo, mock: 'quotes' }] : []),
+      ];
+      if (includeProjection) {
+        card.source_defs[0].projections = { passthrough: '"ok"' };
+      } else {
+        delete card.source_defs[0].projections;
+      }
+      delete card.source_defs[0].urls;
+      if (card.source_defs[1]) delete card.source_defs[1].urls;
+      return card;
+    };
+
+    const portfolioVariantA = makePortfolioVariant('card-portfolio-preflight-a', { ticker: 'NVDA', quantity: 7, cost_basis: 121 });
+    const portfolioVariantB = makePortfolioVariant('card-portfolio-preflight-b', { ticker: 'AMD', quantity: 9, cost_basis: 143 });
+    const marketMockCycleCard = makeMockSourceCard({ id: 'card-market-prices-preflight-cycle' });
+    const marketMockSourceCardA = makeMockSourceCard({ id: 'card-market-prices-preflight-source-a' });
+    const marketMockSourceCardB = makeMockSourceCard({ id: 'card-market-prices-preflight-source-b', includeProjection: true });
+    const marketMockSourceCardC = makeMockSourceCard({ id: 'card-market-prices-preflight-source-c', secondBindTo: 'quotesBackup' });
+    const marketMockSourceCardD = makeMockSourceCard({ id: 'card-market-prices-preflight-source-d', bindTo: 'quotesPrimary' });
+    const marketMockSourceCardE = makeMockSourceCard({ id: 'card-market-prices-preflight-source-e', bindTo: 'quotesEcho' });
+    const marketMissingMockCard = makeMockSourceCard({ id: 'card-market-prices-preflight-missing', missingMock: true });
+    const invalidCard = {
+      ...deepCloneJson(marketCard),
+      id: '',
+      source_defs: [{ bindTo: '', mock: 'quotes' }],
+      view: { layout: { kind: 'stack' }, elements: [{ id: 'broken' }] },
+    };
+
+    const validateSuccessCases = [
+      { name: 'portfolio live', card: portfolioCard, expectCardId: 'card-portfolio' },
+      { name: 'market live', card: marketCard, expectCardId: 'card-market-prices' },
+      { name: 'portfolio-value live', card: portfolioValueCard, expectCardId: 'card-portfolio-value' },
+      { name: 'portfolio variant', card: portfolioVariantA, expectCardId: 'card-portfolio-preflight-a' },
+      { name: 'portfolio variant B', card: portfolioVariantB, expectCardId: 'card-portfolio-preflight-b' },
+    ];
+    for (const tc of validateSuccessCases) {
+      const body = expectPreflightSuccess(await httpMcp('preflight.validate-candidate-card-definition', {
+        candidate_card_content: tc.card,
+      }), `T4 validate success (${tc.name})`);
+      assert(body.cardId === tc.expectCardId, `T4 validate ${tc.name} cardId mismatch`);
+      assert(body.isValid === true, `T4 validate ${tc.name} expected isValid=true`);
+      assert(Array.isArray(body.issues) && body.issues.length === 0, `T4 validate ${tc.name} expected no issues`);
+      console.log(`[T4.validate] ok: ${tc.name}`);
+    }
+
+    const validateFailureBody = expectPreflightSuccess(await httpMcp('preflight.validate-candidate-card-definition', {
+      candidate_card_content: invalidCard,
+    }), 'T4 validate failure (invalid card)');
+    assert(validateFailureBody.isValid === false, 'T4 validate invalid card should be invalid');
+    assert(Array.isArray(validateFailureBody.issues) && validateFailureBody.issues.length > 0, 'T4 validate invalid card should report issues');
+    console.log('[T4.validate] ok: invalid card reports validation issues');
+
+    const materializeSuccessCases = [
+      {
+        name: 'portfolio live empty mocks',
+        card: portfolioCard,
+        mockRequires: {},
+        mockFetchedSources: {},
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.holdings), 'T4 materialize portfolio holdings missing');
+          assert(body.provides_outputs.holdings.length === baseHoldings.length, 'T4 materialize portfolio holdings length mismatch');
+          assert(body.rendered_view?.elements?.[0]?.kind === 'editable-table', 'T4 materialize portfolio rendered_view mismatch');
+        },
+      },
+      {
+        name: 'portfolio variant with extra holding',
+        card: portfolioVariantA,
+        mockRequires: {},
+        mockFetchedSources: {},
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.holdings), 'T4 materialize portfolio variant holdings missing');
+          assert(body.provides_outputs.holdings.length === baseHoldings.length + 1, 'T4 materialize portfolio variant holdings length mismatch');
+        },
+      },
+      {
+        name: 'portfolio variant B with extra holding',
+        card: portfolioVariantB,
+        mockRequires: {},
+        mockFetchedSources: {},
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.holdings), 'T4 materialize portfolio variant B holdings missing');
+          assert(body.provides_outputs.holdings.length === baseHoldings.length + 1, 'T4 materialize portfolio variant B holdings length mismatch');
+        },
+      },
+      {
+        name: 'portfolio-value live with mock requires',
+        card: portfolioValueCard,
+        mockRequires: { holdings: baseHoldings, quotes: mockQuotes },
+        mockFetchedSources: {},
+        verify: (body) => {
+          assert(Array.isArray(body.computed_values?.positions) && body.computed_values.positions.length > 0, 'T4 materialize portfolio-value positions missing');
+          assert(Array.isArray(body.provides_outputs?.positions) && body.provides_outputs.positions.length > 0, 'T4 materialize portfolio-value provides missing');
+          assert(body.rendered_view?.elements?.length === 3, 'T4 materialize portfolio-value rendered_view length mismatch');
+        },
+      },
+      {
+        name: 'portfolio-value subset requires',
+        card: portfolioValueCard,
+        mockRequires: {
+          holdings: baseHoldings.slice(0, 2),
+          quotes: { quoteResponse: { result: mockQuotes.quoteResponse.result.slice(0, 2), error: null } },
+        },
+        mockFetchedSources: {},
+        verify: (body) => {
+          assert(Array.isArray(body.computed_values?.positions) && body.computed_values.positions.length === 2, 'T4 materialize portfolio-value subset positions mismatch');
+          assert(Array.isArray(body.provides_outputs?.positions) && body.provides_outputs.positions.length === 2, 'T4 materialize portfolio-value subset provides mismatch');
+        },
+      },
+    ];
+    for (const tc of materializeSuccessCases) {
+      const body = expectPreflightSuccess(await httpMcp('preflight.materialize-candidate-card', {
+        candidate_card_content: tc.card,
+        mock_requires: tc.mockRequires,
+        mock_fetched_sources: tc.mockFetchedSources,
+      }), `T4 materialize success (${tc.name})`);
+      assert(body.ok === true, `T4 materialize ${tc.name} expected ok=true`);
+      assert(Array.isArray(body.errors) && body.errors.length === 0, `T4 materialize ${tc.name} expected no errors`);
+      tc.verify(body);
+      console.log(`[T4.materialize] ok: ${tc.name}`);
+    }
+
+    const materializeFailureRes = await httpMcp('preflight.materialize-candidate-card', {
+      candidate_card_content: portfolioCard,
+    });
+    assert(materializeFailureRes.status === 400, `T4 materialize missing args expected 400, got ${materializeFailureRes.status}`);
+    assert(materializeFailureRes.data?.error === 'MCP tool requires mock_requires', 'T4 materialize missing args error mismatch');
+    console.log('[T4.materialize] ok: missing required mocks is rejected');
+
+    const probeSuccessCases = [
+      { name: 'single mock source base', card: marketMockSourceCardA, sourceIdx: 0, bindTo: 'quotes', mockProjections: {} },
+      { name: 'single mock source with projection payload', card: marketMockSourceCardB, sourceIdx: 0, bindTo: 'quotes', mockProjections: { passthrough: 'ok' } },
+      { name: 'two mock sources first entry', card: marketMockSourceCardC, sourceIdx: 0, bindTo: 'quotes', mockProjections: {} },
+      { name: 'two mock sources second entry', card: marketMockSourceCardC, sourceIdx: 1, bindTo: 'quotesBackup', mockProjections: {} },
+      { name: 'single mock source alternate bindTo', card: marketMockSourceCardD, sourceIdx: 0, bindTo: 'quotesPrimary', mockProjections: {} },
+    ];
+    for (const tc of probeSuccessCases) {
+      const body = expectPreflightSuccess(await httpMcp('preflight.probe-single-source-in-candidate-card', {
+        candidate_card_content: tc.card,
+        source_idx: tc.sourceIdx,
+        mock_projections: tc.mockProjections,
+      }), `T4 probe success (${tc.name})`);
+      assert(body.bindTo === tc.bindTo, `T4 probe ${tc.name} bindTo mismatch`);
+      assert(body.reachable === true, `T4 probe ${tc.name} expected reachable=true`);
+      assert(typeof body.latencyMs === 'number', `T4 probe ${tc.name} expected numeric latencyMs`);
+      console.log(`[T4.probe] ok: ${tc.name}`);
+    }
+
+    const probeFailureRes = await httpMcp('preflight.probe-single-source-in-candidate-card', {
+      candidate_card_content: marketMissingMockCard,
+      source_idx: 0,
+      mock_projections: {},
+    });
+    assert(probeFailureRes.status === 400, `T4 probe failure expected 400, got ${probeFailureRes.status}`);
+    assert(typeof probeFailureRes.data?.error === 'string' && probeFailureRes.data.error.length > 0, 'T4 probe failure expected error text');
+    console.log('[T4.probe] ok: missing mock source returns HTTP error');
+
+    const runSourceSuccessCases = [
+      { name: 'single mock source base', card: marketMockSourceCardA, sourceIdx: 0, bindTo: 'quotes' },
+      { name: 'single mock source with projection payload', card: marketMockSourceCardB, sourceIdx: 0, bindTo: 'quotes' },
+      { name: 'two mock sources first entry', card: marketMockSourceCardC, sourceIdx: 0, bindTo: 'quotes' },
+      { name: 'two mock sources second entry', card: marketMockSourceCardC, sourceIdx: 1, bindTo: 'quotesBackup' },
+      { name: 'single mock source alternate bindTo', card: marketMockSourceCardE, sourceIdx: 0, bindTo: 'quotesEcho' },
+    ];
+    for (const tc of runSourceSuccessCases) {
+      const body = expectPreflightSuccess(await httpMcp('preflight.run-single-source-in-candidate-card', {
+        candidate_card_content: tc.card,
+        source_idx: tc.sourceIdx,
+        mock_projections: {},
+      }), `T4 run-source success (${tc.name})`);
+      assert(body.bindTo === tc.bindTo, `T4 run-source ${tc.name} bindTo mismatch`);
+      assert(body.ok === true, `T4 run-source ${tc.name} expected ok=true`);
+      assert(Array.isArray(body.issues) && body.issues.length === 0, `T4 run-source ${tc.name} expected no issues`);
+      assert(Array.isArray(body.result?.quoteResponse?.result) && body.result.quoteResponse.result.length > 0, `T4 run-source ${tc.name} result shape mismatch`);
+      console.log(`[T4.run-source] ok: ${tc.name}`);
+    }
+
+    const runSourceFailureBody = expectPreflightSuccess(await httpMcp('preflight.run-single-source-in-candidate-card', {
+      candidate_card_content: marketMissingMockCard,
+      source_idx: 0,
+      mock_projections: {},
+    }), 'T4 run-source failure (missing mock source)');
+    assert(runSourceFailureBody.ok === false, 'T4 run-source missing mock should set ok=false');
+    assert(Array.isArray(runSourceFailureBody.issues) && runSourceFailureBody.issues.length > 0, 'T4 run-source missing mock should report issues');
+    console.log('[T4.run-source] ok: missing mock source returns ok=false with issues');
+
+    const runCycleSuccessCases = [
+      {
+        name: 'portfolio live',
+        card: portfolioCard,
+        mockRequires: {},
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.holdings) && body.provides_outputs.holdings.length === baseHoldings.length, 'T4 run-cycle portfolio provides mismatch');
+          assert(body.rendered_view?.elements?.[0]?.kind === 'editable-table', 'T4 run-cycle portfolio rendered_view mismatch');
+        },
+      },
+      {
+        name: 'portfolio variant',
+        card: portfolioVariantB,
+        mockRequires: {},
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.holdings) && body.provides_outputs.holdings.length === baseHoldings.length + 1, 'T4 run-cycle portfolio variant provides mismatch');
+        },
+      },
+      {
+        name: 'portfolio variant B',
+        card: portfolioVariantB,
+        mockRequires: {},
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.holdings) && body.provides_outputs.holdings.length === baseHoldings.length + 1, 'T4 run-cycle portfolio variant B provides mismatch');
+          assert(body.rendered_view?.elements?.[0]?.kind === 'editable-table', 'T4 run-cycle portfolio variant B rendered_view mismatch');
+        },
+      },
+      {
+        name: 'portfolio-value with full requires',
+        card: portfolioValueCard,
+        mockRequires: { holdings: baseHoldings, quotes: mockQuotes },
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.positions) && body.provides_outputs.positions.length > 0, 'T4 run-cycle portfolio-value provides mismatch');
+          assert(body.rendered_view?.elements?.length === 3, 'T4 run-cycle portfolio-value rendered_view mismatch');
+        },
+      },
+      {
+        name: 'portfolio-value subset requires',
+        card: portfolioValueCard,
+        mockRequires: {
+          holdings: baseHoldings.slice(0, 2),
+          quotes: { quoteResponse: { result: mockQuotes.quoteResponse.result.slice(0, 2), error: null } },
+        },
+        verify: (body) => {
+          assert(Array.isArray(body.provides_outputs?.positions) && body.provides_outputs.positions.length === 2, 'T4 run-cycle portfolio-value subset length mismatch');
+        },
+      },
+    ];
+    for (const tc of runCycleSuccessCases) {
+      const body = expectPreflightSuccess(await httpMcp('preflight.run-one-cycle-with-candidate-card', {
+        candidate_card_content: tc.card,
+        mock_requires: tc.mockRequires,
+      }), `T4 run-cycle success (${tc.name})`);
+      assert(body.ok === true, `T4 run-cycle ${tc.name} expected ok=true`);
+      assert(Array.isArray(body.issues) && body.issues.length === 0, `T4 run-cycle ${tc.name} expected no issues`);
+      tc.verify(body);
+      console.log(`[T4.run-cycle] ok: ${tc.name}`);
+    }
+
   }
 
   console.log('\n=== All smoke checks passed ===\n');

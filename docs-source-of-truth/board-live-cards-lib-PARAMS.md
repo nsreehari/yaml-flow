@@ -124,9 +124,10 @@ probeSourcePreflight(input: CommandInput): CommandResult
 runSourcePreflight(input: CommandInput): CommandResult
   params: { sourceIdx, outRef? }
   body:   { "card-content": <card object>, "mock-projections"?: <object> }
-  // Runs the selected source through the real fetch flow preflight.
-  // Uses the executor `run-source-preflight` hook when supported.
-  // Falls back to full runSourceProbe (same fetch path as probeSource) when unsupported.
+  // Runs the selected source through the real fetch flow only.
+  // Returns { bindTo, ok, result, issues }.
+  // Fails when no task executor is configured.
+  // Does not use executor `run-source-preflight` hooks or fallback modes.
 ```
 
 ### Compute evaluation

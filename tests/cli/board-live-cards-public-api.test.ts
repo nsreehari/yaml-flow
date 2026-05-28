@@ -1197,55 +1197,59 @@ describe('BoardLiveCardsNonCorePublic — runSourcePreflight', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('returns executor output when run-source-preflight is supported', () => {
-    const { nonCore } = freshNonCoreWithExecutorStub(((refArg, subcommand) => {
-      expect(subcommand).toBe('run-source-preflight');
-      return JSON.stringify({
-        ok: true,
-        reachable: true,
-        latencyMs: 12,
-        bindTo: 'prices',
-        kind: 'urls',
-        resultValue: { ok: true },
-        note: 'Actual fetch preflight passed',
-      });
-    }) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
-
+  it('uses the live fetch path for run-source-preflight and returns the simplified shape', () => {
     const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
-    const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
-      expect(result.data).toMatchObject({
-        bindTo: 'prices',
-        kind: 'urls',
-        reachable: true,
-        latencyMs: 12,
-        resultValue: { ok: true },
-      });
-    }
-  });
-
-  it('falls back to run-source-fetch when run-source-preflight is unsupported', () => {
-    const { nonCore } = freshNonCoreWithExecutorStub((((refArg, subcommand, argv) => {
-      if (subcommand === 'run-source-preflight') throw new Error('unsupported');
-      if (subcommand !== 'run-source-fetch') throw new Error(`unexpected subcommand: ${subcommand}`);
+    const { nonCore: liveNonCore } = freshNonCoreWithExecutorStub((((refArg, subcommand, argv) => {
+      expect(subcommand).toBe('run-source-fetch');
       const outIdx = argv.indexOf('--out-ref');
       const outRef = parseRef(argv[outIdx + 1]);
-      fs.writeFileSync(outRef.value, JSON.stringify({ hello: 'world' }));
+      fs.writeFileSync(outRef.value, JSON.stringify({ ok: true }));
       return '';
+    }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+
+    const result = liveNonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    expect(result).toEqual({
+      status: 'success',
+      data: {
+        bindTo: 'prices',
+        ok: true,
+        result: { ok: true },
+        issues: [],
+      },
+    });
+  });
+
+  it('returns ok=false with issues when the live fetch path fails', () => {
+    const { nonCore } = freshNonCoreWithExecutorStub((((refArg, subcommand, argv) => {
+      expect(subcommand).toBe('run-source-fetch');
+      throw new Error('network timeout');
     }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
 
     const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
     const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
-      expect(result.data).toMatchObject({
+    expect(result).toEqual({
+      status: 'success',
+      data: {
         bindTo: 'prices',
-        reachable: true,
-        resultValue: { hello: 'world' },
-        note: 'Actual fetch preflight passed',
-      });
-    }
+        ok: false,
+        result: null,
+        issues: ['Probe failed: network timeout'],
+      },
+    });
+  });
+
+  it('fails when no task executor is configured for run-source-preflight', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-rsp-noexec-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
+
+    const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
+    const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    expect(result).toEqual({
+      status: 'fail',
+      error: 'No task-executor registered for this board',
+    });
   });
 });
 

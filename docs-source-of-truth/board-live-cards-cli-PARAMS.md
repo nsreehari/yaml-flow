@@ -116,8 +116,12 @@ probe-source-preflight --source-idx <n>
 run-source-preflight --source-idx <n>
   params: { sourceIdx, outRef? }
   body: { "card-content": <card object>, "mock-projections"?: <object> }  # stdin
-  # Real-flow source preflight. Delegates to executor's run-source-preflight
-  # subcommand when supported. Falls back to full source execution otherwise.
+  → data: { "bindTo": "<bindTo>", "ok": true|false,
+            "result": <parsed-json-or-raw-string-or-null>,
+            "issues": ["<msg>", ...] }
+  # Live-fetch-only source preflight. Always uses the real run-source-fetch path.
+  # Requires a configured task executor for run-source-fetch.
+  # Does not use executor run-source-preflight hooks or fallback modes.
 ```
 
 ## Compute evaluation

@@ -197,9 +197,29 @@ process.exit(1);
     const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
-    expect(parseJsonBody(res)).toEqual([
-      expect.objectContaining({ id: 'card-1', card_data: expect.objectContaining({ title: 'Card One' }) }),
-    ]);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: [
+        expect.objectContaining({ id: 'card-1', card_data: expect.objectContaining({ title: 'Card One' }) }),
+      ],
+    });
+  });
+
+  it('rejects manage.upsert-card validation failures on /mcp with a 400 error payload', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.upsert-card',
+      args: {
+        card_id: 'card-1',
+        candidate_card_content: { id: 'card-1', card_data: {}, view: { elements: [{ id: 'broken' }] } },
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: "Validation failed: /view/elements/0: must have required property 'kind'" });
   });
 
   it('POST /cards/:id/files uploads bytes, appends metadata, and emits a chat system message with turn when inChat=true', async () => {
@@ -311,8 +331,11 @@ process.exit(1);
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
     expect(parseJsonBody(res)).toEqual({
-      ok: true,
-      file: expect.objectContaining({ name: 'tool-upload.txt', mime_type: 'text/plain', size: 15 }),
+      status: 'success',
+      data: {
+        ok: true,
+        file: expect.objectContaining({ name: 'tool-upload.txt', mime_type: 'text/plain', size: 15 }),
+      },
     });
 
     const cardReq = makeRequest('GET', '/api/board/cards/card-1');
@@ -408,7 +431,7 @@ process.exit(1);
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
-    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    const mcpMessages = ((mcpBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     expect(mcpMessages.length).toBe(1);
     expect(mcpMessages[0].text).toBe('Message A');
     expect(mcpMessages[0].turn).toBe('turn-a');
@@ -435,7 +458,7 @@ process.exit(1);
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
-    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    const mcpMessages = ((mcpBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     expect(mcpMessages.map((m) => m.text)).toEqual(['Question 2', 'Answer 2']);
   });
 
@@ -460,7 +483,7 @@ process.exit(1);
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
-    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    const mcpMessages = ((mcpBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     expect(mcpMessages.map((m) => m.text)).toEqual(['Question 1', 'Answer 1', 'Question 2', 'Answer 2']);
   });
 
@@ -494,7 +517,7 @@ process.exit(1);
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
-    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    const mcpMessages = ((mcpBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     expect(mcpMessages.length).toBe(1);
     expect(mcpMessages.map((m) => m.text)).toEqual(['Message B']);
   });
@@ -566,9 +589,12 @@ process.exit(1);
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
     expect(parseJsonBody(res)).toEqual({
-      version: '1.0',
-      commonSourceFields: { bindTo: { type: 'string' } },
-      sourceKinds: { fake: { title: 'Fake Source' } },
+      status: 'success',
+      data: {
+        version: '1.0',
+        commonSourceFields: { bindTo: { type: 'string' } },
+        sourceKinds: { fake: { title: 'Fake Source' } },
+      },
     });
   });
 
@@ -674,6 +700,28 @@ process.exit(1);
     expect(handled).toBe(true);
     expect(res._status).toBe(400);
     expect(parseJsonBody(res)).toEqual({ error: 'MCP tool requires mock_requires' });
+  });
+
+  it('rejects preflight.probe-single-source-in-candidate-card fail results on /mcp with a 400 error payload', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.probe-single-source-in-candidate-card',
+      args: {
+        source_idx: 3,
+        candidate_card_content: {
+          id: 'tmp-card',
+          card_data: {},
+          source_defs: [{ bindTo: 'sourceA', kind: 'fake' }],
+        },
+        mock_projections: {},
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: 'sourceIdx 3 out of range (card has 1 source(s))' });
   });
 
   it('routes preflight.run-single-source-in-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
