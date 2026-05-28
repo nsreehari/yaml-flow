@@ -14,6 +14,7 @@ import type { CardStorePublic } from './card-store-lib-public.js';
 import type { ChatStorePublic } from './chat-store-lib-public.js';
 import type { ChatRecord } from './chat-storage-lib.js';
 import type { LiveCard } from './board-live-cards-lib.js';
+import { CardCompute } from '../../card-compute/index.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -162,7 +163,12 @@ export interface BoardLiveCardsMcpBoardDeps {
 export interface BoardLiveCardsMcpNonCoreDeps {
   describeTaskExecutorCapabilities(input: {}): CommandResult;
   validateCardPreflight(input: { body: unknown }): CommandResult;
-  evalCardCompute(input: { body: unknown }): CommandResult;
+  evalCardCompute(input: { body: unknown }): CommandResult<{
+    cardId: string;
+    ok: boolean;
+    computed_values: Record<string, unknown>;
+    errors: Array<{ bindTo: string; error: string }>;
+  }>;
   probeSourcePreflight(input: { params: { sourceIdx: number }; body: unknown }): CommandResult;
   runSourcePreflight(input: { params: { sourceIdx: number }; body: unknown }): CommandResult;
   simulateCardCycle(input: { body: unknown }): CommandResult;
@@ -200,6 +206,11 @@ export interface BoardLiveCardsMcp {
     mockProjections: UnknownRecord;
     sourceIdx: number;
   }): unknown;
+  preflightRunSingleSourceInLiveCard(args: {
+    cardId: string;
+    sourceIdx: number;
+    mockRequires: UnknownRecord;
+  }): unknown;
   preflightRunOneCycleWithCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
@@ -221,6 +232,19 @@ function expectSuccess<T>(result: CommandResult<T>, commandName: string): T {
     return Object.prototype.hasOwnProperty.call(result, 'data')
       ? (result as { data: T }).data
       : (undefined as T);
+  }
+  if (result?.status === 'fail' || result?.status === 'error') {
+    throw new Error(result.error || `${commandName} failed`);
+  }
+  throw new Error(`${commandName} returned an unexpected response`);
+}
+
+function expectSuccessData<T>(result: CommandResult<T>, commandName: string): T {
+  if (result?.status === 'success' && Object.prototype.hasOwnProperty.call(result, 'data')) {
+    return (result as { status: 'success'; data: T }).data;
+  }
+  if (result?.status === 'success') {
+    throw new Error(`${commandName} returned success without data`);
   }
   if (result?.status === 'fail' || result?.status === 'error') {
     throw new Error(result.error || `${commandName} failed`);
@@ -597,7 +621,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       return result;
     }
 
-    const payload = ensureRecord(Object.prototype.hasOwnProperty.call(result, 'data') ? result.data : {});
+    const payload = ensureRecord(expectSuccessData(result, 'evalCardCompute'));
     const card = ensureRecord(args.candidateCardContent);
     const runtimeNode: UnknownRecord = {
       card_data: ensureRecord(card.card_data),
@@ -649,6 +673,42 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       body: {
         'card-content': args.candidateCardContent,
         'mock-projections': args.mockProjections,
+      },
+    });
+  }
+
+  function preflightRunSingleSourceInLiveCard(args: {
+    cardId: string;
+    sourceIdx: number;
+    mockRequires: UnknownRecord;
+  }): unknown {
+    const cardId = String(args.cardId || '').trim();
+    if (!cardId) {
+      throw new Error('preflightRunSingleSourceInLiveCard requires cardId');
+    }
+    if (!args.mockRequires || typeof args.mockRequires !== 'object' || Array.isArray(args.mockRequires)) {
+      throw new Error('preflightRunSingleSourceInLiveCard requires mockRequires');
+    }
+    const liveCard = ensureRecord(readOneCard(cardStore, cardId));
+    const sourceDefs = ensureArray(liveCard.source_defs)
+      .filter((item): item is UnknownRecord => !!item && typeof item === 'object' && !Array.isArray(item));
+    let mockProjections: UnknownRecord = {};
+    if (args.sourceIdx >= 0 && args.sourceIdx < sourceDefs.length) {
+      const selected = sourceDefs[args.sourceIdx];
+      const enriched = CardCompute.enrichSourcesSync([selected], {
+        card_data: ensureRecord(liveCard.card_data),
+        requires: args.mockRequires,
+      });
+      if (Array.isArray(enriched) && enriched.length > 0) {
+        mockProjections = ensureRecord((enriched[0] as UnknownRecord)._projections);
+      }
+    }
+    return nonCore.runSourcePreflight({
+      params: { sourceIdx: args.sourceIdx },
+      body: {
+        'card-content': liveCard,
+        'mock-requires': args.mockRequires,
+        'mock-projections': mockProjections,
       },
     });
   }
@@ -862,6 +922,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     preflightMaterializeCandidateCard,
     preflightProbeSingleSourceInCandidateCard,
     preflightRunSingleSourceInCandidateCard,
+    preflightRunSingleSourceInLiveCard,
     preflightRunOneCycleWithCandidateCard,
     manageReadCard,
     manageAddChatEntryAndAnyAttachments,

@@ -364,6 +364,7 @@ All preflight tools are invoked through:
 | `preflight.materialize-candidate-card` | `{ "candidate_card_content": <card>, "mock_requires": {}, "mock_fetched_sources": {} }` | `{ "cardId": string, "ok": boolean, "computed_values": object, "errors": Array<{ bindTo, error }>, "provides_outputs": object, "rendered_view": object }` |
 | `preflight.probe-single-source-in-candidate-card` | `{ "candidate_card_content": <card>, "source_idx": number, "mock_projections": {} }` | `{ "bindTo": string, "reachable": boolean, "latencyMs"?: number, "note"?: string }` |
 | `preflight.run-single-source-in-candidate-card` | `{ "candidate_card_content": <card>, "source_idx": number, "mock_projections": {} }` | `{ "bindTo": string, "ok": boolean, "result": unknown, "issues": string[] }` |
+| `preflight.run-single-source-in-live-card` | `{ "card_id": string, "source_idx": number, "mock_requires": {} }` | `{ "bindTo": string, "ok": boolean, "result": unknown, "issues": string[] }` |
 | `preflight.run-one-cycle-with-candidate-card` | `{ "candidate_card_content": <card>, "mock_requires": {} }` | `{ "cardId": string, "ok": boolean, "issues": string[], "provides_outputs": object, "rendered_view": object }` |
 
 Unless otherwise noted, successful HTTP responses use the normal MCP envelope:
@@ -561,6 +562,65 @@ Field notes:
 - `issues` is empty on success and contains live-fetch errors when `ok` is `false`
 - If no task executor is configured, the call fails with an HTTP error such as `{ "error": "No task-executor registered for this board" }`
 - Request-shape problems such as an out-of-range `source_idx` also fail with an HTTP error, for example `{ "error": "sourceIdx 4 out of range (card has 1 source(s))" }`
+
+---
+
+### `preflight.run-single-source-in-live-card`
+
+Executes a single source using an already-saved live card in card storage. This is useful when you want run-source behavior without supplying `candidate_card_content`.
+
+**Args:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `card_id` | string | required; id of an existing live card |
+| `source_idx` | number | required; index into the card's `source_defs` array |
+| `mock_requires` | object | required; same contract as `preflight.run-one-cycle-with-candidate-card` |
+
+**MCP request body:**
+```json
+{
+  "tool": "preflight.run-single-source-in-live-card",
+  "args": {
+    "card_id": "card-market-prices",
+    "source_idx": 0,
+    "mock_requires": {}
+  }
+}
+```
+
+**Returns:** same shape as `preflight.run-single-source-in-candidate-card`:
+```json
+{
+  "status": "success",
+  "data": {
+    "bindTo": "my-source",
+    "ok": true,
+    "result": { "items": [ ... ] },
+    "issues": []
+  }
+}
+```
+
+On execution failure this still returns `status: "success"` with `ok: false` and `issues` populated.
+
+```json
+{
+  "status": "success",
+  "data": {
+    "bindTo": "my-source",
+    "ok": false,
+    "result": null,
+    "issues": ["Probe failed: network timeout"]
+  }
+}
+```
+
+Request/config errors fail with HTTP error envelopes, for example:
+
+- `{ "error": "Card \"missing-card\" not found" }`
+- `{ "error": "sourceIdx 4 out of range (card has 1 source(s))" }`
+- `{ "error": "MCP tool requires mock_requires" }`
 
 ---
 

@@ -836,7 +836,7 @@ try {
       return card;
     };
 
-    const makeMockSourceCard = ({ id, bindTo = 'quotes', secondBindTo = null, includeProjection = false, missingMock = false }) => {
+    const makeMockSourceCard = ({ id, bindTo = 'quotes', secondBindTo = null, includeProjection = false, projectionExpr = '"ok"', missingMock = false }) => {
       const card = deepCloneJson(marketCard);
       card.id = id;
       card.requires = [];
@@ -845,7 +845,7 @@ try {
         ...(secondBindTo ? [{ bindTo: secondBindTo, mock: 'quotes' }] : []),
       ];
       if (includeProjection) {
-        card.source_defs[0].projections = { passthrough: '"ok"' };
+        card.source_defs[0].projections = { passthrough: projectionExpr };
       } else {
         delete card.source_defs[0].projections;
       }
@@ -1026,6 +1026,68 @@ try {
     assert(runSourceFailureBody.ok === false, 'T4 run-source missing mock should set ok=false');
     assert(Array.isArray(runSourceFailureBody.issues) && runSourceFailureBody.issues.length > 0, 'T4 run-source missing mock should report issues');
     console.log('[T4.run-source] ok: missing mock source returns ok=false with issues');
+
+    const liveRunCardId = 'card-market-prices-preflight-live-run';
+    const liveRunCard = makeMockSourceCard({ id: liveRunCardId, bindTo: 'quotesLive' });
+    const liveUpsertRes = await httpMcp('manage.upsert-card', {
+      card_id: liveRunCardId,
+      candidate_card_content: liveRunCard,
+    });
+    const liveUpsertBody = expectPreflightSuccess(liveUpsertRes, 'T4 preflight live-run setup card upsert');
+    assert(liveUpsertBody?.board_result?.status === 'success', 'T4 preflight live-run setup board_result expected success');
+
+    const liveRunSourceBody = expectPreflightSuccess(await httpMcp('preflight.run-single-source-in-live-card', {
+      card_id: liveRunCardId,
+      source_idx: 0,
+      mock_requires: {},
+    }), 'T4 run-source live card success');
+    assert(liveRunSourceBody.bindTo === 'quotesLive', 'T4 run-source live card bindTo mismatch');
+    assert(liveRunSourceBody.ok === true, 'T4 run-source live card expected ok=true');
+    assert(Array.isArray(liveRunSourceBody.issues) && liveRunSourceBody.issues.length === 0, 'T4 run-source live card expected no issues');
+    assert(Array.isArray(liveRunSourceBody.result?.quoteResponse?.result) && liveRunSourceBody.result.quoteResponse.result.length > 0, 'T4 run-source live card result shape mismatch');
+    console.log('[T4.run-source-live] ok: live card source run returns candidate-compatible shape');
+
+    const liveRunRequiresCardId = 'card-market-prices-preflight-live-run-requires';
+    const liveRunRequiresCard = makeMockSourceCard({
+      id: liveRunRequiresCardId,
+      bindTo: 'quotesLiveRequires',
+      includeProjection: true,
+      projectionExpr: 'requires.live_mock_key',
+    });
+    const liveRunRequiresUpsertRes = await httpMcp('manage.upsert-card', {
+      card_id: liveRunRequiresCardId,
+      candidate_card_content: liveRunRequiresCard,
+    });
+    const liveRunRequiresUpsertBody = expectPreflightSuccess(liveRunRequiresUpsertRes, 'T4 preflight live-run requires setup card upsert');
+    assert(liveRunRequiresUpsertBody?.board_result?.status === 'success', 'T4 preflight live-run requires setup board_result expected success');
+
+    const liveRunRequiresBody = expectPreflightSuccess(await httpMcp('preflight.run-single-source-in-live-card', {
+      card_id: liveRunRequiresCardId,
+      source_idx: 0,
+      mock_requires: { live_mock_key: 'quotes' },
+    }), 'T4 run-source live card uses mock_requires in projections');
+    assert(liveRunRequiresBody.bindTo === 'quotesLiveRequires', 'T4 run-source live card requires bindTo mismatch');
+    assert(liveRunRequiresBody.ok === true, 'T4 run-source live card requires expected ok=true');
+    assert(Array.isArray(liveRunRequiresBody.issues) && liveRunRequiresBody.issues.length === 0, 'T4 run-source live card requires expected no issues');
+    assert(Array.isArray(liveRunRequiresBody.result?.quoteResponse?.result) && liveRunRequiresBody.result.quoteResponse.result.length > 0, 'T4 run-source live card requires result shape mismatch');
+    console.log('[T4.run-source-live] ok: non-empty mock_requires is consumed via source projections');
+
+    const liveRunOutOfRangeRes = await httpMcp('preflight.run-single-source-in-live-card', {
+      card_id: liveRunCardId,
+      source_idx: 9,
+      mock_requires: {},
+    });
+    assert(liveRunOutOfRangeRes.status === 400, `T4 run-source live card out-of-range expected 400, got ${liveRunOutOfRangeRes.status}`);
+    assert(typeof liveRunOutOfRangeRes.data?.error === 'string' && liveRunOutOfRangeRes.data.error.length > 0, 'T4 run-source live card out-of-range expected error text');
+    console.log('[T4.run-source-live] ok: out-of-range source_idx is rejected with HTTP error');
+
+    const liveRunMissingMockRequiresRes = await httpMcp('preflight.run-single-source-in-live-card', {
+      card_id: liveRunCardId,
+      source_idx: 0,
+    });
+    assert(liveRunMissingMockRequiresRes.status === 400, `T4 run-source live card missing mock_requires expected 400, got ${liveRunMissingMockRequiresRes.status}`);
+    assert(liveRunMissingMockRequiresRes.data?.error === 'MCP tool requires mock_requires', 'T4 run-source live card missing mock_requires error mismatch');
+    console.log('[T4.run-source-live] ok: missing mock_requires is rejected');
 
     const runCycleSuccessCases = [
       {

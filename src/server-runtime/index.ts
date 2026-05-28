@@ -651,6 +651,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
         sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
       }),
+      'preflight.run-single-source-in-live-card': (args) => mcp.preflightRunSingleSourceInLiveCard({
+        cardId: getMcpArgString(args, 'card_id', 'cardId'),
+        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
+        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires', 'mockRequires'),
+      }),
       'preflight.run-one-cycle-with-candidate-card': (args) => mcp.preflightRunOneCycleWithCandidateCard({
         candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
         mockRequires: getMcpArgRecord(args, 'mock_requires', 'mockRequires'),
