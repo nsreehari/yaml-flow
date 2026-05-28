@@ -19,6 +19,7 @@ export interface ChatRecord {
   role: string;
   text: string;
   files: unknown[];
+  turn: string;
   updated_at: string;
 }
 
@@ -36,7 +37,7 @@ export interface ChatStorage {
   // ── History (journal) ────────────────────────────────────────────────────
 
   /** Append a message; returns the new entry id (usable as a cursor). */
-  append(cardId: string, role: string, text: string, files?: unknown[]): string;
+  append(cardId: string, role: string, text: string, files?: unknown[], turn?: string): string;
 
   /** Read all messages in insertion order. */
   readAll(cardId: string): ChatRecord[];
@@ -76,6 +77,7 @@ function toRecord(entry: JournalEntry): ChatRecord {
     role: typeof p.role === 'string' ? p.role : 'system',
     text: typeof p.text === 'string' ? p.text : '',
     files: Array.isArray(p.files) ? p.files : [],
+    turn: typeof p.turn === 'string' ? p.turn : '',
     updated_at: typeof p.updated_at === 'string' ? p.updated_at : '',
   };
 }
@@ -93,11 +95,12 @@ export function createChatStorage(
   const configKey = (cardId: string) => `chats/${safeCardKey(cardId)}/config`;
 
   return {
-    append(cardId, role, text, files = []) {
+    append(cardId, role, text, files = [], turn = '') {
       const entry = journalFactory(cardId).append({
         role,
         text,
         files,
+        turn,
         updated_at: new Date().toISOString(),
       });
       return entry.id;
@@ -161,8 +164,8 @@ export function createInMemoryChatStorage(): ChatStorage {
   }
 
   return {
-    append(cardId, role, text, files = []) {
-      const rec: ChatRecord = { id: genId(), role, text, files, updated_at: new Date().toISOString() };
+    append(cardId, role, text, files = [], turn = '') {
+      const rec: ChatRecord = { id: genId(), role, text, files, turn, updated_at: new Date().toISOString() };
       journal(cardId).push(rec);
       return rec.id;
     },

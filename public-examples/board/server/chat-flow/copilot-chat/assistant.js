@@ -30,6 +30,7 @@ const {
   cardsDir = '',
   chatMessages: rawChatMessages = [],
   userText = 'what is two plus two?',
+  turnId = '',
   chatCopilotTimeoutMs: rawChatCopilotTimeoutMs = 300000,
 } = extra;
 
@@ -39,7 +40,7 @@ const chatCopilotTimeoutMs = Number.isFinite(Number(rawChatCopilotTimeoutMs)) &&
   : 300000;
 
 
-function buildPrompt(cId, historyDump, currentUserText) {
+function buildPrompt(cId, historyDump, currentUserText, currentTurnId) {
   const cardSetupDirRel = path.join(cardsDir, cId).replace(/\\/g, '/');
   const runtimeDirRel = boardRuntimeDir;
   const statusDirRel = runtimeStatusDir;
@@ -53,6 +54,7 @@ function buildPrompt(cId, historyDump, currentUserText) {
     'The user sees the data available in cards which is rendered, and the status from ' + statusDirRel + '.',
     'Everything else is internal detail not to be exposed to the user.',
     'The conversation history is provided below exactly as received from the runtime API as a string dump.',
+    ...(currentTurnId ? ['The current conversation turn id is: ' + currentTurnId] : []),
     'The current user query is: ' + currentUserText,
     'Return only the assistant response text for the user.',
     'Do not write files, and do not include any internal notes, logs, or orchestration details in the response.',
@@ -98,7 +100,7 @@ function runCopilot(prompt, workingDir) {
 
 const historyDump = JSON.stringify(chatMessages, null, 2);
 const workingDir = boardSetupRoot;
-const prompt = buildPrompt(cardId, historyDump, userText.trim());
+const prompt = buildPrompt(cardId, historyDump, userText.trim(), String(turnId || '').trim());
 
 try {
   const replyText = runCopilot(prompt, workingDir).trim();

@@ -38,7 +38,7 @@
     },
     "open_turn": {
       "description": "Resolve the current user turn from flow-provided chat messages and parse any chat envelope options",
-      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx"],
+      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "turnId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx"],
       "input_validations": [
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(chatMessages) = \"array\"",
@@ -60,6 +60,7 @@
           "data.chatMessages = expects_data.chatMessages",
           "data.lastChatEntryId = expects_data.lastChatEntryId",
           "data._currentUserMessage = $filter(expects_data.chatMessages, function($message) { $message.id = expects_data.lastChatEntryId and $message.role = \"user\" })[0]",
+          "data.turnId = ($type(expects_data.turnId) = \"string\") ? expects_data.turnId : (($type(data._currentUserMessage.turn) = \"string\") ? data._currentUserMessage.turn : \"\")",
           "data._rawMessageText = $trim($string(data._currentUserMessage.text))",
           "data.probeAttachmentFileIdx = ($type(data._currentUserMessage.files) = \"array\" and $count(data._currentUserMessage.files) > 0) ? 0 : null",
           "data._marker = \"__probe__echo__probe__\"",
@@ -129,7 +130,7 @@
         "meta": "chat-handler",
         "argsMassaging": {
           "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'in-progress', 'files': [] }] }"
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'in-progress', 'files': [], 'turn': turnId }] }"
         }
       },
       "transitions": {
@@ -178,7 +179,7 @@
     },
     "copilot_assistant": {
       "description": "Run the Copilot-backed assistant logic to generate the reply from the resolved chat history",
-      "expects_data": ["userText", "chatMessages", "boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatCopilotTimeoutMs"],
+      "expects_data": ["userText", "chatMessages", "boardId", "cardId", "boardSetupRoot", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatCopilotTimeoutMs", "turnId"],
       "produces_data": ["replyText"],
       "input_validations": [
         "$type(userText) = \"string\"",
@@ -193,7 +194,7 @@
         },
         "argsMassaging": {
           "cmdTemplate": ["chatFlowRoot & '/copilot-chat/assistant.js'"],
-          "stdinTemplate": "{ 'cardId': cardId, 'boardSetupRoot': boardSetupRoot, 'boardRuntimeDir': boardRuntimeDir, 'runtimeStatusDir': runtimeStatusDir, 'cardsDir': cardsDir, 'chatMessages': chatMessages, 'userText': userText, 'chatCopilotTimeoutMs': chatCopilotTimeoutMs }"
+          "stdinTemplate": "{ 'cardId': cardId, 'boardSetupRoot': boardSetupRoot, 'boardRuntimeDir': boardRuntimeDir, 'runtimeStatusDir': runtimeStatusDir, 'cardsDir': cardsDir, 'chatMessages': chatMessages, 'userText': userText, 'chatCopilotTimeoutMs': chatCopilotTimeoutMs, 'turnId': turnId }"
         },
         "meta": "chat-handler"
       },
@@ -225,7 +226,7 @@
     },
     "write_reply": {
       "description": "Append the assistant reply and clear processing via one chat-store-cli command envelope",
-      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "replyText"],
+      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "replyText", "turnId"],
       "produces_data": ["replyId"],
       "input_validations": [
         "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
@@ -242,7 +243,7 @@
         "meta": "chat-handler",
         "argsMassaging": {
           "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [], 'turn': turnId }, { 'command': 'set-processing', 'active': false }] }"
         },
         "outputTransforms": {
           "dataTemplate": "{ 'replyId': output.data.results[0].data.id }"
@@ -256,7 +257,7 @@
     },
     "cleanup_failure": {
       "description": "Write a failure system message and clear processing via one chat-store-cli command envelope",
-      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId"],
+      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "turnId"],
       "input_validations": [
         "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
         "$type(cardId) = \"string\" and $length(cardId) > 0"
@@ -271,7 +272,7 @@
         "meta": "chat-handler",
         "argsMassaging": {
           "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [] }, { 'command': 'set-processing', 'active': false }] }"
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [], 'turn': turnId }, { 'command': 'set-processing', 'active': false }] }"
         }
       },
       "transitions": {

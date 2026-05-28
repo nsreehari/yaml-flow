@@ -1329,29 +1329,7 @@ export function createBoardLiveCardsNonCorePublic(
       const body = input.body as Record<string, unknown>;
       const card = (body['card-content'] ?? body) as Record<string, unknown>;
       const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
-
-      // Structural validation (always runs inline).
-      const structResult = validateCardObject(cardId, card);
-
-      // Pluggable executor hook: if a task-executor is registered and supports
-      // validate-card-preflight, call it and merge any additional issues.
-      const teRef = configStore().readTaskExecutorRef();
-      if (teRef) {
-        try {
-          const stdout = adapter.invokeExecutorSync(teRef, 'validate-card-preflight', [],
-            { timeout: adapter.executorTimeouts?.validationMs ?? 10_000, input: JSON.stringify(card) });
-          const execResult = JSON.parse(stdout.trim()) as { ok: boolean; errors: string[] };
-          if (!execResult.ok && Array.isArray(execResult.errors) && execResult.errors.length > 0) {
-            const mergedIssues = [
-              ...(structResult.status === 'success' ? structResult.data.issues : []),
-              ...execResult.errors,
-            ];
-            return ok({ cardId, isValid: false, issues: mergedIssues }) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
-          }
-        } catch { /* executor doesn't support subcommand or isn't available — use structural result */ }
-      }
-
-      return structResult;
+      return validateCardObject(cardId, card);
     } catch (e) { return err(e) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>; }
   }
 

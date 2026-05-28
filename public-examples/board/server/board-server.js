@@ -16,6 +16,7 @@ import {
 import {
   buildLocalBaseSpec,
   createFsBoardPlatformAdapter,
+  createFsBoardNonCorePlatformAdapter,
   createFsBoardChatStorage,
   createNodeSpawnInvocationAdapter,
   createArtifactsStore,
@@ -301,7 +302,9 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, { notifyChannel });
+  const nonCoreAdapter = createFsBoardNonCorePlatformAdapter(baseRef, { notifyChannel });
   boardAdapter.requestProcessAccumulated = () => {};
+  nonCoreAdapter.requestProcessAccumulated = () => {};
 
   const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: runtimeCardsDir }));
   const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, { suppressSpawn: true });
@@ -313,6 +316,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   return {
     label,
     boardAdapter,
+    nonCoreAdapter,
     artifactsAdapter,
     baseRef,
     cardStoreRef,

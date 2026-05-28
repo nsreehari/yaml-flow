@@ -27,6 +27,11 @@
       "import": "./lib/board-live-cards-public.js",
       "require": "./lib/board-live-cards-public.cjs"
     },
+    "./board-live-cards-mcp": {
+      "types": "./lib/board-live-cards-mcp.d.ts",
+      "import": "./lib/board-live-cards-mcp.js",
+      "require": "./lib/board-live-cards-mcp.cjs"
+    },
     "./card-store-public": {
       "types": "./lib/card-store-public.d.ts",
       "import": "./lib/card-store-public.js",

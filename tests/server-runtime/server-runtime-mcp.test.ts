@@ -1,0 +1,675 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { createSingleBoardServerRuntime } from '../../src/server-runtime/index.js';
+import type { RuntimeRequest, RuntimeResponse, SingleBoardRuntimeOptions } from '../../src/server-runtime/types.js';
+import { createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
+import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
+
+function makeRequest(method: string, url: string, body?: unknown): RuntimeRequest {
+  const bodyBuf = body === undefined
+    ? Buffer.alloc(0)
+    : typeof body === 'string'
+      ? Buffer.from(body, 'utf-8')
+      : Buffer.isBuffer(body)
+        ? body
+        : body instanceof Uint8Array
+          ? Buffer.from(body)
+          : Buffer.from(JSON.stringify(body), 'utf-8');
+  let done = false;
+  return {
+    method,
+    url,
+    headers: { 'content-type': 'application/json' },
+    on(_event: string, _listener: (...args: unknown[]) => void): void {},
+    [Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {
+      return {
+        next() {
+          if (done) return Promise.resolve({ value: undefined as never, done: true });
+          done = true;
+          return Promise.resolve({ value: bodyBuf, done: false });
+        },
+        return() { return Promise.resolve({ value: undefined as never, done: true }); },
+        throw(error: unknown) { return Promise.reject(error); },
+        [Symbol.asyncIterator]() { return this; },
+      };
+    },
+  };
+}
+
+function makeResponse(): RuntimeResponse & { _status: number; _body: string; _headers: Record<string, string | number> } {
+  const toText = (data: string | Buffer) => {
+    if (typeof data === 'string') return data;
+    if (Buffer.isBuffer(data)) return data.toString('utf-8');
+    return new TextDecoder().decode(data as unknown as Uint8Array);
+  };
+  const res = {
+    _status: 0,
+    _body: '',
+    _headers: {} as Record<string, string | number>,
+    writeHead(statusCode: number, headers?: Record<string, string | number>) {
+      res._status = statusCode;
+      if (headers) Object.assign(res._headers, headers);
+    },
+    write(data: string | Buffer) {
+      res._body += toText(data);
+      return true;
+    },
+    end(data?: string | Buffer) {
+      if (data) res._body += toText(data);
+    },
+  };
+  return res;
+}
+
+function parseJsonBody(res: { _body: string }): unknown {
+  return JSON.parse(res._body);
+}
+
+describe('server runtime MCP endpoint', () => {
+  let testRoot = '';
+
+  afterEach(() => {
+    if (testRoot) {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+      testRoot = '';
+    }
+  });
+
+  function createRuntime(opts: { withNonCore?: boolean; chatHandlerFlow?: unknown; chatFlowRunner?: SingleBoardRuntimeOptions['chatFlowRunner'] } = {}) {
+    testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-mcp-'));
+    const boardDir = path.join(testRoot, 'board');
+    const cardStoreDir = path.join(testRoot, 'card-store');
+    const outputsDir = path.join(testRoot, 'outputs');
+    const filesDir = path.join(testRoot, 'files');
+    fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(cardStoreDir, { recursive: true });
+    fs.mkdirSync(outputsDir, { recursive: true });
+    fs.mkdirSync(filesDir, { recursive: true });
+
+    let executorPath = '';
+    if (opts.withNonCore) {
+      executorPath = path.join(testRoot, 'fake-task-executor.mjs');
+      fs.writeFileSync(executorPath, `#!/usr/bin/env node
+const subcommand = process.argv[2] || '';
+const inputText = await new Promise((resolve) => {
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { buf += chunk; });
+  process.stdin.on('end', () => resolve(buf.trim()));
+  process.stdin.resume();
+});
+const parsedInput = inputText ? JSON.parse(inputText) : null;
+if (subcommand === 'describe-capabilities') {
+  console.log(JSON.stringify({ version: '1.0', commonSourceDefFields: { bindTo: { type: 'string' } }, sourceKinds: { fake: { title: 'Fake Source' } } }));
+  process.exit(0);
+}
+if (subcommand === 'validate-card-preflight') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
+  process.exit(0);
+}
+if (subcommand === 'probe-source-preflight') {
+  console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 3 }));
+  process.exit(0);
+}
+if (subcommand === 'run-source-preflight') {
+  console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 4, bindTo: parsedInput?.bindTo || 'source', resultValue: { ok: true } }));
+  process.exit(0);
+}
+if (subcommand === 'validate-source-def') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
+  process.exit(0);
+}
+console.error('unsupported subcommand: ' + subcommand);
+process.exit(1);
+`, 'utf-8');
+    }
+
+    const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
+    const boardAdapter = createFsBoardPlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} });
+    const artifactsAdapter = createFsBoardPlatformAdapter(parseRef(serializeRef({ kind: 'fs-path', value: filesDir })), testRoot, { suppressSpawn: true, onWarn: () => {} });
+    const nonCoreAdapter = opts.withNonCore
+      ? createFsBoardNonCorePlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} })
+      : undefined;
+    const runtimeOptions: SingleBoardRuntimeOptions = {
+      apiBasePath: '/api/board',
+      boardId: 'mcp-test-board',
+      boards: [{
+        label: 'base',
+        boardAdapter,
+        artifactsAdapter,
+        ...(nonCoreAdapter ? { nonCoreAdapter } : {}),
+        baseRef,
+        cardStoreRef: serializeRef({ kind: 'fs-path', value: cardStoreDir }),
+        outputsStoreRef: serializeRef({ kind: 'fs-path', value: outputsDir }),
+        artifactsStoreRef: serializeRef({ kind: 'fs-path', value: filesDir }),
+        ...(opts.chatHandlerFlow !== undefined ? { chatHandlerFlow: opts.chatHandlerFlow } : {}),
+        ...(executorPath ? {
+          taskExecutorRef: {
+            howToRun: 'local-node',
+            whatToRun: serializeRef({ kind: 'fs-path', value: executorPath }),
+          },
+        } : {}),
+      }],
+      invocationAdapter: {
+        async invoke() { return { dispatched: true }; },
+        async describe() { return null; },
+      },
+      ...(opts.chatFlowRunner ? { chatFlowRunner: opts.chatFlowRunner } : {}),
+      logger: { info() {}, warn() {}, error() {} },
+      serverUrl: 'http://example.test',
+    };
+
+    const runtime = createSingleBoardServerRuntime(runtimeOptions);
+    fs.mkdirSync(path.join(filesDir, 'card-1'), { recursive: true });
+    fs.writeFileSync(path.join(filesDir, 'card-1', 'hello.txt'), 'hello', 'utf8');
+    const seedResult = runtime.cardStore.set({
+      body: {
+        id: 'card-1',
+        card_data: {
+          title: 'Card One',
+          files: [{ name: 'hello.txt', stored_name: 'hello.txt', mime_type: 'text/plain', size: 5, uploaded_at: '2026-05-28T00:00:00.000Z' }],
+        },
+      },
+    });
+    expect(seedResult.status).toBe('success');
+    return runtime;
+  }
+
+  it('routes manage.read-card through /mcp and returns the wrapper array shape', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', { tool: 'manage.read-card', args: { card_id: 'card-1' } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual([
+      expect.objectContaining({ id: 'card-1', card_data: expect.objectContaining({ title: 'Card One' }) }),
+    ]);
+  });
+
+  it('POST /cards/:id/files uploads bytes, appends metadata, and emits a chat system message with turn when inChat=true', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/cards/card-1/files?inChat=true', 'hello upload');
+    req.headers['content-type'] = 'text/plain';
+    req.headers['x-file-name'] = encodeURIComponent('upload.txt');
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/files?inChat=true&turn-id=turn-upload'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      ok: true,
+      file: expect.objectContaining({ name: 'upload.txt', mime_type: 'text/plain', size: 12 }),
+    });
+
+    const cardReq = makeRequest('GET', '/api/board/cards/card-1');
+    const cardRes = makeResponse();
+    await runtime.handleRuntimeApi(cardReq, cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    const files = (card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>;
+    expect(files.length).toBe(2);
+
+    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const uploadSystemMessage = (chatsBody.messages as Array<Record<string, unknown>>).find((message) => String(message.text || '').includes('file uploaded: upload.txt'));
+    expect(uploadSystemMessage).toBeTruthy();
+    expect(uploadSystemMessage?.turn).toBe('turn-upload');
+  });
+
+  it('POST /cards/:id/actions chat-send propagates turn-id to the user message and flow args', async () => {
+    const observed: Array<Record<string, unknown>> = [];
+    const runtime = createRuntime({
+      chatHandlerFlow: { id: 'test-flow' },
+      chatFlowRunner: {
+        async run(_flow, args) {
+          observed.push(args);
+          return { dispatched: true };
+        },
+      },
+    });
+
+    const req = makeRequest('POST', '/api/board/cards/card-1/actions', {
+      actionType: 'chat-send',
+      payload: {
+        text: 'Hello turn aware world',
+        'turn-id': 'turn-chat-send',
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/actions'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+
+    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?all-turns=true'));
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const userMessage = (chatsBody.messages as Array<Record<string, unknown>>).find((message) => message.role === 'user' && message.text === 'Hello turn aware world');
+    expect(userMessage).toBeTruthy();
+    expect(userMessage?.turn).toBe('turn-chat-send');
+    expect(observed.length).toBe(1);
+    expect(observed[0].turnId).toBe('turn-chat-send');
+  });
+
+  it('routes manage.upload-card-file through /mcp and reuses upload behavior', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.upload-card-file',
+      args: {
+        card_id: 'card-1',
+        file_name: 'tool-upload.txt',
+        content_type: 'text/plain',
+        text: 'hello from tool',
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      ok: true,
+      file: expect.objectContaining({ name: 'tool-upload.txt', mime_type: 'text/plain', size: 15 }),
+    });
+
+    const cardReq = makeRequest('GET', '/api/board/cards/card-1');
+    const cardRes = makeResponse();
+    await runtime.handleRuntimeApi(cardReq, cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    const files = (card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>;
+    expect(files.length).toBe(2);
+
+    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    expect((chatsBody.messages as Array<Record<string, unknown>>).some((message) => String(message.text || '').includes('file uploaded: tool-upload.txt'))).toBe(false);
+  });
+
+  it('routes stage-ai-response-and-any-attachments through /mcp and appends an assistant chat entry with uploaded file metadata', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: {
+        card_id: 'card-1',
+        'turn-id': 'turn-123',
+        text: 'Here is your answer.',
+        files: [{ file_name: 'result.txt', content_type: 'text/plain', text: 'file content here' }],
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        id: expect.any(String),
+        role: 'assistant',
+        turn: 'turn-123',
+        files: [expect.objectContaining({ name: 'result.txt', mime_type: 'text/plain', size: 17 })],
+      },
+    });
+
+    const cardReq = makeRequest('GET', '/api/board/cards/card-1');
+    const cardRes = makeResponse();
+    await runtime.handleRuntimeApi(cardReq, cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    const files = (card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>;
+    expect(files.length).toBe(2);
+
+    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    const systemMessage = messages.find((message) => message.role === 'system' && /^AI generated: result\.txt as .*result\.txt #0$/.test(String(message.text || '')));
+    expect(systemMessage).toBeTruthy();
+    expect(systemMessage?.turn).toBe('turn-123');
+    const assistantMessage = messages.find((message) => message.role === 'assistant' && message.text === 'Here is your answer.');
+    expect(assistantMessage).toBeTruthy();
+    expect(assistantMessage?.turn).toBe('turn-123');
+    expect(Array.isArray(assistantMessage?.files)).toBe(true);
+    expect((assistantMessage?.files as Array<Record<string, unknown>>).length).toBe(1);
+    expect((assistantMessage?.files as Array<Record<string, unknown>>)[0]).toEqual(expect.objectContaining({ name: 'result.txt', mime_type: 'text/plain' }));
+  });
+
+  it('filters chats by turn consistently in HTTP and MCP read surfaces', async () => {
+    const runtime = createRuntime();
+    const addARes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: { card_id: 'card-1', 'turn-id': 'turn-a', text: 'Message A' },
+    }), addARes, new URL('http://example.test/api/board/mcp'));
+    const addBRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: { card_id: 'card-1', 'turn-id': 'turn-b', text: 'Message B' },
+    }), addBRes, new URL('http://example.test/api/board/mcp'));
+
+    const httpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-a'));
+    expect(httpRes._status).toBe(200);
+    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
+    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
+    expect(httpMessages.length).toBe(1);
+    expect(httpMessages[0].text).toBe('Message A');
+    expect(httpMessages[0].turn).toBe('turn-a');
+
+    const mcpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', 'turn-id': 'turn-a' },
+    }), mcpRes, new URL('http://example.test/api/board/mcp'));
+    expect(mcpRes._status).toBe(200);
+    const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
+    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    expect(mcpMessages.length).toBe(1);
+    expect(mcpMessages[0].text).toBe('Message A');
+    expect(mcpMessages[0].turn).toBe('turn-a');
+  });
+
+  it('defaults chat reads to the last 1 user turn when neither turn-id nor lastUserTurns is provided', async () => {
+    const runtime = createRuntime();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+
+    const httpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    expect(httpRes._status).toBe(200);
+    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
+    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
+    expect(httpMessages.map((m) => m.text)).toEqual(['Question 2', 'Answer 2']);
+
+    const mcpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1' },
+    }), mcpRes, new URL('http://example.test/api/board/mcp'));
+    expect(mcpRes._status).toBe(200);
+    const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
+    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    expect(mcpMessages.map((m) => m.text)).toEqual(['Question 2', 'Answer 2']);
+  });
+
+  it('returns the full chat when all-turns=true', async () => {
+    const runtime = createRuntime();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
+
+    const httpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats?all-turns=true'));
+    expect(httpRes._status).toBe(200);
+    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
+    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
+    expect(httpMessages.map((m) => m.text)).toEqual(['Question 1', 'Answer 1', 'Question 2', 'Answer 2']);
+
+    const mcpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', 'all-turns': true },
+    }), mcpRes, new URL('http://example.test/api/board/mcp'));
+    expect(mcpRes._status).toBe(200);
+    const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
+    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    expect(mcpMessages.map((m) => m.text)).toEqual(['Question 1', 'Answer 1', 'Question 2', 'Answer 2']);
+  });
+
+  it('supports tail-turns-before-id in both HTTP and MCP read surfaces', async () => {
+    const runtime = createRuntime();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: { card_id: 'card-1', 'turn-id': 'turn-a', text: 'Message A' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: { card_id: 'card-1', 'turn-id': 'turn-b', text: 'Message B' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: { card_id: 'card-1', 'turn-id': 'turn-c', text: 'Message C' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp'));
+
+    const httpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats?tail-turns=1&tail-turns-before-id=turn-c'));
+    expect(httpRes._status).toBe(200);
+    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
+    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
+    expect(httpMessages.length).toBe(1);
+    expect(httpMessages.map((m) => m.text)).toEqual(['Message B']);
+
+    const mcpRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', 'tail-turns': 1, 'tail-turns-before-id': 'turn-c' },
+    }), mcpRes, new URL('http://example.test/api/board/mcp'));
+    expect(mcpRes._status).toBe(200);
+    const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
+    const mcpMessages = mcpBody.messages as Array<Record<string, unknown>>;
+    expect(mcpMessages.length).toBe(1);
+    expect(mcpMessages.map((m) => m.text)).toEqual(['Message B']);
+  });
+
+  it('rejects inspect.file-contents on /mcp', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', { tool: 'inspect.file-contents', args: { card_id: 'card-1', file_idx: 0 } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: 'inspect.file-contents is only available on /mcp-raw' });
+  });
+
+  it('routes inspect.file-contents through /mcp-raw and returns raw bytes', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-raw', { tool: 'inspect.file-contents', args: { card_id: 'card-1', file_idx: 0 } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-raw'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(res._headers['Content-Type']).toBe('text/plain');
+    expect(res._headers['Content-Disposition']).toBe('attachment; filename="hello.txt"');
+    expect(res._body).toBe('hello');
+  });
+
+  it('supports head-lines on /mcp-raw for text files', async () => {
+    const runtime = createRuntime();
+    fs.writeFileSync(path.join(testRoot, 'files', 'card-1', 'hello.txt'), 'one\ntwo\nthree\n', 'utf8');
+    const req = makeRequest('POST', '/api/board/mcp-raw', { tool: 'inspect.file-contents', args: { card_id: 'card-1', file_idx: 0, 'head-lines': 2 } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-raw'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(res._body).toBe('one\ntwo');
+  });
+
+  it('supports tail-bytes on /mcp-raw', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-raw', { tool: 'inspect.file-contents', args: { card_id: 'card-1', file_idx: 0, 'tail-bytes': 2 } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-raw'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(res._body).toBe('lo');
+  });
+
+  it('rejects unsupported tools on /mcp-raw', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-raw', { tool: 'manage.read-card', args: { card_id: 'card-1' } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-raw'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: 'Tool does not support raw response: manage.read-card' });
+  });
+
+  it('routes discover.source-kinds through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', { tool: 'discover.source-kinds', args: {} });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      version: '1.0',
+      commonSourceFields: { bindTo: { type: 'string' } },
+      sourceKinds: { fake: { title: 'Fake Source' } },
+    });
+  });
+
+  it('routes preflight.validate-candidate-card-definition through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.validate-candidate-card-definition',
+      args: { candidate_card_content: { id: 'tmp-card', card_data: { x: 1 } } },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: { cardId: 'tmp-card', isValid: true, issues: [] },
+    });
+  });
+
+  it('routes preflight.probe-single-source-in-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.probe-single-source-in-candidate-card',
+      args: {
+        source_idx: 0,
+        candidate_card_content: {
+          id: 'tmp-card',
+          card_data: {},
+          source_defs: [{ bindTo: 'sourceA', kind: 'fake' }],
+        },
+        mock_projections: {},
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: { bindTo: 'sourceA', reachable: true, latencyMs: 3, note: undefined },
+    });
+  });
+
+  it('routes preflight.materialize-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.materialize-candidate-card',
+      args: {
+        candidate_card_content: {
+          id: 'compute-card',
+          card_data: {},
+          compute: [{ bindTo: 'total', expr: '1 + 2 + 3' }],
+        },
+        mock_requires: {},
+        mock_fetched_sources: {},
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'compute-card',
+        ok: true,
+        computed_values: { total: 6 },
+        errors: [],
+      },
+    });
+  });
+
+  it('routes preflight.run-single-source-in-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.run-single-source-in-candidate-card',
+      args: {
+        source_idx: 0,
+        candidate_card_content: {
+          id: 'tmp-card',
+          card_data: {},
+          source_defs: [{ bindTo: 'sourceA', kind: 'fake' }],
+        },
+        mock_projections: {},
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        bindTo: 'sourceA',
+        reachable: true,
+        latencyMs: 4,
+        kind: undefined,
+        resultValue: { ok: true },
+        note: undefined,
+      },
+    });
+  });
+
+  it('routes preflight.run-one-cycle-with-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.run-one-cycle-with-candidate-card',
+      args: {
+        candidate_card_content: {
+          id: 'cycle-card',
+          card_data: {},
+          source_defs: [{ bindTo: 'sourceA', outputFile: 'sourceA.json', kind: 'fake' }],
+          compute: [{ bindTo: 'total', expr: '1 + 2' }],
+        },
+        mock_requires: {},
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'cycle-card',
+        ok: true,
+        validation: { isValid: true, issues: [] },
+        source_probes: [{ bindTo: 'sourceA', reachable: true, latencyMs: 4, error: undefined }],
+        projection_errors: [],
+        computed_values: { total: 3 },
+        compute_errors: [],
+      },
+    });
+  });
+});

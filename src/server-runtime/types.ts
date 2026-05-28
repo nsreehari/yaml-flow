@@ -10,13 +10,13 @@
  * of these interfaces when constructing the runtime.
  */
 
-import type { BoardPlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
+import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
 import type { ExecutionRef } from '../cli/common/execution-interface.js';
 import type { KindValueRef, KVStorage, BlobStorage } from '../cli/common/storage-interface.js';
 import type { ChatStorage } from '../cli/common/chat-storage-lib.js';
 
 // Re-export for convenience so hosts can import from server-runtime/types
-export type { BoardPlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification };
+export type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification };
 export type { ExecutionRef };
 export type { KindValueRef, KVStorage, BlobStorage };
 export type { ChatStorage };
@@ -105,6 +105,7 @@ export interface RuntimeLogger {
 export interface BoardContextConfig {
   label: string;
   boardAdapter: BoardPlatformAdapter;
+  nonCoreAdapter?: BoardNonCorePlatformAdapter;
   /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
   artifactsAdapter?: BoardPlatformAdapter;
   /** Optional explicit blob root ref for persisted card/file attachments. */

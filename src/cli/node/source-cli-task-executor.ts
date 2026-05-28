@@ -8,6 +8,7 @@
  *
  * Subcommands:
  *   run-source-fetch --in-ref <b64-ref> --out-ref <b64-ref> [--err-ref <b64-ref>]
+ *   validate-card-preflight
  *   describe-capabilities
  *
  * Supported source kind:
@@ -175,7 +176,7 @@ function runSourceFetch(argv: string[]): void {
 const CAPABILITIES = {
   version: '1.0',
   executor: 'source-cli-task-executor',
-  subcommands: ['run-source-fetch', 'describe-capabilities'],
+  subcommands: ['run-source-fetch', 'validate-card-preflight', 'describe-capabilities'],
   sourceKinds: {
     cli: {
       description: 'Execute a shell command (source_def.cli) synchronously and capture stdout as the source data.',
@@ -213,6 +214,8 @@ const CAPABILITIES = {
 const sub = process.argv[2];
 if (sub === 'run-source-fetch') {
   runSourceFetch(process.argv.slice(3));
+} else if (sub === 'validate-card-preflight') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
 } else if (sub === 'describe-capabilities') {
   console.log(JSON.stringify(CAPABILITIES, null, 2));
 } else {

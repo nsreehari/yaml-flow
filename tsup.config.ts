@@ -36,6 +36,7 @@ export default defineConfig({
   entry: {
     'index': 'src/index.ts',
     'board-live-cards-public': 'src/cli/common/board-live-cards-public.ts',
+    'board-live-cards-mcp': 'src/cli/common/board-live-cards-mcp.ts',
     'card-store-public': 'src/cli/common/card-store-lib-public.ts',
     'artifacts-store-public': 'src/cli/common/artifacts-store-lib-public.ts',
     'chat-store-public': 'src/cli/common/chat-store-lib-public.ts',

@@ -20,7 +20,7 @@ const SRC = __dirname;
 const OUT = join(__dirname, 'dist');
 
 // Scripts to exclude from the dist build
-const EXCLUDE = new Set(['build.mjs', 'test-scripts.js']);
+const EXCLUDE = new Set(['build.mjs', 'test-scripts.js', 'mcp-test.js']);
 
 const entries = readdirSync(SRC)
   .filter(f => f.endsWith('.js') && !EXCLUDE.has(f));

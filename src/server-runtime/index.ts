@@ -20,7 +20,10 @@
 
 import {
   createBoardLiveCardsPublic,
+  createBoardLiveCardsNonCorePublic,
 } from '../cli/common/board-live-cards-public.js';
+import { createBoardLiveCardsMcp } from '../cli/common/board-live-cards-mcp.js';
+import { parseRef } from '../cli/common/storage-interface.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
 import { createCardStore } from '../cli/common/board-live-cards-lib.js';
@@ -81,6 +84,7 @@ const MAX_STORED_FILE_NAME_LEN = 32;
 interface BoardContext {
   label: string;
   board: ReturnType<typeof createBoardLiveCardsPublic>;
+  nonCore: ReturnType<typeof createBoardLiveCardsNonCorePublic> | null;
   cardStore: ReturnType<typeof createCardStorePublic>;
   readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
   boardAdapter: import('./types.js').BoardPlatformAdapter;
@@ -179,6 +183,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function buildContext(cfg: BoardContextConfig): BoardContext {
     const board = createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter);
+    const nonCoreAdapter = cfg.nonCoreAdapter
+      ?? (isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
+    const nonCore = nonCoreAdapter ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter) : null;
     const kv = cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef);
     const cardAdapterObj = {
       readIndex: () => kv.read('_index'),
@@ -200,6 +207,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return {
       label: cfg.label,
       board,
+      nonCore,
       cardStore,
       get filesArtifacts() { return _filesArtifacts ??= (callerFilesArtifactsStore ?? createArtifactsStore(filesBlob)); },
       boardAdapter: cfg.boardAdapter,
@@ -224,6 +232,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const cardOwnerIndex = new Map<string, number>();
 
   function ownerIndex(cardId: string): number { return cardOwnerIndex.get(cardId) ?? 0; }
+
+  function isBoardNonCorePlatformAdapter(adapter: import('./types.js').BoardPlatformAdapter): adapter is import('./types.js').BoardNonCorePlatformAdapter {
+    const maybe = adapter as import('./types.js').BoardNonCorePlatformAdapter;
+    return typeof maybe.invokeExecutorSync === 'function' && typeof maybe.validateSchema === 'function';
+  }
 
   // ── Artifacts stores ─────────────────────────────────────────────────────
 
@@ -400,6 +413,276 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       all.push(...fromCtx(ctx));
     }
     return all;
+  }
+
+  function primaryContext(): BoardContext | null {
+    return boardContexts[0] ?? null;
+  }
+
+  function mcpBoardFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpBoardDeps {
+    return {
+      status() {
+        const status = readStatusSnapshot();
+        return status == null
+          ? { status: 'fail', error: 'Board status is unavailable' }
+          : { status: 'success', data: status };
+      },
+      getOutputsDataObject(input) {
+        const key = input?.params?.key;
+        if (!key) return { status: 'fail', error: 'getOutputsDataObject requires params.key' };
+        const dataObjects = readDataObjectsByToken();
+        return { status: 'success', data: dataObjects[key] };
+      },
+      getOutputsComputedValues(input) {
+        const key = input?.params?.key;
+        if (!key) return { status: 'fail', error: 'getOutputsComputedValues requires params.key' };
+        const artifacts = readCardRuntimeArtifacts();
+        const entry = artifacts[key] as Record<string, unknown> | undefined;
+        return { status: 'success', data: entry?.computed_values };
+      },
+      getOutputsFetchedSources(input) {
+        const key = input?.params?.key;
+        if (!key) return { status: 'fail', error: 'getOutputsFetchedSources requires params.key' };
+        const ctx = cardContextForCard(key) ?? primaryContext();
+        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+        return ctx.board.getOutputsFetchedSources({ params: { key } });
+      },
+      removeCard(input) {
+        const id = input?.params?.id;
+        if (!id) return { status: 'fail', error: 'removeCard requires params.id' };
+        const ctx = cardContextForCard(id) ?? primaryContext();
+        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+        return ctx.board.removeCard({ params: { id } });
+      },
+      cardRefreshedNotify(input) {
+        const cardId = input?.params?.cardId;
+        if (!cardId) return { status: 'fail', error: 'cardRefreshedNotify requires params.cardId' };
+        const ctx = cardContextForCard(cardId) ?? primaryContext();
+        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+        return ctx.board.cardRefreshedNotify({ params: { cardId } });
+      },
+      upsertCard(input) {
+        const cardId = input?.params?.cardId;
+        if (!cardId) return { status: 'fail', error: 'upsertCard requires params.cardId' };
+        const ctx = cardContextForCard(cardId) ?? primaryContext();
+        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+        return ctx.board.upsertCard({ params: { cardId, restart: input.params.restart === true } });
+      },
+    };
+  }
+
+  function mcpNonCoreFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpNonCoreDeps {
+    const getNonCore = () => {
+      const ctx = primaryContext();
+      if (!ctx?.nonCore) throw new Error('Board non-core adapter is not configured for MCP preflight/discovery tools');
+      return ctx.nonCore;
+    };
+    return {
+      describeTaskExecutorCapabilities(input) { return getNonCore().describeTaskExecutorCapabilities(input); },
+      validateCardPreflight(input) { return getNonCore().validateCardPreflight(input); },
+      evalCardCompute(input) { return getNonCore().evalCardCompute(input); },
+      probeSourcePreflight(input) { return getNonCore().probeSourcePreflight(input); },
+      runSourcePreflight(input) { return getNonCore().runSourcePreflight(input); },
+      simulateCardCycle(input) { return getNonCore().simulateCardCycle(input); },
+    };
+  }
+
+  function mcpCardStoreFacade(): import('../cli/common/card-store-lib-public.js').CardStorePublic {
+    return {
+      get(input) {
+        const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
+        if (id) {
+          const card = readCardFromStore(id);
+          if (!card) return { status: 'fail', error: `card "${id}" not found` };
+          return { status: 'success', data: { cards: [card as import('../cli/common/board-live-cards-lib.js').LiveCard] } };
+        }
+        return { status: 'success', data: { cards: readCardDefinitions() as import('../cli/common/board-live-cards-lib.js').LiveCard[] } };
+      },
+      set(input) {
+        const body = input.body;
+        if (body == null) return { status: 'fail', error: 'set requires a body (card object or array of cards)' };
+        const cards = Array.isArray(body) ? body : [body];
+        for (const rawCard of cards) {
+          const card = rawCard as Record<string, unknown>;
+          const cardId = typeof card.id === 'string' ? card.id : '';
+          if (!cardId) return { status: 'fail', error: 'each card must have a string `id` field' };
+          const ctxIndex = cardOwnerIndex.get(cardId) ?? 0;
+          const ctx = boardContexts[ctxIndex] ?? primaryContext();
+          if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+          const setResult = ctx.cardStore.set({ body: card });
+          if (setResult.status !== 'success') return setResult;
+          cardOwnerIndex.set(cardId, ctxIndex);
+        }
+        return { status: 'success', data: { count: cards.length } };
+      },
+      del(input) {
+        const ids = [input.params?.id, ...(((input.body as { ids?: string[] } | undefined)?.ids) ?? [])].filter((id): id is string => typeof id === 'string' && !!id);
+        if (ids.length === 0) return { status: 'fail', error: 'del requires body.ids (string[]) or params.id' };
+        for (const id of ids) {
+          const ctx = cardContextForCard(id) ?? primaryContext();
+          if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+          const delResult = ctx.cardStore.del({ params: { id } });
+          if (delResult.status !== 'success') return delResult;
+          cardOwnerIndex.delete(id);
+        }
+        return { status: 'success', data: { count: ids.length } };
+      },
+      patch(input) {
+        const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
+        const path = typeof input.params?.path === 'string' ? input.params.path : undefined;
+        if (!id || !path) return { status: 'fail', error: 'patch requires params.id and params.path' };
+        const ctx = cardContextForCard(id) ?? primaryContext();
+        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+        return ctx.cardStore.patch(input);
+      },
+      appendFiles(input) {
+        const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
+        if (!id) return { status: 'fail', error: 'appendFiles requires params.id' };
+        const ctx = cardContextForCard(id) ?? primaryContext();
+        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
+        return ctx.cardStore.appendFiles(input);
+      },
+    };
+  }
+
+  function createMcpFacade() {
+    return createBoardLiveCardsMcp({
+      board: mcpBoardFacade(),
+      nonCore: mcpNonCoreFacade(),
+      cardStore: mcpCardStoreFacade(),
+      chatStore: chatStorePublic,
+      uploadCardFile({ cardId, fileName, contentType, bytes }) {
+        return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
+      },
+      buildFileDownloadUrl({ cardId, fileIdx, storedName }) {
+        const base = `${serverUrl || ''}${apiBasePath}/cards/${encodeURIComponent(cardId)}/files/${fileIdx}`;
+        return storedName ? `${base}?sn=${encodeURIComponent(storedName)}` : base;
+      },
+      readFetchedSourceJsonByRef({ cardId, ref }) {
+        const ctx = cardContextForCard(cardId) ?? primaryContext();
+        if (!ctx) return null;
+        const text = ctx.boardAdapter.resolveBlob(parseRef(ref));
+        const trimmed = text.trim();
+        return trimmed ? JSON.parse(trimmed) : null;
+      },
+    });
+  }
+
+  function getMcpArgString(args: Record<string, unknown>, ...keys: string[]): string {
+    for (const key of keys) {
+      if (typeof args[key] === 'string') return String(args[key]);
+    }
+    return '';
+  }
+
+  function getMcpArgNumber(args: Record<string, unknown>, ...keys: string[]): number | undefined {
+    for (const key of keys) {
+      if (args[key] !== undefined) return Number(args[key]);
+    }
+    return undefined;
+  }
+
+  function getMcpArgRecord(args: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
+    for (const key of keys) {
+      const value = args[key];
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    }
+    return {};
+  }
+
+  function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown> {
+    return {
+      'discover.source-kinds': () => mcp.discoverSourceKinds(),
+      'inspect.board-runtime-status': () => mcp.inspectBoardRuntimeStatus(),
+      'inspect.card-definition-and-runtime': (args) => mcp.inspectCardDefinitionAndRuntime({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
+      'inspect.chat-messages-on-cards': (args) => {
+        const lastUserTurns = getMcpArgNumber(args, 'tail-turns');
+        const tail = getMcpArgNumber(args, 'tail');
+        const turnId = getMcpArgString(args, 'turn-id');
+        const allTurns = args['all-turns'] === true;
+        const tailTurnsBeforeId = getMcpArgString(args, 'tail-turns-before-id');
+        return mcp.inspectChatMessagesOnCards({
+          cardId: getMcpArgString(args, 'card_id', 'cardId'),
+          ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
+          ...(tail !== undefined ? { tail } : {}),
+          ...(turnId ? { turnId } : {}),
+          ...(allTurns ? { allTurns: true } : {}),
+          ...(tailTurnsBeforeId ? { tailTurnsBeforeId } : {}),
+        });
+      },
+      'inspect.file-contents': (args) => mcp.inspectFileContents({
+        cardId: getMcpArgString(args, 'card_id', 'cardId'),
+        fileIdx: Number(getMcpArgNumber(args, 'file_idx', 'fileIdx')),
+      }),
+      'preflight.validate-candidate-card-definition': (args) => mcp.preflightValidateCandidateCardDefinition({
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+      }),
+      'preflight.materialize-candidate-card': (args) => mcp.preflightMaterializeCandidateCard({
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        mockRequires: getMcpArgRecord(args, 'mock_requires', 'mockRequires'),
+        mockFetchedSources: getMcpArgRecord(args, 'mock_fetched_sources', 'mockFetchedSources'),
+      }),
+      'preflight.probe-single-source-in-candidate-card': (args) => mcp.preflightProbeSingleSourceInCandidateCard({
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
+        sourceIdx: Number(getMcpArgNumber(args, 'source_idx', 'sourceIdx')),
+      }),
+      'preflight.run-single-source-in-candidate-card': (args) => mcp.preflightRunSingleSourceInCandidateCard({
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
+        sourceIdx: Number(getMcpArgNumber(args, 'source_idx', 'sourceIdx')),
+      }),
+      'preflight.run-one-cycle-with-candidate-card': (args) => mcp.preflightRunOneCycleWithCandidateCard({
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        mockRequires: getMcpArgRecord(args, 'mock_requires', 'mockRequires'),
+      }),
+      'manage.read-card': (args) => mcp.manageReadCard({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
+      'stage-ai-response-and-any-attachments': (args) => mcp.manageAddChatEntryAndAnyAttachments({
+        cardId: getMcpArgString(args, 'card_id', 'cardId'),
+        role: 'assistant',
+        ...(typeof args.text === 'string' ? { text: args.text } : {}),
+        ...(typeof getMcpArgString(args, 'turn-id', 'turnId', 'turn') === 'string' && getMcpArgString(args, 'turn-id', 'turnId', 'turn') !== ''
+          ? { turn: getMcpArgString(args, 'turn-id', 'turnId', 'turn') }
+          : {}),
+        ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
+      }),
+      'manage.upload-card-file': (args) => {
+        const cardId = getMcpArgString(args, 'card_id', 'cardId');
+        const fileName = getMcpArgString(args, 'file_name', 'fileName', 'name');
+        const contentType = getMcpArgString(args, 'content_type', 'contentType') || 'application/octet-stream';
+        let bytes: Uint8Array | null = null;
+
+        if (Array.isArray(args.bytes)) {
+          bytes = new Uint8Array((args.bytes as unknown[]).map((value) => Math.max(0, Math.min(255, Number(value) || 0))));
+        } else if (typeof args.text === 'string') {
+          bytes = new TextEncoder().encode(args.text);
+        } else if (typeof args.base64 === 'string') {
+          const base64 = String(args.base64).replace(/-/g, '+').replace(/_/g, '/');
+          const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+          const binStr = atob(padded);
+          bytes = Uint8Array.from(binStr, (ch) => ch.charCodeAt(0));
+        }
+
+        if (!cardId) throw Object.assign(new Error('manage.upload-card-file requires card_id'), { statusCode: 400 });
+        if (!fileName) throw Object.assign(new Error('manage.upload-card-file requires file_name'), { statusCode: 400 });
+        if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
+
+        return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
+      },
+      'manage.upsert-card': (args) => mcp.manageUpsertCard({
+        cardId: getMcpArgString(args, 'card_id', 'cardId'),
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+      }),
+      'manage.deprecate': (args) => mcp.manageDeprecate({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
+    };
+  }
+
+  function invokeMcpTool(tool: string, args: Record<string, unknown>): unknown {
+    const handler = createMcpToolRegistry(createMcpFacade())[tool];
+    if (!handler) {
+      throw Object.assign(new Error(`Unknown MCP tool: ${tool}`), { statusCode: 400 });
+    }
+    return handler(args);
   }
 
   // ── Status & runtime artifacts ───────────────────────────────────────────
@@ -640,9 +923,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   /** Append a chat message; returns the new entry id (used as cursor). */
-  function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>): string {
+  function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>, turn = ''): string {
     const msg = typeof text === 'string' ? text.trim() : '';
-    return chatStorage.append(cardId, role || 'system', msg, files);
+    return chatStorage.append(cardId, role || 'system', msg, files, turn);
   }
 
   function readChatRecords(cardId: string): Array<Record<string, unknown>> {
@@ -685,6 +968,46 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
+  function uploadCardFile(
+    cardId: string,
+    requestedName: string,
+    contentType: string,
+    buffer: Uint8Array,
+    opts?: { inChat?: boolean; turnId?: string },
+  ): { ok: true; file: Record<string, unknown> } {
+    if (!buffer.length) {
+      throw Object.assign(new Error('Empty upload body'), { statusCode: 400 });
+    }
+
+    const inChat = opts?.inChat === true;
+    const file = persistUploadedFile(cardId, requestedName, contentType, buffer);
+    let uploadedFileIndex: number | null = null;
+
+    updateCardLocalOnly(cardId, (card) => {
+      const now = new Date().toISOString();
+      const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
+      card.card_data = cardData;
+      const incoming = cardFileMetadataStoreInstance().normalizeIncoming([{
+        name: file.name,
+        stored_name: file.stored_name,
+        size: file.size,
+        mime_type: file.mime_type,
+        uploaded_at: file.uploaded_at || now,
+        chat: inChat,
+      }], now);
+      const merged = cardFileMetadataStoreInstance().merge(cardData, incoming);
+      uploadedFileIndex = merged.findIndex((entry) => entry.stored_name === file.stored_name);
+      return card;
+    });
+
+    if (inChat) {
+      const idxSuffix = typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? ` #${uploadedFileIndex}` : '';
+      writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, [], opts?.turnId ?? '');
+    }
+
+    return { ok: true, file };
+  }
+
   function resolveChatHandlerTarget(cardId: string): {
     ctx: BoardContext;
     handlerFlow: unknown;
@@ -707,7 +1030,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat handler invocation ──────────────────────────────────────────────
 
-  function invokeChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false): void {
+  function invokeChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = ''): void {
     const target = resolveChatHandlerTarget(cardId);
     if (!target) return;
     const { ctx, handlerFlow, handlerRef } = target;
@@ -720,6 +1043,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       boardId,
       cardId: String(cardId),
       lastChatEntryId: lastEntryId,
+      ...(turnId ? { turnId } : {}),
       ...executionExtra,
       ...(serverUrl ? { serverUrl } : {}),
     };
@@ -790,6 +1114,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
       if (actionType === 'chat-send') {
         const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
+        const turnId = payload && typeof payload['turn-id'] === 'string'
+          ? payload['turn-id']
+          : payload && typeof payload.turnId === 'string'
+            ? payload.turnId
+            : payload && typeof payload.turn === 'string'
+              ? payload.turn
+              : '';
         const files: Array<Record<string, unknown>> = [];
         if (Array.isArray(payload?.files)) {
           for (const f of payload.files as unknown[]) {
@@ -806,7 +1137,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const batchResult = chatStorePublic.runBatch({
             cardId,
             commands: [
-              { command: 'append', role: 'user', text, files },
+              { command: 'append', role: 'user', text, files, turn: turnId },
               { command: 'set-processing', active: true },
             ],
           });
@@ -820,7 +1151,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const entryId = appendId;
           const processingAlreadySet = true;
 
-          chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet };
+          chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet, turnId } as typeof chatHandlerResult & { turnId: string };
           // Emit SSE notification so connected clients receive updated chat state immediately
           try {
             const allRecords = readChatRecords(cardId);
@@ -857,7 +1188,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
 
     if (chatHandlerResult) {
-      invokeChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId, chatHandlerResult.processingAlreadySet);
+      invokeChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId, chatHandlerResult.processingAlreadySet, (chatHandlerResult as { turnId?: string }).turnId ?? '');
     }
   }
 
@@ -872,6 +1203,60 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       'Content-Length': byteLen,
     });
     res.end(body);
+  }
+
+  function resolveCardFileDownloadPayload(cardId: string, idx: number, expectedStoredName: string | null): {
+    fileRecord: Record<string, unknown>;
+    bytes: Uint8Array;
+  } {
+    const card = readCardFromStore(cardId);
+    if (!card) throw Object.assign(new Error('Card not found'), { statusCode: 404 });
+
+    const resolved = cardFileMetadataStoreInstance().resolve(card.card_data, idx, expectedStoredName);
+    if (!resolved.ok && (resolved as any).reason === 'stale_reference') {
+      throw Object.assign(new Error('File reference is stale. Refresh and try again.'), { statusCode: 409 });
+    }
+    if (!resolved.ok) throw Object.assign(new Error('File not found'), { statusCode: 404 });
+
+    const fileRecord = (resolved as any).file as Record<string, unknown>;
+    const sid = safeCardId(cardId);
+    const stores = artifactsStores(cardId);
+    const storedName = String(fileRecord.stored_name || '');
+    const fileKey = `${sid}/${storedName}`;
+    const bytes = stores.files ? stores.files.getBytes(fileKey) : null;
+    if (!bytes) throw Object.assign(new Error('File not found'), { statusCode: 404 });
+
+    return { fileRecord, bytes };
+  }
+
+  function sendCardFileDownloadResponse(res: RuntimeResponse, cardId: string, idx: number, expectedStoredName: string | null): void {
+    const { fileRecord, bytes } = resolveCardFileDownloadPayload(cardId, idx, expectedStoredName);
+
+    const filename = String(fileRecord.name || fileRecord.stored_name || 'download.bin');
+    const mimeType = String(fileRecord.mime_type || 'application/octet-stream');
+    res.writeHead(200, {
+      'Content-Type': mimeType,
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': bytes.length,
+    });
+    res.end(bytes as unknown as Buffer);
+  }
+
+  function isLikelyTextMimeType(mimeType: string): boolean {
+    const normalized = String(mimeType || '').toLowerCase();
+    return normalized.startsWith('text/')
+      || normalized.includes('json')
+      || normalized.includes('xml')
+      || normalized.includes('javascript')
+      || normalized.includes('typescript')
+      || normalized.includes('yaml')
+      || normalized.includes('csv');
+  }
+
+  function sliceTextByLines(text: string, mode: 'head' | 'tail', count: number): string {
+    const lines = text.split(/\r?\n/);
+    const selected = mode === 'head' ? lines.slice(0, count) : lines.slice(-count);
+    return selected.join('\n');
   }
 
   async function readJsonBody(req: RuntimeRequest): Promise<Record<string, unknown>> {
@@ -1169,6 +1554,103 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         return true;
       }
 
+      if (method === 'POST' && p === `${apiBasePath}/mcp`) {
+        await bootstrapBoard();
+        const body = await readJsonBody(req);
+        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
+        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+          ? body.args as Record<string, unknown>
+          : {};
+        if (!tool) {
+          json(res, 400, { error: 'tool is required' });
+          return true;
+        }
+        if (tool === 'inspect.file-contents') {
+          json(res, 400, { error: 'inspect.file-contents is only available on /mcp-raw' });
+          return true;
+        }
+        json(res, 200, invokeMcpTool(tool, args));
+        return true;
+      }
+
+      if (method === 'POST' && p === `${apiBasePath}/mcp-raw`) {
+        await bootstrapBoard();
+        const body = await readJsonBody(req);
+        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
+        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+          ? body.args as Record<string, unknown>
+          : {};
+        if (!tool) {
+          json(res, 400, { error: 'tool is required' });
+          return true;
+        }
+        if (tool !== 'inspect.file-contents') {
+          json(res, 400, { error: `Tool does not support raw response: ${tool}` });
+          return true;
+        }
+        const cardId = getMcpArgString(args, 'card_id', 'cardId');
+        const fileIdx = getMcpArgNumber(args, 'file_idx', 'fileIdx');
+        const headLines = getMcpArgNumber(args, 'head-lines', 'headLines');
+        const tailLines = getMcpArgNumber(args, 'tail-lines', 'tailLines');
+        const headBytes = getMcpArgNumber(args, 'head-bytes', 'headBytes');
+        const tailBytes = getMcpArgNumber(args, 'tail-bytes', 'tailBytes');
+        if (!cardId) {
+          json(res, 400, { error: 'inspect.file-contents requires card_id' });
+          return true;
+        }
+        if (fileIdx === undefined || !Number.isInteger(fileIdx) || fileIdx < 0) {
+          json(res, 400, { error: 'inspect.file-contents requires file_idx to be a non-negative integer' });
+          return true;
+        }
+        const rawModes = [headLines, tailLines, headBytes, tailBytes].filter((value) => value !== undefined);
+        if (rawModes.length > 1) {
+          json(res, 400, { error: 'inspect.file-contents accepts at most one of head-lines, tail-lines, head-bytes, tail-bytes' });
+          return true;
+        }
+        for (const [name, value] of [['head-lines', headLines], ['tail-lines', tailLines], ['head-bytes', headBytes], ['tail-bytes', tailBytes]] as const) {
+          if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
+            json(res, 400, { error: `inspect.file-contents requires ${name} to be a non-negative integer` });
+            return true;
+          }
+        }
+        const descriptor = createMcpFacade().inspectFileContents({ cardId, fileIdx }) as { stored_name?: unknown; mime_type?: unknown; name?: unknown };
+        const expectedStoredName = typeof descriptor?.stored_name === 'string' ? descriptor.stored_name : null;
+        const { fileRecord, bytes } = resolveCardFileDownloadPayload(cardId, fileIdx, expectedStoredName);
+        const filename = String(fileRecord.name || fileRecord.stored_name || 'download.bin');
+        const mimeType = String(fileRecord.mime_type || 'application/octet-stream');
+        if (headLines !== undefined || tailLines !== undefined) {
+          if (!isLikelyTextMimeType(mimeType)) {
+            json(res, 400, { error: 'head-lines/tail-lines are only supported for text-like files; use head-bytes/tail-bytes for binary content' });
+            return true;
+          }
+          const text = new TextDecoder().decode(bytes);
+          const slicedText = headLines !== undefined
+            ? sliceTextByLines(text, 'head', headLines)
+            : sliceTextByLines(text, 'tail', tailLines as number);
+          const out = typeof Buffer !== 'undefined' ? Buffer.from(slicedText, 'utf8') : new TextEncoder().encode(slicedText);
+          res.writeHead(200, {
+            'Content-Type': mimeType,
+            'Content-Disposition': `attachment; filename="${filename}"`,
+            'Content-Length': out.length,
+          });
+          res.end(out as unknown as Buffer);
+          return true;
+        }
+        if (headBytes !== undefined || tailBytes !== undefined) {
+          const count = (headBytes ?? tailBytes) as number;
+          const sliced = headBytes !== undefined ? bytes.slice(0, count) : bytes.slice(Math.max(0, bytes.length - count));
+          res.writeHead(200, {
+            'Content-Type': mimeType,
+            'Content-Disposition': `attachment; filename="${filename}"`,
+            'Content-Length': sliced.length,
+          });
+          res.end(sliced as unknown as Buffer);
+          return true;
+        }
+        sendCardFileDownloadResponse(res, cardId, fileIdx, expectedStoredName);
+        return true;
+      }
+
       const cardMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)$`));
       if (method === 'GET' && cardMatch) {
         await bootstrapBoard();
@@ -1237,7 +1719,47 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (method === 'GET' && cardChatsMatch) {
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardChatsMatch[1]);
-        json(res, 200, { ok: true, messages: readChatRecords(cardId) });
+        const turnId = String(url.searchParams.get('turn-id') || '');
+        const allTurns = String(url.searchParams.get('all-turns') || '').toLowerCase() === 'true';
+        const tailTurnsBeforeId = String(url.searchParams.get('tail-turns-before-id') || '');
+        const lastUserTurnsRaw = url.searchParams.get('tail-turns');
+        const lastUserTurns = lastUserTurnsRaw == null || lastUserTurnsRaw === ''
+          ? (allTurns ? undefined : (turnId ? undefined : 1))
+          : Number.parseInt(lastUserTurnsRaw, 10);
+        const readResult = lastUserTurns === undefined
+          ? chatStorePublic.readAll({ params: { cardId } })
+          : chatStorePublic.readAll({ params: { cardId }, body: { lastUserTurns } });
+        if (readResult.status !== 'success') {
+          json(res, 400, { error: readResult.error || 'Failed to read chats' });
+          return true;
+        }
+        let messages = (readResult.data.records as Array<Record<string, unknown>>).filter((message) => !turnId || String(message.turn || '') === turnId);
+        if (tailTurnsBeforeId) {
+          if (lastUserTurns === undefined || !Number.isInteger(lastUserTurns) || lastUserTurns <= 0) {
+            json(res, 400, { error: 'tail-turns is required when tail-turns-before-id is provided' });
+            return true;
+          }
+          const allRecords = chatStorePublic.readAll({ params: { cardId } });
+          if (allRecords.status !== 'success') {
+            json(res, 400, { error: allRecords.error || 'Failed to read chats' });
+            return true;
+          }
+          const byTurn = new Map<string, Array<Record<string, unknown>>>();
+          const orderedTurns: string[] = [];
+          for (const message of allRecords.data.records as Array<Record<string, unknown>>) {
+            const turn = String(message.turn || '');
+            if (!byTurn.has(turn)) {
+              byTurn.set(turn, []);
+              orderedTurns.push(turn);
+            }
+            byTurn.get(turn)!.push(message);
+          }
+          const anchorIndex = orderedTurns.findIndex((value) => value === tailTurnsBeforeId);
+          const sliceStart = Math.max(0, anchorIndex - lastUserTurns);
+          const selectedTurns = anchorIndex === -1 ? [] : orderedTurns.slice(sliceStart, anchorIndex);
+          messages = selectedTurns.flatMap((key) => byTurn.get(key) ?? []);
+        }
+        json(res, 200, { ok: true, messages });
         return true;
       }
 
@@ -1316,35 +1838,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardFileMatch[1]);
         const inChat = String(url.searchParams.get('inChat') || '').toLowerCase() === 'true';
+        const turnId = String(url.searchParams.get('turn-id') || '');
         const encodedName = req.headers['x-file-name'];
         const contentType = String(req.headers['content-type'] || 'application/octet-stream');
         const rawName = Array.isArray(encodedName) ? encodedName[0] : encodedName;
         const requestedName = rawName ? decodeURIComponent(String(rawName)) : 'upload.bin';
         const body = await readRawBody(req);
-        if (!body.length) { json(res, 400, { error: 'Empty upload body' }); return true; }
-
-        const file = persistUploadedFile(cardId, requestedName, contentType, body);
-        // Always register the file in card_data.files regardless of inChat flag,
-        // so GET /cards/:id and GET /cards/:id/files/:idx work unconditionally.
-        let uploadedFileIndex: number | null = null;
-        updateCardLocalOnly(cardId, (card) => {
-          const now = new Date().toISOString();
-          const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
-          card.card_data = cardData;
-          const incoming = cardFileMetadataStoreInstance().normalizeIncoming([{
-            name: file.name, stored_name: file.stored_name, size: file.size,
-            mime_type: file.mime_type, uploaded_at: file.uploaded_at || now, chat: inChat,
-          }], now);
-          const merged = cardFileMetadataStoreInstance().merge(cardData, incoming);
-          uploadedFileIndex = merged.findIndex((entry) => entry.stored_name === file.stored_name);
-          return card;
-        });
-        // inChat: additionally record a system chat message so the upload appears in the chat thread.
-        if (inChat) {
-          const idxSuffix = typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? ` #${uploadedFileIndex}` : '';
-          writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, []);
-        }
-        json(res, 200, { ok: true, file });
+        json(res, 200, uploadCardFile(cardId, requestedName, contentType, body, { inChat, turnId }));
         return true;
       }
 
@@ -1353,31 +1853,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const cardId = decodeURIComponent(cardFileDownloadMatch[1]);
         const idx = parseInt(cardFileDownloadMatch[2], 10);
         const expectedStoredName = url.searchParams.get('sn');
-        const card = readCardFromStore(cardId);
-        if (!card) { json(res, 404, { error: 'Card not found' }); return true; }
-
-        const resolved = cardFileMetadataStoreInstance().resolve(card.card_data, idx, expectedStoredName);
-        if (!resolved.ok && (resolved as any).reason === 'stale_reference') {
-          json(res, 409, { error: 'File reference is stale. Refresh and try again.' });
-          return true;
-        }
-        if (!resolved.ok) { json(res, 404, { error: 'File not found' }); return true; }
-
-        const fileRecord = (resolved as any).file;
-        const sid = safeCardId(cardId);
-        const stores = artifactsStores(cardId);
-        const fileKey = `${sid}/${fileRecord.stored_name}`;
-        const bytes = stores.files ? stores.files.getBytes(fileKey) : null;
-        if (!bytes) { json(res, 404, { error: 'File not found' }); return true; }
-
-        const filename = fileRecord.name || fileRecord.stored_name;
-        const mimeType = fileRecord.mime_type || 'application/octet-stream';
-        res.writeHead(200, {
-          'Content-Type': mimeType,
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Content-Length': bytes.length,
-        });
-        res.end(bytes as unknown as Buffer);
+        sendCardFileDownloadResponse(res, cardId, idx, expectedStoredName);
         return true;
       }
 

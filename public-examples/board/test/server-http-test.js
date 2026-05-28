@@ -565,7 +565,7 @@ try {
   const subRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/chats/subscribe-sse`, { clientId: chatSseClientId });
   assert(subRes.status === 200, `chat subscribe returned ${subRes.status}`);
 
-  const t2Before = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+  const t2Before = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
   assert(t2Before.status === 200, `T3 pre chats returned ${t2Before.status}`);
   const t2BeforeMessages = Array.isArray(t2Before.data?.messages) ? t2Before.data.messages : [];
   const t2BeforeCount = t2BeforeMessages.length;
@@ -590,7 +590,7 @@ try {
   }, 45_000, 'T3 ordered lifecycle');
   assert(!!t2Lifecycle, 'T3 ordered lifecycle not observed');
 
-  const t2After = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+  const t2After = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
   assert(t2After.status === 200, `T3 post chats returned ${t2After.status}`);
   const t2AfterMessages = Array.isArray(t2After.data?.messages) ? t2After.data.messages : [];
   const t2NewMessages = t2AfterMessages.slice(t2BeforeCount);
@@ -613,7 +613,7 @@ try {
     console.log('\n=== T3a: skipped (--skip-t3a) ===');
   } else {
     console.log('\n=== T3a: non-probe chat protocol (expect paris) ===');
-    const t2aBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    const t2aBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
     assert(t2aBefore.status === 200, `T3a pre chats returned ${t2aBefore.status}`);
     const t2aBeforeMessages = Array.isArray(t2aBefore.data?.messages) ? t2aBefore.data.messages : [];
     const t2aBeforeCount = t2aBeforeMessages.length;
@@ -641,7 +641,7 @@ try {
     }, 240_000, 'T3a assistant response with paris');
     assert(!!t2aAssistant, 'T3a assistant response with paris not observed on SSE');
 
-    const t2aAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    const t2aAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
     assert(t2aAfter.status === 200, `T3a post chats returned ${t2aAfter.status}`);
     const t2aAfterMessages = Array.isArray(t2aAfter.data?.messages) ? t2aAfter.data.messages : [];
     const t2aNewMessages = t2aAfterMessages.slice(t2aBeforeCount);
@@ -657,7 +657,7 @@ try {
     console.log('\n=== T3b: skipped (--skip-t3b) ===');
   } else {
     console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
-    const t2bBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    const t2bBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
     assert(t2bBefore.status === 200, `T3b pre chats returned ${t2bBefore.status}`);
     const t2bBeforeMessages = Array.isArray(t2bBefore.data?.messages) ? t2bBefore.data.messages : [];
     const t2bBeforeCount = t2bBeforeMessages.length;
@@ -671,7 +671,7 @@ try {
     const uploadedFile = t2bUploadRes.data?.file;
     assert(uploadedFile && typeof uploadedFile === 'object', 'T3b upload response missing file metadata');
 
-    const t2bAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    const t2bAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
     assert(t2bAfterUpload.status === 200, `T3b chats after upload returned ${t2bAfterUpload.status}`);
     const t2bUploadMessages = Array.isArray(t2bAfterUpload.data?.messages) ? t2bAfterUpload.data.messages : [];
     const t2bUploadNewMessages = t2bUploadMessages.slice(t2bBeforeCount);
@@ -717,7 +717,7 @@ try {
     }, 60_000, 'T3b ordered lifecycle');
     assert(!!t2bLifecycle, 'T3b ordered lifecycle not observed');
 
-    const t2bAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats`);
+    const t2bAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
     assert(t2bAfter.status === 200, `T3b post chats returned ${t2bAfter.status}`);
     const t2bAfterMessages = Array.isArray(t2bAfter.data?.messages) ? t2bAfter.data.messages : [];
     const t2bNewMessages = t2bAfterMessages.slice(t2bSendBaseline);

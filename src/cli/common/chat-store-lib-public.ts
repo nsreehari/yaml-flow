@@ -169,7 +169,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
     if (envelope.command === 'append') {
       return api.append({
         params: { cardId },
-        body: { role: envelope.role, text: envelope.text, files: envelope.files },
+        body: { role: envelope.role, text: envelope.text, files: envelope.files, turn: envelope.turn },
       });
     }
     if (envelope.command === 'read-all') {
@@ -230,8 +230,9 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         const role = typeof body.role === 'string' ? body.role : '';
         const text = typeof body.text === 'string' ? body.text : '';
         const files = Array.isArray(body.files) ? body.files : [];
+        const turn = typeof body.turn === 'string' ? body.turn : '';
         if (!role) return fail('append requires body.role');
-        const id = store.append(cardId, role, text, files);
+        const id = store.append(cardId, role, text, files, turn);
         return ok({ id });
       } catch (e) { return oops(e); }
     },
