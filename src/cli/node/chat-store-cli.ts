@@ -6,8 +6,8 @@
  *
  * Usage (all commands read a JSON envelope from stdin unless flags override):
  *
- *   chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>]
- *   chat-store read-all --store-ref <ref> --card-id <id> [--last-user-turns <n>]
+ *   chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>] [--turn-id <id>]
+ *   chat-store read-all --store-ref <ref> --card-id <id> [--last-user-turns <n>] [--tail-turns <n>] [--turn-id <id>] [--all-turns <true|false>] [--tail-turns-before-id <id>]
  *   chat-store read-after --store-ref <ref> --card-id <id> [--cursor <cursor>]
  *   chat-store clear    --store-ref <ref> --card-id <id>
  *   chat-store set-processing --store-ref <ref> --card-id <id> --active <true|false>
@@ -54,11 +54,11 @@ async function readStdin(): Promise<string> {
 const HELP = [
   'chat-store — chat history and state operations for a board card',
   '',
-  '  chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>]',
+  '  chat-store append   --store-ref <ref> --card-id <id> --role <role> --text <text> [--files-json <json>] [--turn-id <id>]',
   '    Append a message. Prints { id } on success.',
   '',
-  '  chat-store read-all --store-ref <ref> --card-id <id> [--last-user-turns <n>]',
-  '    Print all messages, or the suffix starting at the Nth-last user message.',
+  '  chat-store read-all --store-ref <ref> --card-id <id> [--last-user-turns <n>] [--tail-turns <n>] [--turn-id <id>] [--all-turns <true|false>] [--tail-turns-before-id <id>]',
+  '    Print all messages, or a turn-filtered slice.',
   '',
   '  chat-store read-after --store-ref <ref> --card-id <id> [--cursor <cursor>]',
   '    Print messages after cursor as { records, cursor }.',
@@ -135,16 +135,31 @@ export async function cli(argv: string[]): Promise<void> {
     const role = requireFlag(rest, '--role', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
     const text = requireFlag(rest, '--text', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
     const filesJson = optFlag(rest, '--files-json');
+    const turn = optFlag(rest, '--turn-id') ?? optFlag(rest, '--turn') ?? '';
     const files = filesJson ? (JSON.parse(filesJson) as unknown[]) : [];
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
-    printResult(storePublic.append({ params: { cardId: cid }, body: { role, text, files } }));
+    printResult(storePublic.append({ params: { cardId: cid }, body: { role, text, files, turn } }));
     return;
   }
 
   if (cmd === 'read-all') {
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-all --store-ref <ref> --card-id <id>');
     const lastUserTurns = optFlag(rest, '--last-user-turns');
-    printResult(storePublic.readAll({ params: { cardId: cid }, body: lastUserTurns ? { lastUserTurns } : undefined }));
+    const tailTurns = optFlag(rest, '--tail-turns');
+    const turnId = optFlag(rest, '--turn-id');
+    const tailTurnsBeforeId = optFlag(rest, '--tail-turns-before-id');
+    const allTurnsRaw = optFlag(rest, '--all-turns');
+    if (allTurnsRaw !== undefined && allTurnsRaw !== 'true' && allTurnsRaw !== 'false') {
+      console.error('chat-store read-all: --all-turns must be "true" or "false"');
+      process.exit(1);
+    }
+    const body: Record<string, unknown> = {};
+    if (lastUserTurns !== undefined) body.lastUserTurns = lastUserTurns;
+    if (tailTurns !== undefined) body.tailTurns = tailTurns;
+    if (turnId !== undefined) body.turnId = turnId;
+    if (tailTurnsBeforeId !== undefined) body.tailTurnsBeforeId = tailTurnsBeforeId;
+    if (allTurnsRaw !== undefined) body.allTurns = allTurnsRaw === 'true';
+    printResult(storePublic.readAll({ params: { cardId: cid }, body: Object.keys(body).length > 0 ? body : undefined }));
     return;
   }
 

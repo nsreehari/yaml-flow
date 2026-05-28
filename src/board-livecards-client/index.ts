@@ -120,7 +120,7 @@ export interface BoardRuntimeSession {
   patchCardState(cardId: string, patch: Record<string, unknown>): Promise<void>;
   retriggerCard(cardId: string): Promise<void>;
   dispatchCardAction(cardId: string, actionType: string, payload?: Record<string, unknown> | null): Promise<{ payload: Record<string, unknown> }>;
-  uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null>;
+  uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean; turnId?: string }): Promise<unknown | null>;
   subscribeCardChats(cardId: string): Promise<void>;
   unsubscribeCardChats(cardId: string): Promise<void>;
   dispose(): void;
@@ -137,7 +137,7 @@ export interface DerivedBoardRuntime {
   patchCardState(cardId: string, patch: Record<string, unknown>): Promise<void>;
   retriggerCard(cardId: string): Promise<void>;
   dispatchCardAction(cardId: string, actionType: string, payload?: Record<string, unknown> | null): Promise<{ payload: Record<string, unknown> }>;
-  uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null>;
+  uploadCardFile(cardId: string, file: File, opts?: { inChat?: boolean; turnId?: string }): Promise<unknown | null>;
   subscribeCardChats(cardId: string): Promise<void>;
   unsubscribeCardChats(cardId: string): Promise<void>;
   setMode(mode: string): void;
@@ -229,11 +229,13 @@ export async function uploadCardFile(opts: {
   cardId: string;
   file: File;
   inChat?: boolean;
+  turnId?: string;
 }): Promise<unknown | null> {
   if (!opts.file) return null;
   const paths = opts.boardPaths(opts.boardId);
+  const hasTurnId = typeof opts.turnId === 'string' && opts.turnId !== '';
   const uploadPath = opts.inChat
-    ? `${paths.cardFile(opts.cardId)}?inChat=true`
+    ? `${paths.cardFile(opts.cardId)}?inChat=true${hasTurnId ? `&turn-id=${encodeURIComponent(opts.turnId as string)}` : ''}`
     : paths.cardFile(opts.cardId);
   const fileName = typeof opts.file.name === 'string' ? opts.file.name : 'upload.bin';
   const contentType = opts.file.type || 'application/octet-stream';
@@ -266,11 +268,18 @@ export async function prepareActionPayload(opts: {
   const { actionType } = opts;
   if (actionType !== 'chat-send' && actionType !== 'file-upload') return opts.payload || {};
   const next: Record<string, unknown> = { ...(opts.payload || {}) };
+  const turnId = typeof next['turn-id'] === 'string'
+    ? String(next['turn-id'])
+    : typeof next.turnId === 'string'
+      ? String(next.turnId)
+      : typeof next.turn === 'string'
+        ? String(next.turn)
+        : '';
   const rawFiles = Array.isArray(next.files) ? next.files as File[] : [];
   if (!rawFiles.length) { next.files = []; return next; }
   const uploaded: unknown[] = [];
   for (const file of rawFiles) {
-    const meta = await uploadCardFile({ ...opts, file, inChat: actionType === 'chat-send' });
+    const meta = await uploadCardFile({ ...opts, file, inChat: actionType === 'chat-send', turnId: actionType === 'chat-send' ? turnId : undefined });
     if (meta) uploaded.push(meta);
   }
   next.files = actionType === 'chat-send' ? [] : uploaded;
@@ -478,9 +487,9 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
     return next;
   }
 
-  async function uploadCardFileForSession(cardId: string, file: File, opts?: { inChat?: boolean }): Promise<unknown | null> {
+  async function uploadCardFileForSession(cardId: string, file: File, opts?: { inChat?: boolean; turnId?: string }): Promise<unknown | null> {
     const { boardId } = requireBoardContext();
-    return uploadCardFile({ fetchServer, boardPaths, boardId, cardId, file, inChat: opts?.inChat });
+    return uploadCardFile({ fetchServer, boardPaths, boardId, cardId, file, inChat: opts?.inChat, turnId: opts?.turnId });
   }
 
   async function dispatchCardActionForSession(

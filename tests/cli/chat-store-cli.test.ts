@@ -175,6 +175,37 @@ describe('chat-store-cli stdin mode', () => {
     expect(parseStdout(processingRun.stdout)).toEqual({ active: false });
   });
 
+  it('supports turn-aware append and read flags', () => {
+    const boardDir = makeBoardDir();
+    const storeRef = makeStoreRef(boardDir);
+
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-turns', '--role', 'user', '--text', 'A1', '--turn-id', 'turn-a']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-turns', '--role', 'assistant', '--text', 'A2', '--turn-id', 'turn-a']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-turns', '--role', 'user', '--text', 'B1', '--turn-id', 'turn-b']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-turns', '--role', 'assistant', '--text', 'B2', '--turn-id', 'turn-b']).status).toBe(0);
+    expect(runChatStore(['append', '--store-ref', storeRef, '--card-id', 'card-turns', '--role', 'user', '--text', 'C1', '--turn-id', 'turn-c']).status).toBe(0);
+
+    const byTurnRun = runChatStore(['read-all', '--store-ref', storeRef, '--card-id', 'card-turns', '--turn-id', 'turn-b']);
+    expect(byTurnRun.status).toBe(0);
+    expect(parseStdout(byTurnRun.stdout)).toEqual({
+      records: [
+        expect.objectContaining({ text: 'B1', turn: 'turn-b' }),
+        expect.objectContaining({ text: 'B2', turn: 'turn-b' }),
+      ],
+    });
+
+    const beforeAnchorRun = runChatStore([
+      'read-all', '--store-ref', storeRef, '--card-id', 'card-turns', '--tail-turns', '1', '--tail-turns-before-id', 'turn-c',
+    ]);
+    expect(beforeAnchorRun.status).toBe(0);
+    expect(parseStdout(beforeAnchorRun.stdout)).toEqual({
+      records: [
+        expect.objectContaining({ text: 'B1', turn: 'turn-b' }),
+        expect.objectContaining({ text: 'B2', turn: 'turn-b' }),
+      ],
+    });
+  });
+
   it('does not process stdin envelopes unless --stdin is passed explicitly', () => {
     const boardDir = makeBoardDir();
     const storeRef = makeStoreRef(boardDir);

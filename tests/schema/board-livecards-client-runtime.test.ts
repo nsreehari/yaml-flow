@@ -5,7 +5,9 @@ import {
   createBoardRuntimeSession,
   createDerivedBoardRuntime,
   defaultBoardPaths,
+  prepareActionPayload,
   serverPayloadToBoardState,
+  uploadCardFile,
 } from '../../src/board-livecards-client/index.js';
 import type { BoardRuntimeArtifactsPayload } from '../../src/board-livegraph-runtime/index.js';
 
@@ -133,5 +135,58 @@ describe('session.retriggerCard', () => {
     expect(call).toBeTruthy();
     expect(call?.path).toBe('/api/boards/board-1/cards/card-a/retrigger');
     expect(call?.init?.method).toBe('POST');
+  });
+});
+
+describe('board-livecards-client action upload turn propagation', () => {
+  it('adds turn-id query parameter for in-chat uploads when provided', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    const fakeFile = { name: 'sample.txt', type: 'text/plain' } as unknown as File;
+
+    const result = await uploadCardFile({
+      fetchServer: async (path, init) => {
+        calls.push({ path, init });
+        return new Response(JSON.stringify({ file: { stored_name: 'sample.txt' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+      boardPaths: (boardId: string) => defaultBoardPaths(boardId),
+      boardId: 'board-1',
+      cardId: 'card-a',
+      file: fakeFile,
+      inChat: true,
+      turnId: 'turn-xyz',
+    });
+
+    expect(result).toEqual({ stored_name: 'sample.txt' });
+    expect(calls[0]?.path).toContain('/api/boards/board-1/cards/card-a/files?inChat=true&turn-id=turn-xyz');
+  });
+
+  it('forwards chat turn-id from payload while preparing chat-send action uploads', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    const fakeFile = { name: 'chat-file.txt', type: 'text/plain' } as unknown as File;
+
+    const payload = await prepareActionPayload({
+      fetchServer: async (path, init) => {
+        calls.push({ path, init });
+        return new Response(JSON.stringify({ file: { stored_name: 'chat-file.txt' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+      boardPaths: (boardId: string) => defaultBoardPaths(boardId),
+      boardId: 'board-1',
+      cardId: 'card-a',
+      actionType: 'chat-send',
+      payload: {
+        text: 'hello',
+        'turn-id': 'turn-chat-1',
+        files: [fakeFile],
+      },
+    });
+
+    expect(calls[0]?.path).toContain('/api/boards/board-1/cards/card-a/files?inChat=true&turn-id=turn-chat-1');
+    expect(payload.files).toEqual([]);
   });
 });

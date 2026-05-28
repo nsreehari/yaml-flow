@@ -118,6 +118,17 @@ if (subcommand === 'run-source-preflight') {
   console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 4, bindTo: parsedInput?.bindTo || 'source', resultValue: { ok: true } }));
   process.exit(0);
 }
+if (subcommand === 'run-source-fetch') {
+  const outIdx = process.argv.indexOf('--out-ref');
+  const outRef = process.argv[outIdx + 1];
+  if (!outRef) {
+    console.error('missing --out-ref');
+    process.exit(1);
+  }
+  const refValue = JSON.parse(Buffer.from(outRef.slice(4), 'base64url').toString('utf8')).value;
+  await import('node:fs/promises').then((fs) => fs.writeFile(refValue, JSON.stringify({ ok: true })));
+  process.exit(0);
+}
 if (subcommand === 'validate-source-def') {
   console.log(JSON.stringify({ ok: true, errors: [] }));
   process.exit(0);
@@ -256,6 +267,31 @@ process.exit(1);
     expect(userMessage?.turn).toBe('turn-chat-send');
     expect(observed.length).toBe(1);
     expect(observed[0].turnId).toBe('turn-chat-send');
+  });
+
+  it('POST /cards/:id/chats preserves turn on appended assistant messages', async () => {
+    const runtime = createRuntime();
+    const postReq = makeRequest('POST', '/api/board/cards/card-1/chats', {
+      role: 'assistant',
+      text: 'Turn aware assistant reply',
+      files: [],
+      turn: 'turn-post-chat',
+      done: true,
+    });
+    const postRes = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(postReq, postRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    expect(handled).toBe(true);
+    expect(postRes._status).toBe(200);
+
+    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?all-turns=true'));
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const assistantMessage = (chatsBody.messages as Array<Record<string, unknown>>)
+      .find((message) => message.role === 'assistant' && message.text === 'Turn aware assistant reply');
+    expect(assistantMessage).toBeTruthy();
+    expect(assistantMessage?.turn).toBe('turn-post-chat');
   });
 
   it('routes manage.upload-card-file through /mcp and reuses upload behavior', async () => {
@@ -585,8 +621,14 @@ process.exit(1);
       args: {
         candidate_card_content: {
           id: 'compute-card',
-          card_data: {},
+          card_data: { title: 'Compute Card' },
           compute: [{ bindTo: 'total', expr: '1 + 2 + 3' }],
+          provides: [{ bindTo: 'summaryTotal', ref: 'computed_values.total' }],
+          view: {
+            layout: { kind: 'stack' },
+            features: {},
+            elements: [{ id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'computed_values.total' } }],
+          },
         },
         mock_requires: {},
         mock_fetched_sources: {},
@@ -604,8 +646,34 @@ process.exit(1);
         ok: true,
         computed_values: { total: 6 },
         errors: [],
+        provides_outputs: { summaryTotal: 6 },
+        rendered_view: {
+          layout: { kind: 'stack' },
+          features: {},
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'computed_values.total', resolved: 6 }],
+        },
       },
     });
+  });
+
+  it('rejects preflight.materialize-candidate-card when mock_requires or mock_fetched_sources are omitted', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.materialize-candidate-card',
+      args: {
+        candidate_card_content: {
+          id: 'compute-card',
+          card_data: {},
+          compute: [{ bindTo: 'total', expr: '1 + 2 + 3' }],
+        },
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: 'MCP tool requires mock_requires' });
   });
 
   it('routes preflight.run-single-source-in-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
@@ -631,11 +699,9 @@ process.exit(1);
       status: 'success',
       data: {
         bindTo: 'sourceA',
-        reachable: true,
-        latencyMs: 4,
-        kind: undefined,
-        resultValue: { ok: true },
-        note: undefined,
+        ok: true,
+        result: { ok: true },
+        issues: [],
       },
     });
   });
@@ -647,9 +713,14 @@ process.exit(1);
       args: {
         candidate_card_content: {
           id: 'cycle-card',
-          card_data: {},
+          card_data: { title: 'Cycle Card' },
+          provides: [{ bindTo: 'cycle-card-summary', ref: 'card_data.title' }],
           source_defs: [{ bindTo: 'sourceA', outputFile: 'sourceA.json', kind: 'fake' }],
           compute: [{ bindTo: 'total', expr: '1 + 2' }],
+          view: {
+            layout: { kind: 'stack' },
+            elements: [{ id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'card_data.title' } }],
+          },
         },
         mock_requires: {},
       },
@@ -664,11 +735,12 @@ process.exit(1);
       data: {
         cardId: 'cycle-card',
         ok: true,
-        validation: { isValid: true, issues: [] },
-        source_probes: [{ bindTo: 'sourceA', reachable: true, latencyMs: 4, error: undefined }],
-        projection_errors: [],
-        computed_values: { total: 3 },
-        compute_errors: [],
+        issues: [],
+        provides_outputs: { 'cycle-card-summary': 'Cycle Card' },
+        rendered_view: {
+          layout: { kind: 'stack' },
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'card_data.title', resolved: 'Cycle Card' }],
+        },
       },
     });
   });

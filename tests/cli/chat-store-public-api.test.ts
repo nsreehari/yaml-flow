@@ -97,4 +97,51 @@ describe('chat-store public API command dispatch', () => {
       data: { active: false },
     });
   });
+
+  it('supports turn-aware read filtering and turn-tail slicing', () => {
+    const store = makeStore();
+
+    store.append({ params: { cardId: 'card-turns' }, body: { role: 'user', text: 'A1', files: [], turn: 'turn-a' } });
+    store.append({ params: { cardId: 'card-turns' }, body: { role: 'assistant', text: 'A2', files: [], turn: 'turn-a' } });
+    store.append({ params: { cardId: 'card-turns' }, body: { role: 'user', text: 'B1', files: [], turn: 'turn-b' } });
+    store.append({ params: { cardId: 'card-turns' }, body: { role: 'assistant', text: 'B2', files: [], turn: 'turn-b' } });
+    store.append({ params: { cardId: 'card-turns' }, body: { role: 'user', text: 'C1', files: [], turn: 'turn-c' } });
+
+    const turnRead = store.run({ command: 'read-all', cardId: 'card-turns', turnId: 'turn-b' });
+    expect(turnRead).toEqual({
+      status: 'success',
+      data: {
+        records: [
+          expect.objectContaining({ text: 'B1', turn: 'turn-b' }),
+          expect.objectContaining({ text: 'B2', turn: 'turn-b' }),
+        ],
+      },
+    });
+
+    const tailRead = store.run({ command: 'read-all', cardId: 'card-turns', tailTurns: 1 });
+    expect(tailRead).toEqual({
+      status: 'success',
+      data: {
+        records: [
+          expect.objectContaining({ text: 'C1', turn: 'turn-c' }),
+        ],
+      },
+    });
+
+    const beforeAnchorRead = store.run({
+      command: 'read-all',
+      cardId: 'card-turns',
+      tailTurns: 1,
+      tailTurnsBeforeId: 'turn-c',
+    });
+    expect(beforeAnchorRead).toEqual({
+      status: 'success',
+      data: {
+        records: [
+          expect.objectContaining({ text: 'B1', turn: 'turn-b' }),
+          expect.objectContaining({ text: 'B2', turn: 'turn-b' }),
+        ],
+      },
+    });
+  });
 });

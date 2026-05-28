@@ -9,11 +9,16 @@ import {
 
 const boardLiveCardsCliPath = resolveKnownYamlFlowCliPath('board-live-cards-cli.mjs');
 const chatStoreCliPath = resolveKnownYamlFlowCliPath('chat-store-cli.mjs');
+const cardStoreCliPath = resolveKnownYamlFlowCliPath('card-store-cli.mjs');
 
 const usageLines = [
   'Usage:',
   '  node inspect-chat-messages-on-cards.js --card-id <card-id> get-messages',
   '  node inspect-chat-messages-on-cards.js --card-id <card-id> --last-user-turns <n> get-messages',
+  '  node inspect-chat-messages-on-cards.js --card-id <card-id> --tail-turns <n> get-messages',
+  '  node inspect-chat-messages-on-cards.js --card-id <card-id> --turn-id <id> get-messages',
+  '  node inspect-chat-messages-on-cards.js --card-id <card-id> --all-turns true get-messages',
+  '  node inspect-chat-messages-on-cards.js --card-id <card-id> --tail-turns <n> --tail-turns-before-id <id> get-messages',
   '  node inspect-chat-messages-on-cards.js --card-id <card-id> --tail <n> get-messages',
 ];
 
@@ -70,6 +75,14 @@ function parseOptionalPositiveInteger(flags, key) {
   }
 
   return value;
+}
+
+function parseOptionalBoolean(flags, key) {
+  if (flags[key] === undefined) return null;
+  const raw = String(flags[key]).trim().toLowerCase();
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`--${key} must be true or false`);
 }
 
 function runJsonScript(scriptPath, scriptArgs, input) {
@@ -135,11 +148,20 @@ function readAttachmentRefs(baseRef, cardId) {
     .filter((entry) => typeof entry.stored_name === 'string' && entry.stored_name.length > 0);
 }
 
-function readChatRecords(chatStoreRef, cardId, lastUserTurns = null) {
+function readChatRecords(chatStoreRef, cardId, opts = {}) {
   const scriptArgs = ['read-all', '--store-ref', chatStoreRef, '--card-id', cardId];
-  if (lastUserTurns !== null) {
-    scriptArgs.push('--last-user-turns', String(lastUserTurns));
-  }
+  const {
+    lastUserTurns = null,
+    tailTurns = null,
+    turnId = '',
+    allTurns = null,
+    tailTurnsBeforeId = '',
+  } = opts;
+  if (lastUserTurns !== null) scriptArgs.push('--last-user-turns', String(lastUserTurns));
+  if (tailTurns !== null) scriptArgs.push('--tail-turns', String(tailTurns));
+  if (turnId) scriptArgs.push('--turn-id', String(turnId));
+  if (allTurns !== null) scriptArgs.push('--all-turns', String(allTurns));
+  if (tailTurnsBeforeId) scriptArgs.push('--tail-turns-before-id', String(tailTurnsBeforeId));
 
   const result = runJsonScript(chatStoreCliPath, scriptArgs);
   const raw = Array.isArray(result) ? result : Array.isArray(result?.records) ? result.records : [];
@@ -206,10 +228,20 @@ function handleGetMessages(flags) {
   const baseRef = readKnownBaseRef();
   const cardId = requireArgText(flags, 'card-id');
   const lastUserTurns = parseOptionalPositiveInteger(flags, 'last-user-turns');
+  const tailTurns = parseOptionalPositiveInteger(flags, 'tail-turns');
+  const turnId = typeof flags['turn-id'] === 'string' ? flags['turn-id'].trim() : '';
+  const allTurns = parseOptionalBoolean(flags, 'all-turns');
+  const tailTurnsBeforeId = typeof flags['tail-turns-before-id'] === 'string' ? flags['tail-turns-before-id'].trim() : '';
   const tail = parseOptionalPositiveInteger(flags, 'tail');
   const chatStoreRef = readStoreRef(baseRef, 'get-chat-store-ref', 'Chat storage lookup');
   const attachments = readAttachmentRefs(baseRef, cardId);
-  const messages = readChatRecords(chatStoreRef, cardId, lastUserTurns)
+  const messages = readChatRecords(chatStoreRef, cardId, {
+    lastUserTurns,
+    tailTurns,
+    turnId,
+    allTurns,
+    tailTurnsBeforeId,
+  })
     .map((message) => enhanceChatMessageWithAttachmentHint(message, cardId, attachments));
   const visibleMessages = tail === null ? messages : messages.slice(-tail);
 

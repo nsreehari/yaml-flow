@@ -29,12 +29,13 @@ function makeDeps() {
       appendFiles: vi.fn(() => ({ status: 'success', data: { files_added: [] } })),
     },
     chatStore: {
+      append: vi.fn(() => ({ status: 'success', data: { id: 'msg-1' } })),
       readAll: vi.fn(() => ({
         status: 'success',
         data: {
           records: [
-            { id: 'm1', role: 'user', text: 'hello', files: [] },
-            { id: 'm2', role: 'system', text: 'file uploaded: file-a.txt as file-a.txt #0', files: [] },
+            { id: 'm1', role: 'user', text: 'hello', files: [], turn: 'turn-a' },
+            { id: 'm2', role: 'system', text: 'file uploaded: file-a.txt as file-a.txt #0', files: [], turn: 'turn-a' },
           ],
         },
       })),
@@ -99,6 +100,108 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
+  it('maps preflight materialize to computed_values plus provides_outputs and rendered_view', () => {
+    const deps = makeDeps();
+    deps.nonCore.evalCardCompute.mockReturnValue({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        ok: true,
+        computed_values: { total: 6 },
+        errors: [],
+      },
+    });
+    const mcp = createBoardLiveCardsMcp(deps);
+
+    expect(mcp.preflightMaterializeCandidateCard({
+      candidateCardContent: {
+        id: 'card-1',
+        card_data: { title: 'Card One' },
+        provides: [{ bindTo: 'summaryTotal', ref: 'computed_values.total' }],
+        view: {
+          layout: 'stack',
+          features: { dense: true },
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'computed_values.total' } }],
+        },
+      },
+      mockRequires: {},
+      mockFetchedSources: {},
+    })).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        ok: true,
+        computed_values: { total: 6 },
+        errors: [],
+        provides_outputs: { summaryTotal: 6 },
+        rendered_view: {
+          layout: 'stack',
+          features: { dense: true },
+          elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'computed_values.total', resolved: 6 }],
+        },
+      },
+    });
+  });
+
+  it('maps preflight run-one-cycle to issues, provides_outputs, and rendered_view', () => {
+    const deps = makeDeps();
+    deps.nonCore.simulateCardCycle.mockReturnValue({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        ok: false,
+        validation: { isValid: false, issues: ['view.elements[0].kind is required'] },
+        source_probes: [{ bindTo: 'sourceA', skipped: true, error: 'No task executor configured' }],
+        projection_errors: [{ bindTo: 'sourceA', key: 'url', error: 'Projection "url" resolved to undefined' }],
+        computed_values: { total: 3 },
+        compute_errors: [{ bindTo: 'summary', error: 'undefined variable' }],
+      },
+    });
+    const mcp = createBoardLiveCardsMcp(deps);
+
+    expect(mcp.preflightRunOneCycleWithCandidateCard({
+      candidateCardContent: {
+        id: 'card-1',
+        card_data: { title: 'Card One' },
+        provides: [
+          { bindTo: 'summaryTotal', ref: 'computed_values.total' },
+          { bindTo: 'titleData', ref: 'card_data.title' },
+        ],
+        view: {
+          layout: 'stack',
+          features: { dense: true },
+          elements: [
+            { id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'computed_values.total' } },
+          ],
+        },
+      },
+      mockRequires: {},
+    })).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        ok: false,
+        issues: [
+          'view.elements[0].kind is required',
+          'sourceA: No task executor configured',
+          'sourceA.url: Projection "url" resolved to undefined',
+          'summary: undefined variable',
+        ],
+        provides_outputs: {
+          summaryTotal: 3,
+          titleData: 'Card One',
+        },
+        rendered_view: {
+          layout: 'stack',
+          features: { dense: true },
+          elements: [
+            { id: 'summary', kind: 'text', label: 'Summary', visible: true, bind: 'computed_values.total', resolved: 3 },
+          ],
+        },
+      },
+    });
+  });
+
   it('returns a JSON download descriptor for inspect file contents', () => {
     const mcp = createBoardLiveCardsMcp(makeDeps());
     expect(mcp.inspectFileContents({ cardId: 'card-1', fileIdx: 0 })).toEqual({
@@ -107,6 +210,64 @@ describe('BoardLiveCardsMcp', () => {
       downloadUrl: '/api/board/cards/card-1/files/0',
       name: 'file-a.txt',
       stored_name: 'file-a.txt',
+    });
+  });
+
+  it('supports turn-id filtering and tail-turns-before-id slicing in inspect chat messages', () => {
+    const deps = makeDeps();
+    deps.chatStore.readAll.mockReturnValue({
+      status: 'success',
+      data: {
+        records: [
+          { id: 'm1', role: 'assistant', text: 'A', files: [], turn: 'turn-a' },
+          { id: 'm2', role: 'assistant', text: 'B', files: [], turn: 'turn-b' },
+          { id: 'm3', role: 'assistant', text: 'C', files: [], turn: 'turn-c' },
+        ],
+      },
+    });
+    const mcp = createBoardLiveCardsMcp(deps);
+
+    const byTurn = mcp.inspectChatMessagesOnCards({ cardId: 'card-1', turnId: 'turn-b' });
+    expect(byTurn.cardId).toBe('card-1');
+    expect(byTurn.messages).toHaveLength(3);
+    expect(deps.chatStore.readAll).toHaveBeenCalledWith({
+      params: { cardId: 'card-1' },
+      body: { turnId: 'turn-b' },
+    });
+
+    const beforeAnchor = mcp.inspectChatMessagesOnCards({ cardId: 'card-1', lastUserTurns: 1, tailTurnsBeforeId: 'turn-c' });
+    expect(beforeAnchor.cardId).toBe('card-1');
+    expect(beforeAnchor.messages).toHaveLength(3);
+    expect(deps.chatStore.readAll).toHaveBeenCalledWith({
+      params: { cardId: 'card-1' },
+      body: { tailTurns: 1, tailTurnsBeforeId: 'turn-c' },
+    });
+  });
+
+  it('propagates turn when manage add chat entry is called', () => {
+    const deps = makeDeps();
+    const mcp = createBoardLiveCardsMcp(deps);
+    const result = mcp.manageAddChatEntryAndAnyAttachments({
+      cardId: 'card-1',
+      role: 'assistant',
+      text: 'Turned message',
+      turn: 'turn-z',
+      files: [],
+    });
+
+    expect(result).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        id: expect.any(String),
+        role: 'assistant',
+        turn: 'turn-z',
+        files: [],
+      },
+    });
+    expect(deps.chatStore.append).toHaveBeenCalledWith({
+      params: { cardId: 'card-1' },
+      body: { role: 'assistant', text: 'Turned message', files: [], turn: 'turn-z' },
     });
   });
 });

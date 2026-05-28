@@ -126,6 +126,29 @@ export interface BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult {
   };
 }
 
+export interface BoardLiveCardsMcpPreflightRunOneCycleResult {
+  status: 'success';
+  data: {
+    cardId: string;
+    ok: boolean;
+    issues: string[];
+    provides_outputs: Record<string, unknown>;
+    rendered_view: BoardLiveCardsMcpRenderedView;
+  };
+}
+
+export interface BoardLiveCardsMcpPreflightMaterializeResult {
+  status: 'success';
+  data: {
+    cardId: string;
+    ok: boolean;
+    computed_values: UnknownRecord;
+    errors: Array<{ bindTo: string; error: string }>;
+    provides_outputs: Record<string, unknown>;
+    rendered_view: BoardLiveCardsMcpRenderedView;
+  };
+}
+
 export interface BoardLiveCardsMcpBoardDeps {
   status(input: {}): CommandResult;
   getOutputsDataObject(input: { params: { key: string } }): CommandResult;
@@ -166,7 +189,7 @@ export interface BoardLiveCardsMcp {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
     mockFetchedSources: UnknownRecord;
-  }): unknown;
+  }): BoardLiveCardsMcpPreflightMaterializeResult | CommandResult;
   preflightProbeSingleSourceInCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockProjections: UnknownRecord;
@@ -180,7 +203,7 @@ export interface BoardLiveCardsMcp {
   preflightRunOneCycleWithCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
-  }): unknown;
+  }): BoardLiveCardsMcpPreflightRunOneCycleResult;
   manageReadCard(args: { cardId: string }): LiveCard[];
   manageAddChatEntryAndAnyAttachments(args: {
     cardId: string;
@@ -271,6 +294,30 @@ function materializeView(card: UnknownRecord, runtimeNode: UnknownRecord): Board
       return model;
     }),
   };
+}
+
+function materializeProvidesOutputs(card: UnknownRecord, runtimeNode: UnknownRecord): Record<string, unknown> {
+  const cardId = typeof card.id === 'string' && card.id ? card.id : 'card';
+  const providesBindings = ensureArray(card.provides);
+  const bindings = providesBindings.length > 0
+    ? providesBindings
+    : [{ bindTo: cardId, ref: 'card_data' }];
+
+  const outputs: Record<string, unknown> = {};
+  for (const binding of bindings) {
+    const bindingObj = ensureRecord(binding);
+    const bindTo = typeof bindingObj.bindTo === 'string' ? bindingObj.bindTo : '';
+    const ref = typeof bindingObj.ref === 'string' ? bindingObj.ref : '';
+    if (!bindTo || !ref) {
+      continue;
+    }
+    const resolved = getAtPath(runtimeNode, ref);
+    if (resolved !== undefined) {
+      outputs[bindTo] = resolved;
+    }
+  }
+
+  return outputs;
 }
 
 function parseSystemMessageFileIndex(messageText: unknown): number | null {
@@ -441,41 +488,24 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const turnId = typeof args.turnId === 'string' ? args.turnId : '';
     const allTurns = args.allTurns === true;
     const tailTurnsBeforeId = typeof args.tailTurnsBeforeId === 'string' ? args.tailTurnsBeforeId : '';
-    const lastUserTurns = allTurns ? undefined : (args.lastUserTurns ?? (turnId ? undefined : 1));
+    const tailTurns = allTurns ? undefined : (args.lastUserTurns ?? (turnId ? undefined : 1));
     const tail = args.tail;
-    const readInput = lastUserTurns === undefined
-      ? { params: { cardId } }
-      : { params: { cardId }, body: { lastUserTurns } };
+    const readBody: Record<string, unknown> = {
+      ...(tailTurns === undefined ? {} : { tailTurns }),
+      ...(turnId ? { turnId } : {}),
+      ...(allTurns ? { allTurns: true } : {}),
+      ...(tailTurnsBeforeId ? { tailTurnsBeforeId } : {}),
+    };
+    const readInput = Object.keys(readBody).length > 0
+      ? { params: { cardId }, body: readBody }
+      : { params: { cardId } };
     const recordsResult = expectSuccess(chatStore.readAll(readInput), 'chatStore.readAll');
     const card = ensureRecord(readOneCard(cardStore, cardId));
     const attachments = ensureArray(ensureRecord(card.card_data).files)
       .map((file, idx) => ({ idx, stored_name: ensureRecord(file).stored_name }))
       .filter((entry) => typeof entry.stored_name === 'string' && entry.stored_name.length > 0);
 
-    let turnFiltered = (Array.isArray(recordsResult.records) ? recordsResult.records : []).filter((message) => {
-      if (!turnId) return true;
-      return typeof message?.turn === 'string' ? message.turn === turnId : turnId === '';
-    });
-
-    if (tailTurnsBeforeId) {
-      if (lastUserTurns === undefined || !Number.isInteger(lastUserTurns) || lastUserTurns <= 0) {
-        throw new Error('inspectChatMessagesOnCards requires tail-turns when tail-turns-before-id is provided');
-      }
-      const byTurn = new Map<string, ChatRecord[]>();
-      const orderedTurns: string[] = [];
-      for (const message of Array.isArray(recordsResult.records) ? recordsResult.records : []) {
-        const turnKey = typeof message?.turn === 'string' ? message.turn : '';
-        if (!byTurn.has(turnKey)) {
-          byTurn.set(turnKey, []);
-          orderedTurns.push(turnKey);
-        }
-        byTurn.get(turnKey)!.push(message);
-      }
-      const anchorIndex = orderedTurns.findIndex((value) => value === tailTurnsBeforeId);
-      const sliceStart = Math.max(0, anchorIndex - lastUserTurns);
-      const selectedTurns = anchorIndex === -1 ? [] : orderedTurns.slice(sliceStart, anchorIndex);
-      turnFiltered = selectedTurns.flatMap((key) => byTurn.get(key) ?? []);
-    }
+    const turnFiltered = Array.isArray(recordsResult.records) ? recordsResult.records : [];
 
     const messages = turnFiltered.map((message) => {
       const messageObj = message as unknown as UnknownRecord;
@@ -548,14 +578,51 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
     mockFetchedSources: UnknownRecord;
-  }): unknown {
-    return nonCore.evalCardCompute({
+  }): BoardLiveCardsMcpPreflightMaterializeResult | CommandResult {
+    if (!args.mockRequires || typeof args.mockRequires !== 'object' || Array.isArray(args.mockRequires)) {
+      throw new Error('preflightMaterializeCandidateCard requires mockRequires');
+    }
+    if (!args.mockFetchedSources || typeof args.mockFetchedSources !== 'object' || Array.isArray(args.mockFetchedSources)) {
+      throw new Error('preflightMaterializeCandidateCard requires mockFetchedSources');
+    }
+
+    const result = nonCore.evalCardCompute({
       body: {
         'card-content': args.candidateCardContent,
         'mock-requires': args.mockRequires,
         'mock-fetched-sources': args.mockFetchedSources,
       },
     });
+    if (result.status !== 'success') {
+      return result;
+    }
+
+    const payload = ensureRecord(Object.prototype.hasOwnProperty.call(result, 'data') ? result.data : {});
+    const card = ensureRecord(args.candidateCardContent);
+    const runtimeNode: UnknownRecord = {
+      card_data: ensureRecord(card.card_data),
+      requires: ensureRecord(args.mockRequires),
+      fetched_sources: ensureRecord(args.mockFetchedSources),
+      computed_values: ensureRecord(payload.computed_values),
+    };
+
+    return {
+      status: 'success',
+      data: {
+        cardId: typeof payload.cardId === 'string' ? payload.cardId : (typeof card.id === 'string' ? card.id : '(unknown)'),
+        ok: payload.ok === true,
+        computed_values: ensureRecord(payload.computed_values),
+        errors: ensureArray(payload.errors).map((entry) => {
+          const record = ensureRecord(entry);
+          return {
+            bindTo: typeof record.bindTo === 'string' ? record.bindTo : '',
+            error: typeof record.error === 'string' ? record.error : '',
+          };
+        }),
+        provides_outputs: materializeProvidesOutputs(card, runtimeNode),
+        rendered_view: materializeView(card, runtimeNode),
+      },
+    };
   }
 
   function preflightProbeSingleSourceInCandidateCard(args: {
@@ -589,13 +656,65 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
   function preflightRunOneCycleWithCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
-  }): unknown {
-    return nonCore.simulateCardCycle({
+  }): BoardLiveCardsMcpPreflightRunOneCycleResult {
+    const result = ensureRecord(expectSuccess(nonCore.simulateCardCycle({
       body: {
         'card-content': args.candidateCardContent,
         'mock-requires': args.mockRequires,
       },
-    });
+    }), 'simulateCardCycle'));
+
+    const card = ensureRecord(args.candidateCardContent);
+    const validation = ensureRecord(result.validation);
+    const sourceProbes = ensureArray(result.source_probes);
+    const projectionErrors = ensureArray(result.projection_errors);
+    const computeErrors = ensureArray(result.compute_errors);
+    const computedValues = ensureRecord(result.computed_values);
+    const runtimeNode: UnknownRecord = {
+      card_data: ensureRecord(card.card_data),
+      requires: args.mockRequires,
+      fetched_sources: {},
+      computed_values: computedValues,
+    };
+
+    const issues: string[] = [];
+    for (const issue of ensureArray(validation.issues)) {
+      if (typeof issue === 'string' && issue) {
+        issues.push(issue);
+      }
+    }
+    for (const probe of sourceProbes) {
+      const probeObj = ensureRecord(probe);
+      const bindTo = typeof probeObj.bindTo === 'string' ? probeObj.bindTo : 'source';
+      const error = typeof probeObj.error === 'string' ? probeObj.error : '';
+      if (error) {
+        issues.push(`${bindTo}: ${error}`);
+      }
+    }
+    for (const projectionError of projectionErrors) {
+      const errObj = ensureRecord(projectionError);
+      const bindTo = typeof errObj.bindTo === 'string' ? errObj.bindTo : 'source';
+      const key = typeof errObj.key === 'string' ? errObj.key : 'projection';
+      const error = typeof errObj.error === 'string' ? errObj.error : 'projection failed';
+      issues.push(`${bindTo}.${key}: ${error}`);
+    }
+    for (const computeError of computeErrors) {
+      const errObj = ensureRecord(computeError);
+      const bindTo = typeof errObj.bindTo === 'string' ? errObj.bindTo : 'compute';
+      const error = typeof errObj.error === 'string' ? errObj.error : 'compute failed';
+      issues.push(`${bindTo}: ${error}`);
+    }
+
+    return {
+      status: 'success',
+      data: {
+        cardId: typeof result.cardId === 'string' ? result.cardId : '(unknown)',
+        ok: result.ok === true,
+        issues,
+        provides_outputs: materializeProvidesOutputs(card, runtimeNode),
+        rendered_view: materializeView(card, runtimeNode),
+      },
+    };
   }
 
   function manageReadCard(args: { cardId: string }): LiveCard[] {

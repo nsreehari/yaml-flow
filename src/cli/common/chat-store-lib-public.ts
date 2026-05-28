@@ -42,7 +42,12 @@ export type ChatStoreCommandEnvelope = {
   role?: unknown;
   text?: unknown;
   files?: unknown;
+  turn?: unknown;
   lastUserTurns?: unknown;
+  tailTurns?: unknown;
+  turnId?: unknown;
+  allTurns?: unknown;
+  tailTurnsBeforeId?: unknown;
   cursor?: unknown;
   active?: unknown;
   [key: string]: unknown;
@@ -151,6 +156,29 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
     return records;
   }
 
+  function hasAnyExplicitTurn(records: ChatRecord[]): boolean {
+    return records.some((record) => typeof record?.turn === 'string' && record.turn !== '');
+  }
+
+  function sliceLastTurns(records: ChatRecord[], tailTurns: number): ChatRecord[] {
+    if (tailTurns <= 0) return [];
+    if (!hasAnyExplicitTurn(records)) return sliceLastUserTurns(records, tailTurns);
+
+    const byTurn = new Map<string, ChatRecord[]>();
+    const orderedTurns: string[] = [];
+    for (const record of records) {
+      const turn = typeof record?.turn === 'string' ? record.turn : '';
+      if (!byTurn.has(turn)) {
+        byTurn.set(turn, []);
+        orderedTurns.push(turn);
+      }
+      byTurn.get(turn)!.push(record);
+    }
+
+    const selectedTurns = orderedTurns.slice(Math.max(0, orderedTurns.length - tailTurns));
+    return selectedTurns.flatMap((turn) => byTurn.get(turn) ?? []);
+  }
+
   function ok<T>(data: T): CommandResult<T> {
     return { status: 'success', data } as CommandResult<T>;
   }
@@ -173,7 +201,16 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
       });
     }
     if (envelope.command === 'read-all') {
-      return api.readAll({ params: { cardId }, body: { lastUserTurns: envelope.lastUserTurns } });
+      return api.readAll({
+        params: { cardId },
+        body: {
+          lastUserTurns: envelope.lastUserTurns,
+          tailTurns: envelope.tailTurns,
+          turnId: envelope.turnId,
+          allTurns: envelope.allTurns,
+          tailTurnsBeforeId: envelope.tailTurnsBeforeId,
+        },
+      });
     }
     if (envelope.command === 'read-after') {
       return api.readAfter({ params: { cardId }, body: { cursor: envelope.cursor ?? null } });
@@ -242,11 +279,49 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('readAll requires params.cardId');
         const body = (input.body ?? {}) as Record<string, unknown>;
+        const turnId = typeof body.turnId === 'string' ? body.turnId : '';
+        const allTurns = body.allTurns === true;
+        const tailTurnsBeforeId = typeof body.tailTurnsBeforeId === 'string' ? body.tailTurnsBeforeId : '';
+        const tailTurnsRaw = body.tailTurns === undefined ? body.lastUserTurns : body.tailTurns;
+        const tailTurns = tailTurnsRaw === undefined
+          ? (allTurns ? undefined : (turnId ? undefined : 1))
+          : parsePositiveInteger(tailTurnsRaw);
+
+        if (tailTurnsRaw !== undefined && tailTurns === null) {
+          return fail('readAll requires body.tailTurns (positive integer)');
+        }
+
         const records = store.readAll(cardId);
-        if (body.lastUserTurns === undefined) return ok({ records });
-        const lastUserTurns = parsePositiveInteger(body.lastUserTurns);
-        if (lastUserTurns === null) return fail('readAll requires body.lastUserTurns (positive integer)');
-        return ok({ records: sliceLastUserTurns(records, lastUserTurns) });
+        let visible = records.filter((record) => !turnId || String(record.turn || '') === turnId);
+
+        if (tailTurnsBeforeId) {
+          if (tailTurns === undefined || !Number.isInteger(tailTurns) || tailTurns <= 0) {
+            return fail('readAll requires body.tailTurns (positive integer) when body.tailTurnsBeforeId is provided');
+          }
+
+          const byTurn = new Map<string, ChatRecord[]>();
+          const orderedTurns: string[] = [];
+          for (const record of records) {
+            const turn = String(record.turn || '');
+            if (!byTurn.has(turn)) {
+              byTurn.set(turn, []);
+              orderedTurns.push(turn);
+            }
+            byTurn.get(turn)!.push(record);
+          }
+
+          const anchorIndex = orderedTurns.findIndex((value) => value === tailTurnsBeforeId);
+          const sliceStart = Math.max(0, anchorIndex - tailTurns);
+          const selectedTurns = anchorIndex === -1 ? [] : orderedTurns.slice(sliceStart, anchorIndex);
+          visible = selectedTurns.flatMap((turn) => byTurn.get(turn) ?? []);
+          return ok({ records: visible });
+        }
+
+        if (tailTurns !== undefined) {
+          return ok({ records: sliceLastTurns(visible, tailTurns) });
+        }
+
+        return ok({ records: visible });
       } catch (e) { return oops(e); }
     },
 

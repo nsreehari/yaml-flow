@@ -590,6 +590,25 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return {};
   }
 
+  function getRequiredMcpArgRecord(args: Record<string, unknown>, errorKey: string, ...keys: string[]): Record<string, unknown> {
+    for (const key of keys) {
+      const value = args[key];
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    }
+    throw Object.assign(new Error(`MCP tool requires ${errorKey}`), { statusCode: 400 });
+  }
+
+  function getRequiredMcpArgNumber(args: Record<string, unknown>, errorKey: string, ...keys: string[]): number {
+    for (const key of keys) {
+      const value = args[key];
+      if (value !== undefined) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    throw Object.assign(new Error(`MCP tool requires ${errorKey}`), { statusCode: 400 });
+  }
+
   function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown> {
     return {
       'discover.source-kinds': () => mcp.discoverSourceKinds(),
@@ -615,25 +634,25 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         fileIdx: Number(getMcpArgNumber(args, 'file_idx', 'fileIdx')),
       }),
       'preflight.validate-candidate-card-definition': (args) => mcp.preflightValidateCandidateCardDefinition({
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
       }),
       'preflight.materialize-candidate-card': (args) => mcp.preflightMaterializeCandidateCard({
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
-        mockRequires: getMcpArgRecord(args, 'mock_requires', 'mockRequires'),
-        mockFetchedSources: getMcpArgRecord(args, 'mock_fetched_sources', 'mockFetchedSources'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
+        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires', 'mockRequires'),
+        mockFetchedSources: getRequiredMcpArgRecord(args, 'mock_fetched_sources', 'mock_fetched_sources', 'mockFetchedSources'),
       }),
       'preflight.probe-single-source-in-candidate-card': (args) => mcp.preflightProbeSingleSourceInCandidateCard({
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
         mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
-        sourceIdx: Number(getMcpArgNumber(args, 'source_idx', 'sourceIdx')),
+        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
       }),
       'preflight.run-single-source-in-candidate-card': (args) => mcp.preflightRunSingleSourceInCandidateCard({
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
         mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
-        sourceIdx: Number(getMcpArgNumber(args, 'source_idx', 'sourceIdx')),
+        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
       }),
       'preflight.run-one-cycle-with-candidate-card': (args) => mcp.preflightRunOneCycleWithCandidateCard({
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
         mockRequires: getMcpArgRecord(args, 'mock_requires', 'mockRequires'),
       }),
       'manage.read-card': (args) => mcp.manageReadCard({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
@@ -1726,39 +1745,20 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const lastUserTurns = lastUserTurnsRaw == null || lastUserTurnsRaw === ''
           ? (allTurns ? undefined : (turnId ? undefined : 1))
           : Number.parseInt(lastUserTurnsRaw, 10);
-        const readResult = lastUserTurns === undefined
-          ? chatStorePublic.readAll({ params: { cardId } })
-          : chatStorePublic.readAll({ params: { cardId }, body: { lastUserTurns } });
+        const readResult = chatStorePublic.readAll({
+          params: { cardId },
+          body: {
+            ...(lastUserTurns === undefined ? {} : { tailTurns: lastUserTurns }),
+            ...(turnId ? { turnId } : {}),
+            ...(allTurns ? { allTurns: true } : {}),
+            ...(tailTurnsBeforeId ? { tailTurnsBeforeId } : {}),
+          },
+        });
         if (readResult.status !== 'success') {
           json(res, 400, { error: readResult.error || 'Failed to read chats' });
           return true;
         }
-        let messages = (readResult.data.records as unknown as Array<Record<string, unknown>>).filter((message) => !turnId || String(message.turn || '') === turnId);
-        if (tailTurnsBeforeId) {
-          if (lastUserTurns === undefined || !Number.isInteger(lastUserTurns) || lastUserTurns <= 0) {
-            json(res, 400, { error: 'tail-turns is required when tail-turns-before-id is provided' });
-            return true;
-          }
-          const allRecords = chatStorePublic.readAll({ params: { cardId } });
-          if (allRecords.status !== 'success') {
-            json(res, 400, { error: allRecords.error || 'Failed to read chats' });
-            return true;
-          }
-          const byTurn = new Map<string, Array<Record<string, unknown>>>();
-          const orderedTurns: string[] = [];
-          for (const message of allRecords.data.records as unknown as Array<Record<string, unknown>>) {
-            const turn = String(message.turn || '');
-            if (!byTurn.has(turn)) {
-              byTurn.set(turn, []);
-              orderedTurns.push(turn);
-            }
-            byTurn.get(turn)!.push(message);
-          }
-          const anchorIndex = orderedTurns.findIndex((value) => value === tailTurnsBeforeId);
-          const sliceStart = Math.max(0, anchorIndex - lastUserTurns);
-          const selectedTurns = anchorIndex === -1 ? [] : orderedTurns.slice(sliceStart, anchorIndex);
-          messages = selectedTurns.flatMap((key) => byTurn.get(key) ?? []);
-        }
+        const messages = readResult.data.records as unknown as Array<Record<string, unknown>>;
         json(res, 200, { ok: true, messages });
         return true;
       }
@@ -1770,8 +1770,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const role = typeof body?.role === 'string' ? body.role : 'assistant';
         const text = typeof body?.text === 'string' ? body.text : '';
         const files = Array.isArray(body?.files) ? body.files : [];
+        const turn = typeof body?.turn === 'string'
+          ? body.turn
+          : typeof body?.['turn-id'] === 'string'
+            ? body['turn-id']
+            : typeof body?.turnId === 'string'
+              ? body.turnId
+              : '';
         const done = body?.done === true;
-        const entryId = chatStorage.append(cardId, role, text, files);
+        const entryId = chatStorage.append(cardId, role, text, files, turn);
         if (done) chatStorage.setProcessing(cardId, false);
         broadcastCardChatsToSubscribedSseClients(cardId, !done);
         json(res, 200, { ok: true, id: entryId });
