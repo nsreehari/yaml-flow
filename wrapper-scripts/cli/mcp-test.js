@@ -467,9 +467,28 @@ const upsertedInStatus = postUpsertStatusData.cards.find((card) => card['card-id
 assert(upsertedInStatus, `upserted card ${UPSERT_CARD_ID} not found in board status`);
 ok('upserted card visible in board status');
 
-const deprecateRes = await httpMcp(BASE, 'manage.deprecate', { card_id: UPSERT_CARD_ID });
-expectMcpSuccess(deprecateRes, 'manage.deprecate');
-ok('deprecate removes card from board');
+const deprecateRes = await httpMcp(BASE, 'manage.remove-card', { card_id: UPSERT_CARD_ID });
+const deprecateData = expectMcpSuccess(deprecateRes, 'manage.remove-card');
+assert(deprecateData?.board_result?.status === 'success', 'deprecate: board_result should be success');
+assert(deprecateData?.store_result?.status === 'success', 'deprecate: store_result should be success');
+ok('deprecate removes card from board and card store');
+
+// card must be gone from persistent store after deprecation
+const readAfterDeprecate = expectMcpSuccess(
+  await httpMcp(BASE, 'manage.read-card', { card_id: UPSERT_CARD_ID }),
+  'manage.read-card after remove-card',
+);
+assert(Array.isArray(readAfterDeprecate) && readAfterDeprecate.length === 0, 'read-card after deprecate should return an empty array');
+ok('deprecated card is gone from card store');
+
+// re-upserting the same card id after deprecation creates a fresh card
+const reUpsertRes = await httpMcp(BASE, 'manage.upsert-card', { card_id: UPSERT_CARD_ID, candidate_card_content: { id: UPSERT_CARD_ID, card_data: { v: 2 } } });
+const reUpsertData = expectMcpSuccess(reUpsertRes, 'manage.upsert-card re-upsert after deprecate');
+assert(reUpsertData?.board_result?.status === 'success', 're-upsert after deprecate: board_result should be success');
+ok('re-upsert after deprecation creates a fresh card');
+
+// clean up the re-upserted card
+await httpMcp(BASE, 'manage.remove-card', { card_id: UPSERT_CARD_ID });
 
 console.log('\n--- preflight-validate-candidate-card-definition.js ---');
 const validCard = { id: 'candidate-1', card_data: { v: 1 } };

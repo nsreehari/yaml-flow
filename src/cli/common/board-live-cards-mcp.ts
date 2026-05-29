@@ -224,7 +224,7 @@ export interface BoardLiveCardsMcp {
     files?: unknown[];
   }): BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult;
   manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): BoardLiveCardsMcpManageUpsertCardResult;
-  manageDeprecate(args: { cardId: string }): unknown;
+  manageRemoveCard(args: { cardId: string }): unknown;
 }
 
 function expectSuccess<T>(result: CommandResult<T>, commandName: string): T {
@@ -903,12 +903,20 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function manageDeprecate(args: { cardId: string }): unknown {
+  function manageRemoveCard(args: { cardId: string }): unknown {
     const cardId = String(args.cardId || '').trim();
-    if (!cardId) throw new Error('manageDeprecate requires cardId');
-    const result = board.removeCard({ params: { id: cardId } });
-    expectSuccess(result, 'removeCard');
-    return result;
+    if (!cardId) throw new Error('manageRemoveCard requires cardId');
+    const boardResult = board.removeCard({ params: { id: cardId } });
+    expectSuccess(boardResult, 'removeCard');
+    const storeResult = cardStore.del({ params: { id: cardId } });
+    expectSuccess(storeResult, 'cardStore.del');
+    return {
+      status: 'success',
+      data: {
+        board_result: boardResult,
+        store_result: storeResult,
+      },
+    };
   }
 
   return {
@@ -926,6 +934,6 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     manageReadCard,
     manageAddChatEntryAndAnyAttachments,
     manageUpsertCard,
-    manageDeprecate,
+    manageRemoveCard,
   };
 }

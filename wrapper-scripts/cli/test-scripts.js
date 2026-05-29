@@ -375,12 +375,14 @@ const upsertedInStatus = postUpsertStatus.cards.find(c => c['card-id'] === UPSER
 assert(upsertedInStatus, `upserted card ${UPSERT_CARD_ID} not found in board status`);
 ok('upserted card visible in board status');
 
-// deprecate
+// remove-card
 const deprecateRes = parseOk(path.join(CLI_DIR, 'manage-live-board-card.js'), [
-  'deprecate', '--card-id', UPSERT_CARD_ID,
+  'remove-card', '--card-id', UPSERT_CARD_ID,
 ]);
-assert(deprecateRes.status === 'success', `deprecate failed: ${JSON.stringify(deprecateRes)}`);
-ok('deprecate removes card from board');
+assert(deprecateRes.status === 'success', `remove-card failed: ${JSON.stringify(deprecateRes)}`);
+assert(deprecateRes.data?.board_result?.status === 'success', 'remove-card board_result should be success');
+assert(deprecateRes.data?.store_result?.status === 'success', 'remove-card store_result should be success');
+ok('remove-card removes card from board and card store');
 
 // ── Step 8: preflight-validate-candidate-card-definition.js ──────────────────
 

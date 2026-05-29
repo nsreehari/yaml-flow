@@ -15,7 +15,7 @@ const usageLines = [
   'Usage:',
   '  node manage-live-board-card.js read-card [--base-ref <board-ref>] --card-id <card-id>',
   '  cat payload.json | node manage-live-board-card.js upsert-card [--base-ref <board-ref>] --card-id <card-id>',
-  '  node manage-live-board-card.js deprecate [--base-ref <board-ref>] --card-id <card-id>',
+  '  node manage-live-board-card.js remove-card [--base-ref <board-ref>] --card-id <card-id>',
   '',
   'Create/update payload shape:',
   '  { "candidate_card_content": <card> }',
@@ -112,6 +112,28 @@ function runJsonScript(scriptPath, scriptArgs, payload) {
 
   const out = result.stdout.trim();
   return out ? JSON.parse(out) : null;
+}
+
+function runCliScript(scriptPath, scriptArgs, payload) {
+  const result = spawnSync(process.execPath, [scriptPath, ...scriptArgs], {
+    encoding: 'utf8',
+    input: payload === undefined ? undefined : JSON.stringify(payload),
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    const stderr = result.stderr ? result.stderr.trim() : '';
+    throw new Error(stderr || `Request failed (exit code ${result.status})`);
+  }
+
+  return {
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+  };
 }
 
 function unwrapSuccessfulEnvelope(result, commandName) {
@@ -235,12 +257,28 @@ function handleUpsertCard(flags) {
   });
 }
 
-function handleDeprecate(flags) {
+function handleRemoveCard(flags) {
   const baseRef = resolveBaseRef(flags);
+  const storeRef = readCardStoreRef(baseRef);
   const cardId = requireArgText(flags, 'card-id');
-  const result = runJsonScript(boardLiveCardsCliPath, ['remove-card', '--base-ref', baseRef, '--id', cardId]);
-  unwrapSuccessfulEnvelope(result, 'Card removal');
-  printJson(result);
+  const boardResult = runJsonScript(boardLiveCardsCliPath, ['remove-card', '--base-ref', baseRef, '--id', cardId]);
+  unwrapSuccessfulEnvelope(boardResult, 'Card removal');
+  const storeDelete = runCliScript(cardStoreCliPath, ['del', '--store-ref', storeRef, '--id', cardId]);
+  const removedCountMatch = /removed\s+(\d+)\s+card\(s\)/i.exec(storeDelete.stderr);
+  const storeResult = {
+    status: 'success',
+    data: {
+      count: removedCountMatch ? Number.parseInt(removedCountMatch[1], 10) : undefined,
+      message: storeDelete.stderr || undefined,
+    },
+  };
+  printJson({
+    status: 'success',
+    data: {
+      board_result: boardResult,
+      store_result: storeResult,
+    },
+  });
 }
 
 function main() {
@@ -258,8 +296,8 @@ function main() {
     case 'upsert-card':
       handleUpsertCard(flags);
       return;
-    case 'deprecate':
-      handleDeprecate(flags);
+    case 'remove-card':
+      handleRemoveCard(flags);
       return;
     default:
       printUsage(1);

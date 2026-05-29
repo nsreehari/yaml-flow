@@ -90,6 +90,7 @@ const NS = {
   statusGeneration: 0,
   computedValues: {},
   chatEvents: [],
+  boardEvents: [], // { kind, cardId, at }
 };
 
 function applyFrame(payload) {
@@ -121,6 +122,9 @@ function applyFrame(payload) {
       }
       if (n && n.kind === 'computed_values' && n.cardId) {
         NS.computedValues[n.cardId] = n.values;
+      }
+      if (n && (n.kind === 'card_removed' || n.kind === 'card_refreshed') && n.cardId) {
+        NS.boardEvents.push({ kind: n.kind, cardId: n.cardId, at: Date.now() });
       }
     }
   }
@@ -1141,6 +1145,119 @@ try {
       tc.verify(body);
       console.log(`[T4.run-cycle] ok: ${tc.name}`);
     }
+
+    // ── T4.remove-card ────────────────────────────────────────────────────────
+    console.log('\n[T4.remove-card] testing manage.remove-card lifecycle');
+
+    const T4_REMOVE_CARD_ID = 'card-t4-remove-test';
+    const T4_REMOVE_CARD_V1 = {
+      id: T4_REMOVE_CARD_ID,
+      card_data: { label: 'v1', color: 'blue' },
+    };
+    const T4_REMOVE_CARD_V2 = {
+      id: T4_REMOVE_CARD_ID,
+      card_data: { label: 'v2', color: 'red' },
+    };
+
+    // (a) upsert the card and wait for it to appear in board-runtime-status
+    const t4UpsertV1Res = await httpMcp('manage.upsert-card', {
+      card_id: T4_REMOVE_CARD_ID,
+      candidate_card_content: T4_REMOVE_CARD_V1,
+    });
+    assert(t4UpsertV1Res.status === 200, `T4.remove-card v1 upsert returned ${t4UpsertV1Res.status}`);
+    const t4UpsertV1Data = expectMcpSuccess(t4UpsertV1Res, 'T4.remove-card v1 upsert');
+    assert(t4UpsertV1Data?.board_result?.status === 'success', 'T4.remove-card v1 upsert board_result expected success');
+    console.log('[T4.remove-card] ok: v1 card upserted');
+
+    // (a) check board-runtime-status includes the new card
+    const t4StatusBeforeRemove = expectMcpSuccess(
+      await httpMcp('inspect.board-runtime-status', {}),
+      'T4.remove-card board-runtime-status before remove',
+    );
+    const t4CardsBefore = Array.isArray(t4StatusBeforeRemove?.cards) ? t4StatusBeforeRemove.cards : [];
+    assert(t4CardsBefore.some(c => c['card-id'] === T4_REMOVE_CARD_ID), 'T4.remove-card: card not found in board-runtime-status before remove');
+    const t4CardCountBefore = t4StatusBeforeRemove?.summary?.card_count ?? 0;
+    console.log(`[T4.remove-card] ok: board-runtime-status has ${t4CardCountBefore} cards before remove (includes ${T4_REMOVE_CARD_ID})`);
+
+    // (b) remove the card — should remove from board and store
+    const t4BoardEventsBefore = NS.boardEvents.length;
+    const t4RemoveRes = await httpMcp('manage.remove-card', { card_id: T4_REMOVE_CARD_ID });
+    assert(t4RemoveRes.status === 200, `T4.remove-card remove returned ${t4RemoveRes.status}`);
+    const t4RemoveData = expectMcpSuccess(t4RemoveRes, 'T4.remove-card remove');
+    assert(t4RemoveData?.board_result?.status === 'success', 'T4.remove-card board_result expected success');
+    assert(t4RemoveData?.store_result?.status === 'success', 'T4.remove-card store_result expected success');
+    console.log('[T4.remove-card] ok: manage.remove-card returned success for both board and store');
+
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    // (c) wait for card_removed SSE notification
+    const t4CardRemovedEvent = await waitUntil(
+      () => NS.boardEvents.slice(t4BoardEventsBefore).find(e => e.kind === 'card_removed' && e.cardId === T4_REMOVE_CARD_ID) || false,
+      10_000,
+      `card_removed SSE notification for ${T4_REMOVE_CARD_ID}`,
+    );
+    assert(t4CardRemovedEvent && t4CardRemovedEvent.kind === 'card_removed', 'T4.remove-card: card_removed SSE event not received');
+    assert(t4CardRemovedEvent.cardId === T4_REMOVE_CARD_ID, 'T4.remove-card: card_removed SSE cardId mismatch');
+    console.log(`[T4.remove-card] ok: card_removed SSE notification received for ${T4_REMOVE_CARD_ID}`);
+
+    // (a) verify card is gone from board-runtime-status
+    const t4StatusAfterRemove = expectMcpSuccess(
+      await httpMcp('inspect.board-runtime-status', {}),
+      'T4.remove-card board-runtime-status after remove',
+    );
+    const t4CardsAfter = Array.isArray(t4StatusAfterRemove?.cards) ? t4StatusAfterRemove.cards : [];
+    assert(!t4CardsAfter.some(c => c['card-id'] === T4_REMOVE_CARD_ID), 'T4.remove-card: card still present in board-runtime-status after remove');
+    const t4CardCountAfter = t4StatusAfterRemove?.summary?.card_count ?? 0;
+    assert(t4CardCountAfter === t4CardCountBefore - 1, `T4.remove-card: card_count expected ${t4CardCountBefore - 1}, got ${t4CardCountAfter}`);
+    console.log(`[T4.remove-card] ok: card absent from board-runtime-status after remove (count: ${t4CardCountBefore} → ${t4CardCountAfter})`);
+
+    // (d) upsert a different card content under the same id
+    const t4BoardEventsBeforeV2 = NS.boardEvents.length;
+    const t4UpsertV2Res = await httpMcp('manage.upsert-card', {
+      card_id: T4_REMOVE_CARD_ID,
+      candidate_card_content: T4_REMOVE_CARD_V2,
+    });
+    assert(t4UpsertV2Res.status === 200, `T4.remove-card v2 upsert returned ${t4UpsertV2Res.status}`);
+    const t4UpsertV2Data = expectMcpSuccess(t4UpsertV2Res, 'T4.remove-card v2 upsert');
+    assert(t4UpsertV2Data?.board_result?.status === 'success', 'T4.remove-card v2 upsert board_result expected success');
+    console.log('[T4.remove-card] ok: v2 card upserted under same id');
+
+    // (c) wait for card_refreshed SSE notification confirming v2 is live
+    const t4CardRefreshedEvent = await waitUntil(
+      () => NS.boardEvents.slice(t4BoardEventsBeforeV2).find(e => e.kind === 'card_refreshed' && e.cardId === T4_REMOVE_CARD_ID) || false,
+      10_000,
+      `card_refreshed SSE notification for ${T4_REMOVE_CARD_ID} after v2 upsert`,
+    );
+    assert(t4CardRefreshedEvent && t4CardRefreshedEvent.kind === 'card_refreshed', 'T4.remove-card: card_refreshed SSE event not received after v2 upsert');
+    console.log(`[T4.remove-card] ok: card_refreshed SSE notification received for v2 of ${T4_REMOVE_CARD_ID}`);
+
+    await waitForAllCompleted(30_000, 'T4 remove-card re-upsert completion');
+
+    // (e) verify board-runtime-status shows the card again, and inspect returns v2 card_data
+    const t4StatusAfterV2 = expectMcpSuccess(
+      await httpMcp('inspect.board-runtime-status', {}),
+      'T4.remove-card board-runtime-status after v2 upsert',
+    );
+
+    const t4CardsAfterV2 = Array.isArray(t4StatusAfterV2?.cards) ? t4StatusAfterV2.cards : [];
+    assert(t4CardsAfterV2.some(c => c['card-id'] === T4_REMOVE_CARD_ID), 'T4.remove-card: v2 card missing from board-runtime-status');
+    const t4CardCountAfterV2 = t4StatusAfterV2?.summary?.card_count ?? 0;
+    assert(t4CardCountAfterV2 === t4CardCountBefore, `T4.remove-card: card_count after v2 upsert expected ${t4CardCountBefore}, got ${t4CardCountAfterV2}`);
+    console.log('[T4.remove-card] ok: v2 card present in board-runtime-status');
+
+    const t4InspectV2Data = expectMcpSuccess(
+      await httpMcp('inspect.card-definition-and-runtime', { card_id: T4_REMOVE_CARD_ID }),
+      'T4.remove-card inspect v2',
+    );
+    assert(t4InspectV2Data?.cardId === T4_REMOVE_CARD_ID, 'T4.remove-card inspect v2 cardId mismatch');
+    const t4V2CardData = t4InspectV2Data?.card_definition_and_static_data?.card_data ?? null;
+    assert(t4V2CardData?.label === 'v2', `T4.remove-card inspect v2 label expected "v2", got "${t4V2CardData?.label}"`);
+    assert(t4V2CardData?.color === 'red', `T4.remove-card inspect v2 color expected "red", got "${t4V2CardData?.color}"`);
+    console.log('[T4.remove-card] ok: inspect.card-definition-and-runtime reflects v2 card_data after re-upsert');
+
+    // clean up
+    await httpMcp('manage.remove-card', { card_id: T4_REMOVE_CARD_ID });
+    console.log('[T4.remove-card] cleanup done');
 
   }
 

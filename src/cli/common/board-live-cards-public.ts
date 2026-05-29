@@ -732,6 +732,7 @@ export function createBoardLiveCardsPublic(
     try {
       const id = input.params?.['id'] as string | undefined;
       if (!id) return fail('removeCard requires params.id');
+      try { adapter.kvStorage('card-upsert').delete(id); } catch { /* best-effort */ }
       appendJournalEvent({ type: 'task-removal', taskName: id, timestamp: nowIso() });
       drainFireAndForget();
       return ok();

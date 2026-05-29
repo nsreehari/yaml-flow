@@ -262,9 +262,9 @@ Validates, stores, and registers a card definition. Triggers a board restart for
 
 ---
 
-### `manage.deprecate`
+### `manage.remove-card`
 
-Removes a card from the board.
+Removes a card from both the live board runtime and persistent card storage.
 
 **Args:**
 
@@ -272,10 +272,20 @@ Removes a card from the board.
 |---|---|---|
 | `card_id` | string | yes |
 
-**Returns:** the `board.removeCard` result normalized into the MCP success envelope. On success:
+**Returns:** the card removal result. On success:
 ```json
-{ "status": "success", "data": {} }
+{
+  "status": "success",
+  "data": {
+    "board_result": { "status": "success" },
+    "store_result": { "status": "success", "data": { "count": 1 } }
+  }
+}
 ```
+
+> **Behavior notes:**
+> - The card is fully removed from persistent storage. `readAll` will not return it after removal.
+> - Re-upserting a card with the same `card_id` after removal creates a fresh card with no prior state.
 
 ---
 

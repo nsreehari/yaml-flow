@@ -192,6 +192,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       writeIndex: (idx: unknown) => kv.write('_index', idx),
       readCard: (id: string) => kv.read(id),
       writeCard: (id: string, card: unknown) => { kv.write(id, card); return id; },
+      removeCard: (id: string) => { kv.delete(id); },
       cardExists: (id: string) => kv.read(id) !== null,
       defaultCardKey: (id: string) => id,
     };
@@ -493,7 +494,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
         if (id) {
           const card = readCardFromStore(id);
-          if (!card) return { status: 'fail', error: `card "${id}" not found` };
+          if (!card) return { status: 'success', data: { cards: [] } };
           return { status: 'success', data: { cards: [card as import('../cli/common/board-live-cards-lib.js').LiveCard] } };
         }
         return { status: 'success', data: { cards: readCardDefinitions() as import('../cli/common/board-live-cards-lib.js').LiveCard[] } };
@@ -697,7 +698,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         cardId: getMcpArgString(args, 'card_id', 'cardId'),
         candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
       }),
-      'manage.deprecate': (args) => mcp.manageDeprecate({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
+      'manage.remove-card': (args) => mcp.manageRemoveCard({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
     };
   }
 
