@@ -325,6 +325,28 @@ export type TransportInvoker = (
   options?: InvokeExecutionRefOptions,
 ) => Promise<InvokeRefResult>;
 
+export type InProcessExecutionHandler = (
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+) => Promise<InvokeRefResult> | InvokeRefResult;
+
+const inProcessExecutionHandlerRegistry = new Map<string, InProcessExecutionHandler>();
+
+export function registerInProcessExecutionHandler(key: string, handler: InProcessExecutionHandler): void {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) {
+    throw new Error('registerInProcessExecutionHandler: key is required');
+  }
+  inProcessExecutionHandlerRegistry.set(normalizedKey, handler);
+}
+
+export function unregisterInProcessExecutionHandler(key: string): void {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) return;
+  inProcessExecutionHandlerRegistry.delete(normalizedKey);
+}
+
 export type SyncTransportInvoker = (
   ref: ExecutionRef,
   args: Record<string, unknown>,
@@ -507,6 +529,28 @@ async function invokeHttpExecutionRef(
   }
 }
 
+async function invokeInProcessExecutionRef(
+  ref: ExecutionRef,
+  args: Record<string, unknown>,
+  options?: InvokeExecutionRefOptions,
+): Promise<InvokeRefResult> {
+  const label = options?.label ?? 'invokeExecutionRef';
+  const handlerKey = resolveWhatToRunValue(ref.whatToRun).trim();
+  if (!handlerKey) {
+    return normalizeFailure(`[${label}] in-process-loop requires a non-empty handler key`);
+  }
+  const handler = inProcessExecutionHandlerRegistry.get(handlerKey);
+  if (!handler) {
+    return normalizeFailure(`[${label}] no in-process handler registered for: ${handlerKey}`);
+  }
+  try {
+    return await handler(ref, args, options);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return normalizeFailure(`[${label}] ${msg}`);
+  }
+}
+
 const defaultAsyncTransportInvokers: Record<string, TransportInvoker> = {
   'local-node': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
   'local-python': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
@@ -514,6 +558,7 @@ const defaultAsyncTransportInvokers: Record<string, TransportInvoker> = {
   'built-in': async (ref, args, options) => invokeLocalExecutionRefSync(ref, args, options),
   'http:post': invokeHttpExecutionRef,
   'http:get': invokeHttpExecutionRef,
+  'in-process-loop': invokeInProcessExecutionRef,
 };
 
 const defaultSyncTransportInvokers: Record<string, SyncTransportInvoker> = {
@@ -770,11 +815,19 @@ export function dispatchTaskExecutorDetached(
   args: TaskExecutorArgs,
   cliDir: string,
 ): void {
-  const isHttp = ref.howToRun === 'http:post' || ref.howToRun === 'http:get';
-  if (isHttp) {
-    // For HTTP, we can't easily detach — fire async and ignore result
-    void _invokeTaskExecutorHttp(ref, args).catch(err => {
-      console.error(`[dispatchTaskExecutorDetached] HTTP dispatch failed: ${(err as Error).message}`);
+  const isAsyncTransport = ref.howToRun === 'http:post' || ref.howToRun === 'http:get' || ref.howToRun === 'in-process-loop';
+  if (isAsyncTransport) {
+    void invokeExecutionRef(ref, args as unknown as Record<string, unknown>, {
+      cliDir,
+      cwd: process.cwd(),
+      label: 'dispatchTaskExecutorDetached',
+    }).then((result) => {
+      if (result.result !== 'success') {
+        const detail = typeof result.data?.error === 'string' ? result.data.error : result.error;
+        console.error(`[dispatchTaskExecutorDetached] dispatch failed: ${detail || result.result}`);
+      }
+    }).catch(err => {
+      console.error(`[dispatchTaskExecutorDetached] async dispatch failed: ${(err as Error).message}`);
     });
     return;
   }

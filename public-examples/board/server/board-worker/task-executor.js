@@ -528,6 +528,53 @@ function describeCapabilities() {
   console.log(JSON.stringify(payload, null, 2));
 }
 
+function buildTaskExecutorArgvFromRequest(request) {
+  const subcommand = typeof request?.subcommand === 'string' ? request.subcommand.trim() : '';
+  if (!subcommand) {
+    throw new Error('executeTaskExecutorRequest requires subcommand');
+  }
+
+  const argv = [];
+  if (typeof request?.inRef === 'string' && request.inRef.trim()) argv.push('--in-ref', request.inRef.trim());
+  if (typeof request?.outRef === 'string' && request.outRef.trim()) argv.push('--out-ref', request.outRef.trim());
+  if (typeof request?.errRef === 'string' && request.errRef.trim()) argv.push('--err-ref', request.errRef.trim());
+  if (request?.extra && typeof request.extra === 'object' && !Array.isArray(request.extra)) {
+    argv.push('--extra', Buffer.from(JSON.stringify(request.extra)).toString('base64'));
+  }
+  return { subcommand, argv };
+}
+
+export async function executeBoardWorkerRequest(request) {
+  const { subcommand, argv } = buildTaskExecutorArgvFromRequest(request);
+
+  if (subcommand === 'run-source-fetch') {
+    await runSourceFetchSubcommand(argv);
+    return { ok: true };
+  }
+  if (subcommand === 'probe-source-preflight') {
+    await probeSourcePreflightSubcommand(argv);
+    return { ok: true };
+  }
+  if (subcommand === 'run-source-preflight') {
+    await runSourcePreflightSubcommand(argv);
+    return { ok: true };
+  }
+  if (subcommand === 'describe' || subcommand === 'describe-capabilities') {
+    describeCapabilities();
+    return { ok: true };
+  }
+  if (subcommand === 'validate-source-def') {
+    validateSourceDefSubcommand();
+    return { ok: true };
+  }
+
+  throw new Error(`Unknown subcommand: ${subcommand}`);
+}
+
+export async function executeTaskExecutorRequest(request) {
+  return executeBoardWorkerRequest(request);
+}
+
 async function main() {
   const sub = process.argv[2];
   if (sub === 'run-source-fetch') {

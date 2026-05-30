@@ -216,6 +216,7 @@ export type KnownExecutionTransport =
   | 'http:post'
   | 'http:get'
   | 'built-in'
+  | 'in-process-loop'
   | 'in-browser';
 
 export type ExecutionTransportKind = KnownExecutionTransport | (string & {});

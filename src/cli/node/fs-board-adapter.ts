@@ -45,6 +45,7 @@ import { validateLiveCardDefinition } from '../../card-compute/schema-validator.
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from '../common/board-live-cards-public.js';
 import { createChatStorage } from '../common/chat-storage-lib.js';
 import type { ChatStorage } from '../common/chat-storage-lib.js';
+import type { ExecutionRef } from '../common/execution-interface.js';
 
 // ============================================================================
 // Re-export public API — consumers only need to import from this file
@@ -98,12 +99,15 @@ export {
   invokeExecutionRef,
   invokeExecutionRefSync,
   invokeRefSync,
+  registerInProcessExecutionHandler,
   resolveWhatToRunValue,
   resolveYamlFlowCliPath,
+  unregisterInProcessExecutionHandler,
 } from './execution-adapter.js';
 export type {
   CreateExecutionRefInvokerOptions,
   ExecutionRefInvoker,
+  InProcessExecutionHandler,
   InvokeExecutionRefOptions,
   InvokeRefResult,
   SyncTransportInvoker,
@@ -183,8 +187,13 @@ export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
 
 const BOARD_LOCK_FILE = '.board.lock';
 
-type FsBoardAdapterOpts = { onWarn?: (msg: string) => void; suppressSpawn?: boolean; notifyChannel?: string };
-type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void };
+type FsBoardAdapterOpts = {
+  onWarn?: (msg: string) => void;
+  suppressSpawn?: boolean;
+  notifyChannel?: string;
+  selfRef?: ExecutionRef;
+};
+type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void; selfRef?: ExecutionRef };
 
 function _pathAlreadyEndsWith(dir: string, segment: string): boolean {
   if (!dir || !segment) return false;
@@ -258,7 +267,7 @@ export function createFsBoardPlatformAdapter(
   // Resolve selfRef once for callback-style invocations (node <script> ...).
   // When suppressSpawn is set, skip path resolution because spawning is disabled.
   const callbackTarget = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(resolvedCliDir);
-  const selfRef = {
+  const selfRef = opts?.selfRef ?? {
     meta: 'board-live-cards',
     howToRun: 'local-node' as const,
     whatToRun: callbackTarget ? serializeRef({ kind: 'yaml-flow-cli', value: 'board-live-cards-cli.js' }) : '',
@@ -285,7 +294,11 @@ export function createFsBoardPlatformAdapter(
     selfRef,
 
     async dispatchExecution(ref, args) {
-      if (opts?.suppressSpawn) return { dispatched: false };
+      const needsLocalSpawn = ref.howToRun === 'local-node'
+        || ref.howToRun === 'local-process'
+        || ref.howToRun === 'local-python'
+        || ref.howToRun === 'built-in';
+      if (opts?.suppressSpawn && needsLocalSpawn) return { dispatched: false };
       try {
         const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined
           ?? genUUID().slice(0, 8);

@@ -219,6 +219,18 @@ describe('platform-free server runtime (Node host)', () => {
     expect(data).toHaveProperty('cardRuntimeById');
   });
 
+  it('POST /api/board/callback/board-worker/:token/success returns a client error for an invalid source token', async () => {
+    const ref = serializeRef({ kind: 'fs-path', value: path.join(TEST_ROOT, 'missing-source.json') });
+    const res = await fetch(`${API_BASE}/callback/board-worker/${encodeURIComponent('not-a-valid-token')}/success`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as Record<string, unknown>;
+    expect(String(data.error || '')).toContain('Invalid source token');
+  });
+
   it('PATCH /api/board/cards/:id updates card data', async () => {
     // Get a card that exists
     const statusRes = await fetch(`${API_BASE}/board-status`);

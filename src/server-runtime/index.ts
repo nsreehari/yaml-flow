@@ -22,6 +22,7 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../cli/common/board-live-cards-public.js';
+import type { CommandResult } from '../cli/common/board-live-cards-public.js';
 import { createBoardLiveCardsMcp } from '../cli/common/board-live-cards-mcp.js';
 import { parseRef } from '../cli/common/storage-interface.js';
 
@@ -1348,6 +1349,40 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return result;
   }
 
+  function reportSourceFetchedInternal(token: string, payload: Record<string, unknown>): CommandResult {
+    const ref = typeof payload.ref === 'string' ? payload.ref.trim() : '';
+    if (!ref) return { status: 'fail', error: 'board-worker success callback requires body.ref' };
+    const ctx = boardContexts[0];
+    if (!ctx) return { status: 'fail', error: 'no board context' };
+    return ctx.board.sourceDataFetched({ params: { token, ref } });
+  }
+
+  function reportSourceFetchFailureInternal(token: string, payload: Record<string, unknown>): CommandResult {
+    const reason = typeof payload.reason === 'string' && payload.reason.trim()
+      ? payload.reason
+      : 'unknown';
+    const ctx = boardContexts[0];
+    if (!ctx) return { status: 'fail', error: 'no board context' };
+    return ctx.board.sourceDataFetchFailure({ params: { token, reason } });
+  }
+
+  function applyBoardWorkerCallback(
+    token: string,
+    outcome: 'success' | 'failure',
+    payload: Record<string, unknown>,
+  ): { statusCode: number; body: unknown } {
+    const trimmedToken = String(token || '').trim();
+    if (!trimmedToken) {
+      return { statusCode: 400, body: { error: 'callback token is required' } };
+    }
+    const result = outcome === 'success'
+      ? reportSourceFetchedInternal(trimmedToken, payload)
+      : reportSourceFetchFailureInternal(trimmedToken, payload);
+    if (result.status === 'success') return { statusCode: 200, body: result };
+    if (result.status === 'fail') return { statusCode: 400, body: { error: result.error } };
+    return { statusCode: 500, body: { error: result.error } };
+  }
+
   // ── SSE ──────────────────────────────────────────────────────────────────
 
   let sseEventId = 0;
@@ -1615,6 +1650,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
       if (method === 'GET' && p === `${apiBasePath}/board-status`) {
         json(res, 200, buildPublishedRuntimePayload());
+        return true;
+      }
+
+      const boardWorkerCallbackMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/callback/board-worker/([^/]+)/(success|failure)$`));
+      if (method === 'POST' && boardWorkerCallbackMatch) {
+        await initBoardAndSetup();
+        const token = decodeURIComponent(boardWorkerCallbackMatch[1]);
+        const outcome = boardWorkerCallbackMatch[2] as 'success' | 'failure';
+        const body = await readJsonBody(req);
+        const callbackResult = applyBoardWorkerCallback(token, outcome, body);
+        json(res, callbackResult.statusCode, callbackResult.body);
         return true;
       }
 
@@ -1936,14 +1982,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     buildPublishedRuntimePayload,
     clearChatRecords,
     reportSourceFetched(token: string, ref: string) {
-      const ctx = boardContexts[0];
-      if (!ctx) return { status: 'fail', error: 'no board context' };
-      return ctx.board.sourceDataFetched({ params: { token, ref } });
+      return reportSourceFetchedInternal(token, { ref });
     },
     reportSourceFetchFailure(token: string, reason: string) {
-      const ctx = boardContexts[0];
-      if (!ctx) return { status: 'fail', error: 'no board context' };
-      return ctx.board.sourceDataFetchFailure({ params: { token, reason } });
+      return reportSourceFetchFailureInternal(token, { reason });
     },
     get cardStore() { return boardContexts[0]?.cardStore ?? { set() { return { status: 'fail', error: 'no board context' }; } }; },
   };

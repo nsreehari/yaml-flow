@@ -22,6 +22,7 @@
  * Supported callback transports (via ExecutionRef.howToRun):
  *   local-node     — invoke board CLI as a child Node process
  *   http:post      — HTTP POST to a board endpoint
+ *   in-process-loop — invoke a registered same-process callback handler
  *
  * Usage:
  *   import { parseRef, blobStorageForRef, reportComplete, reportFailed } from './board-worker-adapter.js';
@@ -133,11 +134,45 @@ export interface ExecutionRef {
   /** Optional human-readable label. Not used for dispatch. */
   meta?: string;
   /** Transport / runtime kind. */
-  howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in';
+  howToRun: 'local-node' | 'local-python' | 'local-process' | 'http:post' | 'http:get' | 'built-in' | 'in-process-loop';
   /** Address of the target in b64:<base64url(json)> wire form. */
   whatToRun: string;
   /** Opaque executor config stored with the ref. */
   extra?: Record<string, unknown>;
+}
+
+export type BoardWorkerCallbackOutcome = 'success' | 'failure';
+
+export interface InProcessBoardWorkerCallbackPayload {
+  token: string;
+  outcome: BoardWorkerCallbackOutcome;
+  ref?: string;
+  reason?: string;
+}
+
+export type InProcessBoardWorkerCallbackResult = void | { status?: 'success' | 'fail' | 'error'; error?: string };
+
+export type InProcessBoardWorkerCallbackHandler = (
+  payload: InProcessBoardWorkerCallbackPayload,
+) => InProcessBoardWorkerCallbackResult;
+
+const inProcessBoardWorkerCallbackRegistry = new Map<string, InProcessBoardWorkerCallbackHandler>();
+
+export function registerInProcessBoardWorkerCallback(
+  key: string,
+  handler: InProcessBoardWorkerCallbackHandler,
+): void {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) {
+    throw new Error('registerInProcessBoardWorkerCallback: key is required');
+  }
+  inProcessBoardWorkerCallbackRegistry.set(normalizedKey, handler);
+}
+
+export function unregisterInProcessBoardWorkerCallback(key: string): void {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) return;
+  inProcessBoardWorkerCallbackRegistry.delete(normalizedKey);
 }
 
 /**
@@ -177,6 +212,25 @@ function _parseWhatToRun(whatToRun: string): string {
 function _notifyChannelFromVia(via: ExecutionRef): string | undefined {
   const candidate = via.extra?.['notifyChannel'];
   return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+}
+
+function _boardWorkerCallbackUrl(baseUrl: string, token: string, outcome: BoardWorkerCallbackOutcome): string {
+  return `${String(baseUrl || '').replace(/\/+$/, '')}/${encodeURIComponent(token)}/${outcome}`;
+}
+
+function _runInProcessBoardWorkerCallback(payload: InProcessBoardWorkerCallbackPayload, via: ExecutionRef): void {
+  const handlerKey = _parseWhatToRun(via.whatToRun).trim();
+  if (!handlerKey) {
+    throw new Error('in-process-loop callback requires a non-empty handler key');
+  }
+  const handler = inProcessBoardWorkerCallbackRegistry.get(handlerKey);
+  if (!handler) {
+    throw new Error(`in-process-loop callback handler not registered: ${handlerKey}`);
+  }
+  const result = handler(payload);
+  if (result && result.status && result.status !== 'success') {
+    throw new Error(result.error || `in-process-loop callback failed with status: ${result.status}`);
+  }
 }
 
 /**
@@ -226,9 +280,13 @@ export function reportComplete(callback: TaskCallback, outRef: KindValueRef): vo
     return;
   }
   if (via.howToRun === 'http:post') {
-    const url = _parseWhatToRun(via.whatToRun);
-    const body = JSON.stringify({ status: 'complete', ref: serializeRef(outRef), token });
+    const url = _boardWorkerCallbackUrl(_parseWhatToRun(via.whatToRun), token, 'success');
+    const body = JSON.stringify({ ref: serializeRef(outRef) });
     _httpPostSync(url, body);
+    return;
+  }
+  if (via.howToRun === 'in-process-loop') {
+    _runInProcessBoardWorkerCallback({ token, outcome: 'success', ref: serializeRef(outRef) }, via);
     return;
   }
   throw new Error(`reportComplete: unsupported via.howToRun "${via.howToRun}"`);
@@ -258,9 +316,13 @@ export function reportFailed(callback: TaskCallback, reason: string): void {
     return;
   }
   if (via.howToRun === 'http:post') {
-    const url = _parseWhatToRun(via.whatToRun);
-    const body = JSON.stringify({ status: 'failed', reason, token });
+    const url = _boardWorkerCallbackUrl(_parseWhatToRun(via.whatToRun), token, 'failure');
+    const body = JSON.stringify({ reason });
     _httpPostSync(url, body);
+    return;
+  }
+  if (via.howToRun === 'in-process-loop') {
+    _runInProcessBoardWorkerCallback({ token, outcome: 'failure', reason }, via);
     return;
   }
   throw new Error(`reportFailed: unsupported via.howToRun "${via.howToRun}"`);
@@ -269,12 +331,26 @@ export function reportFailed(callback: TaskCallback, reason: string): void {
 /** Synchronous HTTP POST using a child node process (keeps this file free of async). */
 function _httpPostSync(url: string, body: string): void {
   const script = `
-    const {request} = require(new URL('${url}').protocol === 'https:' ? 'https' : 'http');
-    const h = ${JSON.stringify({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })};
-    const u = new URL('${url}');
-    const req = request({hostname:u.hostname,port:u.port,path:u.pathname+u.search,method:'POST',headers:h});
+    const rawUrl = ${JSON.stringify(url)};
+    const rawBody = ${JSON.stringify(body)};
+    const u = new URL(rawUrl);
+    const {request} = require(u.protocol === 'https:' ? 'https' : 'http');
+    const h = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(rawBody) };
+    const req = request({hostname:u.hostname,port:u.port,path:u.pathname+u.search,method:'POST',headers:h}, (res) => {
+      let responseBody = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { responseBody += chunk; });
+      res.on('end', () => {
+        const code = res.statusCode || 500;
+        if (code < 200 || code >= 300) {
+          const msg = responseBody.trim() || res.statusMessage || ('HTTP ' + code);
+          process.stderr.write(msg);
+          process.exit(1);
+        }
+      });
+    });
     req.on('error', e => { process.stderr.write(e.message); process.exit(1); });
-    req.write(${JSON.stringify(body)});
+    req.write(rawBody);
     req.end();
   `;
   const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', windowsHide: true });
