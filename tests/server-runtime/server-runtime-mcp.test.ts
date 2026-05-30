@@ -314,11 +314,12 @@ process.exit(1);
     expect(assistantMessage?.turn).toBe('turn-post-chat');
   });
 
-  it('routes manage.upload-card-file through /mcp and reuses upload behavior', async () => {
+  it('routes manage.upload-card-file through /mcp-controlplane and reuses upload behavior', async () => {
     const runtime = createRuntime();
-    const req = makeRequest('POST', '/api/board/mcp', {
+    const req = makeRequest('POST', '/api/board/mcp-controlplane', {
       tool: 'manage.upload-card-file',
       args: {
+        board_id: 'mcp-test-board',
         card_id: 'card-1',
         file_name: 'tool-upload.txt',
         content_type: 'text/plain',
@@ -327,7 +328,7 @@ process.exit(1);
     });
     const res = makeResponse();
 
-    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
     expect(parseJsonBody(res)).toEqual({
@@ -350,6 +351,65 @@ process.exit(1);
     await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
     expect((chatsBody.messages as Array<Record<string, unknown>>).some((message) => String(message.text || '').includes('file uploaded: tool-upload.txt'))).toBe(false);
+  });
+
+  it('rejects manage.upload-card-file on /mcp after it moves to /mcp-controlplane', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.upload-card-file',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        file_name: 'tool-upload.txt',
+        content_type: 'text/plain',
+        text: 'hello from tool',
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: 'Unknown MCP tool: manage.upload-card-file' });
+  });
+
+  it('routes setstate.chat-processing-started and done through /mcp-controlplane', async () => {
+    const runtime = createRuntime();
+
+    const startedRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'setstate.chat-processing-started',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), startedRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(startedRes._status).toBe(200);
+    expect(parseJsonBody(startedRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', active: true },
+    });
+
+    const initStartedRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/init-board'), initStartedRes, new URL('http://example.test/api/board/init-board'));
+    expect(initStartedRes._status).toBe(200);
+    const initStartedBody = parseJsonBody(initStartedRes) as Record<string, unknown>;
+    expect(((initStartedBody.cardChatsByCardId as Record<string, unknown>)['card-1'] as Record<string, unknown>).processing).toBe(true);
+
+    const doneRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'setstate.chat-processing-done',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), doneRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(doneRes._status).toBe(200);
+    expect(parseJsonBody(doneRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', active: false },
+    });
+
+    const initDoneRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/init-board'), initDoneRes, new URL('http://example.test/api/board/init-board'));
+    expect(initDoneRes._status).toBe(200);
+    const initDoneBody = parseJsonBody(initDoneRes) as Record<string, unknown>;
+    const chatsByCardId = (initDoneBody.cardChatsByCardId as Record<string, unknown>) ?? {};
+    expect((chatsByCardId['card-1'] as Record<string, unknown> | undefined)?.processing ?? false).toBe(false);
   });
 
   it('routes stage-ai-response-and-any-attachments through /mcp and appends an assistant chat entry with uploaded file metadata', async () => {
@@ -400,6 +460,57 @@ process.exit(1);
     expect(Array.isArray(assistantMessage?.files)).toBe(true);
     expect((assistantMessage?.files as Array<Record<string, unknown>>).length).toBe(1);
     expect((assistantMessage?.files as Array<Record<string, unknown>>)[0]).toEqual(expect.objectContaining({ name: 'result.txt', mime_type: 'text/plain' }));
+  });
+
+  it('silently ignores a second staged AI response for the same turn-id', async () => {
+    const runtime = createRuntime();
+
+    const firstRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: {
+        card_id: 'card-1',
+        'turn-id': 'turn-dup',
+        text: 'First answer',
+        files: [{ file_name: 'first.txt', content_type: 'text/plain', text: 'first file' }],
+      },
+    }), firstRes, new URL('http://example.test/api/board/mcp'));
+    expect(firstRes._status).toBe(200);
+
+    const secondRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-response-and-any-attachments',
+      args: {
+        card_id: 'card-1',
+        'turn-id': 'turn-dup',
+        text: 'Second answer should be ignored',
+        files: [{ file_name: 'second.txt', content_type: 'text/plain', text: 'second file' }],
+      },
+    }), secondRes, new URL('http://example.test/api/board/mcp'));
+    expect(secondRes._status).toBe(200);
+
+    const firstBody = parseJsonBody(firstRes) as Record<string, unknown>;
+    const secondBody = parseJsonBody(secondRes) as Record<string, unknown>;
+    expect(((secondBody.data as Record<string, unknown>).id)).toBe(((firstBody.data as Record<string, unknown>).id));
+
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-dup'));
+    expect(chatsRes._status).toBe(200);
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
+    expect(messages.filter((message) => message.role === 'assistant')[0]?.text).toBe('First answer');
+    expect(messages.filter((message) => message.role === 'system')).toHaveLength(1);
+    expect(messages.filter((message) => /^AI generated: /.test(String(message.text || '')))).toHaveLength(1);
+
+    const cardRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    expect(cardRes._status).toBe(200);
+    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    const files = ((card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>)
+      .filter((file) => file.name === 'first.txt' || file.name === 'second.txt');
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe('first.txt');
   });
 
   it('filters chats by turn consistently in HTTP and MCP read surfaces', async () => {

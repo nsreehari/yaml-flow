@@ -611,6 +611,32 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     throw Object.assign(new Error(`MCP tool requires ${errorKey}`), { statusCode: 400 });
   }
 
+  function parseMcpUploadBytes(args: Record<string, unknown>): Uint8Array | null {
+    if (Array.isArray(args.bytes)) {
+      return new Uint8Array((args.bytes as unknown[]).map((value) => Math.max(0, Math.min(255, Number(value) || 0))));
+    }
+    if (typeof args.text === 'string') {
+      return new TextEncoder().encode(args.text);
+    }
+    if (typeof args.base64 === 'string') {
+      const base64 = String(args.base64).replace(/-/g, '+').replace(/_/g, '/');
+      const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+      const binStr = atob(padded);
+      return Uint8Array.from(binStr, (ch) => ch.charCodeAt(0));
+    }
+    return null;
+  }
+
+  function setChatProcessingFromControlplane(args: Record<string, unknown>, active: boolean): { status: 'success'; data: { boardId: string; cardId: string; active: boolean } } {
+    const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
+    const cardId = getMcpArgString(args, 'card_id', 'cardId');
+    if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
+    if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
+    if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
+    chatStorage.setProcessing(cardId, active);
+    return { status: 'success', data: { boardId, cardId, active } };
+  }
+
   function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown> {
     return {
       'discover.source-kinds': () => mcp.discoverSourceKinds(),
@@ -672,29 +698,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           : {}),
         ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
       }),
-      'manage.upload-card-file': (args) => {
-        const cardId = getMcpArgString(args, 'card_id', 'cardId');
-        const fileName = getMcpArgString(args, 'file_name', 'fileName', 'name');
-        const contentType = getMcpArgString(args, 'content_type', 'contentType') || 'application/octet-stream';
-        let bytes: Uint8Array | null = null;
-
-        if (Array.isArray(args.bytes)) {
-          bytes = new Uint8Array((args.bytes as unknown[]).map((value) => Math.max(0, Math.min(255, Number(value) || 0))));
-        } else if (typeof args.text === 'string') {
-          bytes = new TextEncoder().encode(args.text);
-        } else if (typeof args.base64 === 'string') {
-          const base64 = String(args.base64).replace(/-/g, '+').replace(/_/g, '/');
-          const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
-          const binStr = atob(padded);
-          bytes = Uint8Array.from(binStr, (ch) => ch.charCodeAt(0));
-        }
-
-        if (!cardId) throw Object.assign(new Error('manage.upload-card-file requires card_id'), { statusCode: 400 });
-        if (!fileName) throw Object.assign(new Error('manage.upload-card-file requires file_name'), { statusCode: 400 });
-        if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
-
-        return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
-      },
       'manage.upsert-card': (args) => mcp.manageUpsertCard({
         cardId: getMcpArgString(args, 'card_id', 'cardId'),
         candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
@@ -703,8 +706,30 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  function invokeMcpTool(tool: string, args: Record<string, unknown>): unknown {
-    const handler = createMcpToolRegistry(createMcpFacade())[tool];
+  function createMcpControlplaneToolRegistry(): Record<string, (args: Record<string, unknown>) => unknown> {
+    return {
+      'setstate.chat-processing-started': (args) => setChatProcessingFromControlplane(args, true),
+      'setstate.chat-processing-done': (args) => setChatProcessingFromControlplane(args, false),
+      'manage.upload-card-file': (args) => {
+        const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
+        const cardId = getMcpArgString(args, 'card_id', 'cardId');
+        const fileName = getMcpArgString(args, 'file_name', 'fileName', 'name');
+        const contentType = getMcpArgString(args, 'content_type', 'contentType') || 'application/octet-stream';
+        const bytes = parseMcpUploadBytes(args);
+
+        if (!requestBoardId) throw Object.assign(new Error('manage.upload-card-file requires board_id'), { statusCode: 400 });
+        if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
+        if (!cardId) throw Object.assign(new Error('manage.upload-card-file requires card_id'), { statusCode: 400 });
+        if (!fileName) throw Object.assign(new Error('manage.upload-card-file requires file_name'), { statusCode: 400 });
+        if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
+
+        return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
+      },
+    };
+  }
+
+  function invokeMcpTool(tool: string, args: Record<string, unknown>, registry: Record<string, (args: Record<string, unknown>) => unknown>): unknown {
+    const handler = registry[tool];
     if (!handler) {
       throw Object.assign(new Error(`Unknown MCP tool: ${tool}`), { statusCode: 400 });
     }
@@ -1679,7 +1704,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           json(res, 400, { error: 'inspect.file-contents is only available on /mcp-raw' });
           return true;
         }
-          const result = invokeMcpTool(tool, args);
+        try {
+          const result = invokeMcpTool(tool, args, createMcpToolRegistry(createMcpFacade()));
           if (result && typeof result === 'object' && !Array.isArray(result)) {
             const record = result as Record<string, unknown>;
             if (record.status === 'fail') {
@@ -1692,6 +1718,48 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             }
           }
           json(res, 200, result);
+        } catch (error) {
+          const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+          const message = error instanceof Error ? error.message : String(error);
+          json(res, statusCode, { error: message });
+        }
+        return true;
+      }
+
+      if (method === 'POST' && p === `${apiBasePath}/mcp-controlplane`) {
+        await bootstrapBoard();
+        const body = await readJsonBody(req);
+        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
+        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+          ? body.args as Record<string, unknown>
+          : {};
+        if (!tool) {
+          json(res, 400, { error: 'tool is required' });
+          return true;
+        }
+        try {
+          const result = invokeMcpTool(tool, args, createMcpControlplaneToolRegistry());
+          if (result && typeof result === 'object' && !Array.isArray(result)) {
+            const record = result as Record<string, unknown>;
+            if (record.status === 'fail') {
+              json(res, 400, { error: extractMcpFailureMessage(result, 'Request failed') });
+              return true;
+            }
+            if (record.status === 'error') {
+              json(res, 500, { error: extractMcpFailureMessage(result, 'Internal error') });
+              return true;
+            }
+          }
+          json(res, 200, result);
+        } catch (error) {
+          const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+          const message = error instanceof Error ? error.message : String(error);
+          json(res, statusCode, { error: message });
+        }
         return true;
       }
 

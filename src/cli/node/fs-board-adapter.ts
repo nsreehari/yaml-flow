@@ -320,7 +320,16 @@ export function createFsBoardPlatformAdapter(
           const store = boardWorkerStoreCache ?? createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
           if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
           const boardId = typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : undefined;
-          store.enqueueRequest({ boardId, ref, args });
+          const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined
+            ?? genUUID().slice(0, 8);
+          const scratch = createFsScratchStorage(joinPath(dir, '.tmp'));
+          const inFile  = scratch.create(JSON.stringify(args, null, 2), `exec-in-${label}`, '.json');
+          const outFile = scratch.getUniqueKey(`exec-out-${label}`, '.json');
+          const errFile = scratch.getUniqueKey(`exec-err-${label}`, '.txt');
+          const inRef   = serializeRef(scratch.keyRef(inFile));
+          const outRef  = serializeRef(scratch.keyRef(outFile));
+          const errRef  = serializeRef(scratch.keyRef(errFile));
+          store.enqueueRequest({ boardId, ref, args: { subcommand: 'run-source-fetch', inRef, outRef, errRef } });
           return { dispatched: true };
         } catch (e) {
           return { dispatched: false, error: e instanceof Error ? e.message : String(e) };

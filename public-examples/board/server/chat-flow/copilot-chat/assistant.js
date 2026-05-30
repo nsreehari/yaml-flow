@@ -5,21 +5,10 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { readJsonStdin } from './shared.js';
 
 const HANDLER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WRAPPER_BAT = path.join(HANDLER_DIR, 'copilot_wrapper.bat');
-
-function readJsonStdin() {
-  if (process.stdin.isTTY) return {};
-  try {
-    const raw = fs.readFileSync(0, 'utf-8').trim();
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
 
 const extra = readJsonStdin();
 const {

@@ -602,7 +602,9 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(err => {
-  console.error(`${LOG_PREFIX} fatal: ${err && err.message || err}`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(err => {
+    console.error(`${LOG_PREFIX} fatal: ${err && err.message || err}`);
+    process.exit(1);
+  });
+}

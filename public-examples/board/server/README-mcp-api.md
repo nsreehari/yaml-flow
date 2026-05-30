@@ -1,16 +1,18 @@
 # Board Server — MCP API Reference
 
-Every board server exposes two MCP endpoints under `/api/boards/:boardId`:
+Every board server exposes three MCP endpoints under `/api/boards/:boardId`:
 
 | Endpoint | Content-Type | Purpose |
 |---|---|---|
 | `POST /api/boards/:boardId/mcp` | `application/json` → `application/json` | All tools except file downloads |
+| `POST /api/boards/:boardId/mcp-controlplane` | `application/json` → `application/json` | Runtime state mutation and orchestration tools |
 | `POST /api/boards/:boardId/mcp-raw` | `application/json` → `application/octet-stream` | File content download only (`inspect.file-contents`) |
 
 ## Request / response shape
 
 ```json
 // POST /api/boards/:boardId/mcp
+// POST /api/boards/:boardId/mcp-controlplane
 {
   "tool": "<tool-name>",
   "args": { ... }
@@ -289,6 +291,56 @@ Removes a card from both the live board runtime and persistent card storage.
 
 ---
 
+## `/mcp-controlplane` tools
+
+Control-plane tools are intended for direct runtime-state mutation and orchestration tasks. They are separate from the regular `/mcp` surface.
+
+### `setstate.chat-processing-started`
+
+Marks a card chat as currently processing.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "boardId": "live",
+    "cardId": "card-portfolio",
+    "active": true
+  }
+}
+```
+
+### `setstate.chat-processing-done`
+
+Marks a card chat as no longer processing.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "boardId": "live",
+    "cardId": "card-portfolio",
+    "active": false
+  }
+}
+```
+
 ### `manage.upload-card-file`
 
 Uploads a file to a card's attachment store (outside the chat flow).
@@ -297,6 +349,7 @@ Uploads a file to a card's attachment store (outside the chat flow).
 
 | Field | Type | Notes |
 |---|---|---|
+| `board_id` | string | required |
 | `card_id` | string | required |
 | `file_name` | string | required |
 | `content_type` | string | optional, default `application/octet-stream` |
@@ -327,6 +380,8 @@ Uploads a file to a card's attachment store (outside the chat flow).
 ### `stage-ai-response-and-any-attachments`
 
 Stages an assistant response (with optional file attachments) directly into a card's chat store. Used by agent pipelines to inject a response without going through the SSE chat flow.
+
+**Endpoint:** `POST /api/boards/:boardId/mcp`
 
 **Args:**
 

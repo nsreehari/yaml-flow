@@ -797,6 +797,30 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     if (!cardId) throw new Error('manageAddChatEntryAndAnyAttachments requires cardId');
     if (!role) throw new Error('manageAddChatEntryAndAnyAttachments requires role');
 
+    if (role === 'assistant' && turn) {
+      const existingRecords = expectSuccess(chatStore.readAll({
+        params: { cardId },
+        body: { turnId: turn },
+      }), 'chatStore.readAll(existing turn messages)');
+      const existingAssistant = Array.isArray(existingRecords.records)
+        ? existingRecords.records.find((record) => record.role === 'assistant' && String(record.turn || '') === turn)
+        : undefined;
+      if (existingAssistant) {
+        return {
+          status: 'success',
+          data: {
+            cardId,
+            id: String(existingAssistant.id),
+            role,
+            turn,
+            files: Array.isArray(existingAssistant.files)
+              ? existingAssistant.files as Array<Record<string, unknown>>
+              : [],
+          },
+        };
+      }
+    }
+
     const uploadedFiles = ensureArray(args.files).map((rawFile) => {
       const fileEntry = ensureRecord(rawFile);
       const fileName = String(fileEntry.file_name ?? fileEntry.fileName ?? fileEntry.name ?? '').trim();

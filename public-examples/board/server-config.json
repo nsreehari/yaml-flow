@@ -1,6 +1,6 @@
 {
   "port": 7799,
-  "taskExecutorTransport": "in-process-loop",
+  "taskExecutorTransport": "queue",
   "chatFlowTimeoutMs": 1800000,
   "chatInvokeRefTimeoutMs": 1800000,
   "chatCopilotTimeoutMs": 1800000,

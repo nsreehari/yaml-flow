@@ -38,7 +38,7 @@
     },
     "open_turn": {
       "description": "Resolve the current user turn from flow-provided chat messages and parse any chat envelope options",
-      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "turnId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx"],
+      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "turnId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx", "serverUrl"],
       "input_validations": [
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(chatMessages) = \"array\"",
@@ -57,6 +57,7 @@
           "data.cardsDir = ($type(expects_data.cardsDir) = \"string\" and $length(expects_data.cardsDir) > 0) ? expects_data.cardsDir : \"cards\"",
           "data.projectRoot = $type(expects_data.projectRoot) = \"string\" ? expects_data.projectRoot : \"\"",
           "data.chatFlowRoot = $type(expects_data.chatFlowRoot) = \"string\" ? expects_data.chatFlowRoot : \"\"",
+          "data.serverUrl = $type(expects_data.serverUrl) = \"string\" ? expects_data.serverUrl : \"\"",
           "data.chatMessages = expects_data.chatMessages",
           "data.lastChatEntryId = expects_data.lastChatEntryId",
           "data._currentUserMessage = $filter(expects_data.chatMessages, function($message) { $message.id = expects_data.lastChatEntryId and $message.role = \"user\" })[0]",
@@ -225,7 +226,7 @@
       }
     },
     "write_reply": {
-      "description": "Append the assistant reply and clear processing via one chat-store-cli command envelope",
+      "description": "Append the assistant reply via chat-store-cli",
       "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "replyText", "turnId"],
       "produces_data": ["replyId"],
       "input_validations": [
@@ -243,20 +244,48 @@
         "meta": "chat-handler",
         "argsMassaging": {
           "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [], 'turn': turnId }, { 'command': 'set-processing', 'active': false }] }"
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [], 'turn': turnId }] }"
         },
         "outputTransforms": {
           "dataTemplate": "{ 'replyId': output.data.results[0].data.id }"
         }
       },
       "transitions": {
-        "success": "completed",
+        "success": "clear_processing_done",
         "failure": "cleanup_failure",
         "error": "cleanup_failure"
       }
     },
+    "clear_processing_done": {
+      "description": "Clear processing through the runtime MCP controlplane",
+      "expects_data": ["serverUrl", "boardId", "cardId", "chatFlowRoot"],
+      "input_validations": [
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
+        "$type(cardId) = \"string\" and $length(cardId) > 0",
+        "$type(chatFlowRoot) = \"string\" and $length(chatFlowRoot) > 0"
+      ],
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-process",
+        "whatToRun": {
+          "kind": "process-name",
+          "value": "node"
+        },
+        "argsMassaging": {
+          "cmdTemplate": ["chatFlowRoot & '/copilot-chat/shared.js'"],
+          "stdinTemplate": "{ 'action': 'set-chat-processing-done', 'serverUrl': serverUrl, 'boardId': boardId, 'cardId': cardId }"
+        },
+        "meta": "chat-handler"
+      },
+      "transitions": {
+        "success": "completed",
+        "failure": "failed",
+        "error": "failed"
+      }
+    },
     "cleanup_failure": {
-      "description": "Write a failure system message and clear processing via one chat-store-cli command envelope",
+      "description": "Write a failure system message via chat-store-cli",
       "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "turnId"],
       "input_validations": [
         "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
@@ -272,8 +301,36 @@
         "meta": "chat-handler",
         "argsMassaging": {
           "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [], 'turn': turnId }, { 'command': 'set-processing', 'active': false }] }"
+          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [], 'turn': turnId }] }"
         }
+      },
+      "transitions": {
+        "success": "clear_processing_done_failure",
+        "failure": "failed",
+        "error": "failed"
+      }
+    },
+    "clear_processing_done_failure": {
+      "description": "Clear processing through the runtime MCP controlplane after failure cleanup",
+      "expects_data": ["serverUrl", "boardId", "cardId", "chatFlowRoot"],
+      "input_validations": [
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
+        "$type(cardId) = \"string\" and $length(cardId) > 0",
+        "$type(chatFlowRoot) = \"string\" and $length(chatFlowRoot) > 0"
+      ],
+      "handler": {
+        "type": "ref",
+        "howToRun": "local-process",
+        "whatToRun": {
+          "kind": "process-name",
+          "value": "node"
+        },
+        "argsMassaging": {
+          "cmdTemplate": ["chatFlowRoot & '/copilot-chat/shared.js'"],
+          "stdinTemplate": "{ 'action': 'set-chat-processing-done', 'serverUrl': serverUrl, 'boardId': boardId, 'cardId': cardId }"
+        },
+        "meta": "chat-handler"
       },
       "transitions": {
         "success": "failed",

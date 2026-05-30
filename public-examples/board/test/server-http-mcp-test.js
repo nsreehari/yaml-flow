@@ -323,6 +323,10 @@ function httpMcp(tool, args) {
   return httpJson('POST', `${BASE}/mcp`, { tool, args });
 }
 
+function httpMcpControlplane(tool, args) {
+  return httpJson('POST', `${BASE}/mcp-controlplane`, { tool, args });
+}
+
 function httpMcpRaw(tool, args) {
   return new Promise((resolve, reject) => {
     const u = new URL(`${BASE}/mcp-raw`);
@@ -552,7 +556,8 @@ try {
 
     const t2UploadText = `plain-file-upload-${Date.now()}`;
     const t2UploadName = 't2-upload.txt';
-    const t2UploadRes = await httpMcp('manage.upload-card-file', {
+    const t2UploadRes = await httpMcpControlplane('manage.upload-card-file', {
+      board_id: BOARD_ID,
       card_id: T2_FILE_CARD_ID,
       file_name: t2UploadName,
       content_type: 'text/plain; charset=utf-8',

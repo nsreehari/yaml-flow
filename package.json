@@ -99,12 +99,11 @@
     "!examples/**/cards/**/files/**"
   ],
   "scripts": {
-    "build": "npm run -s build:lib && npm run -s build:cli && npm run -s build:cli-bundled && npm run -s build:public-examples && npm run -s build:wrapper-scripts",
+    "build": "npm run -s build:lib && npm run -s build:cli && npm run -s build:cli-bundled && npm run -s build:public-examples",
     "build:lib": "tsup --config tsup.config.ts",
     "build:cli": "tsup --config tsup.cli.config.ts",
     "build:cli-bundled": "node scripts/build-cli-bundled.mjs",
     "build:public-examples": "node scripts/generate-public-examples.mjs",
-    "build:wrapper-scripts": "node wrapper-scripts/cli/build.mjs",
     "build:browser": "tsup --config tsup.browser.config.ts && node scripts/generate-browser-integrity.mjs",
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
@@ -119,7 +118,6 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:wrapper-scripts": "node wrapper-scripts/cli/test-scripts.js",
     "test:python": "vitest run --config vitest.python.config.ts",
     "tests:e2e": "npm run -s test:e2e",
     "tests:python": "npm run -s test:python",

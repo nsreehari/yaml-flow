@@ -102,9 +102,13 @@ describe('board-worker queue transport', () => {
       const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), { suppressSpawn: true, selfRef: callbackVia });
       const stopRunner = startBoardWorkerQueueRunner({
         workerStore: adapter.boardWorkerStore(),
-        executeBoardWorkerRequest: async (request) => {
+        executeBoardWorkerRequest: async (args, request) => {
           executedBoardIds.push(String(request.boardId || ''));
-          reportComplete(request.args.callback as { token: string; via: typeof callbackVia }, {
+          expect(args.subcommand).toBe('run-source-fetch');
+          const queuedInput = JSON.parse(adapter.resolveBlob(parseRef(String(args.inRef)))) as {
+            callback: { token: string; via: typeof callbackVia };
+          };
+          reportComplete(queuedInput.callback, {
             kind: 'fs-path',
             value: path.join(root, 'output.json'),
           });

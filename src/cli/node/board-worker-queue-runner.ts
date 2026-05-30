@@ -6,7 +6,7 @@ import type {
 
 export interface StartBoardWorkerQueueRunnerOptions {
   workerStore: BoardWorkerStore;
-  executeBoardWorkerRequest(request: BoardWorkerRequest): Promise<void>;
+  executeBoardWorkerRequest(args: Record<string, unknown>, request: BoardWorkerRequest): Promise<void>;
   pollIntervalMs?: number;
   visibilityMs?: number;
   concurrency?: number;
@@ -24,7 +24,7 @@ export function startBoardWorkerQueueRunner(opts: StartBoardWorkerQueueRunnerOpt
 
   async function processLease(lease: BoardWorkerLeasedRequest): Promise<void> {
     try {
-      await opts.executeBoardWorkerRequest(lease.request);
+      await opts.executeBoardWorkerRequest(lease.request.args, lease.request);
       opts.workerStore.ackRequest(lease.messageId, lease.leaseToken);
     } catch (error) {
       const dead = lease.attempt >= maxAttempts;
