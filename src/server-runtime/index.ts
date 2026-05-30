@@ -633,8 +633,80 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
     if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
     if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
-    chatStorage.setProcessing(cardId, active);
+    createMcpFacade().setChatProcessing({ cardId, active });
     return { status: 'success', data: { boardId, cardId, active } };
+  }
+
+  function requireControlplaneCardArgs(args: Record<string, unknown>): { cardId: string } {
+    const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
+    const cardId = getMcpArgString(args, 'card_id', 'cardId');
+    if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
+    if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
+    if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
+    return { cardId };
+  }
+
+  function expectControlplaneSuccess<T>(result: CommandResult<T>, commandName: string): T {
+    if (result?.status === 'success') {
+      return Object.prototype.hasOwnProperty.call(result, 'data')
+        ? (result as { data: T }).data
+        : (undefined as T);
+    }
+    if (result?.status === 'fail' || result?.status === 'error') {
+      throw Object.assign(new Error(result.error || `${commandName} failed`), { statusCode: 400 });
+    }
+    throw Object.assign(new Error(`${commandName} returned an unexpected response`), { statusCode: 500 });
+  }
+
+  function getCardMetaKey(args: Record<string, unknown>): string {
+    const key = getMcpArgString(args, 'key');
+    if (!key) throw Object.assign(new Error('MCP tool requires key'), { statusCode: 400 });
+    const segments = key.split('.');
+    const valid = segments.length >= 2
+      && segments[0] === 'chat'
+      && segments.every((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment));
+    if (!valid) throw Object.assign(new Error('MCP tool only supports card meta keys under chat.*'), { statusCode: 400 });
+    return key;
+  }
+
+  function readCardMetaValue(card: Record<string, unknown>, key: string): { exists: boolean; value: unknown } {
+    let target: unknown = card.meta;
+    for (const segment of key.split('.')) {
+      if (!target || typeof target !== 'object' || Array.isArray(target) || !Object.prototype.hasOwnProperty.call(target, segment)) {
+        return { exists: false, value: null };
+      }
+      target = (target as Record<string, unknown>)[segment];
+    }
+    return { exists: true, value: target };
+  }
+
+  function getChatProcessingFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; active: boolean } } {
+    const { cardId } = requireControlplaneCardArgs(args);
+    const data = createMcpFacade().getChatProcessing({ cardId });
+    return { status: 'success', data: { boardId, cardId, active: data.active } };
+  }
+
+  function setCardMetaFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; key: string } } {
+    const { cardId } = requireControlplaneCardArgs(args);
+    const key = getCardMetaKey(args);
+    if (!Object.prototype.hasOwnProperty.call(args, 'value')) throw Object.assign(new Error('MCP tool requires value'), { statusCode: 400 });
+    expectControlplaneSuccess(mcpCardStoreFacade().patch({
+      params: { id: cardId, path: `meta.${key}` },
+      body: { value: args.value },
+    }), 'cardStore.patch');
+    return { status: 'success', data: { boardId, cardId, key } };
+  }
+
+  function getCardMetaFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; key: string; exists: boolean; value: unknown } } {
+    const { cardId } = requireControlplaneCardArgs(args);
+    const key = getCardMetaKey(args);
+    const result = expectControlplaneSuccess<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
+    const card = Array.isArray(result.cards) && result.cards.length > 0 && result.cards[0] && typeof result.cards[0] === 'object' && !Array.isArray(result.cards[0])
+      ? result.cards[0] as Record<string, unknown>
+      : null;
+    if (!card) throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
+    const metaValue = readCardMetaValue(card, key);
+    return { status: 'success', data: { boardId, cardId, key, exists: metaValue.exists, value: metaValue.value } };
   }
 
   function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown> {
@@ -708,8 +780,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function createMcpControlplaneToolRegistry(): Record<string, (args: Record<string, unknown>) => unknown> {
     return {
+      'getstate.is-chat-processing': (args) => getChatProcessingFromControlplane(args),
       'setstate.chat-processing-started': (args) => setChatProcessingFromControlplane(args, true),
       'setstate.chat-processing-done': (args) => setChatProcessingFromControlplane(args, false),
+      'getstate.card-meta': (args) => getCardMetaFromControlplane(args),
+      'setstate.card-meta': (args) => setCardMetaFromControlplane(args),
       'manage.upload-card-file': (args) => {
         const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
         const cardId = getMcpArgString(args, 'card_id', 'cardId');
@@ -872,7 +947,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       const id = cardDef.id as string;
       try {
         const records = readChatRecords(id);
-        const processing = chatStorage.isProcessing(id);
+        const processing = createMcpFacade().getChatProcessing({ cardId: id }).active;
         if (records.length > 0 || processing) {
           cardChatsByCardId[id] = {
             messages: records.map((r: Record<string, unknown>) => ({
@@ -1009,7 +1084,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function clearChatRecords(cardId: string): void {
     chatStorage.clear(cardId);
-    chatStorage.setProcessing(cardId, false);
+    try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
   }
 
   /** Append a chat message; returns the new entry id (used as cursor). */
@@ -1126,7 +1201,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const { ctx, handlerFlow, handlerRef } = target;
 
     if (!processingAlreadySet) {
-      try { chatStorage.setProcessing(cardId, true); } catch {}
+      try { createMcpFacade().setChatProcessing({ cardId, active: true }); } catch {}
     }
 
     const args: Record<string, unknown> = {
@@ -1140,7 +1215,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
     if (!chatFlowRunner) {
       if (handlerFlow != null) {
-        try { chatStorage.setProcessing(cardId, false); } catch {}
+        try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
         logger.warn(`[chat-handler-flow] configured for card "${cardId}" but no chatFlowRunner was provided`);
         return;
       }

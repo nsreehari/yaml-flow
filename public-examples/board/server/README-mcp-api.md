@@ -34,6 +34,8 @@ Every board server exposes three MCP endpoints under `/api/boards/:boardId`:
 
 ## Tool reference
 
+Regular `/mcp` card-definition tools treat top-level `meta` as control-plane-only state. `manage.read-card` and `inspect.card-definition-and-runtime` omit `meta` from returned card definitions. `manage.upsert-card` accepts candidate cards that contain `meta`, but silently ignores the incoming `meta` and preserves any existing stored `meta` for that card. Use `/mcp-controlplane` for card metadata state.
+
 ### `discover.source-kinds`
 
 Returns the known source-kind registry from the task executor.
@@ -97,6 +99,8 @@ Returns a summary of all registered cards and overall board state.
 ### `inspect.card-definition-and-runtime`
 
 Returns the full card definition, its runtime state, and the current values of all `provides` outputs.
+
+Top-level `meta` is omitted from `card_definition_and_static_data` on this regular `/mcp` surface.
 
 **Args:**
 
@@ -207,6 +211,8 @@ Downloads the raw bytes of a file attachment stored on a card.
 
 Reads the stored document for a single live card.
 
+Top-level `meta` is omitted from cards returned on this regular `/mcp` surface.
+
 **Args:**
 
 | Field | Type | Required |
@@ -236,6 +242,8 @@ Reads the stored document for a single live card.
 ### `manage.upsert-card`
 
 Validates, stores, and registers a card definition. Triggers a board restart for the card.
+
+If `candidate_card_content` contains top-level `meta`, regular `/mcp` strips it before validation/storage. Existing stored card `meta` is preserved and can only be changed through `/mcp-controlplane`.
 
 **Args:**
 
@@ -295,6 +303,31 @@ Removes a card from both the live board runtime and persistent card storage.
 
 Control-plane tools are intended for direct runtime-state mutation and orchestration tasks. They are separate from the regular `/mcp` surface.
 
+### `getstate.is-chat-processing`
+
+Reads whether a card chat is currently marked as processing.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "boardId": "live",
+    "cardId": "card-portfolio",
+    "active": true
+  }
+}
+```
+
+---
+
 ### `setstate.chat-processing-started`
 
 Marks a card chat as currently processing.
@@ -337,6 +370,70 @@ Marks a card chat as no longer processing.
     "boardId": "live",
     "cardId": "card-portfolio",
     "active": false
+  }
+}
+```
+
+### `getstate.card-meta`
+
+Reads control-plane-owned card metadata under `meta.chat.*`.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+| `key` | string | yes, must be under `chat.*` |
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "boardId": "live",
+    "cardId": "card-portfolio",
+    "key": "chat.foundry_thread_id",
+    "exists": true,
+    "value": "thread_abc"
+  }
+}
+```
+
+### `setstate.card-meta`
+
+Sets control-plane-owned card metadata under `meta.chat.*` using the card store patch path `meta.<key>`.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+| `key` | string | yes, must be under `chat.*` |
+| `value` | any JSON value | yes |
+
+**Example:**
+```json
+{
+  "tool": "setstate.card-meta",
+  "args": {
+    "board_id": "live",
+    "card_id": "card-portfolio",
+    "key": "chat.foundry_thread_id",
+    "value": "thread_abc"
+  }
+}
+```
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "boardId": "live",
+    "cardId": "card-portfolio",
+    "key": "chat.foundry_thread_id"
   }
 }
 ```

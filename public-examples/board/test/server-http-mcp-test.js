@@ -35,6 +35,7 @@ const skipT1 = cliArgs.includes('--skip-t1');
 const skipT2 = cliArgs.includes('--skip-t2');
 const skipT3 = cliArgs.includes('--skip-t3');
 const skipT4 = cliArgs.includes('--skip-t4');
+const skipT5 = cliArgs.includes('--skip-t5');
 function isCopilotAvailable() {
   try {
     const r = spawnSync('copilot', ['--version'], { timeout: 5_000, stdio: 'ignore', windowsHide: true });
@@ -1302,6 +1303,71 @@ try {
     await httpMcp('manage.remove-card', { card_id: T4_REMOVE_CARD_ID });
     console.log('[T4.remove-card] cleanup done');
 
+  }
+
+  if (skipT5) {
+    console.log('\n=== T5: skipped (--skip-t5) ===');
+  } else {
+    console.log('\n=== T5: mcp-controlplane setstate/getstate ===');
+    const T5_CARD_ID = CHAT_CARD_ID;
+
+    // (a) getstate.is-chat-processing should report false initially
+    const t5IsProcInit = expectMcpSuccess(
+      await httpMcpControlplane('getstate.is-chat-processing', { board_id: BOARD_ID, card_id: T5_CARD_ID }),
+      'T5 getstate.is-chat-processing initial',
+    );
+    assert(t5IsProcInit?.active === false, `T5 expected initial chat-processing=false, got ${JSON.stringify(t5IsProcInit)}`);
+
+    // (b) setstate.chat-processing-started flips it to true
+    expectMcpSuccess(
+      await httpMcpControlplane('setstate.chat-processing-started', { board_id: BOARD_ID, card_id: T5_CARD_ID }),
+      'T5 setstate.chat-processing-started',
+    );
+    const t5IsProcStarted = expectMcpSuccess(
+      await httpMcpControlplane('getstate.is-chat-processing', { board_id: BOARD_ID, card_id: T5_CARD_ID }),
+      'T5 getstate.is-chat-processing after start',
+    );
+    assert(t5IsProcStarted?.active === true, 'T5 expected chat-processing=true after setstate.chat-processing-started');
+
+    // (c) setstate.chat-processing-done flips it back
+    expectMcpSuccess(
+      await httpMcpControlplane('setstate.chat-processing-done', { board_id: BOARD_ID, card_id: T5_CARD_ID }),
+      'T5 setstate.chat-processing-done',
+    );
+    const t5IsProcDone = expectMcpSuccess(
+      await httpMcpControlplane('getstate.is-chat-processing', { board_id: BOARD_ID, card_id: T5_CARD_ID }),
+      'T5 getstate.is-chat-processing after done',
+    );
+    assert(t5IsProcDone?.active === false, 'T5 expected chat-processing=false after setstate.chat-processing-done');
+    console.log('[T5] ok: setstate/getstate chat-processing round-trip');
+
+    // (d) setstate.card-meta then getstate.card-meta round-trip
+    const t5ThreadId = `thread-t5-${Date.now()}`;
+    expectMcpSuccess(
+      await httpMcpControlplane('setstate.card-meta', { board_id: BOARD_ID, card_id: T5_CARD_ID, key: 'chat.foundry_thread_id', value: t5ThreadId }),
+      'T5 setstate.card-meta',
+    );
+    const t5GetMeta = expectMcpSuccess(
+      await httpMcpControlplane('getstate.card-meta', { board_id: BOARD_ID, card_id: T5_CARD_ID, key: 'chat.foundry_thread_id' }),
+      'T5 getstate.card-meta',
+    );
+    assert(t5GetMeta?.exists === true && t5GetMeta?.value === t5ThreadId, `T5 getstate.card-meta mismatch: ${JSON.stringify(t5GetMeta)}`);
+
+    // (e) regular /mcp manage.read-card must NOT expose meta
+    const t5ReadCards = expectMcpSuccess(
+      await httpMcp('manage.read-card', { card_id: T5_CARD_ID }),
+      'T5 manage.read-card meta-redaction',
+    );
+    const t5ReadCard = Array.isArray(t5ReadCards) ? t5ReadCards[0] : null;
+    assert(t5ReadCard && t5ReadCard.meta === undefined, 'T5 expected manage.read-card to redact top-level meta');
+
+    // (f) regular /mcp inspect.card-definition-and-runtime must NOT expose meta
+    const t5Inspect = expectMcpSuccess(
+      await httpMcp('inspect.card-definition-and-runtime', { card_id: T5_CARD_ID }),
+      'T5 inspect.card-definition-and-runtime meta-redaction',
+    );
+    assert(t5Inspect?.card_definition_and_static_data?.meta === undefined, 'T5 expected inspect to redact card_definition_and_static_data.meta');
+    console.log('[T5] ok: regular /mcp surfaces redact card meta');
   }
 
   console.log('\n=== All smoke checks passed ===\n');

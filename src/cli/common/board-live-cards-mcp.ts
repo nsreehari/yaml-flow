@@ -225,6 +225,8 @@ export interface BoardLiveCardsMcp {
   }): BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult;
   manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): BoardLiveCardsMcpManageUpsertCardResult;
   manageRemoveCard(args: { cardId: string }): unknown;
+  getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean };
+  setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean };
 }
 
 function expectSuccess<T>(result: CommandResult<T>, commandName: string): T {
@@ -359,6 +361,15 @@ function normalizeCandidateCardPayload(card: UnknownRecord): UnknownRecord {
   return { 'card-content': card };
 }
 
+function stripMcpPrivateCardFields<T extends UnknownRecord>(card: T): T {
+  const { meta: _meta, ...publicCard } = card;
+  return publicCard as T;
+}
+
+function hasOwn(value: UnknownRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function readOneCard(cardStore: CardStorePublic, cardId: string): LiveCard {
   const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
   const cards = Array.isArray(result?.cards) ? result.cards : [];
@@ -444,6 +455,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     }
 
     const storedCard = ensureRecord(readOneCard(cardStore, cardId));
+    const publicStoredCard = stripMcpPrivateCardFields(storedCard);
     const requiresKeys = ensureArray(cardStatusInBoard.requires_satisfied).filter((key): key is string => typeof key === 'string' && !!key);
     const providesKeys = ensureArray(cardStatusInBoard.provides_runtime).filter((key): key is string => typeof key === 'string' && !!key);
     const requires = Object.fromEntries(
@@ -492,7 +504,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     return {
       cardId,
       card_status_in_board: cardStatusInBoard,
-      card_definition_and_static_data: storedCard,
+      card_definition_and_static_data: publicStoredCard,
       refs_for_fetched_source_files: fetchedSourceFileRefs,
       runtime_data: {
         requires,
@@ -780,7 +792,9 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('manageReadCard requires cardId');
     const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
-    return Array.isArray(result.cards) ? result.cards : [];
+    return Array.isArray(result.cards)
+      ? result.cards.map((card) => stripMcpPrivateCardFields(ensureRecord(card)) as LiveCard)
+      : [];
   }
 
   function manageAddChatEntryAndAnyAttachments(args: {
@@ -863,7 +877,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
   function manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): BoardLiveCardsMcpManageUpsertCardResult {
     const cardId = String(args.cardId || '').trim();
-    const candidateCard = ensureRecord(args.candidateCardContent);
+    const incomingCandidateCard = ensureRecord(args.candidateCardContent);
+    const candidateCard = stripMcpPrivateCardFields(incomingCandidateCard);
     if (!cardId) throw new Error('manageUpsertCard requires cardId');
     if (typeof candidateCard.id !== 'string' || !candidateCard.id.trim()) {
       throw new Error('candidateCardContent.id must be a non-empty string');
@@ -890,7 +905,11 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       previousCard = null;
     }
 
-    const storeUpdate = cardStore.set({ body: candidateCard });
+    const cardToStore = previousCard && hasOwn(ensureRecord(previousCard), 'meta')
+      ? { ...candidateCard, meta: ensureRecord(previousCard).meta }
+      : candidateCard;
+
+    const storeUpdate = cardStore.set({ body: cardToStore });
     expectSuccess(storeUpdate, 'cardStore.set');
 
     let boardUpdate: unknown;
@@ -943,6 +962,21 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
+  function getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean } {
+    const cardId = String(args.cardId || '').trim();
+    if (!cardId) throw new Error('getChatProcessing requires cardId');
+    const data = expectSuccessData(chatStore.isProcessing({ params: { cardId } }), 'chatStore.isProcessing');
+    return { cardId, active: Boolean((data as { active?: unknown }).active) };
+  }
+
+  function setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean } {
+    const cardId = String(args.cardId || '').trim();
+    if (!cardId) throw new Error('setChatProcessing requires cardId');
+    if (typeof args.active !== 'boolean') throw new Error('setChatProcessing requires boolean active');
+    expectSuccess(chatStore.setProcessing({ params: { cardId }, body: { active: args.active } }), 'chatStore.setProcessing');
+    return { cardId, active: args.active };
+  }
+
   return {
     discoverSourceKinds,
     inspectBoardRuntimeStatus,
@@ -959,5 +993,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     manageAddChatEntryAndAnyAttachments,
     manageUpsertCard,
     manageRemoveCard,
+    getChatProcessing,
+    setChatProcessing,
   };
 }

@@ -205,6 +205,92 @@ process.exit(1);
     });
   });
 
+  it('keeps card meta behind /mcp-controlplane and redacts it from regular /mcp card reads', async () => {
+    const runtime = createRuntime();
+
+    const setMetaRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'setstate.card-meta',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', key: 'chat.foundry_thread_id', value: 'thread-123' },
+    }), setMetaRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(setMetaRes._status).toBe(200);
+    expect(parseJsonBody(setMetaRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', key: 'chat.foundry_thread_id' },
+    });
+
+    const getMetaRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'getstate.card-meta',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', key: 'chat.foundry_thread_id' },
+    }), getMetaRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(getMetaRes._status).toBe(200);
+    expect(parseJsonBody(getMetaRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', key: 'chat.foundry_thread_id', exists: true, value: 'thread-123' },
+    });
+
+    const readRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), readRes, new URL('http://example.test/api/board/mcp'));
+    expect(readRes._status).toBe(200);
+    const readBody = parseJsonBody(readRes) as Record<string, unknown>;
+    const readCards = readBody.data as Array<Record<string, unknown>>;
+    expect(readCards[0].meta).toBeUndefined();
+
+    const directCardRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), directCardRes, new URL('http://example.test/api/board/cards/card-1'));
+    expect(directCardRes._status).toBe(200);
+    const directCard = parseJsonBody(directCardRes) as Record<string, unknown>;
+    expect(directCard.meta).toEqual({ chat: { foundry_thread_id: 'thread-123' } });
+  });
+
+  it('strips incoming meta on regular /mcp upsert-card while preserving stored controlplane meta', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+
+    const setMetaRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'setstate.card-meta',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', key: 'chat.foundry_thread_id', value: 'thread-original' },
+    }), setMetaRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(setMetaRes._status).toBe(200);
+
+    const upsertRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.upsert-card',
+      args: {
+        card_id: 'card-1',
+        candidate_card_content: {
+          id: 'card-1',
+          meta: { chat: { foundry_thread_id: 'thread-from-caller' }, title: 'caller title' },
+          card_data: { title: 'Updated Card One' },
+          view: { elements: [{ id: 'title', kind: 'text', data: { bind: 'card_data.title' } }] },
+        },
+      },
+    }), upsertRes, new URL('http://example.test/api/board/mcp'));
+    expect(upsertRes._status).toBe(200);
+    expect((parseJsonBody(upsertRes) as Record<string, unknown>).status).toBe('success');
+
+    const directCardRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), directCardRes, new URL('http://example.test/api/board/cards/card-1'));
+    expect(directCardRes._status).toBe(200);
+    const directCard = parseJsonBody(directCardRes) as Record<string, unknown>;
+    expect((directCard.card_data as Record<string, unknown>).title).toBe('Updated Card One');
+    expect(directCard.meta).toEqual({ chat: { foundry_thread_id: 'thread-original' } });
+
+    const inspectRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.card-definition-and-runtime',
+      args: { card_id: 'card-1' },
+    }), inspectRes, new URL('http://example.test/api/board/mcp'));
+    expect(inspectRes._status).toBe(200);
+    const inspectBody = parseJsonBody(inspectRes) as Record<string, unknown>;
+    const inspectData = inspectBody.data as Record<string, unknown>;
+    expect((inspectData.card_definition_and_static_data as Record<string, unknown>).meta).toBeUndefined();
+  });
+
   it('rejects manage.upsert-card validation failures on /mcp with a 400 error payload', async () => {
     const runtime = createRuntime({ withNonCore: true });
     const req = makeRequest('POST', '/api/board/mcp', {
@@ -387,6 +473,17 @@ process.exit(1);
       data: { boardId: 'mcp-test-board', cardId: 'card-1', active: true },
     });
 
+    const getStartedRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'getstate.is-chat-processing',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), getStartedRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(getStartedRes._status).toBe(200);
+    expect(parseJsonBody(getStartedRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', active: true },
+    });
+
     const initStartedRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/init-board'), initStartedRes, new URL('http://example.test/api/board/init-board'));
     expect(initStartedRes._status).toBe(200);
@@ -400,6 +497,17 @@ process.exit(1);
     }), doneRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(doneRes._status).toBe(200);
     expect(parseJsonBody(doneRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', active: false },
+    });
+
+    const getDoneRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'getstate.is-chat-processing',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), getDoneRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(getDoneRes._status).toBe(200);
+    expect(parseJsonBody(getDoneRes)).toEqual({
       status: 'success',
       data: { boardId: 'mcp-test-board', cardId: 'card-1', active: false },
     });
