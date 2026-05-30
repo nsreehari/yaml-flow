@@ -258,23 +258,22 @@
     },
     "clear_processing_done": {
       "description": "Clear processing through the runtime MCP controlplane",
-      "expects_data": ["serverUrl", "boardId", "cardId", "chatFlowRoot"],
+      "expects_data": ["serverUrl", "boardId", "cardId"],
       "input_validations": [
         "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
         "$type(boardId) = \"string\" and $length(boardId) > 0",
-        "$type(cardId) = \"string\" and $length(cardId) > 0",
-        "$type(chatFlowRoot) = \"string\" and $length(chatFlowRoot) > 0"
+        "$type(cardId) = \"string\" and $length(cardId) > 0"
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-process",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "process-name",
-          "value": "node"
+          "kind": "http-url",
+          "value": ""
         },
         "argsMassaging": {
-          "cmdTemplate": ["chatFlowRoot & '/copilot-chat/shared.js'"],
-          "stdinTemplate": "{ 'action': 'set-chat-processing-done', 'serverUrl': serverUrl, 'boardId': boardId, 'cardId': cardId }"
+          "urlTemplate": "serverUrl & '/api/boards/' & boardId & '/mcp-controlplane'",
+          "bodyTemplate": "{ 'tool': 'setstate.chat-processing-done', 'args': { 'board_id': boardId, 'card_id': cardId } }"
         },
         "meta": "chat-handler"
       },
@@ -312,23 +311,22 @@
     },
     "clear_processing_done_failure": {
       "description": "Clear processing through the runtime MCP controlplane after failure cleanup",
-      "expects_data": ["serverUrl", "boardId", "cardId", "chatFlowRoot"],
+      "expects_data": ["serverUrl", "boardId", "cardId"],
       "input_validations": [
         "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
         "$type(boardId) = \"string\" and $length(boardId) > 0",
-        "$type(cardId) = \"string\" and $length(cardId) > 0",
-        "$type(chatFlowRoot) = \"string\" and $length(chatFlowRoot) > 0"
+        "$type(cardId) = \"string\" and $length(cardId) > 0"
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-process",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "process-name",
-          "value": "node"
+          "kind": "http-url",
+          "value": ""
         },
         "argsMassaging": {
-          "cmdTemplate": ["chatFlowRoot & '/copilot-chat/shared.js'"],
-          "stdinTemplate": "{ 'action': 'set-chat-processing-done', 'serverUrl': serverUrl, 'boardId': boardId, 'cardId': cardId }"
+          "urlTemplate": "serverUrl & '/api/boards/' & boardId & '/mcp-controlplane'",
+          "bodyTemplate": "{ 'tool': 'setstate.chat-processing-done', 'args': { 'board_id': boardId, 'card_id': cardId } }"
         },
         "meta": "chat-handler"
       },

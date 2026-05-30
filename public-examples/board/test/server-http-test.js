@@ -219,6 +219,43 @@ function waitUntil(predicate, timeoutMs, label) {
   });
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function stopChildProcess(proc, label) {
+  if (!proc) return;
+  if (proc.exitCode !== null) return;
+
+  const exitPromise = new Promise((resolve) => {
+    proc.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+
+  try {
+    proc.kill();
+  } catch {
+    return;
+  }
+
+  const gracefulExit = await Promise.race([
+    exitPromise,
+    wait(5_000).then(() => null),
+  ]);
+  if (gracefulExit) return;
+
+  if (proc.exitCode === null) {
+    try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+  }
+
+  const forcedExit = await Promise.race([
+    exitPromise,
+    wait(5_000).then(() => null),
+  ]);
+  if (!forcedExit && proc.exitCode === null) {
+    throw new Error(`${label} did not exit after kill()`);
+  }
+}
+
 const waitForInitialPayload = (ms = 15_000) =>
   waitUntil(() => NS.initialPayload || false, ms, 'initial SSE payload');
 
@@ -388,9 +425,10 @@ function startServer(port) {
       if (!ready) reject(new Error(`Server exited early: code ${code}`));
     });
 
-    setTimeout(() => {
+    const startupTimer = setTimeout(() => {
       if (!ready) reject(new Error('Server startup timeout (15s)'));
     }, 15_000);
+    startupTimer.unref?.();
   });
 }
 
@@ -744,8 +782,7 @@ try {
     } catch { /* ignore */ }
   }
   if (chatSseClient) chatSseClient.close();
-  serverProc.kill();
-  await new Promise((r) => serverProc.on('exit', r));
+  await stopChildProcess(serverProc, 'demo board server');
   if (sseWorker) await sseWorker.terminate();
 
   // Clean up the test setup directory
