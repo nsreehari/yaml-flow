@@ -33,6 +33,7 @@
  *  'local-process'   execute <whatToRun> directly (shebang / pre-resolved binary)
  *  'http:post'       HTTP POST to <whatToRun>
  *  'http:get'        HTTP GET to <whatToRun>
+ *  'queue-storage'   enqueue a board-worker request into QueueStorage
  *  'built-in'        resolved by the adapter to a well-known internal implementation
  *
  * ────────────────────────────────────────────────────────────────────────────
@@ -215,6 +216,7 @@ export type KnownExecutionTransport =
   | 'local-process'
   | 'http:post'
   | 'http:get'
+  | 'queue-storage'
   | 'built-in'
   | 'in-process-loop'
   | 'in-browser';

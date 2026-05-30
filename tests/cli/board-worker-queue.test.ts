@@ -1,0 +1,144 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  createBoardWorkerStore,
+  createFsBoardPlatformAdapter,
+  createFsQueueStorage,
+  parseRef,
+  serializeRef,
+  startBoardWorkerQueueRunner,
+} from '../../src/cli/node/fs-board-adapter.js';
+import {
+  registerInProcessBoardWorkerCallback,
+  reportComplete,
+  unregisterInProcessBoardWorkerCallback,
+} from '../../src/cli/node/board-worker-adapter.ts';
+
+function makeTempDir(prefix: string): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+describe('board-worker queue transport', () => {
+  it('leases and acknowledges fs-backed queue messages', () => {
+    const root = makeTempDir('yaml-flow-queue-');
+    try {
+      const queue = createFsQueueStorage(path.join(root, 'queue'));
+      const enqueued = queue.enqueue({ kind: 'test', value: 1 });
+
+      expect(queue.peekActive()).toHaveLength(1);
+
+      const [lease] = queue.lease<{ kind: string; value: number }>({ visibilityMs: 250 });
+      expect(lease.id).toBe(enqueued.id);
+      expect(lease.attempt).toBe(1);
+      expect(queue.peekActive()).toHaveLength(0);
+
+      expect(queue.ack(lease.id, lease.leaseToken)).toBe(true);
+      expect(queue.peekActive()).toHaveLength(0);
+      expect(queue.peekDeadLetter()).toHaveLength(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('dead-letters board-worker requests through the semantic store', () => {
+    const root = makeTempDir('yaml-flow-board-worker-store-');
+    try {
+      const store = createBoardWorkerStore(createFsQueueStorage(path.join(root, 'queue')));
+      const requestId = store.enqueueRequest({
+        boardId: 'board-1',
+        ref: {
+          meta: 'task-executor',
+          howToRun: 'queue-storage',
+          whatToRun: serializeRef({ kind: 'queue-storage', value: 'board:board-1:board-worker' }),
+        },
+        args: { payload: 'x' },
+      });
+
+      const [lease] = store.leaseRequests({ visibilityMs: 250 });
+      expect(lease.messageId).toBe(requestId);
+      expect(store.nackRequest(lease.messageId, lease.leaseToken, { dead: true, reason: 'boom' })).toBe(true);
+
+      const deadLetters = store.peekDeadLetter();
+      expect(deadLetters).toHaveLength(1);
+      expect(deadLetters[0]?.reason).toBe('boom');
+      expect(deadLetters[0]?.request.boardId).toBe('board-1');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('dispatches queue-backed board-worker requests through the host runner and callback loop', async () => {
+    const root = makeTempDir('yaml-flow-queue-dispatch-');
+    const callbackKey = `test:queue-callback:${Date.now()}`;
+    const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: root }));
+    const callbackVia = {
+      meta: 'board-live-cards',
+      howToRun: 'in-process-loop' as const,
+      whatToRun: serializeRef({ kind: 'in-process-loop', value: callbackKey }),
+    };
+    let callbackPayload: Record<string, unknown> | null = null;
+    const executedBoardIds: string[] = [];
+
+    registerInProcessBoardWorkerCallback(callbackKey, (payload) => {
+      callbackPayload = payload as Record<string, unknown>;
+      return { status: 'success' };
+    });
+
+    try {
+      const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), { suppressSpawn: true, selfRef: callbackVia });
+      const stopRunner = startBoardWorkerQueueRunner({
+        workerStore: adapter.boardWorkerStore(),
+        executeBoardWorkerRequest: async (request) => {
+          executedBoardIds.push(String(request.boardId || ''));
+          reportComplete(request.args.callback as { token: string; via: typeof callbackVia }, {
+            kind: 'fs-path',
+            value: path.join(root, 'output.json'),
+          });
+        },
+        pollIntervalMs: 10,
+        visibilityMs: 250,
+      });
+
+      try {
+        const result = await adapter.dispatchExecution({
+          meta: 'task-executor',
+          howToRun: 'queue-storage',
+          whatToRun: serializeRef({ kind: 'queue-storage', value: 'board:board-1:board-worker' }),
+          extra: { boardId: 'board-1' },
+        }, {
+          source_def: { bindTo: 'prices' },
+          callback: { token: 'source-token', via: callbackVia },
+        });
+
+        expect(result).toEqual({ dispatched: true });
+        await waitFor(() => callbackPayload !== null);
+        expect(executedBoardIds).toEqual(['board-1']);
+        expect(callbackPayload).toEqual({
+          token: 'source-token',
+          outcome: 'success',
+          ref: serializeRef({ kind: 'fs-path', value: path.join(root, 'output.json') }),
+        });
+        expect(adapter.boardWorkerStore().peekActive()).toHaveLength(0);
+      } finally {
+        stopRunner();
+      }
+    } finally {
+      unregisterInProcessBoardWorkerCallback(callbackKey);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

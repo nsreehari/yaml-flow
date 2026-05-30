@@ -305,7 +305,7 @@ export function buildBoardCliInvocation(
     path.join(cliDir, '..', '..', 'node_modules', '.bin', 'tsx'),
   ];
   const tsx = tsxCandidates.find(candidate => fs.existsSync(candidate));
-  if (fs.existsSync(tsPath) && fs.existsSync(tsx)) {
+  if (fs.existsSync(tsPath) && tsx) {
     return { cmd: process.execPath, args: [tsx, tsPath, command, ...args] };
   }
 

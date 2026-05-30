@@ -46,11 +46,14 @@ import type {
   JournalStorage,
   JSONStorage,
   KVStorage,
+  QueueDeadLetterMessage,
+  QueueLeasedMessage,
+  QueueMessage,
+  QueueStorage,
   KindValueRef,
   ScratchStorage,
   StorageProvider,
 } from '../common/storage-interface.js';
-import { serializeRef } from '../common/storage-interface.js';
 import type {
   CardIndex,
   LiveCard,
@@ -207,6 +210,196 @@ export function createFsAbsolutePathBlobStorage(): BlobStorage {
 
     // Keys are absolute paths — prefix-based listing is not meaningful for this adapter.
     listKeys(_prefix?: string): string[] { return []; },
+  };
+}
+
+// ============================================================================
+// FsQueueStorage
+// ============================================================================
+
+type FsQueueRecord<T = unknown> = {
+  id: string;
+  body: T;
+  enqueuedAt: string;
+  attempt: number;
+  leaseToken?: string;
+  leaseExpiresAt?: string;
+  reason?: string;
+};
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8');
+  renameSync(tmp, filePath);
+}
+
+function readJsonFile<T>(filePath: string): T | null {
+  if (!fs.existsSync(filePath)) return null;
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T; } catch { return null; }
+}
+
+function listJsonFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((name) => path.join(dir, name));
+}
+
+function queueRecordToMessage<T>(record: FsQueueRecord<T>): QueueMessage<T> {
+  return {
+    id: record.id,
+    body: record.body,
+    enqueuedAt: record.enqueuedAt,
+    attempt: record.attempt,
+  };
+}
+
+function queueRecordToLeased<T>(record: FsQueueRecord<T>): QueueLeasedMessage<T> {
+  return {
+    ...queueRecordToMessage(record),
+    leaseToken: String(record.leaseToken || ''),
+    leaseExpiresAt: String(record.leaseExpiresAt || ''),
+  };
+}
+
+function queueRecordToDead<T>(record: FsQueueRecord<T>): QueueDeadLetterMessage<T> {
+  return {
+    ...queueRecordToMessage(record),
+    reason: record.reason,
+  };
+}
+
+export function createFsQueueStorage(rootDir: string): QueueStorage {
+  const activeDir = path.join(rootDir, 'active');
+  const leasedDir = path.join(rootDir, 'leased');
+  const doneDir = path.join(rootDir, 'done');
+  const deadDir = path.join(rootDir, 'dead');
+  for (const dir of [activeDir, leasedDir, doneDir, deadDir]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  function activePath(record: Pick<FsQueueRecord, 'id' | 'enqueuedAt'>): string {
+    const stamp = String(record.enqueuedAt || new Date().toISOString()).replace(/[:.]/g, '-');
+    return path.join(activeDir, `${stamp}-${record.id}.json`);
+  }
+
+  function leasedPath(messageId: string): string {
+    return path.join(leasedDir, `${messageId}.json`);
+  }
+
+  function donePath(messageId: string): string {
+    return path.join(doneDir, `${messageId}.json`);
+  }
+
+  function deadPath(messageId: string): string {
+    return path.join(deadDir, `${messageId}.json`);
+  }
+
+  function reviveExpiredLeases(): void {
+    const now = Date.now();
+    for (const filePath of listJsonFiles(leasedDir)) {
+      const record = readJsonFile<FsQueueRecord>(filePath);
+      if (!record?.leaseExpiresAt) continue;
+      const expiresAt = Date.parse(record.leaseExpiresAt);
+      if (Number.isNaN(expiresAt) || expiresAt > now) continue;
+      const revived: FsQueueRecord = {
+        id: record.id,
+        body: record.body,
+        enqueuedAt: record.enqueuedAt,
+        attempt: record.attempt,
+      };
+      writeJsonAtomic(activePath(revived), revived);
+      try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
+    }
+  }
+
+  return {
+    enqueue<T>(body: T): QueueMessage<T> {
+      const record: FsQueueRecord<T> = {
+        id: randomUUID(),
+        body,
+        enqueuedAt: new Date().toISOString(),
+        attempt: 0,
+      };
+      writeJsonAtomic(activePath(record), record);
+      return queueRecordToMessage(record);
+    },
+
+    lease<T>(opts?: { max?: number; visibilityMs?: number }): QueueLeasedMessage<T>[] {
+      reviveExpiredLeases();
+      const max = Math.max(1, Math.floor(opts?.max ?? 1));
+      const visibilityMs = Math.max(1, Math.floor(opts?.visibilityMs ?? 60_000));
+      const leased: QueueLeasedMessage<T>[] = [];
+      for (const filePath of listJsonFiles(activeDir)) {
+        if (leased.length >= max) break;
+        const record = readJsonFile<FsQueueRecord<T>>(filePath);
+        if (!record) continue;
+        const claimedPath = leasedPath(record.id);
+        try {
+          renameSync(filePath, claimedPath);
+        } catch {
+          continue;
+        }
+        const claimed: FsQueueRecord<T> = {
+          ...record,
+          attempt: (Number(record.attempt) || 0) + 1,
+          leaseToken: randomUUID(),
+          leaseExpiresAt: new Date(Date.now() + visibilityMs).toISOString(),
+        };
+        writeJsonAtomic(claimedPath, claimed);
+        leased.push(queueRecordToLeased(claimed));
+      }
+      return leased;
+    },
+
+    ack(messageId: string, leaseToken: string): boolean {
+      const filePath = leasedPath(messageId);
+      const record = readJsonFile<FsQueueRecord>(filePath);
+      if (!record || record.leaseToken !== leaseToken) return false;
+      try {
+        renameSync(filePath, donePath(messageId));
+      } catch {
+        return false;
+      }
+      return true;
+    },
+
+    nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean {
+      const filePath = leasedPath(messageId);
+      const record = readJsonFile<FsQueueRecord>(filePath);
+      if (!record || record.leaseToken !== leaseToken) return false;
+      const nextRecord: FsQueueRecord = {
+        id: record.id,
+        body: record.body,
+        enqueuedAt: record.enqueuedAt,
+        attempt: record.attempt,
+      };
+      if (opts?.dead) {
+        nextRecord.reason = opts.reason;
+        writeJsonAtomic(deadPath(messageId), nextRecord);
+      } else {
+        writeJsonAtomic(activePath(nextRecord), nextRecord);
+      }
+      try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
+      return true;
+    },
+
+    peekActive<T>(_prefix?: string): QueueMessage<T>[] {
+      reviveExpiredLeases();
+      return listJsonFiles(activeDir)
+        .map((filePath) => readJsonFile<FsQueueRecord<T>>(filePath))
+        .filter((record): record is FsQueueRecord<T> => Boolean(record))
+        .map(queueRecordToMessage);
+    },
+
+    peekDeadLetter<T>(_prefix?: string): QueueDeadLetterMessage<T>[] {
+      return listJsonFiles(deadDir)
+        .map((filePath) => readJsonFile<FsQueueRecord<T>>(filePath))
+        .filter((record): record is FsQueueRecord<T> => Boolean(record))
+        .map(queueRecordToDead);
+    },
   };
 }
 

@@ -184,6 +184,35 @@ export interface JournalStorage {
 }
 
 // ============================================================================
+// Queue — durable work queue with lease/ack semantics
+// ============================================================================
+
+export interface QueueMessage<T = unknown> {
+  id: string;
+  body: T;
+  enqueuedAt: string;
+  attempt: number;
+}
+
+export interface QueueLeasedMessage<T = unknown> extends QueueMessage<T> {
+  leaseToken: string;
+  leaseExpiresAt: string;
+}
+
+export interface QueueDeadLetterMessage<T = unknown> extends QueueMessage<T> {
+  reason?: string;
+}
+
+export interface QueueStorage {
+  enqueue<T>(body: T): QueueMessage<T>;
+  lease<T>(opts?: { max?: number; visibilityMs?: number }): QueueLeasedMessage<T>[];
+  ack(messageId: string, leaseToken: string): boolean;
+  nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean;
+  peekActive<T>(prefix?: string): QueueMessage<T>[];
+  peekDeadLetter<T>(prefix?: string): QueueDeadLetterMessage<T>[];
+}
+
+// ============================================================================
 // KV — key-value store with list and delete
 //
 // Values are opaque unknown — callers own serialisation.

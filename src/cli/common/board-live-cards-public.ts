@@ -33,6 +33,7 @@
 
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import type { BoardWorkerStore } from './board-worker-store.js';
 import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
 import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
@@ -177,6 +178,12 @@ export interface BoardPlatformAdapter {
    * One journal per board — no namespace parameter needed.
    */
   journalAdapter(): JournalStorageAdapter;
+
+  /**
+   * Semantic board-worker queue for hosted task execution.
+   * Implementations may back this with QueueStorage, Service Bus, Pub/Sub, etc.
+   */
+  boardWorkerStore(): BoardWorkerStore;
 
   /**
    * AtomicRelayLock — non-blocking try-acquire with relay-on-busy semantics.

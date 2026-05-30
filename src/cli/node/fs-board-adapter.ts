@@ -30,6 +30,8 @@ import {
 } from './execution-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
+import { createBoardWorkerStore } from '../common/board-worker-store.js';
+import type { BoardWorkerStore } from '../common/board-worker-store.js';
 import {
   createFsKvStorage,
   createFsBlobStorage,
@@ -37,6 +39,7 @@ import {
   createFsAtomicRelayLock,
   createFsJournalStorageAdapter,
   createFsJournalStorage,
+  createFsQueueStorage,
   createFsScratchStorage,
   createFsArchiveFactory,
   computeStableJsonHash,
@@ -86,10 +89,18 @@ export type { ExecutionRef } from '../common/execution-interface.js';
 export { createCardStorePublic } from '../common/card-store-lib-public.js';
 export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
 export { createCardStore } from '../common/board-live-cards-lib.js';
+export { createBoardWorkerStore } from '../common/board-worker-store.js';
 export { createArtifactsStore, createFileArtifactsStore, createCardFileMetadataStore } from '../common/artifacts-store-lib.js';
 import { createArtifactsStore } from '../common/artifacts-store-lib.js';
 export { createChatStorage, createInMemoryChatStorage } from '../common/chat-storage-lib.js';
 export type { ChatStorage, ChatRecord, ChatConfig } from '../common/chat-storage-lib.js';
+export type {
+  BoardWorkerDeadLetterRequest,
+  BoardWorkerLeasedRequest,
+  BoardWorkerQueuedRequest,
+  BoardWorkerRequest,
+  BoardWorkerStore,
+} from '../common/board-worker-store.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 export {
@@ -113,6 +124,8 @@ export type {
   SyncTransportInvoker,
   TransportInvoker,
 } from './execution-adapter.js';
+export { createFsQueueStorage } from './storage-fs-adapters.js';
+export { startBoardWorkerQueueRunner } from './board-worker-queue-runner.js';
 
 // ============================================================================
 // createNodeSpawnInvocationAdapter
@@ -263,6 +276,7 @@ export function createFsBoardPlatformAdapter(
   const { cliDir, opts } = normalizeFsBoardAdapterArgs(cliDirOrOpts, maybeOpts);
   const resolvedCliDir = resolveDefaultCliDir(cliDir);
   const dir = baseRef.value;
+  let boardWorkerStoreCache: BoardWorkerStore | undefined;
 
   // Resolve selfRef once for callback-style invocations (node <script> ...).
   // When suppressSpawn is set, skip path resolution because spawning is disabled.
@@ -289,11 +303,29 @@ export function createFsBoardPlatformAdapter(
 
     journalAdapter: () => createFsJournalStorageAdapter(dir),
 
+    boardWorkerStore: () => {
+      if (!boardWorkerStoreCache) {
+        boardWorkerStoreCache = createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
+      }
+      return boardWorkerStoreCache;
+    },
+
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
 
     selfRef,
 
     async dispatchExecution(ref, args) {
+      if (ref.howToRun === 'queue-storage') {
+        try {
+          const store = boardWorkerStoreCache ?? createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
+          if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
+          const boardId = typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : undefined;
+          store.enqueueRequest({ boardId, ref, args });
+          return { dispatched: true };
+        } catch (e) {
+          return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
       const needsLocalSpawn = ref.howToRun === 'local-node'
         || ref.howToRun === 'local-process'
         || ref.howToRun === 'local-python'

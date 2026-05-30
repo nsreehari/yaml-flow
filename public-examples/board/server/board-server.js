@@ -24,6 +24,7 @@ import {
   invokeExecutionRef,
   parseRef,
   registerInProcessExecutionHandler,
+  startBoardWorkerQueueRunner,
   serializeRef,
 } from 'yaml-flow/board-live-cards-node';
 import { registerInProcessBoardWorkerCallback } from 'yaml-flow/board-worker-adapter';
@@ -146,6 +147,7 @@ const configuredCopilotTimeoutMs = normalizeTimeoutMs(serverConfig.chatCopilotTi
 function normalizeBoardWorkerTransport(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'http') return 'http';
+  if (normalized === 'queue') return 'queue';
   return 'in-process-loop';
 }
 
@@ -261,11 +263,19 @@ function makeHostedBoardWorkerRef(boardId, taskExecPath, transport, executionExt
       extra: { boardId },
     };
   }
+  if (transport === 'queue') {
+    return {
+      meta: 'task-executor',
+      howToRun: 'queue-storage',
+      whatToRun: serializeRef({ kind: 'queue-storage', value: `board:${boardId}:board-worker` }),
+      extra: { boardId },
+    };
+  }
   throw new Error(`Unsupported board-worker transport for demo host: ${transport}`);
 }
 
 function makeBoardWorkerCallbackSelfRef(serverUrl, boardApiBasePath, transport, boardId) {
-  if (transport === 'in-process-loop') {
+  if (transport === 'in-process-loop' || transport === 'queue') {
     return {
       meta: 'board-live-cards',
       howToRun: 'in-process-loop',
@@ -373,6 +383,7 @@ const invocationAdapter = createNodeSpawnInvocationAdapter();
 const notificationTransport = createNamedPipeNotificationTransport();
 const logger = { info: console.log, warn: console.warn, error: console.error };
 const hostedBoardWorkerDispatchers = new Map();
+const hostedBoardWorkerQueueStops = new Map();
 
 // Map config keys to board entries for the factory
 const boardConfigEntries = serverConfig.boards ? Object.entries(serverConfig.boards) : [];
@@ -574,6 +585,11 @@ const runtime = createMultiBoardServerRuntime({
     if (hostedBoardWorkerDispatch) {
       hostedBoardWorkerDispatchers.set(boardId, hostedBoardWorkerDispatch);
     }
+    const previousQueueStop = hostedBoardWorkerQueueStops.get(boardId);
+    if (previousQueueStop) {
+      previousQueueStop();
+      hostedBoardWorkerQueueStops.delete(boardId);
+    }
     if (boardWorkerTransport === 'in-process-loop' && hostedBoardWorkerDispatch) {
       registerInProcessExecutionHandler(`board:${boardId}:board-worker`, async (_ref, args) => {
         void hostedBoardWorkerDispatch(args).catch((err) => {
@@ -581,12 +597,26 @@ const runtime = createMultiBoardServerRuntime({
         });
         return { result: 'success', data: { dispatched: true } };
       });
+    }
+    if ((boardWorkerTransport === 'in-process-loop' || boardWorkerTransport === 'queue') && hostedBoardWorkerDispatch) {
       registerInProcessBoardWorkerCallback(`board:${boardId}:board-worker-callback`, (payload) => {
         if (payload.outcome === 'success') {
           return singleBoardRuntime.reportSourceFetched(payload.token, String(payload.ref || ''));
         }
         return singleBoardRuntime.reportSourceFetchFailure(payload.token, String(payload.reason || 'unknown'));
       });
+    }
+    if (boardWorkerTransport === 'queue' && hostedBoardWorkerDispatch) {
+      const stopQueueRunner = startBoardWorkerQueueRunner({
+        workerStore: baseCfg.boardAdapter.boardWorkerStore(),
+        executeBoardWorkerRequest: hostedBoardWorkerDispatch,
+        onError: (error, lease) => {
+          logger.error(
+            `[board-server] queued board-worker failed for ${boardId} (attempt ${lease.attempt}): ${String(error && error.message || error)}`,
+          );
+        },
+      });
+      hostedBoardWorkerQueueStops.set(boardId, stopQueueRunner);
     }
 
     // Seed card store from source cardsDir if empty
