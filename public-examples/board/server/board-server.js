@@ -243,6 +243,24 @@ function makeExecutionRef(scriptPath, extra) {
   };
 }
 
+function makeLocalTaskExecutorRef(scriptPath, extra) {
+  if (!scriptPath) return undefined;
+  const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(process.cwd(), scriptPath);
+  return {
+    meta: 'task-executor',
+    howToRun: 'local-node',
+    whatToRun: serializeRef({ kind: 'fs-path', value: resolved }),
+    ...(extra !== undefined ? { extra } : {}),
+  };
+}
+
+function isHostedTaskExecutorRef(ref) {
+  return ref?.howToRun === 'queue-storage'
+    || ref?.howToRun === 'in-process-loop'
+    || ref?.howToRun === 'http:post'
+    || ref?.howToRun === 'http:get';
+}
+
 function makeHostedBoardWorkerRef(boardId, taskExecPath, transport, executionExtra) {
   if (!taskExecPath) return undefined;
   if (transport === 'in-process-loop') {
@@ -412,6 +430,14 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
     notifyChannel,
     ...(callbackSelfRef ? { selfRef: callbackSelfRef } : {}),
   });
+  const localSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
+  if (localSyncTaskExecutorRef) {
+    const invokeExecutorSync = nonCoreAdapter.invokeExecutorSync.bind(nonCoreAdapter);
+    nonCoreAdapter.invokeExecutorSync = (ref, subcommand, args, execOpts) => {
+      const syncRef = isHostedTaskExecutorRef(ref) ? localSyncTaskExecutorRef : ref;
+      return invokeExecutorSync(syncRef, subcommand, args, execOpts);
+    };
+  }
   boardAdapter.requestProcessAccumulated = () => {};
   nonCoreAdapter.requestProcessAccumulated = () => {};
 
