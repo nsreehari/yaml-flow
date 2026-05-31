@@ -845,6 +845,47 @@ process.exit(1);
     });
   });
 
+  it('routes inspect.board-runtime-status through /mcp', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', { tool: 'inspect.board-runtime-status', args: {} });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: expect.objectContaining({
+        meta: expect.any(Object),
+        summary: expect.objectContaining({ card_count: expect.any(Number) }),
+        cards: expect.arrayContaining([
+          expect.objectContaining({ 'card-id': 'card-1' }),
+        ]),
+      }),
+    });
+  });
+
+  it('routes manage.remove-card through /mcp and removes the card from both board and store', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', { tool: 'manage.remove-card', args: { card_id: 'card-1' } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: expect.objectContaining({
+        board_result: expect.objectContaining({ status: 'success' }),
+        store_result: expect.objectContaining({ status: 'success' }),
+      }),
+    });
+
+    const cardRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    expect(cardRes._status).toBe(404);
+  });
+
   it('routes preflight.validate-candidate-card-definition through /mcp using a supplied nonCoreAdapter', async () => {
     const runtime = createRuntime({ withNonCore: true });
     const req = makeRequest('POST', '/api/board/mcp', {
@@ -1001,6 +1042,47 @@ process.exit(1);
     });
   });
 
+  it('routes preflight.run-single-source-in-live-card through /mcp using a supplied nonCoreAdapter', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+
+    const seedResult = runtime.cardStore.set({
+      body: {
+        id: 'card-1',
+        card_data: { title: 'Live Source Card' },
+        source_defs: [{ bindTo: 'sourceA', kind: 'fake' }],
+        view: {
+          layout: { kind: 'stack' },
+          features: {},
+          elements: [{ id: 'summary', kind: 'text', data: { bind: 'card_data.title' } }],
+        },
+      },
+    });
+    expect(seedResult.status).toBe('success');
+
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'preflight.run-single-source-in-live-card',
+      args: {
+        card_id: 'card-1',
+        source_idx: 0,
+        mock_requires: {},
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        bindTo: 'sourceA',
+        ok: true,
+        result: { ok: true },
+        issues: [],
+      },
+    });
+  });
+
   it('routes preflight.run-one-cycle-with-candidate-card through /mcp using a supplied nonCoreAdapter', async () => {
     const runtime = createRuntime({ withNonCore: true });
     const req = makeRequest('POST', '/api/board/mcp', {
@@ -1036,6 +1118,46 @@ process.exit(1);
           layout: { kind: 'stack' },
           elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 'Cycle Card' }],
         },
+      },
+    });
+  });
+
+  it('routes manage.admin-upsert-card and manage.admin-read-card through /mcp-controlplane', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+
+    const upsertRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.admin-upsert-card',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        candidate_card_content: {
+          id: 'card-1',
+          meta: { title: 'admin-only' },
+          card_data: { title: 'Admin Card One' },
+          view: { elements: [{ id: 'title', kind: 'text', data: { bind: 'card_data.title' } }] },
+        },
+      },
+    }), upsertRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(upsertRes._status).toBe(200);
+    expect((parseJsonBody(upsertRes) as Record<string, unknown>).status).toBe('success');
+
+    const readRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.admin-read-card',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), readRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(readRes._status).toBe(200);
+    expect(parseJsonBody(readRes)).toEqual({
+      status: 'success',
+      data: {
+        cards: [
+          expect.objectContaining({
+            id: 'card-1',
+            card_data: expect.objectContaining({ title: 'Admin Card One' }),
+            meta: expect.objectContaining({ __visible_controlplane_only: true }),
+          }),
+        ],
       },
     });
   });

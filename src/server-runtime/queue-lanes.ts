@@ -3,7 +3,6 @@ import { createQueueLaneRegistry } from '../cli/common/queue-lane-registry.js';
 import type { QueueLaneDescriptor, QueueLaneRegistry } from '../cli/common/queue-lane-registry.js';
 import type { QueueStorage } from '../cli/common/storage-interface.js';
 import type {
-  AsyncBoardPlatformAdapter,
   AsyncBoardWorkerStore,
 } from '../cli/cloud/board-platform-adapter-async.js';
 import type { AsyncQueueStorage } from '../cli/cloud/storage-async-interface.js';
@@ -35,10 +34,6 @@ function applyLaneTuning<TMessage>(lane: QueueLaneDescriptor<TMessage>, tuning?:
     ...(tuning.concurrency != null ? { concurrency: tuning.concurrency } : {}),
     ...(tuning.maxAttempts != null ? { maxAttempts: tuning.maxAttempts } : {}),
   };
-}
-
-function isAsyncBoardPlatformAdapter(adapter: BoardRuntimePlatformAdapter): adapter is AsyncBoardPlatformAdapter {
-  return typeof (adapter as AsyncBoardPlatformAdapter).journalStorage === 'function';
 }
 
 function createBoardWorkerStoreLane(
@@ -99,12 +94,8 @@ export function createHostedBoardQueueLaneRegistry(opts: HostedBoardQueueLaneReg
   const logger = opts.logger ?? { info() {}, warn() {}, error() {} };
   const boardAdapter = opts.boardAdapter;
   const queueLaneTuning: HostedBoardQueueLaneTuning = opts.runtime.queueLaneTuning ?? {};
-  const processQueue = isAsyncBoardPlatformAdapter(boardAdapter)
-    ? boardAdapter.processAccumulatedStore()
-    : boardAdapter.processAccumulatedStore();
-  const chatStore = isAsyncBoardPlatformAdapter(boardAdapter)
-    ? boardAdapter.chatAgentStore()
-    : boardAdapter.chatAgentStore();
+  const processQueue = boardAdapter.processAccumulatedStore();
+  const chatStore = boardAdapter.chatAgentStore();
   const lanes: QueueLaneDescriptor[] = [];
   lanes.push(applyLaneTuning(createQueueStorageLane(
       'process-accumulated',
@@ -136,9 +127,7 @@ export function createHostedBoardQueueLaneRegistry(opts: HostedBoardQueueLaneReg
     ), queueLaneTuning.chatAgent) as QueueLaneDescriptor);
 
   if (opts.executeTaskExecutorRequest) {
-    const boardWorkerStore = isAsyncBoardPlatformAdapter(boardAdapter)
-      ? boardAdapter.boardWorkerStore()
-      : boardAdapter.boardWorkerStore();
+    const boardWorkerStore = boardAdapter.boardWorkerStore();
     lanes.push(applyLaneTuning(createBoardWorkerStoreLane(
       'task-executor',
       boardWorkerStore,

@@ -1385,6 +1385,5 @@ describe('windows launcher behavior', () => {
     // Keep this semantic: each launch path must explicitly set windowsHide.
     expect(processRunner).toMatch(/export function runSync[\s\S]*?windowsHide:\s*true/);
     expect(processRunner).toMatch(/export function runAsync[\s\S]*?windowsHide:\s*true/);
-    expect(processRunner).toMatch(/export function runDetached[\s\S]*?windowsHide:\s*true/);
   });
 });

@@ -32,6 +32,7 @@ import {
   registerInProcessExecutionHandler,
   startQueueLaneRunners,
   serializeRef,
+  serializeExecutionRef,
 } from 'yaml-flow/board-live-cards-node';
 import { registerInProcessBoardWorkerCallback } from 'yaml-flow/board-worker-adapter';
 import {
@@ -863,16 +864,35 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   if (runtimeMode === 'cloud') {
     const cloudBundle = getCloudBoardBundle(boardId, notifyChannel, boardDir);
     cloudBundle.adapter.callbackTransport = callbackTransport;
+    const cloudNonCoreAdapter = createFsBoardNonCorePlatformAdapter(
+      parseRef(serializeRef({ kind: 'fs-path', value: boardDir })),
+      {
+        notifyChannel,
+        ...(callbackTransport ? { callbackTransport } : {}),
+      },
+    );
+    const cloudHostedTaskExecutorRef = makeHostedBoardWorkerRef(boardId, taskExecPath, boardWorkerTransport, executionExtra);
+    const cloudLocalSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
+    if (cloudLocalSyncTaskExecutorRef) {
+      const invokeExecutor = cloudNonCoreAdapter.invokeExecutor.bind(cloudNonCoreAdapter);
+      cloudNonCoreAdapter.invokeExecutor = (ref, subcommand, execOpts) => {
+        const syncRef = isHostedTaskExecutorRef(ref) ? cloudLocalSyncTaskExecutorRef : ref;
+        return invokeExecutor(syncRef, subcommand, execOpts);
+      };
+    }
+    cloudNonCoreAdapter.requestProcessAccumulated = () => {};
+    try {
+      const seedTeRef = cloudLocalSyncTaskExecutorRef ?? cloudHostedTaskExecutorRef;
+      if (seedTeRef) {
+        cloudNonCoreAdapter.kvStorage('config').write('task-executor', serializeExecutionRef(seedTeRef));
+      }
+    } catch (e) {
+      logger.warn(`[cloud:${boardId}] failed to seed non-core task-executor config: ${e?.message || e}`);
+    }
     return {
       label,
       boardAdapter: cloudBundle.adapter,
-      nonCoreAdapter: createFsBoardNonCorePlatformAdapter(
-        parseRef(serializeRef({ kind: 'fs-path', value: boardDir })),
-        {
-          notifyChannel,
-          ...(callbackTransport ? { callbackTransport } : {}),
-        },
-      ),
+      nonCoreAdapter: cloudNonCoreAdapter,
       artifactsAdapter: cloudBundle.adapter,
       baseRef: { kind: 'cloud-board', value: `board:${boardId}` },
       cardStoreRef: `cloud:${boardId}:cards`,
@@ -881,7 +901,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
       scratchStoreRef: `cloud:${boardId}:scratch`,
       archiveStoreRef: `cloud:${boardId}:archive`,
       notifyRef: { kind: 'in-memory-notify', value: notifyChannel },
-      taskExecutorRef: makeHostedBoardWorkerRef(boardId, taskExecPath, boardWorkerTransport, executionExtra),
+      taskExecutorRef: cloudHostedTaskExecutorRef,
       chatHandlerFlow,
       inferenceAdapterRef: makeExecutionRef(infAdapterPath),
     };

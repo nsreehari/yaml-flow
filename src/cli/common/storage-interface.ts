@@ -83,6 +83,10 @@ export interface BlobStorage {
 // A ref describes WHERE content lives without carrying the bytes.
 // Serialized on the CLI wire as: b64:<base64url({"kind":"...","value":"..."})>
 //   kind = 'fs-path': value is an absolute file path
+// The published worker-facing entrypoint `yaml-flow/board-worker-adapter`
+// intentionally carries a self-contained copy of KindValueRef/parseRef/
+// serializeRef so task executors can vendor that file without importing this
+// broader internal module graph. Keep the wire format aligned between the two.
 // Additional kinds (e.g. 'cosmos') are added in board-worker-adapter.ts as new backends are supported.
 // ============================================================================
 

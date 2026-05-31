@@ -4,6 +4,13 @@
  * Standalone file — copy this to your board worker project (task executor, chat handler, etc.).
  * Zero dependencies on the rest of yaml-flow.
  *
+ * NOTE: KindValueRef / parseRef / serializeRef are intentionally duplicated here
+ * instead of re-exported from cli/common/storage-interface.ts. This file is a
+ * published worker-facing entrypoint (`yaml-flow/board-worker-adapter`) and must
+ * stay self-contained so executors can vendor or copy it without pulling in the
+ * broader runtime package surface. Keep the wire format in sync with the common
+ * storage-interface helpers.
+ *
  * Provides:
  *   - KindValueRef      wire format: b64:<base64url(json)>
  *   - parseRef()        parse a b64:<base64url(json)> string

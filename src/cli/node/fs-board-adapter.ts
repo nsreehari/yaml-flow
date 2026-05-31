@@ -19,12 +19,15 @@ import {
   getHash,
   joinPath,
   isAbsolutePath,
-  requestProcessAccumulatedDetached,
   publishJsonEventsToNamedPipe,
 } from './process-runner.js';
 import {
+  createBoardWorkerQueueLane,
+  createQueueStorageLane,
+  drainQueueLaneToIdle,
+} from './queue-runners.js';
+import {
   buildLocalBaseSpec,
-  dispatchTaskExecutorDetached,
   invokeExecutionRef,
   resolveWhatToRunValue,
 } from './execution-adapter.js';
@@ -49,6 +52,9 @@ import {
   computeStableJsonHash,
 } from './storage-fs-adapters.js';
 import { validateLiveCardDefinition } from '../../card-compute/schema-validator.js';
+import {
+  createBoardLiveCardsPublic,
+} from '../common/board-live-cards-public.js';
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from '../common/board-live-cards-public.js';
 import { createChatStorage } from '../common/chat-storage-lib.js';
 import type { ChatStorage } from '../common/chat-storage-lib.js';
@@ -133,11 +139,10 @@ export type {
   TransportInvoker,
 } from './execution-adapter.js';
 export { createFsQueueStorage } from './storage-fs-adapters.js';
-export { startBoardWorkerQueueRunner } from './board-worker-queue-runner.js';
-export { startProcessAccumulatedQueueRunner } from './process-accumulated-queue-runner.js';
 export {
   createBoardWorkerQueueLane,
   createQueueStorageLane,
+  drainQueueLaneToIdle,
   startQueueLaneRunner,
   startQueueLaneRunners,
 } from './queue-runners.js';
@@ -153,13 +158,13 @@ export type {
 // ============================================================================
 
 /**
- * Creates an InvocationAdapter backed by Node.js `spawn`/`spawnSync`.
+ * Creates a Node host InvocationAdapter backed by `spawn`/`spawnSync`.
  *
  * Supports howToRun: 'local-node'
- *   → spawns the script as a detached Node.js child process (fire-and-forget).
+ *   → the Node host adapter spawns the script as a detached child process.
  *
  * Pass to createSingleBoardServerRuntime / createMultiBoardServerRuntime as
- * the `invocationAdapter` option. This is the reference Node.js implementation;
+ * the `invocationAdapter` option. This is the reference Node host implementation;
  * replace with your own for Azure Functions, Lambda, etc.
  */
 export function createNodeSpawnInvocationAdapter(): InvocationAdapter {
@@ -297,8 +302,11 @@ export function createFsBoardPlatformAdapter(
   const { cliDir, opts } = normalizeFsBoardAdapterArgs(cliDirOrOpts, maybeOpts);
   const dir = baseRef.value;
   let boardWorkerStoreCache: BoardWorkerStore | undefined;
+  let boardWorkerDrainInFlight: Promise<number | void> | null = null;
   let chatAgentStoreCache: BoardWorkerStore | undefined;
   let processAccumulatedStoreCache: ReturnType<typeof createFsQueueStorage> | undefined;
+  let processAccumulatedBoardCache: ReturnType<typeof createBoardLiveCardsPublic> | undefined;
+  let processAccumulatedDrainInFlight: Promise<number | void> | null = null;
   let resolvedCliDirCache: string | undefined;
 
   function getResolvedCliDir(): string {
@@ -310,7 +318,38 @@ export function createFsBoardPlatformAdapter(
 
   const callbackTransport = opts?.callbackTransport ?? createLocalNodeBoardCallbackTransport(opts?.notifyChannel);
 
-  return {
+  let adapter: BoardPlatformAdapter;
+
+  function scheduleInProcessBoardWorkerDrain(): void {
+    if (opts?.suppressSpawn || boardWorkerDrainInFlight) return;
+    const lane = createBoardWorkerQueueLane({
+      id: 'task-executor',
+      workerStore: adapter.boardWorkerStore(),
+      handleRequest: async (_args, request) => {
+        const result = await invokeExecutionRef(request.ref, request.args, {
+          cliDir: getResolvedCliDir(),
+          cwd: process.cwd(),
+          label: 'fsBoardAdapter.boardWorker',
+        });
+        if (result.result !== 'success') {
+          const detail = typeof result.data?.error === 'string' ? result.data.error : result.error;
+          throw new Error(detail || result.result);
+        }
+      },
+    });
+    boardWorkerDrainInFlight = drainQueueLaneToIdle(lane)
+      .catch((error) => {
+        void opts?.onWarn?.(`[board-worker] in-process queue drain failed: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        boardWorkerDrainInFlight = null;
+        if (adapter.boardWorkerStore().peekActive().length > 0) {
+          scheduleInProcessBoardWorkerDrain();
+        }
+      });
+  }
+
+  adapter = {
     kvStorage: (namespace: string) =>
       createFsKvStorage(joinPath(dir, `.${namespace}`)),
 
@@ -348,7 +387,7 @@ export function createFsBoardPlatformAdapter(
 
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
 
-  callbackTransport,
+    callbackTransport,
 
     async dispatchExecution(ref, args) {
       const hasDirectHostedOutput = Boolean((args['output'] as Record<string, unknown> | undefined)?.['ref']);
@@ -417,7 +456,11 @@ export function createFsBoardPlatformAdapter(
         const inRef   = serializeRef(scratch.keyRef(inFile));
         const outRef  = serializeRef(scratch.keyRef(outFile));
         const errRef  = serializeRef(scratch.keyRef(errFile));
-        dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, getResolvedCliDir());
+        const store = boardWorkerStoreCache ?? createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
+        if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
+        const boardId = typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : undefined;
+        store.enqueueRequest({ boardId, ref, args: { subcommand: 'run-source-fetch', inRef, outRef, errRef } });
+        scheduleInProcessBoardWorkerDrain();
         return { dispatched: true };
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
@@ -452,8 +495,29 @@ export function createFsBoardPlatformAdapter(
     kvStorageForRef: (ref: string) => createFsKvStorage(parseRef(ref).value),
 
     requestProcessAccumulated() {
-      if (opts?.suppressSpawn) return;
-      requestProcessAccumulatedDetached(getResolvedCliDir(), baseRef, opts?.notifyChannel);
+      if (opts?.suppressSpawn || processAccumulatedDrainInFlight) return;
+      const adapter = this as BoardPlatformAdapter;
+      const board = processAccumulatedBoardCache ??= createBoardLiveCardsPublic(baseRef, adapter);
+      const lane = createQueueStorageLane<{ boardRef?: string }>({
+        id: 'process-accumulated',
+        queueStorage: adapter.processAccumulatedStore(),
+        handleMessage: async () => {
+          const result = await board.processAccumulatedEvents({});
+          if (result.status !== 'success') {
+            throw new Error(result.error || `processAccumulatedEvents returned ${result.status}`);
+          }
+        },
+      });
+      processAccumulatedDrainInFlight = drainQueueLaneToIdle(lane)
+        .catch((error) => {
+          void opts?.onWarn?.(`[process-accumulated] in-process queue drain failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          processAccumulatedDrainInFlight = null;
+          if (adapter.processAccumulatedStore().peekActive().length > 0) {
+            adapter.requestProcessAccumulated?.();
+          }
+        });
     },
 
     publishBoardChangeNotifications(notifications) {
@@ -470,9 +534,10 @@ export function createFsBoardPlatformAdapter(
         opts.onWarn,
       );
     },
-
     onWarn: opts?.onWarn,
   };
+
+  return adapter;
 }
 
 // ============================================================================

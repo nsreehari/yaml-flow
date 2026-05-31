@@ -121,6 +121,30 @@ export function startQueueLaneRunner<TMessage>(lane: QueueLaneDescriptor<TMessag
   };
 }
 
+export async function drainQueueLaneOnce<TMessage>(lane: QueueLaneDescriptor<TMessage>): Promise<number> {
+  const visibilityMs = Math.max(1, Math.floor(lane.visibilityMs ?? 60_000));
+  const concurrency = Math.max(1, Math.floor(lane.concurrency ?? 1));
+  const leases = await lane.lease({ max: concurrency, visibilityMs });
+  for (const lease of leases) {
+    await runLaneLease(lane, lease);
+  }
+  return leases.length;
+}
+
+export async function drainQueueLaneToIdle<TMessage>(
+  lane: QueueLaneDescriptor<TMessage>,
+  opts?: { maxPasses?: number },
+): Promise<number> {
+  const maxPasses = Math.max(1, Math.floor(opts?.maxPasses ?? 256));
+  let total = 0;
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const drained = await drainQueueLaneOnce(lane);
+    total += drained;
+    if (drained <= 0) return total;
+  }
+  throw new Error(`drainQueueLaneToIdle exceeded ${maxPasses} passes for lane "${lane.id}"`);
+}
+
 export function startQueueLaneRunners(registryOrLanes: QueueLaneRegistry | QueueLaneDescriptor[]): () => void {
   const lanes = Array.isArray(registryOrLanes) ? registryOrLanes : registryOrLanes.lanes;
   const stops = lanes.map((lane) => startQueueLaneRunner(lane));

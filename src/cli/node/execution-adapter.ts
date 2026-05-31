@@ -50,7 +50,7 @@ import { jsonata } from '../common/jsonata-loader.js';
 import type { ArgsMassaging, ExecutionRef, ExecutionResult } from '../common/execution-interface.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
-import { buildBoardCliInvocation, runSync, runDetached } from './process-runner.js';
+import { buildBoardCliInvocation, runSync } from './process-runner.js';
 
 const require = createRequire(import.meta.url);
 
@@ -859,39 +859,3 @@ export function localNodeExecutorRef(scriptPath: string): ExecutionRef {
   };
 }
 
-// ============================================================================
-// Detached task-executor dispatch
-// ============================================================================
-
-/**
- * Dispatch a task-executor invocation as a detached background process.
- * Used by the board source-fetch dispatcher — fire-and-forget.
- *
- * For http transports, falls back to synchronous fetch (not truly detached).
- */
-export function dispatchTaskExecutorDetached(
-  ref: ExecutionRef,
-  args: TaskExecutorArgs,
-  cliDir: string,
-): void {
-  const isAsyncTransport = ref.howToRun === 'http:post' || ref.howToRun === 'http:get' || ref.howToRun === 'in-process-loop';
-  if (isAsyncTransport) {
-    void invokeExecutionRef(ref, args as unknown as Record<string, unknown>, {
-      cliDir,
-      cwd: process.cwd(),
-      label: 'dispatchTaskExecutorDetached',
-    }).then((result) => {
-      if (result.result !== 'success') {
-        const detail = typeof result.data?.error === 'string' ? result.data.error : result.error;
-        console.error(`[dispatchTaskExecutorDetached] dispatch failed: ${detail || result.result}`);
-      }
-    }).catch(err => {
-      console.error(`[dispatchTaskExecutorDetached] async dispatch failed: ${(err as Error).message}`);
-    });
-    return;
-  }
-
-  const { command, baseArgs } = resolveBaseInvocation(ref, cliDir);
-  const callArgv = buildDefaultTaskExecutorArgv(args, ref.extra);
-  runDetached({ command, args: [...baseArgs, ...callArgv] });
-}

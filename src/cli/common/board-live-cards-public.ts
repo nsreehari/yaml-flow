@@ -219,7 +219,7 @@ export interface BoardPlatformAdapter {
    * Generic execution dispatch — platform adapts ExecutionRef → actual transport.
    * Public layer constructs fully-formed semantic args (source def, base_ref,
    * callback token with selfRef baked in). Platform handles transport:
-   *   Node: writes args to temp file, spawns detached process
+    *   Node host adapter: may write args to temp file and may spawn a detached process
    *   Azure: HTTP POST args as JSON body
    *   Firebase: publishes args as pubsub message
    */

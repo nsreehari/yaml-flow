@@ -59,6 +59,18 @@ async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
+async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: Record<string, unknown>): Promise<void> }, boardAdapter: { chatAgentStore(): { leaseRequests(opts?: { max?: number; visibilityMs?: number }): Array<{ messageId: string; leaseToken: string; request: Record<string, unknown> }>; ackRequest(messageId: string, leaseToken: string): boolean; }; }): Promise<void> {
+  const workerStore = boardAdapter.chatAgentStore();
+  while (true) {
+    const leases = workerStore.leaseRequests({ max: 20, visibilityMs: 60_000 });
+    if (!leases.length) break;
+    for (const lease of leases) {
+      await runtime.handleChatAgentRequest(lease.request);
+      workerStore.ackRequest(lease.messageId, lease.leaseToken);
+    }
+  }
+}
+
 // ── CardSourceAdapter from FS ──────────────────────────────────────────────
 function createFsCardSource(cardsDir: string): CardSourceAdapter {
   return {
@@ -611,8 +623,7 @@ describe('platform-free server runtime (Node host)', () => {
     expect(chatRes.ok).toBe(true);
     expect(flowRuns).toBe(0);
 
-    const drainResult = await runtime.processAccumulatedEvents();
-    expect(drainResult.status).toBe('success');
+    await drainQueuedChatRequests(runtime, boardAdapter);
     expect(flowRuns).toBe(1);
     expect(isolatedChatStorage.isProcessing(cardId)).toBe(false);
 
@@ -701,8 +712,7 @@ describe('platform-free server runtime (Node host)', () => {
     });
     expect(chatRes.ok).toBe(true);
     expect(flowRuns).toBe(0);
-    const drainResult = await runtime.processAccumulatedEvents();
-    expect(drainResult.status).toBe('success');
+    await drainQueuedChatRequests(runtime, boardAdapter);
     expect(flowRuns).toBe(1);
 
     await new Promise<void>((resolve) => server2.close(() => resolve()));
@@ -834,8 +844,7 @@ describe('platform-free server runtime (Node host)', () => {
     const beforeDrainMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
     expect(beforeDrainMessages.map((message) => message.role)).toEqual(['user']);
 
-    const drainResult = await runtime.processAccumulatedEvents();
-    expect(drainResult.status).toBe('success');
+    await drainQueuedChatRequests(runtime, boardAdapter);
 
     const newMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
     expect(newMessages.map((message) => message.role)).toEqual(['user', 'system', 'assistant']);

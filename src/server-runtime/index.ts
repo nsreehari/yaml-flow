@@ -620,20 +620,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return { status: 'success' };
   }
 
-  async function processChatAgentQueueInternal(skipInit = false): Promise<CommandResult> {
-    if (!skipInit) await initBoardAndSetup();
-    for (const ctx of boardContexts) {
-      const chatQueueResult = await processQueuedChatHandlers(ctx);
-      if (chatQueueResult.status !== 'success') return chatQueueResult;
-    }
-    return { status: 'success' };
-  }
-
   async function processAccumulatedEventsInternal(): Promise<CommandResult> {
     await initBoardAndSetup();
-    const drainResult = await processAccumulatedLaneInternal(true);
-    if (drainResult.status !== 'success') return drainResult;
-    return processChatAgentQueueInternal(true);
+      return processAccumulatedLaneInternal(true);
   }
 
   // ── Card reads ───────────────────────────────────────────────────────────
@@ -718,7 +707,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         if (!cardId) return { status: 'fail', error: 'upsertCard requires params.cardId' };
         const ctx = cardContextForCard(cardId) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.boardOps.upsertCard({ params: { cardId, restart: input.params.restart === true } });
+        const result = await ctx.boardOps.upsertCard({ params: { cardId, restart: input.params.restart === true } });
+        if (result.status !== 'success') return result;
+        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
+          const drainResult = await processAccumulatedLaneInternal(true);
+          if (drainResult.status !== 'success') return drainResult;
+        }
+        return result;
       },
     };
   }
@@ -1596,41 +1591,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       try { chatStorage.setProcessing(cardId, false); } catch {}
     }
     throw new Error(result.error || `chat-agent dispatch failed for card "${cardId || 'unknown'}"`);
-  }
-
-  async function processQueuedChatHandlers(ctx: BoardContext): Promise<CommandResult> {
-    const leased = isAsyncBoardPlatformAdapter(ctx.boardAdapter)
-      ? await ctx.boardAdapter.chatAgentStore().leaseRequests({ max: 32, visibilityMs: 5 * 60_000 })
-      : ctx.boardAdapter.chatAgentStore().leaseRequests({ max: 32, visibilityMs: 5 * 60_000 });
-
-    for (const message of leased) {
-      const cardId = typeof message.request.args?.cardId === 'string' ? message.request.args.cardId : '';
-      try {
-        await handleChatAgentRequestInternal(message.request, true);
-        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
-          await ctx.boardAdapter.chatAgentStore().ackRequest(message.messageId, message.leaseToken);
-        } else {
-          ctx.boardAdapter.chatAgentStore().ackRequest(message.messageId, message.leaseToken);
-        }
-        logger.info(`[chat-handler] dispatched queued request for card "${cardId}" (boardId: "${boardId}")`);
-      } catch (err) {
-        if (cardId) {
-          try { chatStorage.setProcessing(cardId, false); } catch {}
-        }
-        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
-          await ctx.boardAdapter.chatAgentStore().nackRequest(message.messageId, message.leaseToken, {
-            reason: err instanceof Error ? err.message : String(err),
-          });
-        } else {
-          ctx.boardAdapter.chatAgentStore().nackRequest(message.messageId, message.leaseToken, {
-            reason: err instanceof Error ? err.message : String(err),
-          });
-        }
-        logger.warn(`[chat-handler] invoke failed for card "${cardId}": ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    return { status: 'success' };
   }
 
   // ── Card actions ─────────────────────────────────────────────────────────

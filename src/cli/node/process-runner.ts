@@ -1,13 +1,12 @@
 /**
  * process-runner.ts — Single source of truth for child process execution.
  *
- * All CLI execution paths (task-executor, source.cli, inference-adapter,
- * detached background workers) route through these helpers.
+ * All CLI execution paths (task-executor, source.cli, inference-adapter)
+ * route through these helpers.
  *
  * DESIGN:
  *   - CommandSpec is the structured command form: { command, args, cwd, env, timeoutMs }
  *   - runSync / runAsync use execFileSync / execFile (no ambient shell)
- *   - runDetached handles OS differences in one place
  *   - parseCommandSpec reads both legacy string form and new { command, args } form
  *
  * WHY NO SHELL BY DEFAULT:
@@ -25,42 +24,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as net from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, execFile, spawn } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 
 import type { CommandSpec } from '../../continuous-event-graph/handlers.js';
-import type { KindValueRef } from '../common/storage-interface.js';
-import { serializeRef } from '../common/storage-interface.js';
 export type { CommandSpec };
-
-// ============================================================================
-// makeBoardTempFilePath — board-scoped temp file path for external process handoff
-// ============================================================================
-
-/**
- * Return a unique file path under `<boardDir>/.tmp/` suitable for passing
- * to an external binary (task-executor, inference-adapter) as `--in`, `--out`,
- * or `--err` arguments.
- *
- * - Files are co-located with the board they belong to (not global os.tmpdir()).
- * - The `.tmp/` directory is created on demand.
- * - The file itself is NOT created here — the caller writes it before use.
- * - `ext` defaults to `.json`; use `.txt` for plain-text error files.
- */
-export function makeBoardTempFilePath(boardDir: string, label: string, ext = '.json'): string {
-  const tmpDir = path.join(boardDir, '.tmp');
-  fs.mkdirSync(tmpDir, { recursive: true });
-  return path.join(tmpDir, `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
-}
 
 /** Join path segments — thin wrapper so callers don't need to import node:path. */
 export function joinPath(...segments: string[]): string { return path.join(...segments); }
 
 /** Resolve a path to absolute — thin wrapper so callers don't need to import node:path. */
 export function resolvePath(...segments: string[]): string { return path.resolve(...segments); }
-
-/** Return the directory name of a path. */
-export function dirnamePath(p: string): string { return path.dirname(p); }
 
 /** Return true if the path is absolute. */
 export function isAbsolutePath(p: string): boolean { return path.isAbsolute(p); }
@@ -197,84 +171,6 @@ export function runAsync(
   );
 }
 
-// ============================================================================
-// Git Bash detection (Windows only — needed for runDetached)
-// ============================================================================
-
-let _gitBashPath: string | false | undefined;
-const _GIT_BASH_CACHE = path.join(os.tmpdir(), '.board-live-cards-git-bash-cache.json');
-
-export function findGitBash(): string | false {
-  if (_gitBashPath !== undefined) return _gitBashPath;
-  if (process.platform !== 'win32') return (_gitBashPath = false);
-
-  try {
-    const cached = JSON.parse(fs.readFileSync(_GIT_BASH_CACHE, 'utf8')) as { path: string | false };
-    if (cached.path === false || (typeof cached.path === 'string' && fs.existsSync(cached.path))) {
-      return (_gitBashPath = cached.path);
-    }
-  } catch { /* cache miss */ }
-
-  const candidates: Array<string | undefined> = [
-    process.env.SHELL,
-    process.env.PROGRAMFILES
-      ? path.join(process.env.PROGRAMFILES, 'Git', 'usr', 'bin', 'bash.exe')
-      : undefined,
-    process.env.PROGRAMFILES
-      ? path.join(process.env.PROGRAMFILES, 'Git', 'bin', 'bash.exe')
-      : undefined,
-    process.env['PROGRAMFILES(X86)']
-      ? path.join(process.env['PROGRAMFILES(X86)']!, 'Git', 'bin', 'bash.exe')
-      : undefined,
-    process.env.LOCALAPPDATA
-      ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe')
-      : undefined,
-  ];
-
-  for (const c of candidates) {
-    if (c && /bash(\.exe)?$/i.test(c) && fs.existsSync(c)) {
-      _gitBashPath = c;
-      try { fs.writeFileSync(_GIT_BASH_CACHE, JSON.stringify({ path: c })); } catch { /* best-effort */ }
-      return _gitBashPath;
-    }
-  }
-
-  _gitBashPath = false;
-  try { fs.writeFileSync(_GIT_BASH_CACHE, JSON.stringify({ path: false })); } catch { /* best-effort */ }
-  return _gitBashPath;
-}
-
-// ============================================================================
-// runDetached — fire-and-forget background spawn
-// ============================================================================
-
-/**
- * Spawn a detached background process that survives parent exit.
- * Handles Windows (Git Bash / cmd /c start /b) and Linux/macOS transparently.
- */
-export function runDetached(spec: CommandSpec): void {
-  const { command, args = [] } = spec;
-
-  if (process.platform === 'win32') {
-    // On Windows, `detached: true` sets the DETACHED_PROCESS flag which allocates
-    // a new console window for the child — flashing a CMD window — regardless of
-    // `windowsHide: true`. On Windows, `unref()` alone is sufficient to fire-and-forget:
-    // the child runs independently and the parent's event loop does not wait for it.
-    // `detached` is intentionally omitted (defaults to false) on this platform.
-    const child = spawn(command, args, {
-      stdio: 'ignore',
-      windowsHide: true,
-      shell: _needsWindowsShell(command),
-    });
-    child.unref();
-    return;
-  }
-
-  const child = spawn(command, args, { detached: true, stdio: 'ignore' });
-  child.unref();
-}
-
-// ============================================================================
 // buildBoardCliInvocation — resolve how to invoke board-live-cards-cli
 //
 // cliDir is the directory containing board-live-cards-cli.ts / .js.
@@ -342,20 +238,6 @@ export function resolveBoardCliCallbackTarget(cliDir: string): string {
 }
 
 // ============================================================================
-// requestProcessAccumulatedDetached — fire-and-forget dispatch of next drain pass
-// ============================================================================
-
-/**
- * Spawn a detached board-live-cards process-accumulated-events pass for the given board.
- */
-export function requestProcessAccumulatedDetached(cliDir: string, baseRef: KindValueRef, notifyChannel?: string): void {
-  const cliArgs = ['--base-ref', serializeRef(baseRef)];
-  if (notifyChannel) cliArgs.push('--notify-channel', notifyChannel);
-  const { cmd, args } = buildBoardCliInvocation(cliDir, 'process-accumulated-events', cliArgs);
-  runDetached({ command: cmd, args });
-}
-
-// ============================================================================
 // Named-pipe event transport (cross-process board notifications)
 // ============================================================================
 
@@ -418,10 +300,10 @@ export function publishJsonEventsToNamedPipe(
 // ============================================================================
 // createNodeCommandExecutor — Node implementation of CommandExecutor
 //
-// Wraps runSync / runAsync / runDetached / parseCommandSpec / splitCommandLine
+// Wraps runSync / runAsync / parseCommandSpec / splitCommandLine
 // into a single injectable object. Pass to command handlers instead of the
 // individual execCommandSync / execCommandAsync / resolveCommandInvocation /
-// splitCommandLine / spawnDetachedCommand dep functions.
+// splitCommandLine dep functions.
 // ============================================================================
 
 import type { CommandExecutor, ExecOptions } from '../common/process-interface.js';
@@ -442,8 +324,5 @@ export function createNodeCommandExecutor(): CommandExecutor {
       return { cmd: spec.command, args: spec.args ?? [] };
     },
     splitCommand: splitCommandLine,
-    spawnDetached(cmd: string, args: string[]): void {
-      runDetached({ command: cmd, args });
-    },
   };
 }

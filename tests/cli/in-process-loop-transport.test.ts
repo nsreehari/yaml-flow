@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  dispatchTaskExecutorDetached,
   invokeExecutionRef,
   registerInProcessExecutionHandler,
   unregisterInProcessExecutionHandler,
@@ -12,16 +11,6 @@ import {
   serializeRef,
   unregisterInProcessBoardWorkerCallback,
 } from '../../src/cli/public/board-worker-adapter.ts';
-
-async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 describe('in-process-loop transports', () => {
   it('invokeExecutionRef dispatches to a registered in-process execution handler', async () => {
@@ -40,38 +29,6 @@ describe('in-process-loop transports', () => {
 
       expect(result.result).toBe('success');
       expect(result.data).toEqual({ echoed: 'ok' });
-    } finally {
-      unregisterInProcessExecutionHandler(handlerKey);
-    }
-  });
-
-  it('dispatchTaskExecutorDetached fires an in-process execution handler without waiting for completion', async () => {
-    const handlerKey = 'test:detached-execution-handler';
-    const calls: Array<Record<string, unknown>> = [];
-    registerInProcessExecutionHandler(handlerKey, async (_ref, args) => {
-      calls.push(args);
-      return { result: 'success', data: { dispatched: true } };
-    });
-
-    try {
-      dispatchTaskExecutorDetached({
-        meta: 'task-executor',
-        howToRun: 'in-process-loop',
-        whatToRun: serializeRef({ kind: 'in-process-loop', value: handlerKey }),
-      }, {
-        subcommand: 'run-source-fetch',
-        inRef: 'b64:in',
-        outRef: 'b64:out',
-        errRef: 'b64:err',
-      }, process.cwd());
-
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]).toMatchObject({
-        subcommand: 'run-source-fetch',
-        inRef: 'b64:in',
-        outRef: 'b64:out',
-        errRef: 'b64:err',
-      });
     } finally {
       unregisterInProcessExecutionHandler(handlerKey);
     }

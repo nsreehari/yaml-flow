@@ -1,16 +1,25 @@
 # board-worker — Public API Reference
 
-The board-worker module is a small, transport-agnostic surface for **queueing executor invocations** and **delivering their results back to the board** via callback tokens. It has three pieces:
+The board-worker surface is the transport-agnostic contract for **queueing executor invocations** and **delivering their results back to the board** via callback tokens. For Node hosts, queue draining is expressed through the generic queue-lane helpers.
+
+Primary pieces:
 
 1. **`BoardWorkerStore`** (`board-worker-store.ts`, platform-free) — durable queue of `BoardWorkerRequest`s on top of any `QueueStorage`.
-2. **`startBoardWorkerQueueRunner`** (`board-worker-queue-runner.ts`, Node) — lease/ack polling loop that drains the store by calling a host-supplied executor.
+2. **Task-executor lane helpers** (`queue-runners.ts`, Node) — `createBoardWorkerQueueLane`, `startQueueLaneRunner`, and `startQueueLaneRunners` for host-driven polling/lease/ack/nack execution.
 3. **`reportComplete` / `reportFailed`** (`board-worker-adapter.ts`, Node) — callback helpers that task-executors use to deliver results back to the board, in-process or over HTTP.
+
+`board-worker-adapter` is a published worker-facing boundary, not just an internal helper. Its `KindValueRef` / `parseRef` / `serializeRef` helpers intentionally duplicate the common storage wire helpers so executors can depend on `yaml-flow/board-worker-adapter` as a self-contained surface, or vendor the file directly, without importing the broader runtime internals. The wire format must stay aligned with `cli/common/storage-interface.ts`.
 
 Import surface (Node):
 
 ```ts
 import { createBoardWorkerStore } from 'yaml-flow/board-worker-store';
-import { startBoardWorkerQueueRunner } from 'yaml-flow/board-worker-queue-runner';
+import {
+  createBoardWorkerQueueLane,
+  startQueueLaneRunner,
+  startQueueLaneRunners,
+  type QueueLaneLease,
+} from 'yaml-flow/board-live-cards-node';
 import {
   reportComplete,
   reportFailed,
@@ -100,37 +109,44 @@ interface QueueStorage {
 
 ---
 
-## `startBoardWorkerQueueRunner` (Node)
+## Task-executor lane (Node)
 
-Polling loop that leases from the store, hands each request to the host's
-`executeBoardWorkerRequest`, then ack/nacks based on the outcome. Returns a
-teardown function.
+Node hosts should drain `BoardWorkerStore` through the generic lane runner APIs.
+The task-executor lane is just a `QueueLaneDescriptor<BoardWorkerRequest>` with
+the conventional lane id `task-executor`.
 
 ```ts
-interface StartBoardWorkerQueueRunnerOptions {
+interface CreateBoardWorkerQueueLaneOptions {
+  id?: string; // defaults to 'task-executor' in typical host wiring
   workerStore: BoardWorkerStore;
 
   /** Host-supplied executor. Throw to nack; return normally to ack. */
-  executeBoardWorkerRequest(
+  handleRequest(
     args: Record<string, unknown>,
     request: BoardWorkerRequest,
   ): Promise<void>;
 
-  pollIntervalMs?: number;   // default 250
-  visibilityMs?: number;     // default 60_000 (60s lease)
-  concurrency?: number;      // default 1 (max leases per tick)
-  maxAttempts?: number;      // default 5 — request is dead-lettered once attempt >= maxAttempts
+  pollIntervalMs?: number;   // default consumed by runner: 250
+  visibilityMs?: number;     // default consumed by runner: 60_000
+  concurrency?: number;      // default consumed by runner: 1
+  maxAttempts?: number;      // default consumed by runner: 5
 
-  onError?(error: unknown, lease: BoardWorkerLeasedRequest): void;
+  onError?(error: unknown, lease: QueueLaneLease<BoardWorkerRequest>): void;
 }
 
-function startBoardWorkerQueueRunner(opts: StartBoardWorkerQueueRunnerOptions): () => void
+function createBoardWorkerQueueLane(
+  opts: CreateBoardWorkerQueueLaneOptions,
+): QueueLaneDescriptor<BoardWorkerRequest>
+
+function startQueueLaneRunner<TMessage>(lane: QueueLaneDescriptor<TMessage>): () => void
+function startQueueLaneRunners(registryOrLanes: QueueLaneRegistry | QueueLaneDescriptor[]): () => void
 ```
 
 Behavior:
 
-- Ticks every `pollIntervalMs` (`setInterval`, unref'd if available).
-- Each tick leases up to `concurrency` messages, processes them serially.
+- `createBoardWorkerQueueLane(...)` adapts `BoardWorkerStore` lease/ack/nack to the generic queue-lane contract.
+- `startQueueLaneRunner(...)` ticks every `pollIntervalMs` (`setInterval`, unref'd if available).
+- Each tick leases up to `concurrency` messages and processes them serially.
 - Success → `ackRequest`.
 - Throw → `nackRequest({ dead: attempt >= maxAttempts, reason })` and invoke `onError`.
 - The returned function stops the loop and clears the interval.
@@ -228,17 +244,18 @@ const workerStore = createBoardWorkerStore(myQueueStorage);
 workerStore.enqueueRequest({ boardId, ref: executorRef, args: payload });
 
 // 3. A queue runner drains it
-const stop = startBoardWorkerQueueRunner({
+const stop = startQueueLaneRunner(createBoardWorkerQueueLane({
+  id: 'task-executor',
   workerStore,
   concurrency: 4,
   maxAttempts: 3,
-  async executeBoardWorkerRequest(args, request) {
+  async handleRequest(args, request) {
     // Host-defined: actually invoke the executor (spawn, HTTP, in-process, …)
     // and ensure it eventually calls reportComplete / reportFailed.
     await dispatch(request.ref, args);
   },
-  onError(err, lease) { logger.warn('worker failure', err, lease.messageId); },
-});
+  onError(err, lease) { logger.warn('worker failure', err, lease.id); },
+}));
 
 // 4. Task-executor side — after producing output:
 reportComplete(callback, outRef);   // or reportFailed(callback, 'reason')

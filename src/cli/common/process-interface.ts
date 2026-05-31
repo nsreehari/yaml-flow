@@ -1,7 +1,7 @@
 /**
  * process-interface.ts
  *
- * The interface contract for plugging in a new process-dispatch backend.
+ * The interface contract for plugging in a host-side process-dispatch backend.
  *
  * To add a new backend (e.g. Azure Functions, AWS Lambda, in-process test double):
  *   1. Create a new file (e.g. process-azure-runner.ts, process-lambda-runner.ts).
@@ -9,11 +9,12 @@
  *        - requestSourceFetch   — dispatch a source-data fetch for a card
  *        - requestProcessAccumulated — schedule the next drain pass
  *   3. Export a factory (e.g. `createAzureInvocationAdapter(...): InvocationAdapter`).
- *   4. Wire the factory at the top-level entrypoint (equivalent of `cli()` in
- *      board-live-cards-cli.ts) replacing `createBoardInvocationAdapter`.
+ *   4. Wire the factory at the top-level host entrypoint (for example the
+ *      Node board CLI/server setup) as the `invocationAdapter` implementation.
  *
- * The Node implementation lives in process-runner.ts (`requestProcessAccumulatedDetached`)
- * and board-live-cards-cli.ts (`createBoardInvocationAdapter`).
+ * This is host adapter infrastructure, not board-core behavior.
+ * The Node host implementation lives in the Node FS host adapter and related
+ * process utilities.
  */
 
 import type { KindValueRef } from './storage-interface.js';
@@ -53,7 +54,7 @@ export interface InvocationAdapter {
 
   /**
    * Schedule a new drain pass for the board (the `process-accumulated-events` cycle).
-   * Node: spawns a detached CLI process.
+    * Node host adapter: may spawn a detached CLI process.
    * Azure: enqueues a function trigger / storage-queue message.
    * In-process test double: calls the handler synchronously or records the call.
    */
@@ -78,7 +79,7 @@ export interface ExecOptions {
 // CommandExecutor — injectable abstraction over child-process execution
 //
 // Replaces ad-hoc execCommandSync / execCommandAsync / resolveCommandInvocation /
-// splitCommandLine / spawnDetachedCommand dep-function bundles in command handlers.
+// splitCommandLine dep-function bundles in command handlers.
 //
 // Node implementation: createNodeCommandExecutor() in process-runner.ts.
 // Test double: provide an in-memory stub that records calls / returns canned output.
@@ -97,6 +98,4 @@ export interface CommandExecutor {
   resolveInvocation(rawCmd: string, rawArgs: string[]): { cmd: string; args: string[] };
   /** Split a shell-style command string into tokens (legacy compat). */
   splitCommand(command: string): string[];
-  /** Fire-and-forget background spawn (survives parent exit). */
-  spawnDetached(cmd: string, args: string[]): void;
 }
