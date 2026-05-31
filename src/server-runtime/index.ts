@@ -78,6 +78,12 @@ import {
   getRequiredMcpArgNumber,
   parseMcpUploadBytes,
 } from './mcp-args.js';
+import {
+  expectControlplaneSuccess,
+  expectControlplaneSuccessAsync,
+  getCardMetaKey,
+  readCardMetaValue,
+} from './controlplane-helpers.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -798,44 +804,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
     if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
     return { cardId };
-  }
-
-  function expectControlplaneSuccess<T>(result: CommandResult<T>, commandName: string): T {
-    if (result?.status === 'success') {
-      return Object.prototype.hasOwnProperty.call(result, 'data')
-        ? (result as { data: T }).data
-        : (undefined as T);
-    }
-    if (result?.status === 'fail' || result?.status === 'error') {
-      throw Object.assign(new Error(result.error || `${commandName} failed`), { statusCode: 400 });
-    }
-    throw Object.assign(new Error(`${commandName} returned an unexpected response`), { statusCode: 500 });
-  }
-
-  async function expectControlplaneSuccessAsync<T>(result: CommandResult<T> | Promise<CommandResult<T>>, commandName: string): Promise<T> {
-    return expectControlplaneSuccess(await result, commandName);
-  }
-
-  function getCardMetaKey(args: Record<string, unknown>): string {
-    const key = getMcpArgString(args, 'key');
-    if (!key) throw Object.assign(new Error('MCP tool requires key'), { statusCode: 400 });
-    const segments = key.split('.');
-    const valid = segments.length >= 2
-      && segments[0] === 'chat'
-      && segments.every((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment));
-    if (!valid) throw Object.assign(new Error('MCP tool only supports card meta keys under chat.*'), { statusCode: 400 });
-    return key;
-  }
-
-  function readCardMetaValue(card: Record<string, unknown>, key: string): { exists: boolean; value: unknown } {
-    let target: unknown = card.meta;
-    for (const segment of key.split('.')) {
-      if (!target || typeof target !== 'object' || Array.isArray(target) || !Object.prototype.hasOwnProperty.call(target, segment)) {
-        return { exists: false, value: null };
-      }
-      target = (target as Record<string, unknown>)[segment];
-    }
-    return { exists: true, value: target };
   }
 
   function getChatProcessingFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; active: boolean } } {
