@@ -68,6 +68,18 @@ function parseJsonBody(res: { _body: string }): unknown {
   return JSON.parse(res._body);
 }
 
+async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: Record<string, unknown>): Promise<void> }, boardAdapter: { chatAgentStore(): { leaseRequests(opts?: { max?: number; visibilityMs?: number }): Array<{ messageId: string; leaseToken: string; request: Record<string, unknown> }>; ackRequest(messageId: string, leaseToken: string): boolean; }; }): Promise<void> {
+  const workerStore = boardAdapter.chatAgentStore();
+  while (true) {
+    const leases = workerStore.leaseRequests({ max: 20, visibilityMs: 60_000 });
+    if (!leases.length) break;
+    for (const lease of leases) {
+      await runtime.handleChatAgentRequest(lease.request);
+      workerStore.ackRequest(lease.messageId, lease.leaseToken);
+    }
+  }
+}
+
 describe('server runtime MCP endpoint', () => {
   let testRoot = '';
 
@@ -189,6 +201,117 @@ process.exit(1);
     return runtime;
   }
 
+  function createRuntimeHarness(opts: { withNonCore?: boolean; chatHandlerFlow?: unknown; chatFlowRunner?: SingleBoardRuntimeOptions['chatFlowRunner'] } = {}) {
+    testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-mcp-'));
+    const boardDir = path.join(testRoot, 'board');
+    const cardStoreDir = path.join(testRoot, 'card-store');
+    const outputsDir = path.join(testRoot, 'outputs');
+    const filesDir = path.join(testRoot, 'files');
+    fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(cardStoreDir, { recursive: true });
+    fs.mkdirSync(outputsDir, { recursive: true });
+    fs.mkdirSync(filesDir, { recursive: true });
+
+    let executorPath = '';
+    if (opts.withNonCore) {
+      executorPath = path.join(testRoot, 'fake-task-executor.mjs');
+      fs.writeFileSync(executorPath, `#!/usr/bin/env node
+const subcommand = process.argv[2] || '';
+const inputText = await new Promise((resolve) => {
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { buf += chunk; });
+  process.stdin.on('end', () => resolve(buf.trim()));
+  process.stdin.resume();
+});
+const parsedInput = inputText ? JSON.parse(inputText) : null;
+if (subcommand === 'describe-capabilities') {
+  console.log(JSON.stringify({ version: '1.0', commonSourceDefFields: { bindTo: { type: 'string' } }, sourceKinds: { fake: { title: 'Fake Source' } } }));
+  process.exit(0);
+}
+if (subcommand === 'validate-card-preflight') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
+  process.exit(0);
+}
+if (subcommand === 'probe-source-preflight') {
+  console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 3 }));
+  process.exit(0);
+}
+if (subcommand === 'run-source-preflight') {
+  console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 4, bindTo: parsedInput?.bindTo || 'source', resultValue: { ok: true } }));
+  process.exit(0);
+}
+if (subcommand === 'run-source-fetch') {
+  const outIdx = process.argv.indexOf('--out-ref');
+  const outRef = process.argv[outIdx + 1];
+  if (!outRef) {
+    console.error('missing --out-ref');
+    process.exit(1);
+  }
+  const refValue = JSON.parse(Buffer.from(outRef.slice(4), 'base64url').toString('utf8')).value;
+  await import('node:fs/promises').then((fs) => fs.writeFile(refValue, JSON.stringify({ ok: true })));
+  process.exit(0);
+}
+if (subcommand === 'validate-source-def') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
+  process.exit(0);
+}
+console.error('unsupported subcommand: ' + subcommand);
+process.exit(1);
+`, 'utf-8');
+    }
+
+    const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
+    const boardAdapter = createFsBoardPlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} });
+    const artifactsAdapter = createFsBoardPlatformAdapter(parseRef(serializeRef({ kind: 'fs-path', value: filesDir })), testRoot, { suppressSpawn: true, onWarn: () => {} });
+    const nonCoreAdapter = opts.withNonCore
+      ? createFsBoardNonCorePlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} })
+      : undefined;
+    const runtimeOptions: SingleBoardRuntimeOptions = {
+      apiBasePath: '/api/board',
+      boardId: 'mcp-test-board',
+      boards: [{
+        label: 'base',
+        boardAdapter,
+        artifactsAdapter,
+        ...(nonCoreAdapter ? { nonCoreAdapter } : {}),
+        baseRef,
+        cardStoreRef: serializeRef({ kind: 'fs-path', value: cardStoreDir }),
+        outputsStoreRef: serializeRef({ kind: 'fs-path', value: outputsDir }),
+        artifactsStoreRef: serializeRef({ kind: 'fs-path', value: filesDir }),
+        ...(opts.chatHandlerFlow !== undefined ? { chatHandlerFlow: opts.chatHandlerFlow } : {}),
+        ...(executorPath ? {
+          taskExecutorRef: {
+            howToRun: 'local-node',
+            whatToRun: serializeRef({ kind: 'fs-path', value: executorPath }),
+          },
+        } : {}),
+      }],
+      invocationAdapter: {
+        async invoke() { return { dispatched: true }; },
+        async describe() { return null; },
+      },
+      ...(opts.chatFlowRunner ? { chatFlowRunner: opts.chatFlowRunner } : {}),
+      logger: { info() {}, warn() {}, error() {} },
+      serverUrl: 'http://example.test',
+    };
+
+    const runtime = createSingleBoardServerRuntime(runtimeOptions);
+    fs.mkdirSync(path.join(filesDir, 'card-1'), { recursive: true });
+    fs.writeFileSync(path.join(filesDir, 'card-1', 'hello.txt'), 'hello', 'utf8');
+    const seedResult = runtime.cardStore.set({
+      body: {
+        id: 'card-1',
+        card_data: {
+          title: 'Card One',
+          files: [{ name: 'hello.txt', stored_name: 'hello.txt', mime_type: 'text/plain', size: 5, uploaded_at: '2026-05-28T00:00:00.000Z' }],
+        },
+      },
+    });
+    expect(seedResult.status).toBe('success');
+    return { runtime, boardAdapter };
+  }
+
   it('routes manage.read-card through /mcp and returns the wrapper array shape', async () => {
     const runtime = createRuntime();
     const req = makeRequest('POST', '/api/board/mcp', { tool: 'manage.read-card', args: { card_id: 'card-1' } });
@@ -272,6 +395,7 @@ process.exit(1);
     }), upsertRes, new URL('http://example.test/api/board/mcp'));
     expect(upsertRes._status).toBe(200);
     expect((parseJsonBody(upsertRes) as Record<string, unknown>).status).toBe('success');
+    expect((await runtime.processAccumulatedEvents()).status).toBe('success');
 
     const directCardRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), directCardRes, new URL('http://example.test/api/board/cards/card-1'));
@@ -341,7 +465,7 @@ process.exit(1);
 
   it('POST /cards/:id/actions chat-send propagates turn-id to the user message and flow args', async () => {
     const observed: Array<Record<string, unknown>> = [];
-    const runtime = createRuntime({
+    const { runtime, boardAdapter } = createRuntimeHarness({
       chatHandlerFlow: { id: 'test-flow' },
       chatFlowRunner: {
         async run(_flow, args) {
@@ -363,6 +487,7 @@ process.exit(1);
     const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/actions'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
+    await drainQueuedChatRequests(runtime, boardAdapter);
 
     const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
     const chatsRes = makeResponse();
@@ -847,6 +972,11 @@ process.exit(1);
 
   it('routes inspect.board-runtime-status through /mcp', async () => {
     const runtime = createRuntime();
+    const warmReq = makeRequest('POST', '/api/board/mcp', { tool: 'manage.read-card', args: { card_id: 'card-1' } });
+    const warmRes = makeResponse();
+    await runtime.handleRuntimeApi(warmReq, warmRes, new URL('http://example.test/api/board/mcp'));
+    expect(warmRes._status).toBe(200);
+    expect((await runtime.processAccumulatedEvents()).status).toBe('success');
     const req = makeRequest('POST', '/api/board/mcp', { tool: 'inspect.board-runtime-status', args: {} });
     const res = makeResponse();
 

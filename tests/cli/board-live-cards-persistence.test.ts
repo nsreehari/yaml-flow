@@ -84,7 +84,8 @@ describe('board-live-cards CLI persistence', () => {
 
   it('writes provided token payloads to .output/data-objects/', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    const liveBoard = board(dir);
+    liveBoard.init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
 
     const card: BoardLiveCard = {
       id: 'orders-source',
@@ -102,7 +103,8 @@ describe('board-live-cards CLI persistence', () => {
     };
     writeCardToStore(dir, card);
 
-    board(dir).upsertCard({ params: { cardId: 'orders-source' } });
+    liveBoard.upsertCard({ params: { cardId: 'orders-source' } });
+    expect((await liveBoard.processAccumulatedEvents({})).status).toBe('success');
 
     await pollBoard(dir, (tasks) => !!tasks['orders-source']);
 
@@ -118,7 +120,8 @@ describe('board-live-cards CLI persistence', () => {
 
   it('writes computed_values snapshots to .output/cards/<cardId>/computed_values.json', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    const liveBoard = board(dir);
+    liveBoard.init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
 
     const card: BoardLiveCard = {
       id: 'totals-card',
@@ -132,7 +135,8 @@ describe('board-live-cards CLI persistence', () => {
     };
     writeCardToStore(dir, card);
 
-    board(dir).upsertCard({ params: { cardId: 'totals-card' } });
+    liveBoard.upsertCard({ params: { cardId: 'totals-card' } });
+    expect((await liveBoard.processAccumulatedEvents({})).status).toBe('success');
 
     await pollBoard(dir, (tasks) => !!tasks['totals-card']);
 

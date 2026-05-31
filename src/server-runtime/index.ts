@@ -25,7 +25,6 @@ import {
 import type { CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
 import { createAsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
 import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
-import type { AsyncBoardPlatformAdapter } from '../cli/cloud/board-platform-adapter-async.js';
 import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
 import type { AsyncCardAdminStore } from '../cli/cloud/board-live-cards-storage-async.js';
 import { createBoardLiveCardsMcp } from '../cli/common/board-live-cards-mcp.js';
@@ -59,6 +58,18 @@ import type {
   NotificationTransport,
 } from './types.js';
 import type { BoardWorkerRequest } from '../cli/common/board-worker-store.js';
+import {
+  type NotificationState,
+  makeNotificationState,
+  hasNonEmptyCardCountStatus,
+  appendNotification,
+} from './notifications.js';
+import {
+  isAsyncBoardPlatformAdapter,
+  executionWhatToRunValue,
+  escapeRegExp,
+  concatUint8Arrays,
+} from './internal-helpers.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -157,64 +168,9 @@ interface BoardContext {
   cardsBootstrapped: boolean;
 }
 
-interface NotificationState {
-  status: unknown;
-  computedValues: Record<string, unknown>;
-  dataObjects: Record<string, unknown>;
-  cards: Record<string, unknown>;
-}
-
 interface SseClientState {
   res: RuntimeResponse;
   subscribedChatCardIds: Set<string>;
-}
-
-// ============================================================================
-// Notification helpers
-// ============================================================================
-
-function makeNotificationState(): NotificationState {
-  return { status: null, computedValues: {}, dataObjects: {}, cards: {} };
-}
-
-function hasNonEmptyCardCountStatus(status: unknown): boolean {
-  if (!status || typeof status !== 'object') return false;
-  const summary = (status as Record<string, unknown>).summary;
-  if (!summary || typeof summary !== 'object') return false;
-  return Number((summary as Record<string, unknown>).card_count || 0) > 0;
-}
-
-function appendNotification(state: NotificationState, event: unknown): void {
-  if (!event || typeof event !== 'object') return;
-  const e = event as Record<string, unknown>;
-  // Unpack notification-batch so individual items update ctx.notification.*
-  if (e.kind === 'notification-batch' && Array.isArray(e.notifications)) {
-    for (const n of e.notifications) appendNotification(state, n);
-    return;
-  }
-  if (e.kind === 'status') {
-    // Ignore empty status snapshots (e.g. auxiliary contexts)
-    // so they do not overwrite the primary board status.
-    if (hasNonEmptyCardCountStatus(e.status)) state.status = e.status;
-  }
-  if (e.kind === 'computed_values' && e.cardId) state.computedValues[e.cardId as string] = e.values;
-  if (e.kind === 'data_object' && e.key) state.dataObjects[e.key as string] = e.payload;
-  if (e.kind === 'card_refreshed' && e.cardId) state.cards[e.cardId as string] = e.card;
-  if (e.kind === 'card_removed' && e.cardId) {
-    delete state.cards[e.cardId as string];
-    delete state.computedValues[e.cardId as string];
-  }
-}
-
-function isAsyncBoardPlatformAdapter(adapter: BoardRuntimePlatformAdapter): adapter is AsyncBoardPlatformAdapter {
-  return typeof (adapter as AsyncBoardPlatformAdapter).journalStorage === 'function';
-}
-
-function executionWhatToRunValue(ref: import('./types.js').ExecutionRef): string {
-  if (typeof ref.whatToRun === 'string') {
-    return ref.whatToRun.startsWith('b64:') ? parseRef(ref.whatToRun).value : ref.whatToRun;
-  }
-  return ref.whatToRun.value;
 }
 
 // ============================================================================
@@ -608,6 +564,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       // state immediately via SSE before any async drain completes.
       await publishPersistedStateSnapshot(boardContexts[i]);
       await upsertCardsFromSource(boardContexts[i], i);
+      await publishPersistedStateSnapshot(boardContexts[i]);
     }
   }
 
@@ -1768,14 +1725,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return concatUint8Arrays(chunks as Uint8Array[]);
   }
 
-  function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-    const totalLen = arrays.reduce((acc, a) => acc + a.length, 0);
-    const result = new Uint8Array(totalLen);
-    let offset = 0;
-    for (const a of arrays) { result.set(a, offset); offset += a.length; }
-    return result;
-  }
-
   async function reportSourceFetchedInternal(token: string, payload: Record<string, unknown>): Promise<CommandResult> {
     const ref = typeof payload.ref === 'string' ? payload.ref.trim() : '';
     if (!ref) return { status: 'fail', error: 'board-worker success callback requires body.ref' };
@@ -2071,6 +2020,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         for (let i = 0; i < boardContexts.length; i++) {
           await publishPersistedStateSnapshot(boardContexts[i]);
           await upsertCardsFromSource(boardContexts[i], i);
+          await publishPersistedStateSnapshot(boardContexts[i]);
         }
         return true;
       }
@@ -2632,18 +2582,3 @@ export function createMultiBoardServerRuntime(options: MultiBoardRuntimeOptions)
   };
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const totalLen = arrays.reduce((acc, a) => acc + a.length, 0);
-  const result = new Uint8Array(totalLen);
-  let offset = 0;
-  for (const a of arrays) { result.set(a, offset); offset += a.length; }
-  return result;
-}

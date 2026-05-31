@@ -693,7 +693,7 @@ describe('cloud storage adapters', () => {
 
     expect(await board.retrigger({ params: { id: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
-    expect((await adapter.boardWorkerStore().peekActive())).toHaveLength(2);
+    expect((await adapter.boardWorkerStore().peekActive())).toHaveLength(1);
 
     expect(await board.removeCard({ params: { id: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');

@@ -55,7 +55,7 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
-  it('reshapes board status cards to wrapper field names', () => {
+  it('reshapes board status cards to wrapper field names', async () => {
     const deps = makeDeps();
     deps.board.status.mockReturnValue({
       status: 'success',
@@ -67,16 +67,16 @@ describe('BoardLiveCardsMcp', () => {
     });
     const mcp = createBoardLiveCardsMcp(deps);
 
-    expect(mcp.inspectBoardRuntimeStatus()).toEqual({
+    expect(await mcp.inspectBoardRuntimeStatus()).toEqual({
       meta: { source: 'runtime' },
       summary: { card_count: 1, completed: 1, eligible: 0, pending: 0, blocked: 0, in_progress: 0, failed: 0, unresolved: 0 },
       cards: [{ 'card-id': 'card-1', status: 'completed', error: null, requires: [], requires_satisfied: [], requires_missing: [], provides_declared: [], provides_runtime: ['out.a'] }],
     });
   });
 
-  it('adds attachment retrieval_hint and applies tail slicing for inspect chat messages', () => {
+  it('adds attachment retrieval_hint and applies tail slicing for inspect chat messages', async () => {
     const mcp = createBoardLiveCardsMcp(makeDeps());
-    expect(mcp.inspectChatMessagesOnCards({ cardId: 'card-1', tail: 1 })).toEqual({
+    expect(await mcp.inspectChatMessagesOnCards({ cardId: 'card-1', tail: 1 })).toEqual({
       cardId: 'card-1',
       messages: [
         expect.objectContaining({
@@ -202,9 +202,9 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
-  it('returns a JSON download descriptor for inspect file contents', () => {
+  it('returns a JSON download descriptor for inspect file contents', async () => {
     const mcp = createBoardLiveCardsMcp(makeDeps());
-    expect(mcp.inspectFileContents({ cardId: 'card-1', fileIdx: 0 })).toEqual({
+    expect(await mcp.inspectFileContents({ cardId: 'card-1', fileIdx: 0 })).toEqual({
       cardId: 'card-1',
       fileIdx: 0,
       downloadUrl: '/api/board/cards/card-1/files/0',
@@ -213,7 +213,7 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
-  it('supports turn-id filtering and tail-turns-before-id slicing in inspect chat messages', () => {
+  it('supports turn-id filtering and tail-turns-before-id slicing in inspect chat messages', async () => {
     const deps = makeDeps();
     deps.chatStore.readAll.mockReturnValue({
       status: 'success',
@@ -227,7 +227,7 @@ describe('BoardLiveCardsMcp', () => {
     });
     const mcp = createBoardLiveCardsMcp(deps);
 
-    const byTurn = mcp.inspectChatMessagesOnCards({ cardId: 'card-1', turnId: 'turn-b' });
+    const byTurn = await mcp.inspectChatMessagesOnCards({ cardId: 'card-1', turnId: 'turn-b' });
     expect(byTurn.cardId).toBe('card-1');
     expect(byTurn.messages).toHaveLength(3);
     expect(deps.chatStore.readAll).toHaveBeenCalledWith({
@@ -235,7 +235,7 @@ describe('BoardLiveCardsMcp', () => {
       body: { turnId: 'turn-b' },
     });
 
-    const beforeAnchor = mcp.inspectChatMessagesOnCards({ cardId: 'card-1', lastUserTurns: 1, tailTurnsBeforeId: 'turn-c' });
+    const beforeAnchor = await mcp.inspectChatMessagesOnCards({ cardId: 'card-1', lastUserTurns: 1, tailTurnsBeforeId: 'turn-c' });
     expect(beforeAnchor.cardId).toBe('card-1');
     expect(beforeAnchor.messages).toHaveLength(3);
     expect(deps.chatStore.readAll).toHaveBeenCalledWith({
@@ -244,10 +244,10 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
-  it('propagates turn when manage add chat entry is called', () => {
+  it('propagates turn when manage add chat entry is called', async () => {
     const deps = makeDeps();
     const mcp = createBoardLiveCardsMcp(deps);
-    const result = mcp.manageAddChatEntryAndAnyAttachments({
+    const result = await mcp.manageAddChatEntryAndAnyAttachments({
       cardId: 'card-1',
       role: 'assistant',
       text: 'Turned message',

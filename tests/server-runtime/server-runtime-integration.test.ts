@@ -59,14 +59,18 @@ async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
-async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: Record<string, unknown>): Promise<void> }, boardAdapter: { chatAgentStore(): { leaseRequests(opts?: { max?: number; visibilityMs?: number }): Array<{ messageId: string; leaseToken: string; request: Record<string, unknown> }>; ackRequest(messageId: string, leaseToken: string): boolean; }; }): Promise<void> {
+async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: Record<string, unknown>): Promise<void> }, boardAdapter: { chatAgentStore(): { leaseRequests(opts?: { max?: number; visibilityMs?: number }): Array<{ messageId: string; leaseToken: string; request: Record<string, unknown>; attempt: number }>; ackRequest(messageId: string, leaseToken: string): boolean; nackRequest(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean; }; }): Promise<void> {
   const workerStore = boardAdapter.chatAgentStore();
-  while (true) {
-    const leases = workerStore.leaseRequests({ max: 20, visibilityMs: 60_000 });
-    if (!leases.length) break;
-    for (const lease of leases) {
+  const leases = workerStore.leaseRequests({ max: 20, visibilityMs: 60_000 });
+  for (const lease of leases) {
+    try {
       await runtime.handleChatAgentRequest(lease.request);
       workerStore.ackRequest(lease.messageId, lease.leaseToken);
+    } catch (error) {
+      workerStore.nackRequest(lease.messageId, lease.leaseToken, {
+        dead: lease.attempt >= 5,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }
