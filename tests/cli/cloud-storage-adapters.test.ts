@@ -32,6 +32,7 @@ import type {
   AsyncKVStorage,
   AsyncScratchStorage,
 } from '../../src/cli/cloud/storage-async-interface.js';
+import { createHttpBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
 import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 class MemoryAsyncKVStorage implements AsyncKVStorage {
@@ -508,11 +509,7 @@ describe('cloud storage adapters', () => {
       journalStorage: () => archive.stream('board-journal'),
       queueStorage: queue,
       lock: createImmediateAsyncLock(),
-      selfRef: {
-        meta: 'board-live-cards',
-        howToRun: 'http:post',
-        whatToRun: serializeRef({ kind: 'http-url', value: 'https://example.test/board' }),
-      },
+      callbackTransport: createHttpBoardCallbackTransport('https://example.test/board'),
       fetch: fetchImpl,
       hashFn: (value) => JSON.stringify(value),
       genId: () => 'gen-1',
@@ -563,11 +560,7 @@ describe('cloud storage adapters', () => {
       journalStorage: () => archive.stream('board-journal'),
       queueStorage: queue,
       lock: createImmediateAsyncLock(),
-      selfRef: {
-        meta: 'board-live-cards',
-        howToRun: 'http:post',
-        whatToRun: serializeRef({ kind: 'http-url', value: 'https://example.test/board' }),
-      },
+      callbackTransport: createHttpBoardCallbackTransport('https://example.test/board'),
       hashFn: (value) => JSON.stringify(value),
       genId: (() => {
         let seq = 0;

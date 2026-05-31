@@ -1,4 +1,5 @@
 import type { BoardChangeNotification } from '../common/board-live-cards-public.js';
+import type { BoardCallbackTransport } from '../common/board-callback-transport.js';
 import type { ExecutionRef } from '../common/execution-interface.js';
 import { parseExecutionRef, serializeExecutionRef } from '../common/execution-interface.js';
 import { parseRef } from '../common/storage-interface.js';
@@ -74,7 +75,7 @@ export interface AsyncBoardPlatformAdapter {
   journalStorage(): AsyncJournalStorage;
   boardWorkerStore(): AsyncBoardWorkerStore;
   lock: AsyncAtomicRelayLock;
-  selfRef: ExecutionRef;
+  callbackTransport?: BoardCallbackTransport;
   dispatchExecution(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
   supportsDirectSourceOutput?(ref: ExecutionRef): boolean;
   resolveBlob(ref: KindValueRef): Promise<string>;
@@ -108,7 +109,7 @@ export interface HostedAsyncBoardPlatformAdapterOptions {
   queueStorage?: AsyncQueueStorage;
   boardWorkerStore?: AsyncBoardWorkerStore;
   lock: AsyncAtomicRelayLock;
-  selfRef: ExecutionRef;
+  callbackTransport?: BoardCallbackTransport;
   fetch?: HostedFetchLike;
   dispatchExecution?: (ref: ExecutionRef, args: Record<string, unknown>) => Promise<{ dispatched: boolean; error?: string }>;
   supportsDirectSourceOutput?: (ref: ExecutionRef) => boolean;
@@ -236,6 +237,7 @@ export function createHostedAsyncBoardPlatformAdapter(
   options: HostedAsyncBoardPlatformAdapterOptions,
 ): AsyncBoardPlatformAdapter {
   let boardWorkerStoreCache: AsyncBoardWorkerStore | undefined;
+  let currentCallbackTransport = options.callbackTransport;
 
   const resolveBlob = options.resolveBlob ?? (async (ref: KindValueRef): Promise<string> => {
     const content = await options.blobStorage('').read(ref.value);
@@ -295,7 +297,12 @@ export function createHostedAsyncBoardPlatformAdapter(
       return boardWorkerStoreCache;
     },
     lock: options.lock,
-    selfRef: options.selfRef,
+    get callbackTransport() {
+      return currentCallbackTransport;
+    },
+    set callbackTransport(value: BoardCallbackTransport | undefined) {
+      currentCallbackTransport = value;
+    },
     dispatchExecution: (ref, args) => options.dispatchExecution?.(ref, args) ?? defaultDispatchExecution(ref, args),
     supportsDirectSourceOutput: options.supportsDirectSourceOutput,
     resolveBlob,

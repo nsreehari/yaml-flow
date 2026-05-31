@@ -12,6 +12,7 @@ import {
   serializeRef,
   startBoardWorkerQueueRunner,
 } from '../../src/cli/node/fs-board-adapter.js';
+import { createInProcessBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
 import {
   registerInProcessBoardWorkerCallback,
   reportComplete,
@@ -85,11 +86,8 @@ describe('board-worker queue transport', () => {
     const root = makeTempDir('yaml-flow-queue-dispatch-');
     const callbackKey = `test:queue-callback:${Date.now()}`;
     const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: root }));
-    const callbackVia = {
-      meta: 'board-live-cards',
-      howToRun: 'in-process-loop' as const,
-      whatToRun: serializeRef({ kind: 'in-process-loop', value: callbackKey }),
-    };
+    const callbackTransport = createInProcessBoardCallbackTransport(callbackKey);
+    const callback = callbackTransport.createCallback('source-token');
     let callbackPayload: Record<string, unknown> | null = null;
     const executedBoardIds: string[] = [];
 
@@ -99,7 +97,7 @@ describe('board-worker queue transport', () => {
     });
 
     try {
-      const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), { suppressSpawn: true, selfRef: callbackVia });
+      const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), { suppressSpawn: true, callbackTransport });
       const stopRunner = startBoardWorkerQueueRunner({
         workerStore: adapter.boardWorkerStore(),
         executeBoardWorkerRequest: async (args, request) => {
@@ -109,7 +107,7 @@ describe('board-worker queue transport', () => {
           expect(outputRef.value.replace(/\\/g, '/')).toContain('/sources/card-1/.staged/delivery-1/prices.json');
           fs.mkdirSync(path.dirname(outputRef.value), { recursive: true });
           fs.writeFileSync(outputRef.value, JSON.stringify({ ok: true }), 'utf-8');
-          reportComplete(args.callback as { token: string; via: typeof callbackVia }, outputRef);
+          reportComplete(args.callback as typeof callback, outputRef);
         },
         pollIntervalMs: 10,
         visibilityMs: 250,
@@ -123,7 +121,7 @@ describe('board-worker queue transport', () => {
           extra: { boardId: 'board-1' },
         }, {
           source_def: { bindTo: 'prices' },
-          callback: { token: 'source-token', via: callbackVia },
+          callback,
           output: {
             ref: serializeRef({ kind: 'fs-path', value: path.join(root, 'sources', 'card-1', '.staged', 'delivery-1', 'prices.json') }),
             deliveryToken: 'delivery-1',

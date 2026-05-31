@@ -8,7 +8,7 @@
  *   - lock: in-memory no-op (browser is single-threaded; no cross-tab locking)
  *   - dispatchExecution: supports 'in-browser', 'http:post' and 'http:get'
  *   - requestProcessAccumulated: not applicable (caller drives via polling / setInterval)
- *   - selfRef: 'in-browser' kind — routes to registered in-memory handlers
+ *   - callbackTransport uses either the supplied HTTP callback base URL or an in-browser handler
  */
 
 import type { KindValueRef, AtomicRelayLock, JournalEntry, JournalStorage, QueueStorage } from '../common/storage-interface.js';
@@ -160,13 +160,17 @@ export function createInMemoryNotificationTransport(): import('../../server-runt
 //
 // namespace — logical name for this board instance (e.g. 'my-board').
 //   Used as the localStorage key prefix so multiple boards can coexist.
-// opts.callbackBaseUrl — if set, used as selfRef.whatToRun for http callbacks.
+// opts.callbackBaseUrl — if set, used as the HTTP callback target.
 //   e.g. 'https://my-app.example.com/api/board'
 // opts.notifyChannel — in-memory notification channel name.
 //   The adapter publishes to this channel; pair with notifyRef { kind: 'in-memory-bus', value: channel }.
 // ============================================================================
 
 import type { ExecutionRef } from '../common/execution-interface.js';
+import {
+  createHttpBoardCallbackTransport,
+  createStaticExecutionRefCallbackTransport,
+} from '../common/board-callback-transport.js';
 
 /**
  * Registry of in-browser execution handlers keyed by whatToRun value.
@@ -186,17 +190,13 @@ export function createBrowserBoardPlatformAdapter(
   registerHandler(name: string, handler: InBrowserHandler): void;
   writeMemoryBlob(key: string, data: string): string;
 } {
-  const selfRef = opts?.callbackBaseUrl
-    ? {
-        meta: 'board-live-cards',
-        howToRun: 'http:post' as const,
-        whatToRun: opts.callbackBaseUrl,
-      }
-    : {
+  const callbackTransport = opts?.callbackBaseUrl
+    ? createHttpBoardCallbackTransport(opts.callbackBaseUrl)
+    : createStaticExecutionRefCallbackTransport({
         meta: 'board-live-cards',
         howToRun: 'in-browser' as const,
         whatToRun: serializeRef({ kind: 'in-browser', value: namespace }),
-      };
+      });
 
   // In-browser handler registry: maps whatToRun → handler function
   const handlerRegistry = new Map<string, InBrowserHandler>();
@@ -310,7 +310,7 @@ export function createBrowserBoardPlatformAdapter(
 
     lock,
 
-    selfRef,
+  callbackTransport,
 
     async dispatchExecution(ref, args): Promise<{ dispatched: boolean; error?: string }> {
       if (ref.howToRun === 'http:post') {

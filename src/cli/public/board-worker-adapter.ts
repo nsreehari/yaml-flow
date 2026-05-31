@@ -32,12 +32,32 @@
  *   reportComplete(callback, outRef);
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { createRequire } from 'node:module';
-import { spawnSync } from 'node:child_process';
+import {
+  type InProcessBoardWorkerCallbackHandler,
+  type InProcessBoardWorkerCallbackPayload,
+  type InProcessBoardWorkerCallbackResult,
+  registerInProcessBoardWorkerCallback,
+  reportBoardWorkerCallbackInProcess,
+  unregisterInProcessBoardWorkerCallback,
+} from './board-worker-callback-inprocess.js';
+import {
+  reportBoardWorkerCallbackHttpFailure,
+  reportBoardWorkerCallbackHttpSuccess,
+} from './board-worker-callback-http.js';
+import {
+  reportBoardWorkerCallbackLocalNodeFailure,
+  reportBoardWorkerCallbackLocalNodeSuccess,
+} from './board-worker-callback-local-node.js';
 
-const require = createRequire(import.meta.url);
+export {
+  registerInProcessBoardWorkerCallback,
+  unregisterInProcessBoardWorkerCallback,
+};
+export type {
+  InProcessBoardWorkerCallbackHandler,
+  InProcessBoardWorkerCallbackPayload,
+  InProcessBoardWorkerCallbackResult,
+};
 
 // ============================================================================
 // KindValueRef
@@ -143,38 +163,6 @@ export interface ExecutionRef {
 
 export type BoardWorkerCallbackOutcome = 'success' | 'failure';
 
-export interface InProcessBoardWorkerCallbackPayload {
-  token: string;
-  outcome: BoardWorkerCallbackOutcome;
-  ref?: string;
-  reason?: string;
-}
-
-export type InProcessBoardWorkerCallbackResult = void | { status?: 'success' | 'fail' | 'error'; error?: string };
-
-export type InProcessBoardWorkerCallbackHandler = (
-  payload: InProcessBoardWorkerCallbackPayload,
-) => InProcessBoardWorkerCallbackResult;
-
-const inProcessBoardWorkerCallbackRegistry = new Map<string, InProcessBoardWorkerCallbackHandler>();
-
-export function registerInProcessBoardWorkerCallback(
-  key: string,
-  handler: InProcessBoardWorkerCallbackHandler,
-): void {
-  const normalizedKey = String(key || '').trim();
-  if (!normalizedKey) {
-    throw new Error('registerInProcessBoardWorkerCallback: key is required');
-  }
-  inProcessBoardWorkerCallbackRegistry.set(normalizedKey, handler);
-}
-
-export function unregisterInProcessBoardWorkerCallback(key: string): void {
-  const normalizedKey = String(key || '').trim();
-  if (!normalizedKey) return;
-  inProcessBoardWorkerCallbackRegistry.delete(normalizedKey);
-}
-
 /**
  * Describes how the board wants to receive task completion callbacks.
  * Baked into the inRef payload as { source_def, callback }.
@@ -188,105 +176,21 @@ export interface TaskCallback {
 }
 
 /**
- * Extract the path/url value from a whatToRun b64:<base64url(json)> wire string.
- */
-function _parseWhatToRun(whatToRun: string): string {
-  const parsed = parseRef(whatToRun);
-  if (parsed.kind === 'yaml-flow-cli') {
-    const trimmed = path.basename(parsed.value.trim());
-    if (!trimmed) {
-      throw new Error(`Invalid yaml-flow-cli ref: expected non-empty cli file name, got ${JSON.stringify(parsed.value)}`);
-    }
-    const packageRoot = path.dirname(require.resolve('yaml-flow/package.json'));
-    // Prefer cli/bundled/<stem>.mjs (shipped); fall back to cli/node/<trimmed> for dev/legacy.
-    const stem = trimmed.replace(/\.[^.]+$/, '');
-    const bundled = path.join(packageRoot, 'cli', 'bundled', `${stem}.mjs`);
-    if (fs.existsSync(bundled)) return bundled;
-    const legacy = path.join(packageRoot, 'cli', 'node', trimmed);
-    if (fs.existsSync(legacy)) return legacy;
-    throw new Error(`Invalid yaml-flow-cli ref: could not find ${trimmed} under cli/bundled or cli/node in ${packageRoot}`);
-  }
-  return parsed.value;
-}
-
-function _notifyChannelFromVia(via: ExecutionRef): string | undefined {
-  const candidate = via.extra?.['notifyChannel'];
-  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
-}
-
-function _boardWorkerCallbackUrl(baseUrl: string, token: string, outcome: BoardWorkerCallbackOutcome): string {
-  return `${String(baseUrl || '').replace(/\/+$/, '')}/${encodeURIComponent(token)}/${outcome}`;
-}
-
-function _runInProcessBoardWorkerCallback(payload: InProcessBoardWorkerCallbackPayload, via: ExecutionRef): void {
-  const handlerKey = _parseWhatToRun(via.whatToRun).trim();
-  if (!handlerKey) {
-    throw new Error('in-process-loop callback requires a non-empty handler key');
-  }
-  const handler = inProcessBoardWorkerCallbackRegistry.get(handlerKey);
-  if (!handler) {
-    throw new Error(`in-process-loop callback handler not registered: ${handlerKey}`);
-  }
-  const result = handler(payload);
-  if (result && result.status && result.status !== 'success') {
-    throw new Error(result.error || `in-process-loop callback failed with status: ${result.status}`);
-  }
-}
-
-/**
- * Resolve the Node invocation for a local board CLI script.
- * If the path ends in .ts (dev mode), attempts to locate tsx alongside it;
- * otherwise assumes it’s a compiled .js and invokes directly with node.
- */
-function _resolveLocalNodeInvocation(scriptPath: string): { cmd: string; args: string[] } {
-  if (!scriptPath.endsWith('.ts')) {
-    return { cmd: process.execPath, args: [scriptPath] };
-  }
-  // Dev path: look for tsx in node_modules relative to the script's package root.
-  // The .ts file may be at src/cli/node/<file>.ts — walk up until we find node_modules/tsx.
-  const dir = path.dirname(scriptPath);
-  const candidates: string[] = [];
-  for (let up = 1; up <= 5; up++) {
-    const base = path.join(dir, ...Array(up).fill('..'), 'node_modules');
-    candidates.push(path.join(base, 'tsx', 'dist', 'cli.mjs'));
-    candidates.push(path.join(base, '.bin', 'tsx'));
-  }
-  const tsx = candidates.find(p => fs.existsSync(p));
-  if (tsx) return { cmd: process.execPath, args: [tsx, scriptPath] };
-  return { cmd: 'npx', args: ['tsx', scriptPath] };
-}
-
-/**
  * Report successful task completion back to the board.
  * Call this from a task-executor after writing the result to outRef.
  */
 export function reportComplete(callback: TaskCallback, outRef: KindValueRef): void {
   const { token, via } = callback;
   if (via.howToRun === 'local-node' || via.howToRun === 'local-process') {
-    const scriptPath = _parseWhatToRun(via.whatToRun);
-    const { cmd, args } = _resolveLocalNodeInvocation(scriptPath);
-    const notifyChannel = _notifyChannelFromVia(via);
-    const callbackArgs = [
-      ...args,
-      'source-data-fetched',
-      '--ref', serializeRef(outRef),
-      '--token', token,
-      ...(notifyChannel ? ['--notify-channel', notifyChannel] : []),
-    ];
-    const result = spawnSync(cmd, callbackArgs, { encoding: 'utf-8', windowsHide: true });
-    if (result.status !== 0) {
-      throw new Error(`reportComplete: board CLI exited ${result.status}: ${result.stderr?.trim()}`);
-    }
+    reportBoardWorkerCallbackLocalNodeSuccess(via, token, serializeRef(outRef));
     return;
   }
   if (via.howToRun === 'http:post') {
-    const url = _boardWorkerCallbackUrl(_parseWhatToRun(via.whatToRun), token, 'success');
-    const body = JSON.stringify({ ref: serializeRef(outRef) });
-    _httpPostSync(url, body);
+    reportBoardWorkerCallbackHttpSuccess(parseRef(via.whatToRun).value, token, serializeRef(outRef));
     return;
   }
   if (via.howToRun === 'in-process-loop') {
-    _runInProcessBoardWorkerCallback({ token, outcome: 'success', ref: serializeRef(outRef) }, via);
+    reportBoardWorkerCallbackInProcess({ token, outcome: 'success', ref: serializeRef(outRef) }, parseRef(via.whatToRun).value);
     return;
   }
   throw new Error(`reportComplete: unsupported via.howToRun "${via.howToRun}"`);
@@ -299,60 +203,16 @@ export function reportComplete(callback: TaskCallback, outRef: KindValueRef): vo
 export function reportFailed(callback: TaskCallback, reason: string): void {
   const { token, via } = callback;
   if (via.howToRun === 'local-node' || via.howToRun === 'local-process') {
-    const scriptPath = _parseWhatToRun(via.whatToRun);
-    const { cmd, args } = _resolveLocalNodeInvocation(scriptPath);
-    const notifyChannel = _notifyChannelFromVia(via);
-    const callbackArgs = [
-      ...args,
-      'source-data-fetch-failure',
-      '--token', token,
-      '--reason', reason,
-      ...(notifyChannel ? ['--notify-channel', notifyChannel] : []),
-    ];
-    const result = spawnSync(cmd, callbackArgs, { encoding: 'utf-8', windowsHide: true });
-    if (result.status !== 0) {
-      throw new Error(`reportFailed: board CLI exited ${result.status}: ${result.stderr?.trim()}`);
-    }
+    reportBoardWorkerCallbackLocalNodeFailure(via, token, reason);
     return;
   }
   if (via.howToRun === 'http:post') {
-    const url = _boardWorkerCallbackUrl(_parseWhatToRun(via.whatToRun), token, 'failure');
-    const body = JSON.stringify({ reason });
-    _httpPostSync(url, body);
+    reportBoardWorkerCallbackHttpFailure(parseRef(via.whatToRun).value, token, reason);
     return;
   }
   if (via.howToRun === 'in-process-loop') {
-    _runInProcessBoardWorkerCallback({ token, outcome: 'failure', reason }, via);
+    reportBoardWorkerCallbackInProcess({ token, outcome: 'failure', reason }, parseRef(via.whatToRun).value);
     return;
   }
   throw new Error(`reportFailed: unsupported via.howToRun "${via.howToRun}"`);
-}
-
-/** Synchronous HTTP POST using a child node process (keeps this file free of async). */
-function _httpPostSync(url: string, body: string): void {
-  const script = `
-    const rawUrl = ${JSON.stringify(url)};
-    const rawBody = ${JSON.stringify(body)};
-    const u = new URL(rawUrl);
-    const {request} = require(u.protocol === 'https:' ? 'https' : 'http');
-    const h = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(rawBody) };
-    const req = request({hostname:u.hostname,port:u.port,path:u.pathname+u.search,method:'POST',headers:h}, (res) => {
-      let responseBody = '';
-      res.setEncoding('utf8');
-      res.on('data', chunk => { responseBody += chunk; });
-      res.on('end', () => {
-        const code = res.statusCode || 500;
-        if (code < 200 || code >= 300) {
-          const msg = responseBody.trim() || res.statusMessage || ('HTTP ' + code);
-          process.stderr.write(msg);
-          process.exit(1);
-        }
-      });
-    });
-    req.on('error', e => { process.stderr.write(e.message); process.exit(1); });
-    req.write(rawBody);
-    req.end();
-  `;
-  const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', windowsHide: true });
-  if (result.status !== 0) throw new Error(`http-post failed: ${result.stderr?.trim()}`);
 }

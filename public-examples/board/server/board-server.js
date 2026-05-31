@@ -12,11 +12,16 @@ import {
   createMultiBoardServerRuntime,
   createSingleBoardServerRuntime,
 } from 'yaml-flow/board-live-cards-server-runtime';
+import {
+  createHostedAsyncBoardPlatformAdapter,
+} from 'yaml-flow/cloud-storage';
 
 import {
   buildLocalBaseSpec,
+  createHttpBoardCallbackTransport,
   createFsBoardPlatformAdapter,
   createFsBoardNonCorePlatformAdapter,
+  createInProcessBoardCallbackTransport,
   createFsBoardChatStorage,
   createNodeSpawnInvocationAdapter,
   createArtifactsStore,
@@ -144,6 +149,12 @@ const configuredChatFlowTimeoutMs = normalizeTimeoutMs(serverConfig.chatFlowTime
 const configuredInvokeRefTimeoutMs = normalizeTimeoutMs(serverConfig.chatInvokeRefTimeoutMs, 300000);
 const configuredCopilotTimeoutMs = normalizeTimeoutMs(serverConfig.chatCopilotTimeoutMs, 300000);
 
+function normalizeRuntimeMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'sync' || normalized === 'fs') return 'sync';
+  return 'cloud';
+}
+
 function normalizeBoardWorkerTransport(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'http') return 'http';
@@ -153,6 +164,9 @@ function normalizeBoardWorkerTransport(value) {
 
 const configuredBoardWorkerTransport = normalizeBoardWorkerTransport(
   process.env.DEMO_TASK_EXECUTOR_TRANSPORT || serverConfig.taskExecutorTransport || 'in-process-loop',
+);
+const configuredRuntimeMode = normalizeRuntimeMode(
+  process.env.DEMO_SERVER_MODE || serverConfig.mode || 'cloud',
 );
 
 // Resolve top-level config defaults (used as fallbacks for per-board config)
@@ -293,25 +307,14 @@ function makeHostedBoardWorkerRef(boardId, taskExecPath, transport, executionExt
   throw new Error(`Unsupported board-worker transport for demo host: ${transport}`);
 }
 
-function makeBoardWorkerCallbackSelfRef(serverUrl, boardApiBasePath, transport, boardId) {
+function makeBoardWorkerCallbackTransport(serverUrl, boardApiBasePath, transport, boardId) {
   if (transport === 'in-process-loop' || transport === 'queue') {
-    return {
-      meta: 'board-live-cards',
-      howToRun: 'in-process-loop',
-      whatToRun: serializeRef({ kind: 'in-process-loop', value: `board:${boardId}:board-worker-callback` }),
-    };
+    return createInProcessBoardCallbackTransport(`board:${boardId}:board-worker-callback`);
   }
   const normalizedServerUrl = typeof serverUrl === 'string' ? serverUrl.trim().replace(/\/+$/, '') : '';
   const normalizedApiBasePath = typeof boardApiBasePath === 'string' ? boardApiBasePath.trim().replace(/\/+$/, '') : '';
   if (!normalizedServerUrl || !normalizedApiBasePath) return undefined;
-  return {
-    meta: 'board-live-cards',
-    howToRun: 'http:post',
-    whatToRun: serializeRef({
-      kind: 'http-url',
-      value: `${normalizedServerUrl}${normalizedApiBasePath}/callback/board-worker`,
-    }),
-  };
+  return createHttpBoardCallbackTransport(`${normalizedServerUrl}${normalizedApiBasePath}/callback/board-worker`);
 }
 
 async function readJsonRequest(req) {
@@ -381,6 +384,339 @@ function createNamedPipeNotificationTransport() {
   };
 }
 
+function createInMemoryNotificationTransport() {
+  const subscribers = new Map();
+
+  return {
+    publish(channel, notifications) {
+      const channelSubscribers = subscribers.get(channel);
+      if (!channelSubscribers?.size) return;
+      const event = notifications.length === 1
+        ? notifications[0]
+        : { kind: 'notification-batch', notifications };
+      for (const onEvent of channelSubscribers) {
+        try { onEvent(event); } catch { /* */ }
+      }
+    },
+
+    async subscribe(ref, onEvent) {
+      if (ref.kind !== 'in-memory-notify') return () => {};
+      const channel = String(ref.value || '');
+      const channelSubscribers = subscribers.get(channel) || new Set();
+      channelSubscribers.add(onEvent);
+      subscribers.set(channel, channelSubscribers);
+      return () => {
+        channelSubscribers.delete(onEvent);
+        if (!channelSubscribers.size) subscribers.delete(channel);
+      };
+    },
+  };
+}
+
+function createNotificationTransport() {
+  const namedPipeTransport = createNamedPipeNotificationTransport();
+  const inMemoryTransport = createInMemoryNotificationTransport();
+
+  return {
+    publish: inMemoryTransport.publish,
+    async subscribe(ref, onEvent) {
+      if (ref.kind === 'in-memory-notify') return inMemoryTransport.subscribe(ref, onEvent);
+      return namedPipeTransport.subscribe(ref, onEvent);
+    },
+  };
+}
+
+class MemoryAsyncKVStorage {
+  constructor() {
+    this.values = new Map();
+  }
+
+  readSync(key) {
+    return this.values.has(key) ? this.values.get(key) : null;
+  }
+
+  writeSync(key, value) {
+    this.values.set(key, value);
+  }
+
+  deleteSync(key) {
+    this.values.delete(key);
+  }
+
+  async read(key) {
+    return this.readSync(key);
+  }
+
+  async write(key, value) {
+    this.writeSync(key, value);
+  }
+
+  async delete(key) {
+    this.deleteSync(key);
+  }
+
+  async listKeys(prefix = '') {
+    return Array.from(this.values.keys()).filter((key) => key.startsWith(prefix)).sort();
+  }
+}
+
+class MemoryAsyncBlobStorage {
+  constructor(kind, keyRefFactory = null) {
+    this.kind = kind;
+    this.keyRefFactory = keyRefFactory;
+    this.textValues = new Map();
+    this.byteValues = new Map();
+  }
+
+  keyRef(key) {
+    if (this.keyRefFactory) return this.keyRefFactory(key);
+    return { kind: this.kind, value: key };
+  }
+
+  async read(key) {
+    if (this.textValues.has(key)) return this.textValues.get(key);
+    const bytes = this.byteValues.get(key);
+    return bytes ? Buffer.from(bytes).toString('utf-8') : null;
+  }
+
+  async write(key, value) {
+    this.textValues.set(key, value);
+    this.byteValues.delete(key);
+  }
+
+  async readBytes(key) {
+    if (this.byteValues.has(key)) return this.byteValues.get(key);
+    if (this.textValues.has(key)) return Buffer.from(this.textValues.get(key), 'utf-8');
+    return null;
+  }
+
+  async writeBytes(key, value) {
+    this.byteValues.set(key, Buffer.from(value));
+    this.textValues.delete(key);
+  }
+
+  async remove(key) {
+    this.textValues.delete(key);
+    this.byteValues.delete(key);
+  }
+
+  async exists(key) {
+    return this.textValues.has(key) || this.byteValues.has(key);
+  }
+
+  async listKeys(prefix = '') {
+    const keys = new Set([
+      ...Array.from(this.textValues.keys()),
+      ...Array.from(this.byteValues.keys()),
+    ]);
+    return Array.from(keys).filter((key) => key.startsWith(prefix)).sort();
+  }
+}
+
+function createMemoryAsyncScratchStorage() {
+  const store = new MemoryAsyncBlobStorage('cloud-scratch-key');
+  let seq = 0;
+  return {
+    ...store,
+    async getUniqueKey(prefix = 'scratch', suffix = '.json') {
+      seq += 1;
+      return `${prefix}-${seq}${suffix}`;
+    },
+    async create(value, prefix, suffix) {
+      const key = await this.getUniqueKey(prefix, suffix);
+      await store.write(key, value);
+      return key;
+    },
+    config: {
+      get: () => null,
+      set: () => {},
+    },
+  };
+}
+
+function createMemoryArchiveFactory() {
+  const blobStores = new Map();
+  const journalStreams = new Map();
+  let seq = 0;
+  return {
+    stream(name) {
+      if (!journalStreams.has(name)) journalStreams.set(name, []);
+      const entries = journalStreams.get(name);
+      return {
+        async append(payload) {
+          seq += 1;
+          const entry = { id: `j-${seq}`, payload };
+          entries.push(entry);
+          return entry;
+        },
+        async readAll() {
+          return entries.slice();
+        },
+        async readAfter(cursor) {
+          const idx = cursor ? entries.findIndex((entry) => entry.id === cursor) : -1;
+          const items = idx >= 0 ? entries.slice(idx + 1) : entries.slice();
+          return {
+            entries: items,
+            newCursor: items.length ? items[items.length - 1].id : cursor,
+          };
+        },
+        async clear() {
+          entries.splice(0, entries.length);
+        },
+      };
+    },
+    blob(name) {
+      if (!blobStores.has(name)) blobStores.set(name, new MemoryAsyncBlobStorage('cloud-archive-key'));
+      return blobStores.get(name);
+    },
+    async listStreams(prefix = '') {
+      return Array.from(journalStreams.keys()).filter((key) => key.startsWith(prefix)).sort();
+    },
+    async listBlobs(prefix = '') {
+      return Array.from(blobStores.keys()).filter((key) => key.startsWith(prefix)).sort();
+    },
+    config: {
+      get: () => null,
+      set: () => {},
+    },
+  };
+}
+
+function createImmediateAsyncLock() {
+  let held = false;
+  return {
+    async tryAcquire() {
+      if (held) return null;
+      held = true;
+      return async () => { held = false; };
+    },
+  };
+}
+
+function stableHash(value) {
+  const json = JSON.stringify(value);
+  let hash = 0;
+  for (let i = 0; i < json.length; i += 1) {
+    hash = ((hash << 5) - hash + json.charCodeAt(i)) | 0;
+  }
+  return `h${Math.abs(hash)}`;
+}
+
+function genShortId() {
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 18)}`;
+}
+
+function normalizeHostedBoardWorkerTransport(runtimeMode, requestedTransport) {
+  if (runtimeMode === 'cloud') return 'http';
+  return requestedTransport;
+}
+
+function seedCloudCardStore(cardStoreKv, cards) {
+  const index = {};
+  const now = new Date().toISOString();
+  for (const card of cards) {
+    if (!card || typeof card !== 'object' || !card.id) continue;
+    const key = String(card.id);
+    cardStoreKv.writeSync(key, card);
+    index[card.id] = {
+      key,
+      checksum: stableHash(card),
+      updatedAt: now,
+    };
+  }
+  cardStoreKv.writeSync('_index', index);
+}
+
+const cloudBoardBundles = new Map();
+
+function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
+  if (cloudBoardBundles.has(boardId)) return cloudBoardBundles.get(boardId);
+
+  const kvNamespaces = new Map();
+  const kvRefs = new Map();
+  const blobNamespaces = new Map();
+  const blobKindToNamespace = new Map([
+    ['cloud-blob-key', ''],
+    ['cloud-source-key', 'sources'],
+    ['cloud-archive-key', 'archive'],
+    ['cloud-scratch-key', 'scratch'],
+  ]);
+  const scratchStore = createMemoryAsyncScratchStorage();
+  const archiveFactory = createMemoryArchiveFactory();
+  const journalStorage = archiveFactory.stream('board-journal');
+  const stagedSourcesDir = boardDir ? path.join(path.dirname(boardDir), 'runtime-out', '.cloud-staged-sources') : null;
+  if (stagedSourcesDir) fs.mkdirSync(stagedSourcesDir, { recursive: true });
+
+  const getKvNamespace = (namespace) => {
+    const key = String(namespace || '');
+    if (!kvNamespaces.has(key)) kvNamespaces.set(key, new MemoryAsyncKVStorage());
+    return kvNamespaces.get(key);
+  };
+  const getKvRef = (ref) => {
+    const key = String(ref || '');
+    if (!kvRefs.has(key)) kvRefs.set(key, new MemoryAsyncKVStorage());
+    return kvRefs.get(key);
+  };
+  const getBlobNamespace = (namespace) => {
+    const key = String(namespace || '');
+    if (key === 'scratch') return scratchStore;
+    if (!blobNamespaces.has(key)) {
+      const kind = key === 'sources' ? 'cloud-source-key' : 'cloud-blob-key';
+      const keyRefFactory = key === 'sources' && stagedSourcesDir
+        ? (blobKey) => ({ kind: 'fs-path', value: path.join(stagedSourcesDir, ...String(blobKey).split('/')) })
+        : null;
+      blobNamespaces.set(key, new MemoryAsyncBlobStorage(kind, keyRefFactory));
+    }
+    return blobNamespaces.get(key);
+  };
+
+  const bundle = {
+    getKvNamespace,
+    getKvRef,
+    getBlobNamespace,
+    adapter: null,
+    notifyChannel,
+    scheduleDrain: () => {},
+    drainScheduled: false,
+    drainRunning: false,
+  };
+
+  bundle.adapter = createHostedAsyncBoardPlatformAdapter({
+    boardId,
+    kvStorage: (namespace) => getKvNamespace(namespace),
+    kvStorageForRef: (ref) => getKvRef(ref),
+    blobStorage: (namespace) => getBlobNamespace(namespace),
+    scratchStorage: () => scratchStore,
+    scratchStorageForRef: () => scratchStore,
+    archiveFactory: () => archiveFactory,
+    archiveFactoryForRef: () => archiveFactory,
+    journalStorage: () => journalStorage,
+    lock: createImmediateAsyncLock(),
+    callbackTransport: undefined,
+    resolveBlob: async (ref) => {
+      if (ref.kind === 'fs-path') {
+        return fs.promises.readFile(ref.value, 'utf-8');
+      }
+      const namespace = blobKindToNamespace.get(ref.kind);
+      if (namespace !== undefined) {
+        const value = await getBlobNamespace(namespace).read(ref.value);
+        if (value != null) return value;
+      }
+      throw new Error(`Blob not found for ref ${ref.kind}:${ref.value}`);
+    },
+    hashFn: stableHash,
+    genId: genShortId,
+    supportsDirectSourceOutput: (ref) => ref?.howToRun === 'http:post',
+    publishBoardChangeNotifications: async (notifications) => {
+      notificationTransport.publish(notifyChannel, notifications);
+    },
+    requestProcessAccumulated: () => bundle.scheduleDrain(),
+  });
+
+  cloudBoardBundles.set(boardId, bundle);
+  return bundle;
+}
+
 // ---------------------------------------------------------------------------
 // Server meta store (multi-board registry)
 // ---------------------------------------------------------------------------
@@ -397,7 +733,7 @@ const serverMetaStore = createArtifactsStore(serverMetaAdapter.blobStorage('serv
 
 const apiBasePath = '/api/boards';
 const invocationAdapter = createNodeSpawnInvocationAdapter();
-const notificationTransport = createNamedPipeNotificationTransport();
+const notificationTransport = createNotificationTransport();
 const logger = { info: console.log, warn: console.warn, error: console.error };
 const hostedBoardWorkerDispatchers = new Map();
 const hostedBoardWorkerQueueStops = new Map();
@@ -407,7 +743,7 @@ const hostedBoardChatStorages = new Map();
 const boardConfigEntries = serverConfig.boards ? Object.entries(serverConfig.boards) : [];
 const boardConfigMap = new Map(boardConfigEntries);
 
-function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId, executionExtra = {}) {
+function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId, executionExtra = {}, runtimeMode = 'sync') {
   fs.mkdirSync(boardDir, { recursive: true });
   const runtimeCardsDir = path.join(path.dirname(boardDir), 'cards');
   const runtimeCardStoreDir = path.join(runtimeCardsDir, 'store');
@@ -419,16 +755,47 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   fs.mkdirSync(archiveDir, { recursive: true });
 
   const notifyChannel = `yaml-flow-server-${label}-${boardId}-${process.pid}`;
+  const boardWorkerTransport = normalizeHostedBoardWorkerTransport(
+    runtimeMode,
+    normalizeBoardWorkerTransport(executionExtra.taskExecutorTransport),
+  );
+  const callbackTransport = makeBoardWorkerCallbackTransport(executionExtra.serverUrl, executionExtra.apiBasePath, boardWorkerTransport, boardId);
+
+  if (runtimeMode === 'cloud') {
+    const cloudBundle = getCloudBoardBundle(boardId, notifyChannel, boardDir);
+    cloudBundle.adapter.callbackTransport = callbackTransport;
+    return {
+      label,
+      boardAdapter: cloudBundle.adapter,
+      nonCoreAdapter: createFsBoardNonCorePlatformAdapter(
+        parseRef(serializeRef({ kind: 'fs-path', value: boardDir })),
+        {
+          notifyChannel,
+          ...(callbackTransport ? { callbackTransport } : {}),
+        },
+      ),
+      artifactsAdapter: cloudBundle.adapter,
+      baseRef: { kind: 'cloud-board', value: `board:${boardId}` },
+      cardStoreRef: `cloud:${boardId}:cards`,
+      outputsStoreRef: `cloud:${boardId}:runtime-out`,
+      artifactsStoreRef: `cloud:${boardId}:artifacts`,
+      scratchStoreRef: `cloud:${boardId}:scratch`,
+      archiveStoreRef: `cloud:${boardId}:archive`,
+      notifyRef: { kind: 'in-memory-notify', value: notifyChannel },
+      taskExecutorRef: makeHostedBoardWorkerRef(boardId, taskExecPath, boardWorkerTransport, executionExtra),
+      chatHandlerFlow,
+      inferenceAdapterRef: makeExecutionRef(infAdapterPath),
+    };
+  }
+
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
-  const boardWorkerTransport = normalizeBoardWorkerTransport(executionExtra.taskExecutorTransport);
-  const callbackSelfRef = makeBoardWorkerCallbackSelfRef(executionExtra.serverUrl, executionExtra.apiBasePath, boardWorkerTransport, boardId);
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, {
     notifyChannel,
-    ...(callbackSelfRef ? { selfRef: callbackSelfRef } : {}),
+    ...(callbackTransport ? { callbackTransport } : {}),
   });
   const nonCoreAdapter = createFsBoardNonCorePlatformAdapter(baseRef, {
     notifyChannel,
-    ...(callbackSelfRef ? { selfRef: callbackSelfRef } : {}),
+    ...(callbackTransport ? { callbackTransport } : {}),
   });
   const localSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
   if (localSyncTaskExecutorRef) {
@@ -536,7 +903,11 @@ const runtime = createMultiBoardServerRuntime({
     );
     const infAdapterPath = resolveFromConfig(regular.inferenceAdapterPath) || (entry?.inferenceAdapterPath || configuredInferenceAdapterPath);
     const stepMachinePath = resolveFromConfig(regular.stepMachineCliPath || cfg?.stepMachineCliPath) || (entry?.stepMachineCliPath || configuredStepMachineCliPath);
-    const boardWorkerTransport = normalizeBoardWorkerTransport(regular.taskExecutorTransport || entry?.taskExecutorTransport || configuredBoardWorkerTransport);
+    const runtimeMode = normalizeRuntimeMode(regular.mode || entry?.mode || cfg?.mode || configuredRuntimeMode);
+    const boardWorkerTransport = normalizeHostedBoardWorkerTransport(
+      runtimeMode,
+      normalizeBoardWorkerTransport(regular.taskExecutorTransport || entry?.taskExecutorTransport || configuredBoardWorkerTransport),
+    );
     const chatInvokeRefTimeoutMs = configuredInvokeRefTimeoutMs;
     const chatCopilotTimeoutMs = configuredCopilotTimeoutMs;
 
@@ -577,10 +948,19 @@ const runtime = createMultiBoardServerRuntime({
       ...(stepMachinePath ? { stepMachineCliPath: stepMachinePath } : {}),
     };
 
-    const baseCfg = buildBoardContextConfig('base', boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId, baseExecutionExtra);
+    const baseCfg = buildBoardContextConfig('base', boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId, baseExecutionExtra, runtimeMode);
     const boards = [baseCfg];
 
     demoPrepSetup({ cardsDir, boardDir });
+
+    if (runtimeMode === 'cloud' && cardsDir) {
+      const cards = createFsCardSource(cardsDir, selectedCardsPattern).listCards();
+      if (cards.length) {
+        const cloudBundle = getCloudBoardBundle(boardId, baseCfg.notifyRef.value);
+        
+        seedCloudCardStore(cloudBundle.getKvRef(baseCfg.cardStoreRef), cards);
+      }
+    }
 
     const chatStorage = createFsBoardChatStorage(boardDir);
     hostedBoardChatStorages.set(boardId, chatStorage);
@@ -607,6 +987,30 @@ const runtime = createMultiBoardServerRuntime({
         ...(stepMachinePath ? { stepMachineCliPath: stepMachinePath } : {}),
       },
     });
+
+    if (runtimeMode === 'cloud') {
+      const cloudBundle = getCloudBoardBundle(boardId, baseCfg.notifyRef.value, boardDir);
+      cloudBundle.scheduleDrain = () => {
+        cloudBundle.drainScheduled = true;
+        if (cloudBundle.drainRunning) return;
+        cloudBundle.drainRunning = true;
+        void (async () => {
+          try {
+            while (cloudBundle.drainScheduled) {
+              cloudBundle.drainScheduled = false;
+              const result = await singleBoardRuntime.processAccumulatedEvents();
+              if (result?.status && result.status !== 'success') {
+                logger.error(`[board-server] cloud drain returned ${result.status} for ${boardId}: ${String(result.error || 'unknown error')}`);
+              }
+            }
+          } catch (error) {
+            logger.error(`[board-server] cloud drain failed for ${boardId}: ${String(error && error.message || error)}`);
+          } finally {
+            cloudBundle.drainRunning = false;
+          }
+        })();
+      };
+    }
 
     const hostedBoardWorkerDispatch = createHostedBoardWorkerDispatcher(boardId, taskExecPath);
     if (hostedBoardWorkerDispatch) {
@@ -647,11 +1051,13 @@ const runtime = createMultiBoardServerRuntime({
     }
 
     // Seed card store from source cardsDir if empty
-    const existing = singleBoardRuntime.cardStore.get({});
-    const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
-    if (isEmpty && cardsDir) {
-      const cards = createFsCardSource(cardsDir, selectedCardsPattern).listCards();
-      if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
+    if (runtimeMode === 'sync') {
+      const existing = singleBoardRuntime.cardStore.get({});
+      const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
+      if (isEmpty && cardsDir) {
+        const cards = createFsCardSource(cardsDir, selectedCardsPattern).listCards();
+        if (cards.length) singleBoardRuntime.cardStore.set({ body: cards });
+      }
     }
 
     return singleBoardRuntime;

@@ -17,7 +17,9 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../../src/cli/node/fs-board-adapter.js';
+import { createHttpBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
 import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
+import type { BoardPlatformAdapter } from '../../src/cli/common/board-live-cards-public.js';
 
 const adapterOpts = { onWarn: () => {}, suppressSpawn: true };
 
@@ -136,6 +138,39 @@ describe('BoardLiveCardsPublic — init and status', () => {
     board.init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const result = await board.processAccumulatedEvents({});
     expect(result.status).toBe('success');
+  });
+
+  it('createBoardLiveCardsPublic throws when adapter.callbackTransport is missing', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-pub-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const invalidAdapter = { ...adapter, callbackTransport: undefined } as unknown as BoardPlatformAdapter;
+
+    expect(() => createBoardLiveCardsPublic(br, invalidAdapter)).toThrow(/adapter\.callbackTransport is required/);
+  });
+
+  it('createBoardLiveCardsPublic allows callbackTransport-only adapters', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-pub-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const callbackTransportOnly = { ...adapter } as unknown as BoardPlatformAdapter;
+
+    expect(() => createBoardLiveCardsPublic(br, callbackTransportOnly)).not.toThrow();
+  });
+
+  it('createFsBoardPlatformAdapter accepts explicit callbackTransport without resolving a public CLI dir', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-pub-'));
+    const boardDir = path.join(tmpDir, 'board');
+    const br = ref(boardDir);
+
+    const adapter = createFsBoardPlatformAdapter(br, path.join(tmpDir, 'missing-cli-dir'), {
+      suppressSpawn: true,
+      callbackTransport: createHttpBoardCallbackTransport('http://127.0.0.1:9999/api/board/callback/board-worker'),
+    });
+
+    expect(() => createBoardLiveCardsPublic(br, adapter)).not.toThrow();
   });
 
   it('removeCard emits a card_removed notification', async () => {

@@ -33,6 +33,8 @@
 
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import type { BoardCallbackTransport } from './board-callback-transport.js';
+import { assertBoardCallbackTransport } from './board-callback-transport.js';
 import type { BoardWorkerStore } from './board-worker-store.js';
 import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
@@ -195,12 +197,10 @@ export interface BoardPlatformAdapter {
   lock: AtomicRelayLock;
 
   /**
-   * Self-identity ExecutionRef — how to invoke THIS board instance.
-   * Embedded in source callback tokens so executors know where to report back.
-  *   Node/FS:  { howToRun: 'local-node', whatToRun: 'b64:<base64url({"kind":"yaml-flow-cli","value":"board-live-cards-cli.js"})>' }
-  *   Azure Fn: { howToRun: 'http:post',  whatToRun: 'b64:<base64url({"kind":"http-url","value":"https://…/api/board"})>' }
+   * Adapter-owned callback transport used to build worker callback payloads.
+   * The board core treats callback delivery as a platform concern.
    */
-  selfRef: ExecutionRef;
+  callbackTransport?: BoardCallbackTransport;
 
   /**
    * Generic execution dispatch — platform adapts ExecutionRef → actual transport.
@@ -376,6 +376,7 @@ export function createBoardLiveCardsPublic(
   baseRef: KindValueRef,
   adapter: BoardPlatformAdapter,
 ): BoardLiveCardsPublic {
+  assertBoardCallbackTransport(adapter.callbackTransport, 'createBoardLiveCardsPublic');
   const warn = adapter.onWarn ?? (() => { /* no-op */ });
   const boardPath = serializeRef(baseRef);
 
@@ -685,7 +686,7 @@ export function createBoardLiveCardsPublic(
         });
         adapter.dispatchExecution(executorRef, {
           source_def: src, base_ref: serializeRef(baseRef),
-          callback: { token: sourceToken, via: adapter.selfRef },
+          callback: adapter.callbackTransport.createCallback(sourceToken),
           ...(directOutput ? { output: directOutput } : {}),
         }).catch((e: unknown) => taskFailedFn(cardId, e instanceof Error ? e.message : String(e)));
       }

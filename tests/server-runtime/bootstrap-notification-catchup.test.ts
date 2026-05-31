@@ -26,7 +26,7 @@ import type {
   AtomicRelayLock,
   KindValueRef,
 } from '../../src/cli/common/storage-interface.js';
-import type { ExecutionRef } from '../../src/cli/common/execution-interface.js';
+import { createHttpBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
 import type {
   SingleBoardRuntimeOptions,
   InvocationAdapter,
@@ -115,7 +115,6 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
 
   const journal = createMemoryJournalAdapter();
   const lock = createMemoryLock();
-  const selfRef: ExecutionRef = { meta: 'board', howToRun: 'http:post', whatToRun: serializeRef({ kind: 'http-url', value: 'http://localhost' }) };
 
   const adapter: BoardPlatformAdapter & { publishedBatches: BoardChangeNotification[][] } = {
     publishedBatches,
@@ -127,7 +126,7 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
     blobStorage: (_ns) => createMemoryBlobStorage(),
     journalAdapter: () => journal,
     lock,
-    selfRef,
+    callbackTransport: createHttpBoardCallbackTransport('http://localhost'),
     async dispatchExecution(_ref, _args) { return { dispatched: true }; },
     resolveBlob(_ref: KindValueRef) { throw new Error('not used in test'); },
     hashFn(value: unknown) {
@@ -333,7 +332,7 @@ describe('bootstrap notification catch-up', () => {
     const syn2 = syntheticResponse();
     await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/init-board'));
 
-    const payload = runtime.buildPublishedRuntimePayload() as Record<string, unknown>;
+    const payload = await runtime.buildPublishedRuntimePayload() as Record<string, unknown>;
     expect(payload).toHaveProperty('cardDefinitions');
     const cardRuntimeById = payload.cardRuntimeById as Record<string, unknown>;
     expect(Object.keys(cardRuntimeById).length).toBeGreaterThan(0);

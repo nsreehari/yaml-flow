@@ -30,6 +30,12 @@ import {
 } from './execution-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
+import type { BoardCallbackTransport } from '../common/board-callback-transport.js';
+import {
+  createHttpBoardCallbackTransport,
+  createInProcessBoardCallbackTransport,
+  createLocalNodeBoardCallbackTransport,
+} from '../common/board-callback-transport.js';
 import { createBoardWorkerStore } from '../common/board-worker-store.js';
 import type { BoardWorkerStore } from '../common/board-worker-store.js';
 import {
@@ -104,6 +110,9 @@ export type {
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 export {
+  createHttpBoardCallbackTransport,
+  createInProcessBoardCallbackTransport,
+  createLocalNodeBoardCallbackTransport,
   buildLocalBaseSpec,
   createExecutionRefInvoker,
   evaluateArgsMassaging,
@@ -204,9 +213,9 @@ type FsBoardAdapterOpts = {
   onWarn?: (msg: string) => void;
   suppressSpawn?: boolean;
   notifyChannel?: string;
-  selfRef?: ExecutionRef;
+  callbackTransport?: BoardCallbackTransport;
 };
-type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void; selfRef?: ExecutionRef };
+type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void; callbackTransport?: BoardCallbackTransport };
 
 function _pathAlreadyEndsWith(dir: string, segment: string): boolean {
   if (!dir || !segment) return false;
@@ -274,19 +283,18 @@ export function createFsBoardPlatformAdapter(
   maybeOpts?: FsBoardAdapterOpts,
 ): BoardPlatformAdapter {
   const { cliDir, opts } = normalizeFsBoardAdapterArgs(cliDirOrOpts, maybeOpts);
-  const resolvedCliDir = resolveDefaultCliDir(cliDir);
   const dir = baseRef.value;
   let boardWorkerStoreCache: BoardWorkerStore | undefined;
+  let resolvedCliDirCache: string | undefined;
 
-  // Resolve selfRef once for callback-style invocations (node <script> ...).
-  // When suppressSpawn is set, skip path resolution because spawning is disabled.
-  const callbackTarget = opts?.suppressSpawn ? '' : resolveBoardCliCallbackTarget(resolvedCliDir);
-  const selfRef = opts?.selfRef ?? {
-    meta: 'board-live-cards',
-    howToRun: 'local-node' as const,
-    whatToRun: callbackTarget ? serializeRef({ kind: 'yaml-flow-cli', value: 'board-live-cards-cli.js' }) : '',
-    ...(opts?.notifyChannel ? { extra: { notifyChannel: opts.notifyChannel } } : {}),
-  };
+  function getResolvedCliDir(): string {
+    if (!resolvedCliDirCache) {
+      resolvedCliDirCache = resolveDefaultCliDir(cliDir);
+    }
+    return resolvedCliDirCache;
+  }
+
+  const callbackTransport = opts?.callbackTransport ?? createLocalNodeBoardCallbackTransport(opts?.notifyChannel);
 
   return {
     kvStorage: (namespace: string) =>
@@ -312,7 +320,7 @@ export function createFsBoardPlatformAdapter(
 
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
 
-    selfRef,
+  callbackTransport,
 
     async dispatchExecution(ref, args) {
       const hasDirectHostedOutput = Boolean((args['output'] as Record<string, unknown> | undefined)?.['ref']);
@@ -356,7 +364,6 @@ export function createFsBoardPlatformAdapter(
             return { dispatched: true };
           }
           const result = await invokeExecutionRef(ref, args, {
-            cliDir: resolvedCliDir,
             cwd: process.cwd(),
             label: 'dispatchExecution.directHostedWorker',
           });
@@ -382,7 +389,7 @@ export function createFsBoardPlatformAdapter(
         const inRef   = serializeRef(scratch.keyRef(inFile));
         const outRef  = serializeRef(scratch.keyRef(outFile));
         const errRef  = serializeRef(scratch.keyRef(errFile));
-        dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, resolvedCliDir);
+        dispatchTaskExecutorDetached(ref, { subcommand: 'run-source-fetch', inRef, outRef, errRef }, getResolvedCliDir());
         return { dispatched: true };
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
@@ -418,7 +425,7 @@ export function createFsBoardPlatformAdapter(
 
     requestProcessAccumulated() {
       if (opts?.suppressSpawn) return;
-      requestProcessAccumulatedDetached(resolvedCliDir, baseRef, opts?.notifyChannel);
+      requestProcessAccumulatedDetached(getResolvedCliDir(), baseRef, opts?.notifyChannel);
     },
 
     publishBoardChangeNotifications(notifications) {
@@ -451,8 +458,14 @@ export function createFsBoardNonCorePlatformAdapter(
   maybeOpts?: FsBoardNonCoreAdapterOpts,
 ): BoardNonCorePlatformAdapter {
   const { cliDir, opts } = normalizeFsBoardNonCoreAdapterArgs(cliDirOrOpts, maybeOpts);
-  const resolvedCliDir = resolveDefaultCliDir(cliDir);
-  const base = createFsBoardPlatformAdapter(baseRef, resolvedCliDir, opts);
+  let resolvedCliDirCache: string | undefined;
+  const getResolvedCliDir = (): string => {
+    if (!resolvedCliDirCache) {
+      resolvedCliDirCache = resolveDefaultCliDir(cliDir);
+    }
+    return resolvedCliDirCache;
+  };
+  const base = createFsBoardPlatformAdapter(baseRef, cliDir, opts);
   return {
     ...base,
     async invokeExecutor(ref, subcommand, execOpts) {
@@ -466,7 +479,6 @@ export function createFsBoardNonCorePlatformAdapter(
           ...(execOpts?.input !== undefined ? { input: execOpts.input } : {}),
           ...(ref.extra ? { extra: ref.extra } : {}),
         }, {
-          cliDir: resolvedCliDir,
           cwd: process.cwd(),
           timeoutMs: execOpts?.timeout ?? 30_000,
           label: `invokeExecutor:${subcommand}`,
@@ -479,7 +491,7 @@ export function createFsBoardNonCorePlatformAdapter(
         return JSON.stringify(result.data ?? {});
       }
 
-      const { command, baseArgs } = buildLocalBaseSpec(ref, resolvedCliDir);
+      const { command, baseArgs } = buildLocalBaseSpec(ref, getResolvedCliDir());
       const extraFlag = ref.extra ? ['--extra', Buffer.from(JSON.stringify(ref.extra)).toString('base64')] : [];
       const argv = [...baseArgs, subcommand, ...extraFlag];
 

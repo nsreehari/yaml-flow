@@ -6,6 +6,7 @@ import { CardCompute } from '../../card-compute/index.js';
 import type { ComputeNode, ComputeSource } from '../../card-compute/index.js';
 import type { KindValueRef } from '../common/storage-interface.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
+import { assertBoardCallbackTransport } from '../common/board-callback-transport.js';
 import type {
   BoardChangeNotification,
   CommandInput,
@@ -392,6 +393,7 @@ export function createAsyncBoardLiveCardsPublic(
   baseRef: KindValueRef,
   adapter: AsyncBoardPlatformAdapter,
 ): AsyncBoardLiveCardsPublic {
+  assertBoardCallbackTransport(adapter.callbackTransport, 'createAsyncBoardLiveCardsPublic');
   const warn = adapter.warn ?? (() => undefined);
   const boardPath = serializeRef(baseRef);
   let drainInFlight: Promise<CommandResult> | null = null;
@@ -627,7 +629,7 @@ export function createAsyncBoardLiveCardsPublic(
         const result = await adapter.dispatchExecution(executorRef, {
           source_def: src,
           base_ref: serializeRef(baseRef),
-          callback: { token: sourceToken, via: adapter.selfRef },
+          callback: adapter.callbackTransport.createCallback(sourceToken),
           ...(directOutput ? { output: directOutput } : {}),
         });
         if (!result.dispatched) {
