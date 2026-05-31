@@ -225,6 +225,8 @@ export interface BoardLiveCardsMcp {
   }): BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult;
   manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   manageRemoveCard(args: { cardId: string }): unknown;
+  adminReadCard(args: { cardId: string }): LiveCard[];
+  adminUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean };
   setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean };
 }
@@ -370,6 +372,11 @@ function hasOwn(value: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function isAdminCard(card: UnknownRecord): boolean {
+  const meta = ensureRecord(card.meta);
+  return meta.__visible_controlplane_only === true;
+}
+
 function readOneCard(cardStore: CardStorePublic, cardId: string): LiveCard {
   const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
   const cards = Array.isArray(result?.cards) ? result.cards : [];
@@ -455,6 +462,9 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     }
 
     const storedCard = ensureRecord(readOneCard(cardStore, cardId));
+    if (isAdminCard(storedCard)) {
+      throw Object.assign(new Error(`card "${cardId}" not found`), { statusCode: 404 });
+    }
     const publicStoredCard = stripMcpPrivateCardFields(storedCard);
     const requiresKeys = ensureArray(cardStatusInBoard.requires_satisfied).filter((key): key is string => typeof key === 'string' && !!key);
     const providesKeys = ensureArray(cardStatusInBoard.provides_runtime).filter((key): key is string => typeof key === 'string' && !!key);
@@ -792,9 +802,11 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('manageReadCard requires cardId');
     const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
-    return Array.isArray(result.cards)
-      ? result.cards.map((card) => stripMcpPrivateCardFields(ensureRecord(card)) as LiveCard)
-      : [];
+    const cards = Array.isArray(result.cards) ? result.cards.map(ensureRecord) : [];
+    if (cards.some(isAdminCard)) {
+      throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
+    }
+    return cards.map((card) => stripMcpPrivateCardFields(card) as LiveCard);
   }
 
   function manageAddChatEntryAndAnyAttachments(args: {
@@ -962,6 +974,75 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
+  function adminReadCard(args: { cardId: string }): LiveCard[] {
+    const cardId = String(args.cardId || '').trim();
+    if (!cardId) throw new Error('adminReadCard requires cardId');
+    const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
+    return Array.isArray(result.cards)
+      ? result.cards.map((card) => ensureRecord(card) as LiveCard)
+      : [];
+  }
+
+  async function adminUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
+    const cardId = String(args.cardId || '').trim();
+    const incomingCandidateCard = ensureRecord(args.candidateCardContent);
+    const candidateCard = stripMcpPrivateCardFields(incomingCandidateCard);
+    if (!cardId) throw new Error('adminUpsertCard requires cardId');
+    if (typeof candidateCard.id !== 'string' || !candidateCard.id.trim()) {
+      throw new Error('candidateCardContent.id must be a non-empty string');
+    }
+    if (candidateCard.id !== cardId) {
+      throw new Error(`candidateCardContent.id must match cardId (${cardId})`);
+    }
+
+    const validation = await preflightValidateCandidateCardDefinition({ candidateCardContent: candidateCard });
+    const validationObj = ensureRecord(validation);
+    const validationData = ensureRecord(validationObj.data);
+    if (validationObj.status !== 'success' || validationData.isValid !== true) {
+      return { status: 'fail', step: 'validate', validation };
+    }
+
+    let previousCard: LiveCard | null = null;
+    try {
+      previousCard = readOneCard(cardStore, cardId);
+    } catch {
+      previousCard = null;
+    }
+
+    // Preserve existing meta fields but always force __visible_controlplane_only = true
+    const existingMeta = previousCard ? ensureRecord(ensureRecord(previousCard).meta) : {};
+    const cardToStore = { ...candidateCard, meta: { ...existingMeta, __visible_controlplane_only: true } };
+
+    const storeUpdate = cardStore.set({ body: cardToStore });
+    expectSuccess(storeUpdate, 'cardStore.set');
+
+    let boardUpdate: unknown;
+    try {
+      boardUpdate = board.upsertCard({ params: { cardId, restart: true } });
+      expectSuccess(boardUpdate as CommandResult<unknown>, 'upsertCard');
+    } catch (boardErr) {
+      try {
+        if (previousCard) cardStore.set({ body: previousCard });
+      } catch {
+        // best-effort rollback
+      }
+      throw boardErr;
+    }
+
+    let refreshNotify: unknown = null;
+    try {
+      refreshNotify = board.cardRefreshedNotify({ params: { cardId } });
+      expectSuccess(refreshNotify as CommandResult<unknown>, 'cardRefreshedNotify');
+    } catch {
+      refreshNotify = null;
+    }
+
+    return {
+      status: 'success',
+      data: { validation, card_saved: null, board_result: boardUpdate, refresh_notify: refreshNotify },
+    };
+  }
+
   function getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean } {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('getChatProcessing requires cardId');
@@ -993,6 +1074,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     manageAddChatEntryAndAnyAttachments,
     manageUpsertCard,
     manageRemoveCard,
+    adminReadCard,
+    adminUpsertCard,
     getChatProcessing,
     setChatProcessing,
   };

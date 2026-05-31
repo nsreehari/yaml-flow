@@ -690,6 +690,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const { cardId } = requireControlplaneCardArgs(args);
     const key = getCardMetaKey(args);
     if (!Object.prototype.hasOwnProperty.call(args, 'value')) throw Object.assign(new Error('MCP tool requires value'), { statusCode: 400 });
+    if (key.split('.').includes('__visible_controlplane_only')) {
+      // Allow the key through only if the value matches the card's current __visible_controlplane_only flag
+      // (idempotent round-trip: client read the full meta, re-submits values, flag value unchanged).
+      const existing = expectControlplaneSuccess<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
+      const card = Array.isArray(existing.cards) && existing.cards.length > 0 && typeof existing.cards[0] === 'object' && !Array.isArray(existing.cards[0])
+        ? existing.cards[0] as Record<string, unknown>
+        : null;
+      const currentFlag = card ? readCardMetaValue(card, '__visible_controlplane_only').value : undefined;
+      if (args.value !== currentFlag) {
+        throw Object.assign(new Error('MCP tool cannot change the reserved meta flag __visible_controlplane_only'), { statusCode: 403 });
+      }
+      return { status: 'success', data: { boardId, cardId, key } };
+    }
     expectControlplaneSuccess(mcpCardStoreFacade().patch({
       params: { id: cardId, path: `meta.${key}` },
       body: { value: args.value },
@@ -806,6 +819,22 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
 
         return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
+      },
+      'manage.admin-read-card': (args) => {
+        const { cardId } = requireControlplaneCardArgs(args);
+        const cards = createMcpFacade().adminReadCard({ cardId });
+        return { status: 'success', data: { cards } };
+      },
+      'manage.admin-upsert-card': (args) => {
+        const requestBoardId = getMcpArgString(args, 'board_id');
+        const cardId = getMcpArgString(args, 'card_id');
+        if (!requestBoardId) throw Object.assign(new Error('manage.admin-upsert-card requires board_id'), { statusCode: 400 });
+        if (!cardId) throw Object.assign(new Error('manage.admin-upsert-card requires card_id'), { statusCode: 400 });
+        if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
+        return createMcpFacade().adminUpsertCard({
+          cardId,
+          candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),
+        });
       },
     };
   }

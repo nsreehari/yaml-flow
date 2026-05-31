@@ -1472,6 +1472,70 @@ try {
     );
     assert(t5Inspect?.card_definition_and_static_data?.meta === undefined, 'T5 expected inspect to redact card_definition_and_static_data.meta');
     console.log('[T5] ok: regular /mcp surfaces redact card meta');
+
+    // ── T5: admin-only card round-trip ──────────────────────────────────────
+    // 1. Read the existing card definition via the normal read-card path.
+    const t5AdminCardId = T5_CARD_ID;
+    const t5NormalRead = expectMcpSuccess(
+      await httpMcp('manage.read-card', { card_id: t5AdminCardId }),
+      'T5 admin setup: manage.read-card before marking admin',
+    );
+    const t5OriginalCard = Array.isArray(t5NormalRead) ? t5NormalRead[0] : null;
+    assert(t5OriginalCard, 'T5 expected card definition before marking as admin-only');
+
+    // 2. Upsert it as an admin-only card via the controlplane tool.
+    const t5AdminUpsert = expectMcpSuccess(
+      await httpMcpControlplane('manage.admin-upsert-card', {
+        board_id: BOARD_ID,
+        card_id: t5AdminCardId,
+        candidate_card_content: t5OriginalCard,
+      }),
+      'T5 manage.admin-upsert-card',
+    );
+    assert(t5AdminUpsert?.board_result, 'T5 expected board_result from admin upsert');
+    console.log('[T5] ok: manage.admin-upsert-card succeeded');
+
+    // 3. Verify the card is now invisible on the regular /mcp surface.
+    const t5HiddenRead = await httpMcp('manage.read-card', { card_id: t5AdminCardId });
+    assert(t5HiddenRead?.status === 'fail' || (Array.isArray(expectMcpSuccess(t5HiddenRead, 'silent')) && expectMcpSuccess(t5HiddenRead, 'silent').length === 0) || t5HiddenRead?.error,
+      `T5 expected manage.read-card to be blocked after admin upsert, got: ${JSON.stringify(t5HiddenRead)}`);
+    console.log('[T5] ok: manage.read-card blocked for admin-only card');
+
+    // 4. Verify the card IS visible via the controlplane admin-read-card tool.
+    const t5AdminRead = expectMcpSuccess(
+      await httpMcpControlplane('manage.admin-read-card', { board_id: BOARD_ID, card_id: t5AdminCardId }),
+      'T5 manage.admin-read-card',
+    );
+    const t5AdminCards = Array.isArray(t5AdminRead?.cards) ? t5AdminRead.cards : [];
+    assert(t5AdminCards.length > 0, 'T5 expected admin-read-card to return the card');
+    assert(t5AdminCards[0]?.meta?.__visible_controlplane_only === true, `T5 expected meta.__visible_controlplane_only=true, got: ${JSON.stringify(t5AdminCards[0]?.meta)}`);
+    console.log('[T5] ok: manage.admin-read-card returns card with __visible_controlplane_only=true');
+
+    // 5. Guard: setstate.card-meta must block changing the flag to a different value.
+    // key = 'chat.__visible_controlplane_only' passes the chat.* format check but contains
+    // the reserved segment, so it reaches the guard.
+    const t5MetaGuard = await httpMcpControlplane('setstate.card-meta', {
+      board_id: BOARD_ID,
+      card_id: t5AdminCardId,
+      key: 'chat.__visible_controlplane_only',
+      value: false,  // differs from current flag value (true) → must be rejected
+    });
+    assert(t5MetaGuard?.error || t5MetaGuard?.status === 'fail',
+      `T5 expected setstate.card-meta to reject changing __visible_controlplane_only, got: ${JSON.stringify(t5MetaGuard)}`);
+    console.log('[T5] ok: setstate.card-meta blocked flag mutation (false != true)');
+
+    // 6. Guard: same key with value matching the current flag (true) must pass (idempotent).
+    const t5MetaIdempotent = expectMcpSuccess(
+      await httpMcpControlplane('setstate.card-meta', {
+        board_id: BOARD_ID,
+        card_id: t5AdminCardId,
+        key: 'chat.__visible_controlplane_only',
+        value: true,  // matches current flag value → idempotent, allowed
+      }),
+      'T5 setstate.card-meta idempotent same-value',
+    );
+    assert(t5MetaIdempotent, 'T5 expected setstate.card-meta to succeed with matching flag value');
+    console.log('[T5] ok: setstate.card-meta idempotent same-value allowed');
   }
   }
 
