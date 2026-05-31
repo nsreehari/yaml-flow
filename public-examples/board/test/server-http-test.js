@@ -1331,10 +1331,18 @@ try {
     assert(t4UpsertV1Data?.board_result?.status === 'success', 'T4.remove-card v1 upsert board_result expected success');
     console.log('[T4.remove-card] ok: v1 card upserted');
 
-    const t4StatusBeforeRemove = expectMcpSuccess(
-      await httpMcp('inspect.board-runtime-status', {}),
-      'T4.remove-card board-runtime-status before remove',
-    );
+    let t4StatusBeforeRemove = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      t4StatusBeforeRemove = expectMcpSuccess(
+        await httpMcp('inspect.board-runtime-status', {}),
+        'T4.remove-card board-runtime-status before remove',
+      );
+      const cards = Array.isArray(t4StatusBeforeRemove?.cards) ? t4StatusBeforeRemove.cards : [];
+      if (cards.some(c => c['card-id'] === T4_REMOVE_CARD_ID)) break;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
     const t4CardsBefore = Array.isArray(t4StatusBeforeRemove?.cards) ? t4StatusBeforeRemove.cards : [];
     assert(t4CardsBefore.some(c => c['card-id'] === T4_REMOVE_CARD_ID), 'T4.remove-card: card not found in board-runtime-status before remove');
     const t4CardCountBefore = t4StatusBeforeRemove?.summary?.card_count ?? 0;
