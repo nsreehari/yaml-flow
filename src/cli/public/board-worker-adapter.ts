@@ -25,7 +25,7 @@
  *   in-process-loop — invoke a registered same-process callback handler
  *
  * Usage:
- *   import { parseRef, blobStorageForRef, reportComplete, reportFailed } from './board-worker-adapter.js';
+ *   import { parseRef, blobStorageForRef, reportComplete, reportFailed } from 'yaml-flow/board-worker-adapter';
  *
  *   const { source_def, callback } = JSON.parse(blobStorageForRef(inRef).read(inRef.value));
  *   // ... do work, write to outRef ...

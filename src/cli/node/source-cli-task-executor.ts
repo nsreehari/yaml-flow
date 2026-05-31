@@ -24,8 +24,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { parseRef, blobStorageForRef, reportComplete, reportFailed } from './board-worker-adapter.js';
-import type { KindValueRef, TaskCallback } from './board-worker-adapter.js';
+import { parseRef, blobStorageForRef, reportComplete, reportFailed } from '../public/board-worker-adapter.js';
+import type { KindValueRef, TaskCallback } from '../public/board-worker-adapter.js';
 
 // ============================================================================
 // Command splitting — minimal implementation for source.cli strings.
