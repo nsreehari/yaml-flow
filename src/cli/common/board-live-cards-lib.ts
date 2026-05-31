@@ -24,6 +24,17 @@ import { schedule } from '../../continuous-event-graph/schedule.js';
 import type { TaskHandlerFn } from '../../continuous-event-graph/reactive.js';
 import { CardCompute } from '../../card-compute/index.js';
 import type { ComputeNode, ComputeStep, ComputeSource } from '../../card-compute/index.js';
+import {
+  applyStateSnapshotCommitEnvelope as applySharedStateSnapshotCommitEnvelope,
+  createJournalStoreFromEntriesAdapter,
+  createStateSnapshotStoreFromAdapter,
+} from './board-live-cards-shared-snapshot-journal.js';
+import {
+  createCardRuntimeStoreFromBacking,
+  createExecutionRequestStoreFromBacking,
+  createFetchedSourcesStoreFromBacking,
+  createPublishedOutputsStoreFromBacking,
+} from './board-live-cards-shared-stores.js';
 export type { DispatchResult, InvocationAdapter } from './process-interface.js';
 
 // ============================================================================
@@ -254,35 +265,7 @@ export function createFetchedSourcesStore(
   blob: BlobStorage,
   resolveRef: (ref: KindValueRef) => string,
 ): FetchedSourcesStore {
-  return {
-    readSourceData(cardId, outputFile): unknown {
-      const raw = blob.read(`${cardId}/${outputFile}`);
-      if (raw == null) return null;
-      const trimmed = raw.trim();
-      if (!trimmed) return null;
-      try { return JSON.parse(trimmed); } catch { return trimmed; }
-    },
-    ingestSourceDataStaged(cardId, outputFile, ref, deliveryToken): void {
-      const content = resolveRef(ref);
-      blob.write(`${cardId}/.staged/${deliveryToken}/${outputFile}`, content);
-    },
-    commitSourceData(cardId, outputFile, deliveryToken): boolean {
-      const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
-      const content = blob.read(stagedKey);
-      if (content == null) return false;
-      blob.write(`${cardId}/${outputFile}`, content);
-      blob.remove(stagedKey);
-      return true;
-    },
-    hasSource(cardId, outputFile): boolean {
-      return blob.exists(`${cardId}/${outputFile}`);
-    },
-    listSources(cardId: string): string[] {
-      return blob.listKeys(`${cardId}/`)
-        .filter(k => !k.includes('/.staged/'))
-        .map(k => k.slice(`${cardId}/`.length));
-    },
-  };
+  return createFetchedSourcesStoreFromBacking(blob, resolveRef);
 }
 
 // ============================================================================
@@ -310,28 +293,7 @@ export interface JournalAdminStore extends JournalStore {
 }
 
 export function createJournalStore(adapter: JournalStorageAdapter): JournalAdminStore {
-  function entriesAfterCursor(cursor: string): JournalEntry[] {
-    const all = adapter.readAllEntries();
-    if (!cursor) return all;
-    const idx = all.findIndex(e => e.id === cursor);
-    return idx === -1 ? all : all.slice(idx + 1);
-  }
-
-  return {
-    readEntriesAfterCursor(cursor: string): { events: GraphEvent[]; newCursor: string } {
-      const entries = entriesAfterCursor(cursor);
-      if (entries.length === 0) return { events: [], newCursor: cursor };
-      return { events: entries.map(e => e.event), newCursor: entries[entries.length - 1].id };
-    },
-
-    pendingCount(cursor: string): number {
-      return entriesAfterCursor(cursor).length;
-    },
-
-    appendEvent(event: GraphEvent): void {
-      adapter.appendEntry({ id: adapter.generateId(), event });
-    },
-  };
+  return createJournalStoreFromEntriesAdapter(adapter);
 }
 
 // ============================================================================
@@ -352,26 +314,7 @@ export function createExecutionRequestStore(
   kv: KVStorage,
   onDispatchFailed: (entry: ExecutionRequestEntry, error: string) => void,
 ): ExecutionRequestStore {
-  return {
-    appendEntries(journalId: string, entries: ExecutionRequestEntry[]): void {
-      if (!journalId || entries.length === 0) return;
-      const existing = (kv.read(journalId) as ExecutionRequestEntry[] | null) ?? [];
-      kv.write(journalId, [...existing, ...entries]);
-    },
-
-    dispatchEntriesForJournalId(journalId: string, processorFn: (entry: ExecutionRequestEntry) => void): void {
-      if (!journalId) return;
-      const entries = kv.read(journalId) as ExecutionRequestEntry[] | null;
-      if (!entries || entries.length === 0) return;
-      for (const entry of entries) {
-        try { processorFn(entry); } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          try { onDispatchFailed(entry, msg); } catch { /* guard against failure in error handler */ }
-        }
-      }
-      kv.delete(journalId);
-    },
-  };
+  return createExecutionRequestStoreFromBacking(kv, onDispatchFailed);
 }
 
 // ============================================================================
@@ -411,14 +354,7 @@ export interface CardRuntimeStore {
 }
 
 export function createCardRuntimeStore(kv: KVStorage): CardRuntimeStore {
-  return {
-    readRuntime(cardId) {
-      return (kv.read(cardRuntimeKey(cardId)) as CardRuntimeSnapshot | null) ?? { _sources: {} };
-    },
-    writeRuntime(cardId, state) {
-      kv.write(cardRuntimeKey(cardId), state);
-    },
-  };
+  return createCardRuntimeStoreFromBacking(kv, cardRuntimeKey, () => ({ _sources: {} }));
 }
 
 export interface FetchedSourceManifestEntry {
@@ -473,32 +409,11 @@ export function applyStateSnapshotCommitEnvelope(
   current: Record<string, unknown>,
   envelope: Pick<StateSnapshotCommitEnvelope, 'deleteKeys' | 'shallowMerge'>,
 ): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...current };
-  for (const key of envelope.deleteKeys) {
-    delete next[key];
-  }
-  return { ...next, ...envelope.shallowMerge };
+  return applySharedStateSnapshotCommitEnvelope(current, envelope);
 }
 
 export function createStateSnapshotStore(adapter: StateSnapshotStorageAdapter): StateSnapshotStore {
-  return {
-    readSnapshot(scopeId: string): StateSnapshotReadView {
-      return adapter.readValues(scopeId);
-    },
-
-    commitSnapshot(scopeId: string, envelope: StateSnapshotCommitEnvelope): StateSnapshotCommitResult {
-      if (envelope.schemaVersion !== SNAPSHOT_SCHEMA_VERSION_V1) {
-        throw new Error(`Unsupported snapshot schema version: ${envelope.schemaVersion}`);
-      }
-      const current = adapter.readValues(scopeId);
-      if (current.version !== envelope.expectedVersion) {
-        return { ok: false, reason: 'version-mismatch', currentVersion: current.version };
-      }
-      const nextValues = applyStateSnapshotCommitEnvelope(current.values, envelope);
-      const newVersion = adapter.writeValues(scopeId, nextValues, envelope.deleteKeys);
-      return { ok: true, newVersion };
-    },
-  };
+  return createStateSnapshotStoreFromAdapter(adapter, SNAPSHOT_SCHEMA_VERSION_V1);
 }
 
 // ============================================================================
@@ -621,38 +536,7 @@ export interface PublishedOutputsStore {
 }
 
 export function createPublishedOutputsStore(kv: KVStorage): PublishedOutputsStore {
-  return {
-    writeComputedValues(cardId, values) {
-      kv.write(`cards/${cardId}/computed_values`, values);
-    },
-    readComputedValues(cardId) { return kv.read(`cards/${cardId}/computed_values`); },
-    readAllComputedValues() {
-      const out: Record<string, unknown> = {};
-      for (const key of kv.listKeys('cards/')) {
-        const m = key.match(/^cards\/([^/]+)\/computed_values$/);
-        if (m) out[m[1]] = kv.read(key);
-      }
-      return out;
-    },
-    writeDataObjects(data) {
-      for (const [token, payload] of Object.entries(data)) {
-        if (!token) continue;
-        kv.write(`data-objects/${token}`, payload);
-      }
-    },
-    readDataObject(key) { return kv.read(`data-objects/${key}`); },
-    readAllDataObjects() {
-      const out: Record<string, unknown> = {};
-      for (const key of kv.listKeys('data-objects/')) {
-        out[key.slice('data-objects/'.length)] = kv.read(key);
-      }
-      return out;
-    },
-    writeStatusSnapshot(status) {
-      kv.write('status', status);
-    },
-    readStatusSnapshot() { return kv.read('status'); },
-  };
+  return createPublishedOutputsStoreFromBacking(kv);
 }
 
 // ============================================================================

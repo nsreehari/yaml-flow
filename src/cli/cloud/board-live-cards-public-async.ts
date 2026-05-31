@@ -1,0 +1,1070 @@
+import type { TaskHandlerFn } from '../../continuous-event-graph/reactive.js';
+import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
+import { createLiveGraph, restore, snapshot } from '../../continuous-event-graph/core.js';
+import type { GraphEvent } from '../../event-graph/types.js';
+import { CardCompute } from '../../card-compute/index.js';
+import type { ComputeNode, ComputeSource } from '../../card-compute/index.js';
+import type { KindValueRef } from '../common/storage-interface.js';
+import { parseRef, serializeRef } from '../common/storage-interface.js';
+import type {
+  BoardChangeNotification,
+  CommandInput,
+  CommandResult,
+} from '../common/board-live-cards-public.js';
+import {
+  BOARD_GRAPH_KEY,
+  EMPTY_CONFIG,
+} from '../common/board-live-cards-public.js';
+import type {
+  BoardEnvelope,
+  BoardStatusObject,
+  CardRuntimeSnapshot,
+  CardUpsertIndexEntry,
+  ExecutionRequestEntry,
+  LiveCard,
+  OutputStoreEvent,
+  SourceTokenPayload,
+} from '../common/board-live-cards-lib.js';
+import {
+  buildBoardStatusObject,
+  boardEnvelopeToSnapshotEntries,
+  cardRuntimeKey,
+  decideSourceAction,
+  liveCardToTaskConfig,
+  nextEntryAfterFetchDelivery,
+  nextEntryAfterFetchFailure,
+  normalizeSourceRuntimeEntry,
+  snapshotEntriesToBoardEnvelope,
+} from '../common/board-live-cards-lib.js';
+import {
+  createCardRuntimeStoreFromBacking,
+  createExecutionRequestStoreFromBacking,
+  createFetchedSourcesStoreFromBacking,
+  createPublishedOutputsStoreFromBacking,
+} from '../common/board-live-cards-shared-stores.js';
+import {
+  createAsyncJournalStoreFromStorage,
+  createStateSnapshotAdapterFromKV,
+  createStateSnapshotStoreFromAdapter,
+} from '../common/board-live-cards-shared-snapshot-journal.js';
+import type { ExecutionRef } from '../common/execution-interface.js';
+import type {
+  AsyncBlobStorage,
+  AsyncKVStorage,
+} from './storage-async-interface.js';
+import { withAsyncRelayLock } from './storage-async-interface.js';
+import type {
+  AsyncBoardConfigStore,
+  AsyncBoardPlatformAdapter,
+} from './board-platform-adapter-async.js';
+import { createAsyncBoardConfigStore } from './board-platform-adapter-async.js';
+import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from './board-live-cards-storage-async.js';
+import type { AsyncCardAdminStore } from './board-live-cards-storage-async.js';
+
+export interface AsyncBoardLiveCardsPublic {
+  init(input: CommandInput): Promise<CommandResult>;
+  status(input: CommandInput): Promise<CommandResult<BoardStatusObject>>;
+  getCardStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string }>>;
+  getOutputsStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string }>>;
+  getScratchStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
+  getArchiveStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
+  getChatStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
+  getArtifactsStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
+  getConfig(input: CommandInput): Promise<CommandResult<{ value: unknown }>>;
+  getOutputsDataObject(input: CommandInput): Promise<CommandResult>;
+  getAllOutputsDataObjects(input: CommandInput): Promise<CommandResult<Record<string, unknown>>>;
+  getOutputsComputedValues(input: CommandInput): Promise<CommandResult>;
+  getAllOutputsComputedValues(input: CommandInput): Promise<CommandResult<Record<string, unknown>>>;
+  getOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, string>>>;
+  getAllOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, Record<string, string>>>>;
+  addCardFiles(input: CommandInput): Promise<CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>>;
+  cardRefreshedNotify(input: CommandInput): Promise<CommandResult>;
+  removeCard(input: CommandInput): Promise<CommandResult>;
+  retrigger(input: CommandInput): Promise<CommandResult>;
+  upsertCard(input: CommandInput): Promise<CommandResult>;
+  processAccumulatedEvents(input: CommandInput): Promise<CommandResult>;
+  taskFailed(input: CommandInput): Promise<CommandResult>;
+  taskProgress(input: CommandInput): Promise<CommandResult>;
+  sourceDataFetched(input: CommandInput): Promise<CommandResult>;
+  sourceDataFetchFailure(input: CommandInput): Promise<CommandResult>;
+}
+
+interface AsyncPublishedOutputsStore {
+  writeComputedValues(cardId: string, values: Record<string, unknown>): Promise<void>;
+  readComputedValues(cardId: string): Promise<unknown | null>;
+  readAllComputedValues(): Promise<Record<string, unknown>>;
+  writeDataObjects(data: Record<string, unknown>): Promise<void>;
+  readDataObject(key: string): Promise<unknown | null>;
+  readAllDataObjects(): Promise<Record<string, unknown>>;
+  writeStatusSnapshot(status: unknown): Promise<void>;
+  readStatusSnapshot(): Promise<unknown | null>;
+}
+
+interface AsyncCardRuntimeStore {
+  readRuntime(cardId: string): Promise<CardRuntimeSnapshot>;
+  writeRuntime(cardId: string, state: CardRuntimeSnapshot): Promise<void>;
+}
+
+interface AsyncFetchedSourcesStore {
+  readSourceData(cardId: string, outputFile: string): Promise<unknown>;
+  ingestSourceDataStaged(cardId: string, outputFile: string, ref: KindValueRef, deliveryToken: string): Promise<void>;
+  commitSourceData(cardId: string, outputFile: string, deliveryToken: string): Promise<boolean>;
+  hasSource(cardId: string, outputFile: string): Promise<boolean>;
+  listSources(cardId: string): Promise<string[]>;
+}
+
+interface AsyncExecutionRequestStore {
+  appendEntries(journalId: string, entries: ExecutionRequestEntry[]): Promise<void>;
+  dispatchEntriesForJournalId(journalId: string, processorFn: (entry: ExecutionRequestEntry) => Promise<void>): Promise<void>;
+}
+
+function ok(): CommandResult;
+function ok<T>(data: T): CommandResult<T>;
+function ok<T>(data?: T): CommandResult<T> {
+  return (data !== undefined ? { status: 'success', data } : { status: 'success' }) as CommandResult<T>;
+}
+
+function fail(error: string): CommandResult { return { status: 'fail', error }; }
+function err(error: unknown): CommandResult { return { status: 'error', error: error instanceof Error ? error.message : String(error) }; }
+
+function nowIso(): string { return new Date().toISOString(); }
+
+function toBase64Url(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  const binStr = Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+  return btoa(binStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function fromBase64Url(str: string): string {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+  const binStr = atob(padded);
+  const bytes = Uint8Array.from(binStr, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function decodeCallbackToken(token: string): { taskName: string } | null {
+  try {
+    const payload = JSON.parse(fromBase64Url(token));
+    return typeof payload?.t === 'string' ? { taskName: payload.t } : null;
+  } catch {
+    return null;
+  }
+}
+
+type HostedSourceTokenPayload = SourceTokenPayload & { dt?: string };
+
+function encodeSourceToken(payload: HostedSourceTokenPayload): string {
+  return toBase64Url(JSON.stringify(payload));
+}
+
+function decodeSourceToken(token: string): HostedSourceTokenPayload | null {
+  try {
+    const payload = JSON.parse(fromBase64Url(token));
+    if (typeof payload?.cbk === 'string' && typeof payload?.cid === 'string' && typeof payload?.b === 'string' && typeof payload?.d === 'string') {
+      return payload as HostedSourceTokenPayload;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function createAsyncCardRuntimeStore(kv: AsyncKVStorage): AsyncCardRuntimeStore {
+  return createCardRuntimeStoreFromBacking(kv, cardRuntimeKey, () => ({ _sources: {} }));
+}
+
+function createAsyncFetchedSourcesStore(
+  blob: AsyncBlobStorage,
+  resolveRef: (ref: KindValueRef) => Promise<string>,
+): AsyncFetchedSourcesStore {
+  return createFetchedSourcesStoreFromBacking(blob, resolveRef);
+}
+
+function createAsyncPublishedOutputsStore(kv: AsyncKVStorage): AsyncPublishedOutputsStore {
+  return createPublishedOutputsStoreFromBacking(kv);
+}
+
+function createAsyncExecutionRequestStore(
+  kv: AsyncKVStorage,
+  onDispatchFailed: (entry: ExecutionRequestEntry, error: string) => Promise<void>,
+): AsyncExecutionRequestStore {
+  return createExecutionRequestStoreFromBacking(kv, onDispatchFailed);
+}
+
+function createAsyncCardHandlerFn(
+  baseRef: KindValueRef,
+  journalId: string,
+  adapters: {
+    cardStore: AsyncCardAdminStore;
+    cardRuntimeStore: AsyncCardRuntimeStore;
+    fetchedSourcesStore: AsyncFetchedSourcesStore;
+    outputStore: AsyncPublishedOutputsStore;
+    executionRequestStore: AsyncExecutionRequestStore;
+  },
+  taskCompletedFn: (taskName: string, data: Record<string, unknown>) => void,
+  writeComputedValuesFn?: (cardId: string, values: Record<string, unknown>) => void,
+  writeDataObjectsFn?: (data: Record<string, unknown>) => void,
+): TaskHandlerFn {
+  return async (input) => {
+    const pendingRequests: ExecutionRequestEntry[] = [];
+    const card = await adapters.cardStore.readCard(input.nodeId);
+    if (!card) return 'task-initiate-failure';
+
+    const cardId = card.id as string;
+    const cardState = (card.card_data ?? {}) as Record<string, unknown>;
+    const allSources = (card.source_defs ?? []) as ComputeSource[];
+    const requiredSources = allSources.filter((source) => source.optionalForCompletionGating !== true);
+
+    let state = await adapters.cardRuntimeStore.readRuntime(cardId);
+    let dirty = false;
+
+    const flush = async (): Promise<void> => {
+      if (!dirty) return;
+      await adapters.cardRuntimeStore.writeRuntime(cardId, state);
+      dirty = false;
+    };
+
+    const getSourceEntry = (outputFile: string) => normalizeSourceRuntimeEntry(state._sources[outputFile]);
+    const setSourceEntry = (outputFile: string, entry: CardRuntimeSnapshot['_sources'][string]): void => {
+      state._sources[outputFile] = normalizeSourceRuntimeEntry(entry);
+      dirty = true;
+    };
+
+    const currentExecutionCount = input.taskState?.executionCount ?? 0;
+    if (state._lastExecutionCount !== currentExecutionCount) {
+      state._sources = {};
+      state._lastExecutionCount = currentExecutionCount;
+      dirty = true;
+    }
+
+    if (input.update) {
+      const outputFile = input.update.outputFile as string;
+      if (outputFile) {
+        const entry = getSourceEntry(outputFile);
+        if (input.update.failure) {
+          const failureToken = (input.update.rqt as string | undefined) ?? entry.lastRequestedToken ?? entry.queueRequestedToken;
+          if (failureToken) setSourceEntry(outputFile, nextEntryAfterFetchFailure(entry, failureToken));
+        } else {
+          const incomingRqt = input.update.rqt as string;
+          if (!entry.lastCompletedToken || incomingRqt > entry.lastCompletedToken) {
+            const deliveryToken = typeof input.update.deliveryToken === 'string' ? input.update.deliveryToken : undefined;
+            const committed = deliveryToken ? await adapters.fetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken) : false;
+            setSourceEntry(outputFile, committed
+              ? nextEntryAfterFetchDelivery(entry, incomingRqt)
+              : nextEntryAfterFetchFailure(entry, incomingRqt));
+          }
+        }
+        await flush();
+      }
+    }
+
+    const sourcesData: Record<string, unknown> = {};
+    for (const src of allSources) {
+      if (!src.outputFile) continue;
+      const content = await adapters.fetchedSourcesStore.readSourceData(cardId, src.outputFile);
+      if (content !== null) sourcesData[src.bindTo] = content;
+    }
+
+    const requires: Record<string, unknown> = {};
+    for (const [token, taskData] of Object.entries(input.state ?? {})) {
+      if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
+        const unwrapped = (taskData as Record<string, unknown>)[token];
+        requires[token] = unwrapped !== undefined ? unwrapped : taskData;
+      } else {
+        requires[token] = taskData;
+      }
+    }
+
+    const computeNode: ComputeNode = {
+      id: cardId,
+      card_data: { ...cardState },
+      requires,
+      source_defs: allSources,
+      compute: card.compute as never,
+    };
+    computeNode._sourcesData = sourcesData;
+    if (card.compute) CardCompute.runSync(computeNode, { sourcesData });
+
+    (writeComputedValuesFn ?? (() => undefined))(cardId, computeNode.computed_values ?? {});
+
+    const enrichedSources = CardCompute.enrichSourcesSync(
+      Array.isArray(card.source_defs) ? card.source_defs : undefined,
+      { card_data: card.card_data as Record<string, unknown>, requires },
+    );
+    const enrichedCard = {
+      ...card,
+      source_defs: Array.isArray(enrichedSources)
+        ? enrichedSources.map((src) => ({
+            ...src,
+            boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : baseRef.value,
+          }))
+        : enrichedSources,
+    };
+
+    const now = nowIso();
+    const runQueuedToken = input.update ? undefined : now;
+
+    const undeliveredRequired = requiredSources.filter((src) => {
+      const outputFile = src.outputFile;
+      if (typeof outputFile !== 'string' || !outputFile) return true;
+      let entry = getSourceEntry(outputFile);
+      if (runQueuedToken) {
+        entry = { ...entry, queueRequestedToken: runQueuedToken };
+        setSourceEntry(outputFile, entry);
+      }
+      const queueRequestedToken = entry.queueRequestedToken ?? entry.lastRequestedToken ?? now;
+      const action = decideSourceAction(entry, queueRequestedToken);
+      return action === 'dispatch';
+    });
+
+    await flush();
+
+    if (undeliveredRequired.length > 0) {
+      let stampedAny = false;
+      let dispatchRqt = now;
+      for (const src of undeliveredRequired) {
+        const outputFile = src.outputFile;
+        if (typeof outputFile !== 'string' || !outputFile) continue;
+        const entry = getSourceEntry(outputFile);
+        const queuedAt = entry.queueRequestedToken ?? now;
+        setSourceEntry(outputFile, { ...entry, lastRequestedToken: queuedAt });
+        dispatchRqt = queuedAt;
+        stampedAny = true;
+      }
+      if (stampedAny) await flush();
+      if (!stampedAny) return 'task-initiated';
+
+      pendingRequests.push({
+        taskKind: 'source-fetch',
+        payload: {
+          boardRef: serializeRef(baseRef),
+          enrichedCard: enrichedCard as Record<string, unknown>,
+          callbackToken: input.callbackToken,
+          rqt: dispatchRqt,
+        },
+      });
+      await adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
+      return 'task-initiated';
+    }
+
+    const anyRequiredInFlight = requiredSources.some((src) => {
+      const outputFile = src.outputFile;
+      if (typeof outputFile !== 'string' || !outputFile) return false;
+      const entry = getSourceEntry(outputFile);
+      const queueRequestedToken = entry.queueRequestedToken ?? entry.lastRequestedToken ?? now;
+      return decideSourceAction(entry, queueRequestedToken) === 'in-flight';
+    });
+    if (anyRequiredInFlight) return 'task-initiated';
+
+    const providesBindings = (card.provides ?? []) as Array<{ bindTo: string; ref: string }>;
+    const data: Record<string, unknown> = {};
+    for (const { bindTo, ref } of providesBindings) data[bindTo] = CardCompute.resolve(computeNode, ref);
+
+    (writeDataObjectsFn ?? (() => undefined))(data);
+
+    const undeliveredOptional = allSources.filter((src) => {
+      if (src.optionalForCompletionGating !== true) return false;
+      const entry = getSourceEntry(src.outputFile as string);
+      if (!entry.lastRequestedToken) return true;
+      if (!entry.lastCompletedToken) return true;
+      return entry.lastCompletedToken <= entry.lastRequestedToken;
+    });
+    if (undeliveredOptional.length > 0) {
+      pendingRequests.push({
+        taskKind: 'source-fetch',
+        payload: {
+          boardRef: serializeRef(baseRef),
+          enrichedCard: enrichedCard as Record<string, unknown>,
+          callbackToken: input.callbackToken,
+          rqt: now,
+        },
+      });
+    }
+
+    taskCompletedFn(input.nodeId, data);
+    if (pendingRequests.length > 0) await adapters.executionRequestStore.appendEntries(journalId, pendingRequests);
+    return 'task-initiated';
+  };
+}
+
+export function createAsyncBoardLiveCardsPublic(
+  baseRef: KindValueRef,
+  adapter: AsyncBoardPlatformAdapter,
+): AsyncBoardLiveCardsPublic {
+  const warn = adapter.warn ?? (() => undefined);
+  const boardPath = serializeRef(baseRef);
+  let drainInFlight: Promise<CommandResult> | null = null;
+
+  function flushBoardChangeNotifications(notifications: BoardChangeNotification[]): Promise<void> | undefined {
+    if (notifications.length === 0) return undefined;
+    try {
+      return Promise.resolve(adapter.publishBoardChangeNotifications?.(notifications)).catch((error) => {
+        warn(`[async-board-live-cards-public] publishBoardChangeNotifications failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    } catch (error) {
+      warn(`[async-board-live-cards-public] publishBoardChangeNotifications failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  }
+
+  const configStore = (): AsyncBoardConfigStore => createAsyncBoardConfigStore(adapter.kvStorage('config'));
+  const snapshotKv = (): AsyncKVStorage => adapter.kvStorage('state-snapshot');
+  const boardScopeId = baseRef.value;
+  const stateSnapshotStore = () => createStateSnapshotStoreFromAdapter(
+    createStateSnapshotAdapterFromKV(() => snapshotKv(), adapter.hashFn),
+    'v1',
+  );
+  const outputStore = async (): Promise<AsyncPublishedOutputsStore> => {
+    const ref = await configStore().readOutputsStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no outputs store configured.`);
+    return createAsyncPublishedOutputsStore(adapter.kvStorageForRef(ref));
+  };
+  const cardStore = async (): Promise<AsyncCardAdminStore> => {
+    const ref = await configStore().readCardStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no card store configured.`);
+    const kv = adapter.kvStorageForRef(ref);
+    return createAsyncCardStore(createAsyncCardStorageAdapter(createAsyncJsonStorage(kv), adapter.hashFn), warn);
+  };
+  async function boardExists(): Promise<boolean> {
+    return Boolean((await stateSnapshotStore().readSnapshot(boardScopeId)).values[BOARD_GRAPH_KEY]);
+  }
+
+  async function loadEnvelope(): Promise<BoardEnvelope> {
+    const snapshotRead = await stateSnapshotStore().readSnapshot(boardScopeId);
+    if (!snapshotRead.values[BOARD_GRAPH_KEY]) throw new Error(`Board not initialized at ${baseRef.value}`);
+    return snapshotEntriesToBoardEnvelope(snapshotRead.values);
+  }
+
+  async function commitEnvelope(envelope: BoardEnvelope, expectedVersion: string | null): Promise<void> {
+    const result = await stateSnapshotStore().commitSnapshot(boardScopeId, {
+      schemaVersion: 'v1',
+      expectedVersion,
+      deleteKeys: [],
+      shallowMerge: boardEnvelopeToSnapshotEntries(envelope),
+    });
+    if (!result.ok) {
+      throw new Error(`Snapshot commit failed (version mismatch): expected=${expectedVersion ?? 'null'} current=${result.currentVersion ?? 'null'}`);
+    }
+  }
+
+  const journalStore = () => createAsyncJournalStoreFromStorage<GraphEvent>(adapter.journalStorage());
+
+  async function appendJournalEvent(event: GraphEvent): Promise<void> {
+    await journalStore().appendEvent(event);
+  }
+
+  function createFetchedSourcesStoreForRuntime(): AsyncFetchedSourcesStore {
+    return createAsyncFetchedSourcesStore(adapter.blobStorage('sources'), (ref) => adapter.resolveBlob(ref));
+  }
+
+  async function toSourceRef(blobKey: string): Promise<string> {
+    const ref = await Promise.resolve(adapter.blobStorage('sources').keyRef?.(blobKey));
+    return ref ? serializeRef(ref) : blobKey;
+  }
+
+  async function drainCycle(): Promise<void> {
+    const executionRequestStore = createAsyncExecutionRequestStore(adapter.kvStorage('execution-requests'), async (entry, error) => {
+      const payload = entry.payload as Record<string, unknown>;
+      const enriched = (payload.enrichedCard ?? {}) as Record<string, unknown>;
+      const taskName = (enriched.id ?? payload.cardId ?? 'unknown') as string;
+      await appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
+    });
+
+    const realCardRuntimeStore = createAsyncCardRuntimeStore(adapter.kvStorage('card-runtime'));
+    const realFetchedSourcesStore = createFetchedSourcesStoreForRuntime();
+    const resolvedCardStore = await cardStore();
+    const resolvedOutputStore = await outputStore();
+
+    const runtimeOverlay = new Map<string, CardRuntimeSnapshot>();
+    const sourceOverlay = new Map<string, unknown>();
+    const sourceCommits: Array<{ cardId: string; outputFile: string; deliveryToken: string }> = [];
+    const computedWrites: Array<{ cardId: string; values: Record<string, unknown> }> = [];
+    const dataWrites: Record<string, unknown>[] = [];
+    const refreshedCards = new Map<string, LiveCard>();
+    const removedCards = new Set<string>();
+
+    const overlayCardRuntimeStore: AsyncCardRuntimeStore = {
+      async readRuntime(cardId: string): Promise<CardRuntimeSnapshot> {
+        return runtimeOverlay.get(cardId) ?? await realCardRuntimeStore.readRuntime(cardId);
+      },
+      async writeRuntime(cardId: string, state: CardRuntimeSnapshot): Promise<void> {
+        runtimeOverlay.set(cardId, state);
+      },
+    };
+
+    const overlayFetchedSourcesStore: AsyncFetchedSourcesStore = {
+      async readSourceData(cardId: string, outputFile: string): Promise<unknown> {
+        const key = `${cardId}/${outputFile}`;
+        return sourceOverlay.has(key) ? sourceOverlay.get(key) : await realFetchedSourcesStore.readSourceData(cardId, outputFile);
+      },
+      ingestSourceDataStaged(cardId: string, outputFile: string, ref: KindValueRef, deliveryToken: string): Promise<void> {
+        return realFetchedSourcesStore.ingestSourceDataStaged(cardId, outputFile, ref, deliveryToken);
+      },
+      async commitSourceData(cardId: string, outputFile: string, deliveryToken: string): Promise<boolean> {
+        const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
+        const content = await adapter.blobStorage('sources').read(stagedKey);
+        if (content == null) return false;
+        const key = `${cardId}/${outputFile}`;
+        const trimmed = content.trim();
+        try { sourceOverlay.set(key, JSON.parse(trimmed)); } catch { sourceOverlay.set(key, trimmed); }
+        sourceCommits.push({ cardId, outputFile, deliveryToken });
+        return true;
+      },
+      async hasSource(cardId: string, outputFile: string): Promise<boolean> {
+        const key = `${cardId}/${outputFile}`;
+        return sourceOverlay.has(key) || await realFetchedSourcesStore.hasSource(cardId, outputFile);
+      },
+      async listSources(cardId: string): Promise<string[]> {
+        const real = await realFetchedSourcesStore.listSources(cardId);
+        const overlay = [...sourceOverlay.keys()]
+          .filter((key) => key.startsWith(`${cardId}/`))
+          .map((key) => key.slice(`${cardId}/`.length));
+        return [...new Set([...real, ...overlay])];
+      },
+    };
+
+    const envelope = await loadEnvelope();
+    const live = restore(envelope.graph);
+    const { events: undrained, newCursor } = await journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
+    let tx: GraphEvent[] = undrained;
+
+    const rg = createReactiveGraph(live, {
+      handlers: {
+        'card-handler': createAsyncCardHandlerFn(
+          baseRef,
+          newCursor,
+          {
+            cardStore: resolvedCardStore,
+            cardRuntimeStore: overlayCardRuntimeStore,
+            fetchedSourcesStore: overlayFetchedSourcesStore,
+            outputStore: resolvedOutputStore,
+            executionRequestStore,
+          },
+          (taskName, data) => {
+            tx.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
+          },
+          (cardId, values) => { computedWrites.push({ cardId, values }); },
+          (data) => { dataWrites.push(data); },
+        ),
+      },
+      onNodeRemoved: (cardId) => {
+        refreshedCards.delete(cardId);
+        runtimeOverlay.delete(cardId);
+        removedCards.add(cardId);
+      },
+    });
+
+    while (tx.length > 0) {
+      const pending = tx;
+      tx = [];
+      for (const event of pending) {
+        if (event.type === 'task-restart') {
+          const card = await resolvedCardStore.readCard(event.taskName as string);
+          if (card) refreshedCards.set(event.taskName as string, card);
+        }
+      }
+      rg.pushAll(pending);
+      await rg.waitForHandlers();
+    }
+
+    const finalLive = rg.getState();
+    await rg.dispose({ wait: true });
+
+    await commitEnvelope({ lastDrainedJournalId: newCursor, graph: snapshot(finalLive) }, (await stateSnapshotStore().readSnapshot(boardScopeId)).version);
+
+    for (const { cardId, values } of computedWrites) await resolvedOutputStore.writeComputedValues(cardId, values);
+    for (const data of dataWrites) await resolvedOutputStore.writeDataObjects(data);
+    for (const [cardId, state] of runtimeOverlay) await realCardRuntimeStore.writeRuntime(cardId, state);
+    for (const staged of sourceCommits) await realFetchedSourcesStore.commitSourceData(staged.cardId, staged.outputFile, staged.deliveryToken);
+
+    const statusObj = buildBoardStatusObject(boardPath, finalLive);
+    await resolvedOutputStore.writeStatusSnapshot(statusObj);
+
+    const notifications: BoardChangeNotification[] = [];
+    for (const { cardId, values } of computedWrites) notifications.push({ kind: 'computed_values', cardId, values } satisfies OutputStoreEvent);
+    for (const data of dataWrites) {
+      for (const [key, payload] of Object.entries(data)) notifications.push({ kind: 'data_object', key, payload } satisfies OutputStoreEvent);
+    }
+    for (const [cardId, card] of refreshedCards) notifications.push({ kind: 'card_refreshed', cardId, card });
+    for (const cardId of removedCards) notifications.push({ kind: 'card_removed', cardId });
+    notifications.push({ kind: 'status', status: statusObj } satisfies OutputStoreEvent);
+    await flushBoardChangeNotifications(notifications);
+
+    const executorRef = await configStore().readTaskExecutorRef();
+    if (!executorRef) return;
+    const useDirectHostedWorkerRequest = adapter.supportsDirectSourceOutput?.(executorRef) === true;
+    await executionRequestStore.dispatchEntriesForJournalId(newCursor, async (entry) => {
+      if (entry.taskKind !== 'source-fetch') {
+        warn(`[async-process-accumulated-events] unknown taskKind "${entry.taskKind}" — skipping`);
+        return;
+      }
+      const payload = entry.payload as { enrichedCard: Record<string, unknown>; callbackToken: string; rqt: string };
+      const cardId = (payload.enrichedCard?.id as string | undefined) ?? 'unknown';
+      const sourceDefs = (payload.enrichedCard?.source_defs ?? []) as Array<{ bindTo: string; outputFile?: string; [key: string]: unknown }>;
+      for (const src of sourceDefs) {
+        if (!src.outputFile) continue;
+        let directOutput: { ref: string; deliveryToken: string; outputFile: string; cardId: string } | undefined;
+        if (useDirectHostedWorkerRequest) {
+          const deliveryToken = adapter.genId();
+          const stagedKey = `${cardId}/.staged/${deliveryToken}/${src.outputFile}`;
+          const stagedRef = await Promise.resolve(adapter.blobStorage('sources').keyRef?.(stagedKey));
+          if (stagedRef) {
+            directOutput = { ref: serializeRef(stagedRef), deliveryToken, outputFile: src.outputFile, cardId };
+          }
+        }
+        const sourceToken = encodeSourceToken({
+          cbk: payload.callbackToken,
+          rg: baseRef.value,
+          br: serializeRef(baseRef),
+          cid: cardId,
+          b: src.bindTo,
+          d: src.outputFile,
+          cs: undefined,
+          rqt: payload.rqt,
+          ...(directOutput ? { dt: directOutput.deliveryToken } : {}),
+        });
+        const result = await adapter.dispatchExecution(executorRef, {
+          source_def: src,
+          base_ref: serializeRef(baseRef),
+          callback: { token: sourceToken, via: adapter.selfRef },
+          ...(directOutput ? { output: directOutput } : {}),
+        });
+        if (!result.dispatched) {
+          await appendJournalEvent({ type: 'task-failed', taskName: cardId, error: result.error ?? 'dispatch failed', timestamp: nowIso() });
+        }
+      }
+    });
+  }
+
+  async function drainOnce(): Promise<CommandResult> {
+    try {
+      const continuation = async () => {
+        const envelope = await loadEnvelope();
+        const { events } = await journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
+        if (events.length > 0) {
+          void drain();
+          await adapter.requestProcessAccumulated?.();
+        }
+      };
+      const ran = await withAsyncRelayLock(adapter.lock, drainCycle, continuation);
+      return ok({ ran: ran !== false }) as CommandResult;
+    } catch (error) {
+      return err(error);
+    }
+  }
+
+  async function drain(): Promise<CommandResult> {
+    if (drainInFlight) return drainInFlight;
+    drainInFlight = drainOnce().finally(() => {
+      drainInFlight = null;
+    });
+    return drainInFlight;
+  }
+
+  function drainFireAndForget(): void {
+    void drain();
+    void adapter.requestProcessAccumulated?.();
+  }
+
+  return {
+    async init(input: CommandInput): Promise<CommandResult> {
+      try {
+        const storeRef = input.params?.['cardStoreRef'] as string | undefined;
+        if (!storeRef) return fail('init requires params.cardStoreRef');
+        const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
+        if (!outputsStoreRef) return fail('init requires params.outputsStoreRef');
+        if (!await boardExists()) {
+          await commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(createLiveGraph(EMPTY_CONFIG)) }, null);
+        }
+        const cfg = configStore();
+        await cfg.writeCardStoreRef(storeRef);
+        await cfg.writeOutputsStoreRef(outputsStoreRef);
+        const scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
+        const archiveStoreRef = input.params?.['archiveStoreRef'] as string | undefined;
+        const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
+        const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;
+        if (scratchStoreRef) await cfg.writeScratchStoreRef(scratchStoreRef);
+        if (archiveStoreRef) await cfg.writeArchiveStoreRef(archiveStoreRef);
+        if (chatStoreRef) await cfg.writeChatStoreRef(chatStoreRef);
+        if (artifactsStoreRef) await cfg.writeArtifactsStoreRef(artifactsStoreRef);
+        const body = (input.body ?? {}) as Record<string, unknown>;
+        if (body['task-executor-ref']) await cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
+        if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) await cfg.writeChatHandlerFlow(body['chat-handler-flow']);
+        await (await outputStore()).writeStatusSnapshot(buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph)));
+        return ok();
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async status(_input: CommandInput): Promise<CommandResult<BoardStatusObject>> {
+      try {
+        const outputs = await outputStore();
+        let statusObj = await outputs.readStatusSnapshot() as BoardStatusObject | null;
+        if (!statusObj) {
+          statusObj = buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph));
+          await outputs.writeStatusSnapshot(statusObj);
+        }
+        return ok(statusObj) as CommandResult<BoardStatusObject>;
+      } catch (error) {
+        return err(error) as CommandResult<BoardStatusObject>;
+      }
+    },
+
+    async getCardStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string }>> {
+      try {
+        const storeRef = await configStore().readCardStoreRef();
+        if (!storeRef) return fail(`Board at ${baseRef.value} has no card store configured`) as CommandResult<{ storeRef: string }>;
+        return ok({ storeRef }) as CommandResult<{ storeRef: string }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string }>;
+      }
+    },
+
+    async getOutputsStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string }>> {
+      try {
+        const storeRef = await configStore().readOutputsStoreRef();
+        if (!storeRef) return fail(`Board at ${baseRef.value} has no outputs store configured`) as CommandResult<{ storeRef: string }>;
+        return ok({ storeRef }) as CommandResult<{ storeRef: string }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string }>;
+      }
+    },
+
+    async getScratchStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
+      try {
+        return ok({ storeRef: await configStore().readScratchStoreRef() }) as CommandResult<{ storeRef: string | null }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string | null }>;
+      }
+    },
+
+    async getArchiveStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
+      try {
+        return ok({ storeRef: await configStore().readArchiveStoreRef() }) as CommandResult<{ storeRef: string | null }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string | null }>;
+      }
+    },
+
+    async getChatStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
+      try {
+        return ok({ storeRef: await configStore().readChatStoreRef() }) as CommandResult<{ storeRef: string | null }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string | null }>;
+      }
+    },
+
+    async getArtifactsStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
+      try {
+        return ok({ storeRef: await configStore().readArtifactsStoreRef() }) as CommandResult<{ storeRef: string | null }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string | null }>;
+      }
+    },
+
+    async getConfig(input: CommandInput): Promise<CommandResult<{ value: unknown }>> {
+      try {
+        const key = input.params?.['key'] as string | undefined;
+        if (!key) return fail('getConfig requires params.key') as CommandResult<{ value: unknown }>;
+        const cfg = configStore();
+        let value: unknown;
+        switch (key) {
+          case 'task-executor': value = await cfg.readTaskExecutorRef() ?? null; break;
+          case 'chat-handler-flow': value = await cfg.readChatHandlerFlow() ?? null; break;
+          case 'card-store-ref': value = await cfg.readCardStoreRef(); break;
+          case 'outputs-store-ref': value = await cfg.readOutputsStoreRef(); break;
+          case 'scratch-store-ref': value = await cfg.readScratchStoreRef(); break;
+          case 'archive-store-ref': value = await cfg.readArchiveStoreRef(); break;
+          case 'chat-store-ref': value = await cfg.readChatStoreRef(); break;
+          case 'artifacts-store-ref': value = await cfg.readArtifactsStoreRef(); break;
+          default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
+        }
+        return ok({ value }) as CommandResult<{ value: unknown }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ value: unknown }>;
+      }
+    },
+
+    async getOutputsDataObject(input: CommandInput): Promise<CommandResult> {
+      try {
+        const key = input.params?.['key'] as string | undefined;
+        if (!key) return fail('getOutputsDataObject requires params.key');
+        return ok(await (await outputStore()).readDataObject(key));
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async getAllOutputsDataObjects(_input: CommandInput): Promise<CommandResult<Record<string, unknown>>> {
+      try {
+        return ok(await (await outputStore()).readAllDataObjects()) as CommandResult<Record<string, unknown>>;
+      } catch (error) {
+        return err(error) as CommandResult<Record<string, unknown>>;
+      }
+    },
+
+    async getOutputsComputedValues(input: CommandInput): Promise<CommandResult> {
+      try {
+        const key = input.params?.['key'] as string | undefined;
+        if (!key) return fail('getOutputsComputedValues requires params.key');
+        return ok(await (await outputStore()).readComputedValues(key));
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async getAllOutputsComputedValues(_input: CommandInput): Promise<CommandResult<Record<string, unknown>>> {
+      try {
+        return ok(await (await outputStore()).readAllComputedValues()) as CommandResult<Record<string, unknown>>;
+      } catch (error) {
+        return err(error) as CommandResult<Record<string, unknown>>;
+      }
+    },
+
+    async getOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, string>>> {
+      try {
+        const key = input.params?.['key'] as string | undefined;
+        if (!key) return fail('getOutputsFetchedSources requires params.key') as CommandResult<Record<string, string>>;
+        const files = await createFetchedSourcesStoreForRuntime().listSources(key);
+        const result: Record<string, string> = {};
+        for (const outputFile of files) result[outputFile] = await toSourceRef(`${key}/${outputFile}`);
+        return ok(result) as CommandResult<Record<string, string>>;
+      } catch (error) {
+        return err(error) as CommandResult<Record<string, string>>;
+      }
+    },
+
+    async getAllOutputsFetchedSources(_input: CommandInput): Promise<CommandResult<Record<string, Record<string, string>>>> {
+      try {
+        const store = createFetchedSourcesStoreForRuntime();
+        const blobKeys = await adapter.blobStorage('sources').listKeys();
+        const cardIds = new Set<string>();
+        for (const key of blobKeys) {
+          const slash = key.indexOf('/');
+          if (slash > 0 && !key.includes('/.staged/')) cardIds.add(key.slice(0, slash));
+        }
+        const result: Record<string, Record<string, string>> = {};
+        for (const cardId of cardIds) {
+          const files = await store.listSources(cardId);
+          if (files.length === 0) continue;
+          result[cardId] = {};
+          for (const outputFile of files) result[cardId][outputFile] = await toSourceRef(`${cardId}/${outputFile}`);
+        }
+        return ok(result) as CommandResult<Record<string, Record<string, string>>>;
+      } catch (error) {
+        return err(error) as CommandResult<Record<string, Record<string, string>>>;
+      }
+    },
+
+    async addCardFiles(input: CommandInput): Promise<CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>> {
+      type R = CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>;
+      try {
+        const cardId = input.params?.['cardId'] as string | undefined;
+        if (!cardId) return fail('addCardFiles requires params.cardId') as R;
+
+        const cards = await cardStore();
+        const card = await cards.readCard(cardId);
+        if (!card) return fail(`card "${cardId}" not found`) as R;
+
+        const body = input.body;
+        const files = Array.isArray(body)
+          ? body
+          : body && typeof body === 'object' && Array.isArray((body as { files?: unknown }).files)
+            ? (body as { files: unknown[] }).files
+            : body != null
+              ? [body]
+              : null;
+        if (!files || files.length === 0) {
+          return fail('addCardFiles requires a file metadata object, array, or body.files array') as R;
+        }
+
+        const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
+          ? card.card_data as Record<string, unknown>
+          : {};
+        const existingFiles = Array.isArray(cardData.files) ? cardData.files : [];
+        const nextFiles = [...existingFiles, ...files];
+        const filesAdded = files.map((entry, offset) => ({ idx: existingFiles.length + offset, entry }));
+
+        await cards.writeCard(cardId, {
+          ...card,
+          card_data: {
+            ...cardData,
+            files: nextFiles,
+          },
+        });
+
+        const notifyResult = await this.cardRefreshedNotify({ params: { cardId } });
+        if (notifyResult.status !== 'success') return notifyResult as unknown as R;
+        return ok({ cardId, files_added: filesAdded, notified: true }) as R;
+      } catch (error) {
+        return err(error) as R;
+      }
+    },
+
+    async cardRefreshedNotify(input: CommandInput): Promise<CommandResult> {
+      try {
+        const cardId = input.params?.['cardId'] as string | undefined;
+        if (!cardId) return fail('cardRefreshedNotify requires params.cardId');
+        const card = await (await cardStore()).readCard(cardId);
+        if (!card) return fail(`Card "${cardId}" not found in board at ${baseRef.value}`);
+        await flushBoardChangeNotifications([{ kind: 'card_refreshed', cardId, card }]);
+        return ok({ cardId, notified: true });
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async removeCard(input: CommandInput): Promise<CommandResult> {
+      try {
+        const id = input.params?.['id'] as string | undefined;
+        if (!id) return fail('removeCard requires params.id');
+        try { await adapter.kvStorage('card-upsert').delete(id); } catch { /* best-effort */ }
+        await appendJournalEvent({ type: 'task-removal', taskName: id, timestamp: nowIso() });
+        drainFireAndForget();
+        return ok();
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async retrigger(input: CommandInput): Promise<CommandResult> {
+      try {
+        const id = input.params?.['id'] as string | undefined;
+        if (!id) return fail('retrigger requires params.id');
+        await appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
+        drainFireAndForget();
+        return ok();
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async processAccumulatedEvents(_input: CommandInput): Promise<CommandResult> {
+      return drain();
+    },
+
+    async upsertCard(input: CommandInput): Promise<CommandResult> {
+      try {
+        const cardId = input.params?.['cardId'] as string | undefined;
+        const all = input.params?.['all'];
+        const restart = Boolean(input.params?.['restart']);
+        if (!cardId && !all) return fail('upsertCard requires --card-id <id> or --all');
+
+        const cards = await cardStore();
+        const ids = all ? (await cards.readAllCards()).map((card) => card.id) : [cardId as string];
+        for (const id of ids) {
+          if (!await cards.readCard(id)) return fail(`Card "${id}" not found in board at ${baseRef.value}`);
+        }
+
+        const upsertKv = adapter.kvStorage('card-upsert');
+        for (const id of ids) {
+          const card = await cards.readCard(id);
+          if (!card) continue;
+          const taskConfig = liveCardToTaskConfig(card);
+          const taskConfigHash = adapter.hashFn(taskConfig);
+          const existing = await upsertKv.read(id) as CardUpsertIndexEntry | null;
+          const taskConfigChanged = existing?.taskConfigHash !== taskConfigHash;
+          if (!taskConfigChanged && !restart) continue;
+          if (taskConfigChanged) {
+            const blobRef = existing?.blobRef ?? await cards.readCardKey(id) ?? id;
+            await appendJournalEvent({ type: 'task-upsert', taskName: id, taskConfig, timestamp: nowIso() });
+            await upsertKv.write(id, { blobRef, taskConfigHash, updatedAt: nowIso() } satisfies CardUpsertIndexEntry);
+          }
+          if (restart) await appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
+        }
+
+        drainFireAndForget();
+        return ok();
+      } catch (error) {
+        return err(error);
+      }
+    },
+
+    async taskFailed(input: CommandInput): Promise<CommandResult> {
+      try {
+        const token = input.params?.['token'] as string | undefined;
+        if (!token) return fail('taskFailed requires params.token');
+        const error = (input.params?.['error'] as string | undefined) ?? 'unknown error';
+        const decoded = decodeCallbackToken(token);
+        if (!decoded) return fail('Invalid callback token');
+        await appendJournalEvent({ type: 'task-failed', taskName: decoded.taskName, error, timestamp: nowIso() });
+        drainFireAndForget();
+        return ok();
+      } catch (e) {
+        return err(e);
+      }
+    },
+
+    async taskProgress(input: CommandInput): Promise<CommandResult> {
+      try {
+        const token = input.params?.['token'] as string | undefined;
+        if (!token) return fail('taskProgress requires params.token');
+        const update = ((input.body ?? {}) as Record<string, unknown>)['update'] ?? {};
+        const decoded = decodeCallbackToken(token);
+        if (!decoded) return fail('Invalid callback token');
+        await appendJournalEvent({ type: 'task-progress', taskName: decoded.taskName, update: update as Record<string, unknown>, timestamp: nowIso() });
+        drainFireAndForget();
+        return ok();
+      } catch (e) {
+        return err(e);
+      }
+    },
+
+    async sourceDataFetched(input: CommandInput): Promise<CommandResult> {
+      try {
+        const token = input.params?.['token'] as string | undefined;
+        const ref = input.params?.['ref'] as string | undefined;
+        if (!token) return fail('sourceDataFetched requires params.token');
+        if (!ref) return fail('sourceDataFetched requires params.ref');
+        const payload = decodeSourceToken(token);
+        if (!payload) return fail('Invalid source token');
+        const fetchedSourcesStore = createFetchedSourcesStoreForRuntime();
+        const deliveryToken = payload.dt || adapter.genId();
+        if (!payload.dt) await fetchedSourcesStore.ingestSourceDataStaged(payload.cid, payload.d, parseRef(ref), deliveryToken);
+        const decoded = decodeCallbackToken(payload.cbk);
+        if (!decoded) return fail('Invalid callback token embedded in source token');
+        await appendJournalEvent({
+          type: 'task-progress',
+          taskName: decoded.taskName,
+          update: {
+            bindTo: payload.b,
+            outputFile: payload.d,
+            fetchedAt: nowIso(),
+            deliveryToken,
+            sourceChecksum: payload.cs,
+            rqt: payload.rqt,
+          },
+          timestamp: nowIso(),
+        });
+        drainFireAndForget();
+        return ok();
+      } catch (e) {
+        return err(e);
+      }
+    },
+
+    async sourceDataFetchFailure(input: CommandInput): Promise<CommandResult> {
+      try {
+        const token = input.params?.['token'] as string | undefined;
+        const reason = (input.params?.['reason'] as string | undefined) ?? 'unknown';
+        if (!token) return fail('sourceDataFetchFailure requires params.token');
+        const payload = decodeSourceToken(token);
+        if (!payload) return fail('Invalid source token');
+        const decoded = decodeCallbackToken(payload.cbk);
+        if (!decoded) return fail('Invalid callback token embedded in source token');
+        await appendJournalEvent({
+          type: 'task-progress',
+          taskName: decoded.taskName,
+          update: { bindTo: payload.b, outputFile: payload.d, failure: true, reason, sourceChecksum: payload.cs, rqt: payload.rqt },
+          timestamp: nowIso(),
+        });
+        drainFireAndForget();
+        return ok();
+      } catch (e) {
+        return err(e);
+      }
+    },
+  };
+}

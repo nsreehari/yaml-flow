@@ -14,6 +14,11 @@
       "import": "./lib/board-live-cards-public.js",
       "require": "./lib/board-live-cards-public.cjs"
     },
+    "./cloud-storage": {
+      "types": "./lib/cloud-storage.d.ts",
+      "import": "./lib/cloud-storage.js",
+      "require": "./lib/cloud-storage.cjs"
+    },
     "./board-live-cards-public": {
       "types": "./lib/board-live-cards-public.d.ts",
       "import": "./lib/board-live-cards-public.js",

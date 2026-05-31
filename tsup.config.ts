@@ -35,6 +35,7 @@ function copyJsonataSyncToLibDirs() {
 export default defineConfig({
   entry: {
     'index': 'src/index.ts',
+    'cloud-storage': 'src/cli/cloud/index.ts',
     'board-live-cards-public': 'src/cli/common/board-live-cards-public.ts',
     'board-live-cards-mcp': 'src/cli/common/board-live-cards-mcp.ts',
     'card-store-public': 'src/cli/common/card-store-lib-public.ts',

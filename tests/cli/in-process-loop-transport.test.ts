@@ -11,7 +11,7 @@ import {
   reportComplete,
   serializeRef,
   unregisterInProcessBoardWorkerCallback,
-} from '../../src/cli/node/board-worker-adapter.ts';
+} from '../../src/cli/public/board-worker-adapter.ts';
 
 async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
   const startedAt = Date.now();

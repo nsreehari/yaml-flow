@@ -16,7 +16,7 @@ import {
   registerInProcessBoardWorkerCallback,
   reportComplete,
   unregisterInProcessBoardWorkerCallback,
-} from '../../src/cli/node/board-worker-adapter.ts';
+} from '../../src/cli/public/board-worker-adapter.ts';
 
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

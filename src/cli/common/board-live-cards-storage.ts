@@ -25,46 +25,10 @@ import type {
   CardIndex,
   CardStorageAdapter,
   LiveCard,
-  StateSnapshotReadView,
   StateSnapshotStorageAdapter,
 } from './board-live-cards-lib.js';
-
-// ============================================================================
-// Private helpers (used by createJsonStorage and createStateSnapshotAdapter)
-// ============================================================================
-
-function deepMergeObjects(
-  target: Record<string, unknown>,
-  patch: Record<string, unknown>,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...target };
-  for (const [k, v] of Object.entries(patch)) {
-    if (
-      v !== null && typeof v === 'object' && !Array.isArray(v) &&
-      result[k] !== null && typeof result[k] === 'object' && !Array.isArray(result[k])
-    ) {
-      result[k] = deepMergeObjects(result[k] as Record<string, unknown>, v as Record<string, unknown>);
-    } else {
-      result[k] = v;
-    }
-  }
-  return result;
-}
-
-function applyJsonPath(
-  obj: Record<string, unknown>,
-  segments: string[],
-  value: unknown,
-): Record<string, unknown> {
-  if (segments.length === 0) return obj;
-  const [head, ...tail] = segments;
-  if (tail.length === 0) return { ...obj, [head]: value };
-  const nested =
-    obj[head] !== null && typeof obj[head] === 'object' && !Array.isArray(obj[head])
-      ? (obj[head] as Record<string, unknown>)
-      : {};
-  return { ...obj, [head]: applyJsonPath(nested, tail, value) };
-}
+import { createJsonStorageFromKV } from './board-live-cards-shared-json.js';
+import { createStateSnapshotAdapterFromKV } from './board-live-cards-shared-snapshot-journal.js';
 
 // ============================================================================
 // createJsonStorage — JSONStorage backed by any KVStorage
@@ -77,35 +41,7 @@ function applyJsonPath(
 // ============================================================================
 
 export function createJsonStorage(kv: KVStorage): JSONStorage {
-  return {
-    read: (key) => kv.read(key),
-    get(key, jsonPath) {
-      const obj = kv.read(key);
-      if (obj === null) return null;
-      let current: unknown = obj;
-      for (const segment of jsonPath.split('.').filter(Boolean)) {
-        if (current === null || typeof current !== 'object' || Array.isArray(current)) return null;
-        current = (current as Record<string, unknown>)[segment] ?? null;
-      }
-      return current ?? null;
-    },
-    write: (key, value) => kv.write(key, value),
-    delete: (key) => kv.delete(key),
-    listKeys: (prefix?) => kv.listKeys(prefix),
-    shallowMerge(key, patch) {
-      const existing = (kv.read(key) as Record<string, unknown> | null) ?? {};
-      kv.write(key, { ...existing, ...patch });
-    },
-    deepMerge(key, patch) {
-      const existing = (kv.read(key) as Record<string, unknown> | null) ?? {};
-      kv.write(key, deepMergeObjects(existing, patch));
-    },
-    patch(key, jsonPath, value) {
-      const existing = (kv.read(key) as Record<string, unknown> | null) ?? {};
-      const segments = jsonPath.split('.').filter(Boolean);
-      kv.write(key, applyJsonPath(existing, segments, value));
-    },
-  };
+  return createJsonStorageFromKV(kv) as JSONStorage;
 }
 
 // ============================================================================
@@ -167,22 +103,7 @@ export function createStateSnapshotAdapter(
   kvFactory: (scopeId: string) => KVStorage,
   computeHash: (v: unknown) => string,
 ): StateSnapshotStorageAdapter {
-  return {
-    readValues(scopeId: string): StateSnapshotReadView {
-      const kv = kvFactory(scopeId);
-      const keys = kv.listKeys().sort();
-      if (keys.length === 0) return { version: null, values: {} };
-      const values: Record<string, unknown> = {};
-      for (const key of keys) values[key] = kv.read(key);
-      return { version: computeHash(values), values };
-    },
-    writeValues(scopeId: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
-      const kv = kvFactory(scopeId);
-      for (const key of deletedKeys) kv.delete(key);
-      for (const [key, value] of Object.entries(nextValues)) kv.write(key, value);
-      return computeHash(nextValues);
-    },
-  };
+  return createStateSnapshotAdapterFromKV(kvFactory, computeHash) as StateSnapshotStorageAdapter;
 }
 
 // ============================================================================
