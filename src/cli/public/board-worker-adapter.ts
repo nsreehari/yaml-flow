@@ -32,6 +32,9 @@
  *   reportComplete(callback, outRef);
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import {
   type InProcessBoardWorkerCallbackHandler,
   type InProcessBoardWorkerCallbackPayload,

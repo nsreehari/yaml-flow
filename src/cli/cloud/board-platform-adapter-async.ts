@@ -74,6 +74,8 @@ export interface AsyncBoardPlatformAdapter {
   archiveFactoryForRef(ref: string): AsyncArchiveFactory;
   journalStorage(): AsyncJournalStorage;
   boardWorkerStore(): AsyncBoardWorkerStore;
+  chatAgentStore(): AsyncBoardWorkerStore;
+  processAccumulatedStore(): AsyncQueueStorage;
   lock: AsyncAtomicRelayLock;
   callbackTransport?: BoardCallbackTransport;
   dispatchExecution(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
@@ -108,6 +110,10 @@ export interface HostedAsyncBoardPlatformAdapterOptions {
   journalStorage(): AsyncJournalStorage;
   queueStorage?: AsyncQueueStorage;
   boardWorkerStore?: AsyncBoardWorkerStore;
+  chatAgentQueueStorage?: AsyncQueueStorage;
+  chatAgentStore?: AsyncBoardWorkerStore;
+  processAccumulatedQueueStorage?: AsyncQueueStorage;
+  processAccumulatedStore?: AsyncQueueStorage;
   lock: AsyncAtomicRelayLock;
   callbackTransport?: BoardCallbackTransport;
   fetch?: HostedFetchLike;
@@ -237,6 +243,8 @@ export function createHostedAsyncBoardPlatformAdapter(
   options: HostedAsyncBoardPlatformAdapterOptions,
 ): AsyncBoardPlatformAdapter {
   let boardWorkerStoreCache: AsyncBoardWorkerStore | undefined;
+  let chatAgentStoreCache: AsyncBoardWorkerStore | undefined;
+  let processAccumulatedStoreCache: AsyncQueueStorage | undefined;
   let currentCallbackTransport = options.callbackTransport;
 
   const resolveBlob = options.resolveBlob ?? (async (ref: KindValueRef): Promise<string> => {
@@ -295,6 +303,27 @@ export function createHostedAsyncBoardPlatformAdapter(
         else throw new Error('Hosted async board adapter requires queueStorage or boardWorkerStore');
       }
       return boardWorkerStoreCache;
+    },
+    chatAgentStore: () => {
+      if (!chatAgentStoreCache) {
+        if (options.chatAgentStore) chatAgentStoreCache = options.chatAgentStore;
+        else if (options.chatAgentQueueStorage) chatAgentStoreCache = createAsyncBoardWorkerStore(options.chatAgentQueueStorage);
+        else if (options.boardWorkerStore) chatAgentStoreCache = options.boardWorkerStore;
+        else if (options.queueStorage) chatAgentStoreCache = createAsyncBoardWorkerStore(options.queueStorage);
+        else throw new Error('Hosted async board adapter requires chatAgentStore, chatAgentQueueStorage, queueStorage, or boardWorkerStore');
+      }
+      return chatAgentStoreCache;
+    },
+    processAccumulatedStore: () => {
+      if (!processAccumulatedStoreCache) {
+        processAccumulatedStoreCache = options.processAccumulatedStore
+          ?? options.processAccumulatedQueueStorage
+          ?? options.queueStorage;
+      }
+      if (!processAccumulatedStoreCache) {
+        throw new Error('Hosted async board adapter requires processAccumulatedStore, processAccumulatedQueueStorage, or queueStorage');
+      }
+      return processAccumulatedStoreCache;
     },
     lock: options.lock,
     get callbackTransport() {

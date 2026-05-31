@@ -205,6 +205,16 @@ export interface QueueDeadLetterMessage<T = unknown> extends QueueMessage<T> {
 
 export interface QueueStorage {
   enqueue<T>(body: T): QueueMessage<T>;
+  /**
+   * Enqueue only if no active or leased message with the same dedupKey exists.
+   * Returns the new message, or null if a pending message with that key is
+   * already present. Dedup is released on ack or on dead-letter; nack-retry
+   * preserves the dedup key (the original message is still pending).
+   *
+   * Optional: adapters that cannot cheaply dedup (e.g. Azure Storage Queue)
+   * may leave this unimplemented; callers should fall back to `enqueue`.
+   */
+  enqueueIfAbsent?<T>(body: T, dedupKey: string): QueueMessage<T> | null;
   lease<T>(opts?: { max?: number; visibilityMs?: number }): QueueLeasedMessage<T>[];
   ack(messageId: string, leaseToken: string): boolean;
   nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean;

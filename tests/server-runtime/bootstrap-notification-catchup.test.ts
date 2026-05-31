@@ -25,8 +25,10 @@ import type {
   BlobStorage,
   AtomicRelayLock,
   KindValueRef,
+  QueueStorage,
 } from '../../src/cli/common/storage-interface.js';
 import { createHttpBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
+import { createBoardWorkerStore } from '../../src/cli/common/board-worker-store.js';
 import type {
   SingleBoardRuntimeOptions,
   InvocationAdapter,
@@ -98,6 +100,85 @@ function createMemoryLock(): AtomicRelayLock {
   };
 }
 
+function createMemoryQueueStorage(): QueueStorage {
+  const active = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    leaseToken?: string;
+    leaseExpiresAt?: string;
+    dedupKey?: string;
+  }>();
+  const dead = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    reason?: string;
+  }>();
+
+  return {
+    enqueue<T>(body: T) {
+      const item = { id: `q-${Math.random().toString(36).slice(2)}`, body, enqueuedAt: new Date().toISOString(), attempt: 0 };
+      active.set(item.id, item);
+      return item;
+    },
+    enqueueIfAbsent<T>(body: T, dedupKey: string) {
+      for (const existing of active.values()) {
+        if (existing.dedupKey === dedupKey) return null;
+      }
+      const item = { id: `q-${Math.random().toString(36).slice(2)}`, body, enqueuedAt: new Date().toISOString(), attempt: 0, dedupKey };
+      active.set(item.id, item);
+      return { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+    },
+    lease<T>(opts?: { max?: number; visibilityMs?: number }) {
+      const max = Math.max(1, Math.floor(opts?.max ?? 1));
+      const visibilityMs = Math.max(1, Math.floor(opts?.visibilityMs ?? 60_000));
+      const now = Date.now();
+      for (const item of active.values()) {
+        if (item.leaseExpiresAt && Date.parse(item.leaseExpiresAt) <= now) {
+          delete item.leaseToken;
+          delete item.leaseExpiresAt;
+        }
+      }
+      const leased: Array<{ id: string; body: T; enqueuedAt: string; attempt: number; leaseToken: string; leaseExpiresAt: string }> = [];
+      for (const item of active.values()) {
+        if (leased.length >= max) break;
+        if (item.leaseToken) continue;
+        item.attempt += 1;
+        item.leaseToken = `lease-${Math.random().toString(36).slice(2)}`;
+        item.leaseExpiresAt = new Date(Date.now() + visibilityMs).toISOString();
+        leased.push({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt, leaseToken: item.leaseToken, leaseExpiresAt: item.leaseExpiresAt });
+      }
+      return leased;
+    },
+    ack(messageId: string, leaseToken: string) {
+      const item = active.get(messageId);
+      if (!item || item.leaseToken !== leaseToken) return false;
+      active.delete(messageId);
+      return true;
+    },
+    nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }) {
+      const item = active.get(messageId);
+      if (!item || item.leaseToken !== leaseToken) return false;
+      delete item.leaseToken;
+      delete item.leaseExpiresAt;
+      if (opts?.dead) {
+        active.delete(messageId);
+        dead.set(messageId, { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: opts.reason });
+      }
+      return true;
+    },
+    peekActive<T>() {
+      return [...active.values()].filter((item) => !item.leaseToken).map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
+    },
+    peekDeadLetter<T>() {
+      return [...dead.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: item.reason }));
+    },
+  };
+}
+
 // ============================================================================
 // Build a test platform adapter that also captures published notifications
 // ============================================================================
@@ -115,6 +196,9 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
 
   const journal = createMemoryJournalAdapter();
   const lock = createMemoryLock();
+  const workerQueue = createMemoryQueueStorage();
+  const chatQueue = createMemoryQueueStorage();
+  const processAccumulatedQueue = createMemoryQueueStorage();
 
   const adapter: BoardPlatformAdapter & { publishedBatches: BoardChangeNotification[][] } = {
     publishedBatches,
@@ -125,6 +209,9 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
     },
     blobStorage: (_ns) => createMemoryBlobStorage(),
     journalAdapter: () => journal,
+    boardWorkerStore: () => createBoardWorkerStore(workerQueue),
+    chatAgentStore: () => createBoardWorkerStore(chatQueue),
+    processAccumulatedStore: () => processAccumulatedQueue,
     lock,
     callbackTransport: createHttpBoardCallbackTransport('http://localhost'),
     async dispatchExecution(_ref, _args) { return { dispatched: true }; },

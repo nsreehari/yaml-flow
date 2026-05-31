@@ -609,9 +609,10 @@ describe('platform-free server runtime (Node host)', () => {
       body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow should fail dispatch', 'turn-id': 'test-turn-fail-dispatch' } }),
     });
     expect(chatRes.ok).toBe(true);
+    expect(flowRuns).toBe(0);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
+    const drainResult = await runtime.processAccumulatedEvents();
+    expect(drainResult.status).toBe('success');
     expect(flowRuns).toBe(1);
     expect(isolatedChatStorage.isProcessing(cardId)).toBe(false);
 
@@ -699,7 +700,9 @@ describe('platform-free server runtime (Node host)', () => {
       body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow preferred', 'turn-id': 'test-turn-flow-preferred' } }),
     });
     expect(chatRes.ok).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(flowRuns).toBe(0);
+    const drainResult = await runtime.processAccumulatedEvents();
+    expect(drainResult.status).toBe('success');
     expect(flowRuns).toBe(1);
 
     await new Promise<void>((resolve) => server2.close(() => resolve()));
@@ -828,7 +831,11 @@ describe('platform-free server runtime (Node host)', () => {
     });
     expect(sendRes.ok).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const beforeDrainMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
+    expect(beforeDrainMessages.map((message) => message.role)).toEqual(['user']);
+
+    const drainResult = await runtime.processAccumulatedEvents();
+    expect(drainResult.status).toBe('success');
 
     const newMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
     expect(newMessages.map((message) => message.role)).toEqual(['user', 'system', 'assistant']);

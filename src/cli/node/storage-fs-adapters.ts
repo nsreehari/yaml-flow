@@ -229,6 +229,7 @@ type FsQueueRecord<T = unknown> = {
   leaseToken?: string;
   leaseExpiresAt?: string;
   reason?: string;
+  dedupKey?: string;
 };
 
 function writeJsonAtomic(filePath: string, value: unknown): void {
@@ -326,6 +327,25 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
         body,
         enqueuedAt: new Date().toISOString(),
         attempt: 0,
+      };
+      writeJsonAtomic(activePath(record), record);
+      return queueRecordToMessage(record);
+    },
+
+    enqueueIfAbsent<T>(body: T, dedupKey: string): QueueMessage<T> | null {
+      reviveExpiredLeases();
+      for (const dir of [activeDir, leasedDir]) {
+        for (const filePath of listJsonFiles(dir)) {
+          const existing = readJsonFile<FsQueueRecord>(filePath);
+          if (existing?.dedupKey === dedupKey) return null;
+        }
+      }
+      const record: FsQueueRecord<T> = {
+        id: randomUUID(),
+        body,
+        enqueuedAt: new Date().toISOString(),
+        attempt: 0,
+        dedupKey,
       };
       writeJsonAtomic(activePath(record), record);
       return queueRecordToMessage(record);

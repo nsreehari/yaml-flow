@@ -22,6 +22,7 @@ export interface SyncBlobStoreOps {
   exists(key: string): boolean;
   remove(key: string): void;
   listKeys(prefix?: string): string[];
+  keyRef?(key: string): Awaitable<KindValueRef>;
 }
 
 export interface AsyncBlobStoreOps {
@@ -30,6 +31,7 @@ export interface AsyncBlobStoreOps {
   exists(key: string): Promise<boolean>;
   remove(key: string): Promise<void>;
   listKeys(prefix?: string): Promise<string[]>;
+  keyRef?(key: string): Awaitable<KindValueRef>;
 }
 
 function isPromiseLike<T>(value: Awaitable<T>): value is Promise<T> {
@@ -105,6 +107,15 @@ export function createFetchedSourcesStoreFromBacking(
   blob: SyncBlobStoreOps | AsyncBlobStoreOps,
   resolveRef: (ref: KindValueRef) => Awaitable<string>,
 ) {
+  const readStagedContent = (stagedKey: string): Awaitable<string | null> => chain(blob.read(stagedKey), (content) => {
+    if (content != null) return content;
+    if (!blob.keyRef) return null;
+    return chain(blob.keyRef(stagedKey), (stagedRef) => {
+      if (!stagedRef) return null;
+      return chain(resolveRef(stagedRef), (resolved) => resolved ?? null);
+    });
+  });
+
   return {
     readSourceData(cardId: string, outputFile: string) {
       return chain(blob.read(`${cardId}/${outputFile}`), readStoredSourceData);
@@ -114,7 +125,7 @@ export function createFetchedSourcesStoreFromBacking(
     },
     commitSourceData(cardId: string, outputFile: string, deliveryToken: string) {
       const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
-      return chain(blob.read(stagedKey), (content) => {
+      return chain(readStagedContent(stagedKey), (content) => {
         if (content == null) return false;
         return chain(blob.write(`${cardId}/${outputFile}`, content), () => chain(blob.remove(stagedKey), () => true));
       });

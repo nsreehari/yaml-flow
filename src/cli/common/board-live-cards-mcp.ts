@@ -10,13 +10,13 @@
 import type {
   CommandResult,
 } from './board-live-cards-public.js';
-import type { CardStorePublic } from './card-store-lib-public.js';
 import type { ChatStorePublic } from './chat-store-lib-public.js';
 import type { ChatRecord } from './chat-storage-lib.js';
 import type { LiveCard } from './board-live-cards-lib.js';
 import { CardCompute } from '../../card-compute/index.js';
 
 type UnknownRecord = Record<string, unknown>;
+type Awaitable<T> = T | Promise<T>;
 
 export interface BoardLiveCardsMcpFileDownloadDescriptor {
   cardId: string;
@@ -151,13 +151,21 @@ export interface BoardLiveCardsMcpPreflightMaterializeResult {
 }
 
 export interface BoardLiveCardsMcpBoardDeps {
-  status(input: {}): CommandResult;
-  getOutputsDataObject(input: { params: { key: string } }): CommandResult;
-  getOutputsComputedValues(input: { params: { key: string } }): CommandResult;
-  getOutputsFetchedSources(input: { params: { key: string } }): CommandResult<Record<string, string>>;
-  removeCard(input: { params: { id: string } }): CommandResult;
-  cardRefreshedNotify(input: { params: { cardId: string } }): CommandResult;
-  upsertCard(input: { params: { cardId: string; restart?: boolean } }): CommandResult;
+  status(input: {}): Awaitable<CommandResult>;
+  getOutputsDataObject(input: { params: { key: string } }): Awaitable<CommandResult>;
+  getOutputsComputedValues(input: { params: { key: string } }): Awaitable<CommandResult>;
+  getOutputsFetchedSources(input: { params: { key: string } }): Awaitable<CommandResult<Record<string, string>>>;
+  removeCard(input: { params: { id: string } }): Awaitable<CommandResult>;
+  cardRefreshedNotify(input: { params: { cardId: string } }): Awaitable<CommandResult>;
+  upsertCard(input: { params: { cardId: string; restart?: boolean } }): Awaitable<CommandResult>;
+}
+
+export interface BoardLiveCardsMcpCardStoreDeps {
+  get(input: { params?: { id?: string } }): Awaitable<CommandResult<{ cards?: Array<Record<string, unknown>> }>>;
+  set(input: { body?: unknown }): Awaitable<CommandResult>;
+  del(input: { params?: { id?: string }; body?: { ids?: string[] } }): Awaitable<CommandResult>;
+  patch(input: { params?: { id?: string; path?: string }; body?: unknown }): Awaitable<CommandResult>;
+  appendFiles?(input: { params?: { id?: string }; body?: unknown }): Awaitable<CommandResult>;
 }
 
 export interface BoardLiveCardsMcpNonCoreDeps {
@@ -177,19 +185,19 @@ export interface BoardLiveCardsMcpNonCoreDeps {
 export interface BoardLiveCardsMcpDeps {
   board: BoardLiveCardsMcpBoardDeps;
   nonCore: BoardLiveCardsMcpNonCoreDeps;
-  cardStore: CardStorePublic;
+  cardStore: BoardLiveCardsMcpCardStoreDeps;
   chatStore: ChatStorePublic;
-  uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array }): { ok: true; file: Record<string, unknown> };
+  uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array }): Awaitable<{ ok: true; file: Record<string, unknown> }>;
   buildFileDownloadUrl(args: { cardId: string; fileIdx: number; storedName?: string | null }): string;
   readFetchedSourceJsonByRef?(args: { cardId: string; ref: string }): unknown | null;
 }
 
 export interface BoardLiveCardsMcp {
   discoverSourceKinds(): Promise<BoardLiveCardsMcpDiscoverSourceKindsResult>;
-  inspectBoardRuntimeStatus(): BoardLiveCardsMcpBoardStatusResult;
-  inspectCardDefinitionAndRuntime(args: { cardId: string }): BoardLiveCardsMcpInspectCardDefinitionAndRuntimeResult;
-  inspectChatMessagesOnCards(args: { cardId: string; lastUserTurns?: number; tail?: number; turnId?: string; allTurns?: boolean; tailTurnsBeforeId?: string }): BoardLiveCardsMcpInspectChatMessagesResult;
-  inspectFileContents(args: { cardId: string; fileIdx: number }): BoardLiveCardsMcpFileDownloadDescriptor;
+  inspectBoardRuntimeStatus(): Promise<BoardLiveCardsMcpBoardStatusResult>;
+  inspectCardDefinitionAndRuntime(args: { cardId: string }): Promise<BoardLiveCardsMcpInspectCardDefinitionAndRuntimeResult>;
+  inspectChatMessagesOnCards(args: { cardId: string; lastUserTurns?: number; tail?: number; turnId?: string; allTurns?: boolean; tailTurnsBeforeId?: string }): Promise<BoardLiveCardsMcpInspectChatMessagesResult>;
+  inspectFileContents(args: { cardId: string; fileIdx: number }): Promise<BoardLiveCardsMcpFileDownloadDescriptor>;
   preflightValidateCandidateCardDefinition(args: { candidateCardContent: UnknownRecord }): Promise<unknown>;
   preflightMaterializeCandidateCard(args: {
     candidateCardContent: UnknownRecord;
@@ -215,17 +223,17 @@ export interface BoardLiveCardsMcp {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
   }): Promise<BoardLiveCardsMcpPreflightRunOneCycleResult>;
-  manageReadCard(args: { cardId: string }): LiveCard[];
+  manageReadCard(args: { cardId: string }): Promise<LiveCard[]>;
   manageAddChatEntryAndAnyAttachments(args: {
     cardId: string;
     role: string;
     text?: string;
     turn?: string;
     files?: unknown[];
-  }): BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult;
+  }): Promise<BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult>;
   manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
-  manageRemoveCard(args: { cardId: string }): unknown;
-  adminReadCard(args: { cardId: string }): LiveCard[];
+  manageRemoveCard(args: { cardId: string }): Promise<unknown>;
+  adminReadCard(args: { cardId: string }): Promise<LiveCard[]>;
   adminUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean };
   setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean };
@@ -377,13 +385,13 @@ function isAdminCard(card: UnknownRecord): boolean {
   return meta.__visible_controlplane_only === true;
 }
 
-function readOneCard(cardStore: CardStorePublic, cardId: string): LiveCard {
-  const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
+async function readOneCard(cardStore: BoardLiveCardsMcpCardStoreDeps, cardId: string): Promise<LiveCard> {
+  const result = await expectSuccessAsync(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
   const cards = Array.isArray(result?.cards) ? result.cards : [];
   if (cards.length === 0) {
     throw new Error(`Card "${cardId}" not found`);
   }
-  return cards[0];
+  return cards[0] as LiveCard;
 }
 
 export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveCardsMcp {
@@ -417,8 +425,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function inspectBoardRuntimeStatus(): BoardLiveCardsMcpBoardStatusResult {
-    const statusPayload = ensureRecord(expectSuccess(board.status({}), 'status'));
+  async function inspectBoardRuntimeStatus(): Promise<BoardLiveCardsMcpBoardStatusResult> {
+    const statusPayload = ensureRecord(await expectSuccessAsync(board.status({}), 'status'));
     const summary = ensureRecord(statusPayload.summary);
     const cards = ensureArray(statusPayload.cards);
 
@@ -450,34 +458,34 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function inspectCardDefinitionAndRuntime(args: { cardId: string }): BoardLiveCardsMcpInspectCardDefinitionAndRuntimeResult {
+  async function inspectCardDefinitionAndRuntime(args: { cardId: string }): Promise<BoardLiveCardsMcpInspectCardDefinitionAndRuntimeResult> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('inspectCardDefinitionAndRuntime requires cardId');
 
-    const statusPayload = ensureRecord(expectSuccess(board.status({}), 'status'));
+    const statusPayload = ensureRecord(await expectSuccessAsync(board.status({}), 'status'));
     const cards = ensureArray(statusPayload.cards).map(ensureRecord);
     const cardStatusInBoard = cards.find((card) => card.name === cardId);
     if (!cardStatusInBoard) {
       throw new Error(`card "${cardId}" not found in board status`);
     }
 
-    const storedCard = ensureRecord(readOneCard(cardStore, cardId));
+    const storedCard = ensureRecord(await readOneCard(cardStore, cardId));
     if (isAdminCard(storedCard)) {
       throw Object.assign(new Error(`card "${cardId}" not found`), { statusCode: 404 });
     }
     const publicStoredCard = stripMcpPrivateCardFields(storedCard);
     const requiresKeys = ensureArray(cardStatusInBoard.requires_satisfied).filter((key): key is string => typeof key === 'string' && !!key);
     const providesKeys = ensureArray(cardStatusInBoard.provides_runtime).filter((key): key is string => typeof key === 'string' && !!key);
-    const requires = Object.fromEntries(
-      requiresKeys.map((key) => [key, expectSuccess(board.getOutputsDataObject({ params: { key } }), `getOutputsDataObject(${key})`)]),
-    );
-    const provides = Object.fromEntries(
-      providesKeys.map((key) => [key, expectSuccess(board.getOutputsDataObject({ params: { key } }), `getOutputsDataObject(${key})`)]),
-    );
+    const requires = Object.fromEntries(await Promise.all(
+      requiresKeys.map(async (key) => [key, await expectSuccessAsync(board.getOutputsDataObject({ params: { key } }), `getOutputsDataObject(${key})`)] as const),
+    ));
+    const provides = Object.fromEntries(await Promise.all(
+      providesKeys.map(async (key) => [key, await expectSuccessAsync(board.getOutputsDataObject({ params: { key } }), `getOutputsDataObject(${key})`)] as const),
+    ));
     const computedValues = ensureRecord(
-      expectSuccess(board.getOutputsComputedValues({ params: { key: cardId } }), 'getOutputsComputedValues'),
+      await expectSuccessAsync(board.getOutputsComputedValues({ params: { key: cardId } }), 'getOutputsComputedValues'),
     );
-    const fetchedSourceFileRefs = expectSuccess(
+    const fetchedSourceFileRefs = await expectSuccessAsync(
       board.getOutputsFetchedSources({ params: { key: cardId } }),
       'getOutputsFetchedSources',
     );
@@ -525,7 +533,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function inspectChatMessagesOnCards(args: { cardId: string; lastUserTurns?: number; tail?: number; turnId?: string; allTurns?: boolean; tailTurnsBeforeId?: string }): BoardLiveCardsMcpInspectChatMessagesResult {
+  async function inspectChatMessagesOnCards(args: { cardId: string; lastUserTurns?: number; tail?: number; turnId?: string; allTurns?: boolean; tailTurnsBeforeId?: string }): Promise<BoardLiveCardsMcpInspectChatMessagesResult> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('inspectChatMessagesOnCards requires cardId');
 
@@ -544,7 +552,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       ? { params: { cardId }, body: readBody }
       : { params: { cardId } };
     const recordsResult = expectSuccess(chatStore.readAll(readInput), 'chatStore.readAll');
-    const card = ensureRecord(readOneCard(cardStore, cardId));
+    const card = ensureRecord(await readOneCard(cardStore, cardId));
     const attachments = ensureArray(ensureRecord(card.card_data).files)
       .map((file, idx) => ({ idx, stored_name: ensureRecord(file).stored_name }))
       .filter((entry) => typeof entry.stored_name === 'string' && entry.stored_name.length > 0);
@@ -588,13 +596,13 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function inspectFileContents(args: { cardId: string; fileIdx: number }): BoardLiveCardsMcpFileDownloadDescriptor {
+  async function inspectFileContents(args: { cardId: string; fileIdx: number }): Promise<BoardLiveCardsMcpFileDownloadDescriptor> {
     const cardId = String(args.cardId || '').trim();
     const fileIdx = Number(args.fileIdx);
     if (!cardId) throw new Error('inspectFileContents requires cardId');
     if (!Number.isInteger(fileIdx) || fileIdx < 0) throw new Error('inspectFileContents requires fileIdx to be a non-negative integer');
 
-    const card = ensureRecord(readOneCard(cardStore, cardId));
+    const card = ensureRecord(await readOneCard(cardStore, cardId));
     const files = ensureArray(ensureRecord(card.card_data).files).map(ensureRecord);
     if (fileIdx >= files.length) {
       throw new Error(`attachment index ${fileIdx} is out of range for card "${cardId}"`);
@@ -709,7 +717,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     if (!args.mockRequires || typeof args.mockRequires !== 'object' || Array.isArray(args.mockRequires)) {
       throw new Error('preflightRunSingleSourceInLiveCard requires mockRequires');
     }
-    const liveCard = ensureRecord(readOneCard(cardStore, cardId));
+    const liveCard = ensureRecord(await readOneCard(cardStore, cardId));
     const sourceDefs = ensureArray(liveCard.source_defs)
       .filter((item): item is UnknownRecord => !!item && typeof item === 'object' && !Array.isArray(item));
     let mockProjections: UnknownRecord = {};
@@ -798,10 +806,10 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function manageReadCard(args: { cardId: string }): LiveCard[] {
+  async function manageReadCard(args: { cardId: string }): Promise<LiveCard[]> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('manageReadCard requires cardId');
-    const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
+    const result = await expectSuccessAsync(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
     const cards = Array.isArray(result.cards) ? result.cards.map(ensureRecord) : [];
     if (cards.some(isAdminCard)) {
       throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
@@ -809,13 +817,13 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     return cards.map((card) => stripMcpPrivateCardFields(card) as LiveCard);
   }
 
-  function manageAddChatEntryAndAnyAttachments(args: {
+  async function manageAddChatEntryAndAnyAttachments(args: {
     cardId: string;
     role: string;
     text?: string;
     turn?: string;
     files?: unknown[];
-  }): BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult {
+  }): Promise<BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult> {
     const cardId = String(args.cardId || '').trim();
     const role = String(args.role || '').trim();
     const text = typeof args.text === 'string' ? args.text : '';
@@ -847,18 +855,18 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       }
     }
 
-    const uploadedFiles = ensureArray(args.files).map((rawFile) => {
+    const uploadedFiles = await Promise.all(ensureArray(args.files).map(async (rawFile) => {
       const fileEntry = ensureRecord(rawFile);
       const fileName = String(fileEntry.file_name ?? fileEntry.fileName ?? fileEntry.name ?? '').trim();
       const contentType = String(fileEntry.content_type ?? fileEntry.contentType ?? 'application/octet-stream');
       if (!fileName) throw new Error('file entry requires file_name');
-      return uploadCardFile({
+      return (await uploadCardFile({
         cardId,
         fileName,
         contentType,
         bytes: decodeAttachmentBytes(fileEntry),
-      }).file;
-    });
+      })).file;
+    }));
 
     uploadedFiles.forEach((file, index) => {
       const systemText = role === 'assistant'
@@ -912,7 +920,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
     let previousCard: LiveCard | null = null;
     try {
-      previousCard = readOneCard(cardStore, cardId);
+      previousCard = await readOneCard(cardStore, cardId);
     } catch {
       previousCard = null;
     }
@@ -921,17 +929,17 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       ? { ...candidateCard, meta: ensureRecord(previousCard).meta }
       : candidateCard;
 
-    const storeUpdate = cardStore.set({ body: cardToStore });
+    const storeUpdate = await cardStore.set({ body: cardToStore });
     expectSuccess(storeUpdate, 'cardStore.set');
 
     let boardUpdate: unknown;
     try {
-      boardUpdate = board.upsertCard({ params: { cardId, restart: true } });
+      boardUpdate = await board.upsertCard({ params: { cardId, restart: true } });
       expectSuccess(boardUpdate as CommandResult<unknown>, 'upsertCard');
     } catch (boardErr) {
       try {
         if (previousCard) {
-          cardStore.set({ body: previousCard });
+          await cardStore.set({ body: previousCard });
         }
       } catch {
         // best-effort rollback
@@ -941,7 +949,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
     let refreshNotify: unknown = null;
     try {
-      refreshNotify = board.cardRefreshedNotify({ params: { cardId } });
+      refreshNotify = await board.cardRefreshedNotify({ params: { cardId } });
       expectSuccess(refreshNotify as CommandResult<unknown>, 'cardRefreshedNotify');
     } catch {
       refreshNotify = null;
@@ -958,12 +966,12 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function manageRemoveCard(args: { cardId: string }): unknown {
+  async function manageRemoveCard(args: { cardId: string }): Promise<unknown> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('manageRemoveCard requires cardId');
-    const boardResult = board.removeCard({ params: { id: cardId } });
+    const boardResult = await board.removeCard({ params: { id: cardId } });
     expectSuccess(boardResult, 'removeCard');
-    const storeResult = cardStore.del({ params: { id: cardId } });
+    const storeResult = await cardStore.del({ params: { id: cardId } });
     expectSuccess(storeResult, 'cardStore.del');
     return {
       status: 'success',
@@ -974,10 +982,10 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function adminReadCard(args: { cardId: string }): LiveCard[] {
+  async function adminReadCard(args: { cardId: string }): Promise<LiveCard[]> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('adminReadCard requires cardId');
-    const result = expectSuccess(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
+    const result = await expectSuccessAsync(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
     return Array.isArray(result.cards)
       ? result.cards.map((card) => ensureRecord(card) as LiveCard)
       : [];
@@ -1004,7 +1012,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
     let previousCard: LiveCard | null = null;
     try {
-      previousCard = readOneCard(cardStore, cardId);
+      previousCard = await readOneCard(cardStore, cardId);
     } catch {
       previousCard = null;
     }
@@ -1013,16 +1021,16 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const existingMeta = previousCard ? ensureRecord(ensureRecord(previousCard).meta) : {};
     const cardToStore = { ...candidateCard, meta: { ...existingMeta, __visible_controlplane_only: true } };
 
-    const storeUpdate = cardStore.set({ body: cardToStore });
+    const storeUpdate = await cardStore.set({ body: cardToStore });
     expectSuccess(storeUpdate, 'cardStore.set');
 
     let boardUpdate: unknown;
     try {
-      boardUpdate = board.upsertCard({ params: { cardId, restart: true } });
+      boardUpdate = await board.upsertCard({ params: { cardId, restart: true } });
       expectSuccess(boardUpdate as CommandResult<unknown>, 'upsertCard');
     } catch (boardErr) {
       try {
-        if (previousCard) cardStore.set({ body: previousCard });
+        if (previousCard) await cardStore.set({ body: previousCard });
       } catch {
         // best-effort rollback
       }
@@ -1031,7 +1039,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
     let refreshNotify: unknown = null;
     try {
-      refreshNotify = board.cardRefreshedNotify({ params: { cardId } });
+      refreshNotify = await board.cardRefreshedNotify({ params: { cardId } });
       expectSuccess(refreshNotify as CommandResult<unknown>, 'cardRefreshedNotify');
     } catch {
       refreshNotify = null;

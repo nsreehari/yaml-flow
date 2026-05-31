@@ -11,7 +11,7 @@ export type InProcessBoardWorkerCallbackResult = void | { status?: 'success' | '
 
 export type InProcessBoardWorkerCallbackHandler = (
   payload: InProcessBoardWorkerCallbackPayload,
-) => InProcessBoardWorkerCallbackResult;
+) => InProcessBoardWorkerCallbackResult | Promise<InProcessBoardWorkerCallbackResult>;
 
 const inProcessBoardWorkerCallbackRegistry = new Map<string, InProcessBoardWorkerCallbackHandler>();
 
@@ -32,7 +32,7 @@ export function unregisterInProcessBoardWorkerCallback(key: string): void {
   inProcessBoardWorkerCallbackRegistry.delete(normalizedKey);
 }
 
-export function reportBoardWorkerCallbackInProcess(payload: InProcessBoardWorkerCallbackPayload, handlerKey: string): void {
+export async function reportBoardWorkerCallbackInProcess(payload: InProcessBoardWorkerCallbackPayload, handlerKey: string): Promise<void> {
   const normalizedKey = String(handlerKey || '').trim();
   if (!normalizedKey) {
     throw new Error('in-process-loop callback requires a non-empty handler key');
@@ -41,7 +41,7 @@ export function reportBoardWorkerCallbackInProcess(payload: InProcessBoardWorker
   if (!handler) {
     throw new Error(`in-process-loop callback handler not registered: ${normalizedKey}`);
   }
-  const result = handler(payload);
+  const result = await handler(payload);
   if (result && result.status && result.status !== 'success') {
     throw new Error(result.error || `in-process-loop callback failed with status: ${result.status}`);
   }

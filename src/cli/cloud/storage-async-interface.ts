@@ -29,6 +29,8 @@ export interface AsyncJournalStorage {
 
 export interface AsyncQueueStorage {
   enqueue<T>(body: T): Promise<QueueMessage<T>>;
+  /** See QueueStorage.enqueueIfAbsent. Optional on adapters that cannot cheaply dedup. */
+  enqueueIfAbsent?<T>(body: T, dedupKey: string): Promise<QueueMessage<T> | null>;
   lease<T>(opts?: { max?: number; visibilityMs?: number }): Promise<QueueLeasedMessage<T>[]>;
   ack(messageId: string, leaseToken: string): Promise<boolean>;
   nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): Promise<boolean>;

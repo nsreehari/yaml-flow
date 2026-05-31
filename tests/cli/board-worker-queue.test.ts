@@ -5,12 +5,15 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  createBoardWorkerQueueLane,
+  createQueueLaneRegistry,
+  createQueueStorageLane,
   createBoardWorkerStore,
   createFsBoardPlatformAdapter,
   createFsQueueStorage,
   parseRef,
   serializeRef,
-  startBoardWorkerQueueRunner,
+  startQueueLaneRunners,
 } from '../../src/cli/node/fs-board-adapter.js';
 import { createInProcessBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
 import {
@@ -98,20 +101,23 @@ describe('board-worker queue transport', () => {
 
     try {
       const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), { suppressSpawn: true, callbackTransport });
-      const stopRunner = startBoardWorkerQueueRunner({
-        workerStore: adapter.boardWorkerStore(),
-        executeBoardWorkerRequest: async (args, request) => {
-          executedBoardIds.push(String(request.boardId || ''));
-          expect(args.source_def).toEqual({ bindTo: 'prices' });
-          const outputRef = parseRef(String((args.output as Record<string, unknown>).ref));
-          expect(outputRef.value.replace(/\\/g, '/')).toContain('/sources/card-1/.staged/delivery-1/prices.json');
-          fs.mkdirSync(path.dirname(outputRef.value), { recursive: true });
-          fs.writeFileSync(outputRef.value, JSON.stringify({ ok: true }), 'utf-8');
-          reportComplete(args.callback as typeof callback, outputRef);
-        },
-        pollIntervalMs: 10,
-        visibilityMs: 250,
-      });
+      const stopRunner = startQueueLaneRunners(createQueueLaneRegistry([
+        createBoardWorkerQueueLane({
+          id: 'task-executor',
+          workerStore: adapter.boardWorkerStore(),
+          handleRequest: async (args, request) => {
+            executedBoardIds.push(String(request.boardId || ''));
+            expect(args.source_def).toEqual({ bindTo: 'prices' });
+            const outputRef = parseRef(String((args.output as Record<string, unknown>).ref));
+            expect(outputRef.value.replace(/\\/g, '/')).toContain('/sources/card-1/.staged/delivery-1/prices.json');
+            fs.mkdirSync(path.dirname(outputRef.value), { recursive: true });
+            fs.writeFileSync(outputRef.value, JSON.stringify({ ok: true }), 'utf-8');
+            reportComplete(args.callback as typeof callback, outputRef);
+          },
+          pollIntervalMs: 10,
+          visibilityMs: 250,
+        }),
+      ]));
 
       try {
         const result = await adapter.dispatchExecution({
@@ -144,6 +150,37 @@ describe('board-worker queue transport', () => {
       }
     } finally {
       unregisterInProcessBoardWorkerCallback(callbackKey);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drives process-accumulated wakeups from the queue runner and acknowledges them', async () => {
+    const root = makeTempDir('yaml-flow-process-accumulated-');
+    try {
+      const queue = createFsQueueStorage(path.join(root, 'queue'));
+      queue.enqueue({ boardRef: '::fs-path::/tmp/board-1' });
+      let processCalls = 0;
+
+      const stopRunner = startQueueLaneRunners(createQueueLaneRegistry([
+        createQueueStorageLane({
+          id: 'process-accumulated',
+          queueStorage: queue,
+          handleMessage: async () => {
+            processCalls += 1;
+          },
+          pollIntervalMs: 10,
+          visibilityMs: 250,
+        }),
+      ]));
+
+      try {
+        await waitFor(() => processCalls === 1);
+        expect(queue.peekActive()).toHaveLength(0);
+        expect(queue.peekDeadLetter()).toHaveLength(0);
+      } finally {
+        stopRunner();
+      }
+    } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

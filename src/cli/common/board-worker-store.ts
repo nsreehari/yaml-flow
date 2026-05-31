@@ -30,6 +30,7 @@ export interface BoardWorkerDeadLetterRequest extends BoardWorkerQueuedRequest {
 
 export interface BoardWorkerStore {
   enqueueRequest(request: BoardWorkerRequest): string;
+  enqueueRequestIfAbsent?(request: BoardWorkerRequest, dedupKey: string): string | null;
   leaseRequests(opts?: { max?: number; visibilityMs?: number }): BoardWorkerLeasedRequest[];
   ackRequest(messageId: string, leaseToken: string): boolean;
   nackRequest(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean;
@@ -66,6 +67,13 @@ export function createBoardWorkerStore(queue: QueueStorage): BoardWorkerStore {
     enqueueRequest(request: BoardWorkerRequest): string {
       return queue.enqueue(request).id;
     },
+
+    enqueueRequestIfAbsent: queue.enqueueIfAbsent
+      ? (request: BoardWorkerRequest, dedupKey: string): string | null => {
+          const msg = queue.enqueueIfAbsent!(request, dedupKey);
+          return msg ? msg.id : null;
+        }
+      : undefined,
 
     leaseRequests(opts?: { max?: number; visibilityMs?: number }): BoardWorkerLeasedRequest[] {
       return queue.lease<BoardWorkerRequest>(opts).map(mapLeased);

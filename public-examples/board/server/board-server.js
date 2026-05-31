@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createMultiBoardServerRuntime,
   createSingleBoardServerRuntime,
+  createHostedBoardQueueLaneRegistry,
 } from 'yaml-flow/board-live-cards-server-runtime';
 import {
   createHostedAsyncBoardPlatformAdapter,
@@ -29,7 +30,7 @@ import {
   invokeExecutionRef,
   parseRef,
   registerInProcessExecutionHandler,
-  startBoardWorkerQueueRunner,
+  startQueueLaneRunners,
   serializeRef,
 } from 'yaml-flow/board-live-cards-node';
 import { registerInProcessBoardWorkerCallback } from 'yaml-flow/board-worker-adapter';
@@ -308,7 +309,7 @@ function makeHostedBoardWorkerRef(boardId, taskExecPath, transport, executionExt
 }
 
 function makeBoardWorkerCallbackTransport(serverUrl, boardApiBasePath, transport, boardId) {
-  if (transport === 'in-process-loop' || transport === 'queue') {
+  if (transport === 'in-process-loop' || transport === 'queue' || transport === 'http') {
     return createInProcessBoardCallbackTransport(`board:${boardId}:board-worker-callback`);
   }
   const normalizedServerUrl = typeof serverUrl === 'string' ? serverUrl.trim().replace(/\/+$/, '') : '';
@@ -513,6 +514,102 @@ class MemoryAsyncBlobStorage {
   }
 }
 
+class MemoryAsyncQueueStorage {
+  constructor() {
+    this.queueItems = new Map();
+    this.deadQueueItems = new Map();
+  }
+
+  createId() {
+    return globalThis.crypto?.randomUUID?.() || genShortId();
+  }
+
+  async enqueue(body) {
+    const item = {
+      id: this.createId(),
+      body,
+      enqueuedAt: new Date().toISOString(),
+      attempt: 0,
+    };
+    this.queueItems.set(item.id, item);
+    return item;
+  }
+
+  async enqueueIfAbsent(body, dedupKey) {
+    for (const existing of this.queueItems.values()) {
+      if (existing.dedupKey === dedupKey) return null;
+    }
+    const item = {
+      id: this.createId(),
+      body,
+      enqueuedAt: new Date().toISOString(),
+      attempt: 0,
+      dedupKey,
+    };
+    this.queueItems.set(item.id, item);
+    return { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+  }
+
+  async lease(opts = {}) {
+    const max = Math.max(1, Math.floor(opts.max ?? 1));
+    const visibilityMs = Math.max(1, Math.floor(opts.visibilityMs ?? 60_000));
+    const now = Date.now();
+    for (const item of this.queueItems.values()) {
+      if (item.leaseExpiresAt && Date.parse(item.leaseExpiresAt) <= now) {
+        delete item.leaseToken;
+        delete item.leaseExpiresAt;
+      }
+    }
+    const leased = [];
+    for (const item of this.queueItems.values()) {
+      if (leased.length >= max) break;
+      if (item.leaseToken) continue;
+      item.attempt += 1;
+      item.leaseToken = this.createId();
+      item.leaseExpiresAt = new Date(Date.now() + visibilityMs).toISOString();
+      leased.push({
+        id: item.id,
+        body: item.body,
+        enqueuedAt: item.enqueuedAt,
+        attempt: item.attempt,
+        leaseToken: item.leaseToken,
+        leaseExpiresAt: item.leaseExpiresAt,
+      });
+    }
+    return leased;
+  }
+
+  async ack(messageId, leaseToken) {
+    const item = this.queueItems.get(messageId);
+    if (!item || item.leaseToken !== leaseToken) return false;
+    this.queueItems.delete(messageId);
+    return true;
+  }
+
+  async nack(messageId, leaseToken, opts = {}) {
+    const item = this.queueItems.get(messageId);
+    if (!item || item.leaseToken !== leaseToken) return false;
+    delete item.leaseToken;
+    delete item.leaseExpiresAt;
+    if (opts.dead) {
+      this.queueItems.delete(messageId);
+      this.deadQueueItems.set(messageId, { ...item, reason: opts.reason });
+    }
+    return true;
+  }
+
+  async peekActive() {
+    return Array.from(this.queueItems.values())
+      .filter((item) => !item.leaseToken)
+      .map((item) => ({ id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
+  }
+
+  async peekDeadLetter() {
+    return Array.from(this.deadQueueItems.values())
+      .map((item) => ({ ...item, body: item.body }));
+  }
+}
+
 function createMemoryAsyncScratchStorage() {
   const store = new MemoryAsyncBlobStorage('cloud-scratch-key');
   let seq = 0;
@@ -644,6 +741,9 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
   const scratchStore = createMemoryAsyncScratchStorage();
   const archiveFactory = createMemoryArchiveFactory();
   const journalStorage = archiveFactory.stream('board-journal');
+  const boardWorkerQueueStorage = new MemoryAsyncQueueStorage();
+  const chatAgentQueueStorage = new MemoryAsyncQueueStorage();
+  const processAccumulatedQueueStorage = new MemoryAsyncQueueStorage();
   const stagedSourcesDir = boardDir ? path.join(path.dirname(boardDir), 'runtime-out', '.cloud-staged-sources') : null;
   if (stagedSourcesDir) fs.mkdirSync(stagedSourcesDir, { recursive: true });
 
@@ -676,9 +776,6 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
     getBlobNamespace,
     adapter: null,
     notifyChannel,
-    scheduleDrain: () => {},
-    drainScheduled: false,
-    drainRunning: false,
   };
 
   bundle.adapter = createHostedAsyncBoardPlatformAdapter({
@@ -691,6 +788,9 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
     archiveFactory: () => archiveFactory,
     archiveFactoryForRef: () => archiveFactory,
     journalStorage: () => journalStorage,
+    queueStorage: boardWorkerQueueStorage,
+    chatAgentQueueStorage,
+    processAccumulatedQueueStorage,
     lock: createImmediateAsyncLock(),
     callbackTransport: undefined,
     resolveBlob: async (ref) => {
@@ -710,7 +810,6 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
     publishBoardChangeNotifications: async (notifications) => {
       notificationTransport.publish(notifyChannel, notifications);
     },
-    requestProcessAccumulated: () => bundle.scheduleDrain(),
   });
 
   cloudBoardBundles.set(boardId, bundle);
@@ -736,7 +835,7 @@ const invocationAdapter = createNodeSpawnInvocationAdapter();
 const notificationTransport = createNotificationTransport();
 const logger = { info: console.log, warn: console.warn, error: console.error };
 const hostedBoardWorkerDispatchers = new Map();
-const hostedBoardWorkerQueueStops = new Map();
+const hostedQueueLaneStops = new Map();
 const hostedBoardChatStorages = new Map();
 
 // Map config keys to board entries for the factory
@@ -988,38 +1087,14 @@ const runtime = createMultiBoardServerRuntime({
       },
     });
 
-    if (runtimeMode === 'cloud') {
-      const cloudBundle = getCloudBoardBundle(boardId, baseCfg.notifyRef.value, boardDir);
-      cloudBundle.scheduleDrain = () => {
-        cloudBundle.drainScheduled = true;
-        if (cloudBundle.drainRunning) return;
-        cloudBundle.drainRunning = true;
-        void (async () => {
-          try {
-            while (cloudBundle.drainScheduled) {
-              cloudBundle.drainScheduled = false;
-              const result = await singleBoardRuntime.processAccumulatedEvents();
-              if (result?.status && result.status !== 'success') {
-                logger.error(`[board-server] cloud drain returned ${result.status} for ${boardId}: ${String(result.error || 'unknown error')}`);
-              }
-            }
-          } catch (error) {
-            logger.error(`[board-server] cloud drain failed for ${boardId}: ${String(error && error.message || error)}`);
-          } finally {
-            cloudBundle.drainRunning = false;
-          }
-        })();
-      };
-    }
-
     const hostedBoardWorkerDispatch = createHostedBoardWorkerDispatcher(boardId, taskExecPath);
     if (hostedBoardWorkerDispatch) {
       hostedBoardWorkerDispatchers.set(boardId, hostedBoardWorkerDispatch);
     }
-    const previousQueueStop = hostedBoardWorkerQueueStops.get(boardId);
+    const previousQueueStop = hostedQueueLaneStops.get(boardId);
     if (previousQueueStop) {
       previousQueueStop();
-      hostedBoardWorkerQueueStops.delete(boardId);
+      hostedQueueLaneStops.delete(boardId);
     }
     if (boardWorkerTransport === 'in-process-loop' && hostedBoardWorkerDispatch) {
       registerInProcessExecutionHandler(`board:${boardId}:board-worker`, async (_ref, args) => {
@@ -1029,7 +1104,7 @@ const runtime = createMultiBoardServerRuntime({
         return { result: 'success', data: { dispatched: true } };
       });
     }
-    if ((boardWorkerTransport === 'in-process-loop' || boardWorkerTransport === 'queue') && hostedBoardWorkerDispatch) {
+    if ((boardWorkerTransport === 'in-process-loop' || boardWorkerTransport === 'queue' || boardWorkerTransport === 'http') && hostedBoardWorkerDispatch) {
       registerInProcessBoardWorkerCallback(`board:${boardId}:board-worker-callback`, (payload) => {
         if (payload.outcome === 'success') {
           return singleBoardRuntime.reportSourceFetched(payload.token, String(payload.ref || ''));
@@ -1037,18 +1112,16 @@ const runtime = createMultiBoardServerRuntime({
         return singleBoardRuntime.reportSourceFetchFailure(payload.token, String(payload.reason || 'unknown'));
       });
     }
-    if (boardWorkerTransport === 'queue' && hostedBoardWorkerDispatch) {
-      const stopQueueRunner = startBoardWorkerQueueRunner({
-        workerStore: baseCfg.boardAdapter.boardWorkerStore(),
-        executeBoardWorkerRequest: hostedBoardWorkerDispatch,
-        onError: (error, lease) => {
-          logger.error(
-            `[board-server] queued board-worker failed for ${boardId} (attempt ${lease.attempt}): ${String(error && error.message || error)}`,
-          );
-        },
-      });
-      hostedBoardWorkerQueueStops.set(boardId, stopQueueRunner);
-    }
+    const stopQueueRunner = startQueueLaneRunners(createHostedBoardQueueLaneRegistry({
+      boardId,
+      runtime: singleBoardRuntime,
+      boardAdapter: baseCfg.boardAdapter,
+      logger,
+      ...(boardWorkerTransport === 'queue' && hostedBoardWorkerDispatch
+        ? { executeTaskExecutorRequest: hostedBoardWorkerDispatch }
+        : {}),
+    }));
+    hostedQueueLaneStops.set(boardId, stopQueueRunner);
 
     // Seed card store from source cardsDir if empty
     if (runtimeMode === 'sync') {

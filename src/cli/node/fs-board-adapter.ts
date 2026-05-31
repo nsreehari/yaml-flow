@@ -32,8 +32,6 @@ import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
 import type { BoardCallbackTransport } from '../common/board-callback-transport.js';
 import {
-  createHttpBoardCallbackTransport,
-  createInProcessBoardCallbackTransport,
   createLocalNodeBoardCallbackTransport,
 } from '../common/board-callback-transport.js';
 import { createBoardWorkerStore } from '../common/board-worker-store.js';
@@ -54,7 +52,6 @@ import { validateLiveCardDefinition } from '../../card-compute/schema-validator.
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter } from '../common/board-live-cards-public.js';
 import { createChatStorage } from '../common/chat-storage-lib.js';
 import type { ChatStorage } from '../common/chat-storage-lib.js';
-import type { ExecutionRef } from '../common/execution-interface.js';
 
 // ============================================================================
 // Re-export public API — consumers only need to import from this file
@@ -110,9 +107,6 @@ export type {
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 export {
-  createHttpBoardCallbackTransport,
-  createInProcessBoardCallbackTransport,
-  createLocalNodeBoardCallbackTransport,
   buildLocalBaseSpec,
   createExecutionRefInvoker,
   evaluateArgsMassaging,
@@ -124,6 +118,11 @@ export {
   resolveYamlFlowCliPath,
   unregisterInProcessExecutionHandler,
 } from './execution-adapter.js';
+export {
+  createHttpBoardCallbackTransport,
+  createInProcessBoardCallbackTransport,
+  createLocalNodeBoardCallbackTransport,
+} from '../common/board-callback-transport.js';
 export type {
   CreateExecutionRefInvokerOptions,
   ExecutionRefInvoker,
@@ -135,6 +134,19 @@ export type {
 } from './execution-adapter.js';
 export { createFsQueueStorage } from './storage-fs-adapters.js';
 export { startBoardWorkerQueueRunner } from './board-worker-queue-runner.js';
+export { startProcessAccumulatedQueueRunner } from './process-accumulated-queue-runner.js';
+export {
+  createBoardWorkerQueueLane,
+  createQueueStorageLane,
+  startQueueLaneRunner,
+  startQueueLaneRunners,
+} from './queue-runners.js';
+export { createQueueLaneRegistry } from '../common/queue-lane-registry.js';
+export type {
+  QueueLaneDescriptor,
+  QueueLaneLease,
+  QueueLaneRegistry,
+} from '../common/queue-lane-registry.js';
 
 // ============================================================================
 // createNodeSpawnInvocationAdapter
@@ -285,6 +297,8 @@ export function createFsBoardPlatformAdapter(
   const { cliDir, opts } = normalizeFsBoardAdapterArgs(cliDirOrOpts, maybeOpts);
   const dir = baseRef.value;
   let boardWorkerStoreCache: BoardWorkerStore | undefined;
+  let chatAgentStoreCache: BoardWorkerStore | undefined;
+  let processAccumulatedStoreCache: ReturnType<typeof createFsQueueStorage> | undefined;
   let resolvedCliDirCache: string | undefined;
 
   function getResolvedCliDir(): string {
@@ -316,6 +330,20 @@ export function createFsBoardPlatformAdapter(
         boardWorkerStoreCache = createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
       }
       return boardWorkerStoreCache;
+    },
+
+    chatAgentStore: () => {
+      if (!chatAgentStoreCache) {
+        chatAgentStoreCache = createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.chat-agent-queue')));
+      }
+      return chatAgentStoreCache;
+    },
+
+    processAccumulatedStore: () => {
+      if (!processAccumulatedStoreCache) {
+        processAccumulatedStoreCache = createFsQueueStorage(joinPath(dir, '.process-accumulated-queue'));
+      }
+      return processAccumulatedStoreCache;
     },
 
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),

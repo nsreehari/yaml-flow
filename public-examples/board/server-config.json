@@ -1,6 +1,7 @@
 {
+  "mode": "cloud",
   "port": 7799,
-  "taskExecutorTransport": "queue",
+  "taskExecutorTransport": "http",
   "chatFlowTimeoutMs": 1800000,
   "chatInvokeRefTimeoutMs": 1800000,
   "chatCopilotTimeoutMs": 1800000,

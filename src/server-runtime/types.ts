@@ -11,15 +11,24 @@
  */
 
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
+import type { BoardWorkerRequest } from '../cli/common/board-worker-store.js';
+import type { AsyncBoardPlatformAdapter } from '../cli/cloud/board-platform-adapter-async.js';
+import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
 import type { ExecutionRef } from '../cli/common/execution-interface.js';
 import type { KindValueRef, KVStorage, BlobStorage } from '../cli/common/storage-interface.js';
 import type { ChatStorage } from '../cli/common/chat-storage-lib.js';
 
 // Re-export for convenience so hosts can import from server-runtime/types
 export type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification };
+export type { BoardWorkerRequest };
+export type { AsyncBoardPlatformAdapter, AsyncBoardLiveCardsPublic };
 export type { ExecutionRef };
 export type { KindValueRef, KVStorage, BlobStorage };
 export type { ChatStorage };
+
+export type Awaitable<T> = T | Promise<T>;
+export type BoardRuntimePlatformAdapter = BoardPlatformAdapter | AsyncBoardPlatformAdapter;
+export type BoardRuntimePublic = BoardLiveCardsPublic | AsyncBoardLiveCardsPublic;
 
 // ============================================================================
 // InvocationAdapter — dispatches execution requests
@@ -98,16 +107,29 @@ export interface RuntimeLogger {
   error(msg: string, ...args: unknown[]): void;
 }
 
+export interface QueueLaneRuntimeTuning {
+  pollIntervalMs?: number;
+  visibilityMs?: number;
+  concurrency?: number;
+  maxAttempts?: number;
+}
+
+export interface HostedBoardQueueLaneTuning {
+  processAccumulated?: QueueLaneRuntimeTuning;
+  chatAgent?: QueueLaneRuntimeTuning;
+  taskExecutor?: QueueLaneRuntimeTuning;
+}
+
 // ============================================================================
 // BoardContextConfig — per-board-layer configuration
 // ============================================================================
 
 export interface BoardContextConfig {
   label: string;
-  boardAdapter: BoardPlatformAdapter;
+  boardAdapter: BoardRuntimePlatformAdapter;
   nonCoreAdapter?: BoardNonCorePlatformAdapter;
   /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
-  artifactsAdapter?: BoardPlatformAdapter;
+  artifactsAdapter?: BoardRuntimePlatformAdapter;
   /** Optional explicit blob root ref for persisted card/file attachments. */
   artifactsStoreRef?: string;
   /**
@@ -152,6 +174,7 @@ export interface SingleBoardRuntimeOptions {
   notificationTransport?: NotificationTransport;
   logger?: RuntimeLogger;
   serverUrl?: string;
+  queueLaneTuning?: HostedBoardQueueLaneTuning;
   /** Extra host-specific fields baked into execution ref extras */
   executionExtra?: Record<string, unknown>;
   /** Called when an SSE client connects. The writer injects a single SSE data frame. */
@@ -188,17 +211,21 @@ export interface MultiBoardRuntimeOptions {
 export interface SingleBoardRuntime {
   readonly apiBasePath: string;
   readonly corsHeaders: Record<string, string>;
+  readonly queueLaneTuning: HostedBoardQueueLaneTuning;
   handleRuntimeApi(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean>;
-  buildPublishedRuntimePayload(): unknown;
+  buildPublishedRuntimePayload(): Awaitable<unknown>;
+  processAccumulatedEvents(): Awaitable<CommandResult>;
+  processAccumulatedLane(): Awaitable<CommandResult>;
+  handleChatAgentRequest(request: BoardWorkerRequest): Awaitable<void>;
   clearChatRecords(cardId: string): void;
   /** Report that a source fetch completed. Token is the source callback token; ref is the blob ref (b64:<base64url(json)>). */
-  reportSourceFetched(token: string, ref: string): CommandResult | Promise<CommandResult>;
+  reportSourceFetched(token: string, ref: string): Awaitable<CommandResult>;
   /** Report that a source fetch failed. Token is the source callback token. */
-  reportSourceFetchFailure(token: string, reason: string): CommandResult | Promise<CommandResult>;
+  reportSourceFetchFailure(token: string, reason: string): Awaitable<CommandResult>;
   /** Exposed card store — host calls cardStore.set({body: cards}) to seed definitions. */
   readonly cardStore: {
-    get(input: { params?: { id?: string } }): { status: string; data?: { cards?: Array<Record<string, unknown>> }; error?: string };
-    set(input: { body: unknown }): { status: string; error?: string };
+    get(input: { params?: { id?: string } }): Awaitable<{ status: string; data?: { cards?: Array<Record<string, unknown>> }; error?: string }>;
+    set(input: { body: unknown }): Awaitable<{ status: string; data?: { count?: number }; error?: string }>;
   };
 }
 

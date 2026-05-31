@@ -23,6 +23,11 @@ import {
   createBoardLiveCardsNonCorePublic,
 } from '../cli/common/board-live-cards-public.js';
 import type { CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
+import { createAsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
+import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
+import type { AsyncBoardPlatformAdapter } from '../cli/cloud/board-platform-adapter-async.js';
+import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
+import type { AsyncCardAdminStore } from '../cli/cloud/board-live-cards-storage-async.js';
 import { createBoardLiveCardsMcp } from '../cli/common/board-live-cards-mcp.js';
 import { parseRef } from '../cli/common/storage-interface.js';
 
@@ -31,7 +36,6 @@ import { createCardStore } from '../cli/common/board-live-cards-lib.js';
 
 import {
   createArtifactsStore,
-  createFileArtifactsStore,
   createCardFileMetadataStore,
 } from '../cli/common/artifacts-store-lib.js';
 
@@ -50,9 +54,11 @@ import type {
   RuntimeResponse,
   RuntimeLogger,
   BoardContextConfig,
+  BoardRuntimePlatformAdapter,
   InvocationAdapter,
   NotificationTransport,
 } from './types.js';
+import type { BoardWorkerRequest } from '../cli/common/board-worker-store.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -69,6 +75,7 @@ export type {
 
 // Re-export types for hosts
 export * from './types.js';
+export * from './queue-lanes.js';
 
 const DEFAULT_CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -77,6 +84,7 @@ const DEFAULT_CORS_HEADERS: Record<string, string> = {
 };
 
 const MAX_STORED_FILE_NAME_LEN = 32;
+const CHAT_HANDLER_FLOW_QUEUE_TARGET = 'chat-handler-flow-queue';
 
 // ============================================================================
 // Internal types
@@ -96,10 +104,13 @@ type BoardStatusObjectInternal = import('../cli/common/board-live-cards-lib.js')
 interface BoardOpsAwaitable {
   init(input: CommandInput): Awaitable<CommandResult>;
   status(input: CommandInput): Awaitable<CommandResult<BoardStatusObjectInternal>>;
+  getConfig(input: CommandInput): Awaitable<CommandResult<{ value: unknown }>>;
   getAllOutputsDataObjects(input: CommandInput): Awaitable<CommandResult<Record<string, unknown>>>;
   getAllOutputsComputedValues(input: CommandInput): Awaitable<CommandResult<Record<string, unknown>>>;
+  getOutputsFetchedSources(input: CommandInput): Awaitable<CommandResult<Record<string, string>>>;
   upsertCard(input: CommandInput): Awaitable<CommandResult>;
   removeCard(input: CommandInput): Awaitable<CommandResult>;
+  cardRefreshedNotify(input: CommandInput): Awaitable<CommandResult>;
   sourceDataFetched(input: CommandInput): Awaitable<CommandResult>;
   sourceDataFetchFailure(input: CommandInput): Awaitable<CommandResult>;
 }
@@ -107,19 +118,29 @@ interface BoardOpsAwaitable {
 /** Awaitable mirror of the CardStorePublic methods the runtime needs. */
 interface CardStoreOpsAwaitable {
   get(input: CommandInput): Awaitable<CommandResult<{ cards: Array<Record<string, unknown>> }>>;
+  set(input: CommandInput): Awaitable<CommandResult<{ count: number }>>;
+  del(input: CommandInput): Awaitable<CommandResult<{ count: number }>>;
+  patch(input: CommandInput): Awaitable<CommandResult<{ count: number }>>;
+  appendFiles(input: CommandInput): Awaitable<CommandResult<{ files_added: Array<{ idx: number; entry: unknown }> }>>;
+}
+
+interface RuntimeFilesArtifactsStore {
+  putBytes(key: string, content: Uint8Array, contentType?: string): Awaitable<void>;
+  getBytes(key: string): Awaitable<Uint8Array | null>;
+  listKeys(prefix?: string): Awaitable<string[]>;
 }
 
 interface BoardContext {
   label: string;
-  board: ReturnType<typeof createBoardLiveCardsPublic>;
+  board: ReturnType<typeof createBoardLiveCardsPublic> | AsyncBoardLiveCardsPublic;
   nonCore: ReturnType<typeof createBoardLiveCardsNonCorePublic> | null;
-  cardStore: ReturnType<typeof createCardStorePublic>;
+  publicCardStore: SingleBoardRuntime['cardStore'];
   /** Awaitable wrapper around `board` for runtime-internal call sites. */
   boardOps: BoardOpsAwaitable;
   /** Awaitable wrapper around `cardStore` for runtime-internal call sites. */
   cardStoreOps: CardStoreOpsAwaitable;
-  readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
-  boardAdapter: import('./types.js').BoardPlatformAdapter;
+  readonly filesArtifacts: RuntimeFilesArtifactsStore | null;
+  boardAdapter: BoardRuntimePlatformAdapter;
   cardStoreRef: string;
   outputsStoreRef: string;
   artifactsStoreRef?: string;
@@ -185,6 +206,17 @@ function appendNotification(state: NotificationState, event: unknown): void {
   }
 }
 
+function isAsyncBoardPlatformAdapter(adapter: BoardRuntimePlatformAdapter): adapter is AsyncBoardPlatformAdapter {
+  return typeof (adapter as AsyncBoardPlatformAdapter).journalStorage === 'function';
+}
+
+function executionWhatToRunValue(ref: import('./types.js').ExecutionRef): string {
+  if (typeof ref.whatToRun === 'string') {
+    return ref.whatToRun.startsWith('b64:') ? parseRef(ref.whatToRun).value : ref.whatToRun;
+  }
+  return ref.whatToRun.value;
+}
+
 // ============================================================================
 // createSingleBoardServerRuntime
 // ============================================================================
@@ -192,6 +224,7 @@ function appendNotification(state: NotificationState, event: unknown): void {
 export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOptions): SingleBoardRuntime {
   const apiBasePath = String(options.apiBasePath || '/api/board').replace(/\/$/, '');
   const corsHeaders = { ...DEFAULT_CORS_HEADERS, ...(options.corsHeaders || {}) };
+  const queueLaneTuning = options.queueLaneTuning ?? {};
   const boardId = options.boardId || '';
   const logger: RuntimeLogger = options.logger || { info: console.log, warn: console.warn, error: console.error };
   const invocationAdapter = options.invocationAdapter;
@@ -214,51 +247,202 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // ── Build board contexts from injected configs ───────────────────────────
 
   function buildContext(cfg: BoardContextConfig): BoardContext {
-    const board = createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter);
+    function normalizeFilesBody(body: unknown): Array<Record<string, unknown>> | null {
+      if (Array.isArray(body)) return body as Array<Record<string, unknown>>;
+      if (body && typeof body === 'object') {
+        const obj = body as { files?: unknown };
+        if (Array.isArray(obj.files)) return obj.files as Array<Record<string, unknown>>;
+        return [body as Record<string, unknown>];
+      }
+      return null;
+    }
+
+    function createSyncCardStoreOps(store: ReturnType<typeof createCardStorePublic>): CardStoreOpsAwaitable {
+      return {
+        async get(input) { return store.get(input) as CommandResult<{ cards: Array<Record<string, unknown>> }>; },
+        async set(input) { return store.set(input); },
+        async del(input) { return store.del(input); },
+        async patch(input) { return store.patch(input); },
+        async appendFiles(input) { return store.appendFiles(input); },
+      };
+    }
+
+    function createAsyncCardStoreOps(store: AsyncCardAdminStore): CardStoreOpsAwaitable {
+      function ok<T>(data: T): CommandResult<T> { return { status: 'success', data } as CommandResult<T>; }
+      function fail<T>(error: string): CommandResult<T> { return { status: 'fail', error } as CommandResult<T>; }
+      function oops<T>(e: unknown): CommandResult<T> { return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>; }
+
+      return {
+        async get(input) {
+          try {
+            const id = input.params?.id as string | undefined;
+            if (id) {
+              const card = await store.readCard(id);
+              if (!card) return fail(`card "${id}" not found`);
+              return ok({ cards: [card as Record<string, unknown>] });
+            }
+            return ok({ cards: await store.readAllCards() as Array<Record<string, unknown>> });
+          } catch (e) { return oops(e); }
+        },
+        async set(input) {
+          try {
+            const body = input.body;
+            if (body == null) return fail('set requires a body (card object or array of cards)');
+            const cards = Array.isArray(body) ? body as Array<Record<string, unknown>> : [body as Record<string, unknown>];
+            for (const card of cards) {
+              if (typeof card.id !== 'string') return fail('each card must have a string `id` field');
+              await store.writeCard(card.id, card as import('../cli/common/board-live-cards-lib.js').LiveCard);
+            }
+            return ok({ count: cards.length });
+          } catch (e) { return oops(e); }
+        },
+        async del(input) {
+          try {
+            const bodyIds = (input.body as { ids?: string[] } | undefined)?.ids ?? [];
+            const paramId = input.params?.id as string | undefined;
+            const ids = paramId ? [...bodyIds, paramId] : bodyIds;
+            if (ids.length === 0) return fail('del requires body.ids (string[]) or params.id');
+            for (const id of ids) await store.removeCard(id);
+            return ok({ count: ids.length });
+          } catch (e) { return oops(e); }
+        },
+        async patch(input) {
+          try {
+            const id = input.params?.id as string | undefined;
+            const jsonPath = input.params?.path as string | undefined;
+            if (!id) return fail('patch requires params.id');
+            if (!jsonPath) return fail('patch requires params.path');
+            const body = input.body as { value?: unknown } | undefined;
+            const value = body && Object.prototype.hasOwnProperty.call(body, 'value') ? body.value : input.body;
+            await store.patchCard(id, jsonPath, value);
+            return ok({ count: 1 });
+          } catch (e) { return oops(e); }
+        },
+        async appendFiles(input) {
+          try {
+            const id = input.params?.id as string | undefined;
+            if (!id) return fail('appendFiles requires params.id');
+            const card = await store.readCard(id);
+            if (!card) return fail(`card "${id}" not found`);
+            const files = normalizeFilesBody(input.body);
+            if (!files || files.length === 0) return fail('appendFiles requires a file metadata object, array, or body.files array');
+            const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
+              ? card.card_data as Record<string, unknown>
+              : {};
+            const existingFiles = Array.isArray(cardData.files) ? cardData.files : [];
+            const nextFiles = [...existingFiles, ...files];
+            await store.patchCard(id, 'card_data.files', nextFiles);
+            return ok({ files_added: files.map((entry, offset) => ({ idx: existingFiles.length + offset, entry })) });
+          } catch (e) { return oops(e); }
+        },
+      };
+    }
+
+    const board = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
+      ? createAsyncBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter)
+      : createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter);
     const nonCoreAdapter = cfg.nonCoreAdapter
-      ?? (isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
+      ?? (!isAsyncBoardPlatformAdapter(cfg.boardAdapter) && isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
     const nonCore = nonCoreAdapter ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter) : null;
-    const kv = cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef);
-    const cardAdapterObj = {
-      readIndex: () => kv.read('_index'),
-      writeIndex: (idx: unknown) => kv.write('_index', idx),
-      readCard: (id: string) => kv.read(id),
-      writeCard: (id: string, card: unknown) => { kv.write(id, card); return id; },
-      removeCard: (id: string) => { kv.delete(id); },
-      cardExists: (id: string) => kv.read(id) !== null,
-      defaultCardKey: (id: string) => id,
-    };
-    const cardStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
+    let publicCardStore: SingleBoardRuntime['cardStore'];
+    const cardStoreOps = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
+      ? (() => {
+        const asyncStore = createAsyncCardStore(
+          createAsyncCardStorageAdapter(createAsyncJsonStorage(cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef)), cfg.boardAdapter.hashFn),
+          logger.warn,
+        );
+        const ops = createAsyncCardStoreOps(asyncStore);
+        publicCardStore = {
+          get(input) { return ops.get(input); },
+          set(input) { return ops.set(input); },
+        };
+        return ops;
+      })()
+      : (() => {
+        const kv = cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef);
+        const cardAdapterObj = {
+          readIndex: () => kv.read('_index'),
+          writeIndex: (idx: unknown) => kv.write('_index', idx),
+          readCard: (id: string) => kv.read(id),
+          writeCard: (id: string, card: unknown) => { kv.write(id, card); return id; },
+          removeCard: (id: string) => { kv.delete(id); },
+          cardExists: (id: string) => kv.read(id) !== null,
+          defaultCardKey: (id: string) => id,
+        };
+        const syncStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
+        publicCardStore = syncStore;
+        return createSyncCardStoreOps(syncStore);
+      })();
     const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
     const callerFilesArtifactsStore = cfg.filesArtifactsStore ?? null;
-    const filesBlob = cfg.artifactsAdapter ? artAdapter.blobStorage('') : artAdapter.blobStorage('files');
-
-    // Lazy artifact stores — only created on first access (saves ~5KB in bundles
-    // that never use file features).
-    let _filesArtifacts: ReturnType<typeof createArtifactsStore> | null = null;
+    let _filesArtifacts: RuntimeFilesArtifactsStore | null = callerFilesArtifactsStore
+      ? {
+        putBytes(key, content, contentType) { callerFilesArtifactsStore.putBytes(key, content, contentType); },
+        getBytes(key) { return callerFilesArtifactsStore.getBytes(key); },
+        listKeys(prefix) { return callerFilesArtifactsStore.list(prefix).map((entry) => entry.key); },
+      }
+      : null;
+    if (!_filesArtifacts && !isAsyncBoardPlatformAdapter(artAdapter)) {
+      const filesBlob = cfg.artifactsAdapter ? artAdapter.blobStorage('') : artAdapter.blobStorage('files');
+      const filesStore = createArtifactsStore(filesBlob);
+      _filesArtifacts = {
+        putBytes(key, content, contentType) { filesStore.putBytes(key, content, contentType); },
+        getBytes(key) { return filesStore.getBytes(key); },
+        listKeys(prefix) { return filesStore.list(prefix).map((entry) => entry.key); },
+      };
+    } else if (!_filesArtifacts && isAsyncBoardPlatformAdapter(artAdapter)) {
+      const filesBlob = cfg.artifactsAdapter ? artAdapter.blobStorage('') : artAdapter.blobStorage('files');
+      _filesArtifacts = {
+        async putBytes(key, content) {
+          if (filesBlob.writeBytes) {
+            await filesBlob.writeBytes(key, content);
+            return;
+          }
+          const envelope = JSON.stringify({ __kind: 'bytes-array', data: [...content] });
+          await filesBlob.write(key, envelope);
+        },
+        async getBytes(key) {
+          if (filesBlob.readBytes) {
+            const bytes = await filesBlob.readBytes(key);
+            if (bytes !== null) return bytes;
+          }
+          const raw = await filesBlob.read(key);
+          if (raw === null) return null;
+          try {
+            const parsed = JSON.parse(raw) as { __kind?: string; data?: number[] };
+            if (parsed && parsed.__kind === 'bytes-array' && Array.isArray(parsed.data)) {
+              return new Uint8Array(parsed.data);
+            }
+          } catch {
+            // plain text path
+          }
+          return new TextEncoder().encode(raw);
+        },
+        async listKeys(prefix) { return await filesBlob.listKeys(prefix); },
+      };
+    }
 
     const boardOps: BoardOpsAwaitable = {
       async init(input) { return board.init(input); },
       async status(input) { return board.status(input); },
+      async getConfig(input) { return board.getConfig(input); },
       async getAllOutputsDataObjects(input) { return board.getAllOutputsDataObjects(input); },
       async getAllOutputsComputedValues(input) { return board.getAllOutputsComputedValues(input); },
+      async getOutputsFetchedSources(input) { return board.getOutputsFetchedSources(input); },
       async upsertCard(input) { return board.upsertCard(input); },
       async removeCard(input) { return board.removeCard(input); },
+      async cardRefreshedNotify(input) { return board.cardRefreshedNotify(input); },
       async sourceDataFetched(input) { return board.sourceDataFetched(input); },
       async sourceDataFetchFailure(input) { return board.sourceDataFetchFailure(input); },
     };
-    const cardStoreOps: CardStoreOpsAwaitable = {
-      async get(input) { return cardStore.get(input) as CommandResult<{ cards: Array<Record<string, unknown>> }>; },
-    };
-
     return {
       label: cfg.label,
       board,
       nonCore,
-      cardStore,
+      publicCardStore,
       boardOps,
       cardStoreOps,
-      get filesArtifacts() { return _filesArtifacts ??= (callerFilesArtifactsStore ?? createArtifactsStore(filesBlob)); },
+      get filesArtifacts() { return _filesArtifacts; },
       boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
@@ -294,12 +478,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return {
       files: ctx ? ctx.filesArtifacts : null,
     };
-  }
-
-  function fileArtifactsForCard(cardId: string) {
-    const stores = artifactsStores(cardId);
-    if (!stores.files) return null;
-    return createFileArtifactsStore(stores.files);
   }
 
   function cardFileMetadataStoreInstance() {
@@ -433,25 +611,50 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
   }
 
+  async function processAccumulatedLaneInternal(skipInit = false): Promise<CommandResult> {
+    if (!skipInit) await initBoardAndSetup();
+    for (const ctx of boardContexts) {
+      const result = await ctx.board.processAccumulatedEvents({});
+      if (result.status !== 'success') return result;
+    }
+    return { status: 'success' };
+  }
+
+  async function processChatAgentQueueInternal(skipInit = false): Promise<CommandResult> {
+    if (!skipInit) await initBoardAndSetup();
+    for (const ctx of boardContexts) {
+      const chatQueueResult = await processQueuedChatHandlers(ctx);
+      if (chatQueueResult.status !== 'success') return chatQueueResult;
+    }
+    return { status: 'success' };
+  }
+
+  async function processAccumulatedEventsInternal(): Promise<CommandResult> {
+    await initBoardAndSetup();
+    const drainResult = await processAccumulatedLaneInternal(true);
+    if (drainResult.status !== 'success') return drainResult;
+    return processChatAgentQueueInternal(true);
+  }
+
   // ── Card reads ───────────────────────────────────────────────────────────
 
   function cardContextForCard(cardId: string): BoardContext | null {
     return boardContexts[ownerIndex(cardId)] ?? null;
   }
 
-  function readCardFromStore(cardId: string): Record<string, unknown> | null {
+  async function readCardFromStore(cardId: string): Promise<Record<string, unknown> | null> {
     const ctx = cardContextForCard(cardId);
     if (!ctx) return null;
-    const result = ctx.cardStore.get({ params: { id: cardId } });
+    const result = await ctx.cardStoreOps.get({ params: { id: cardId } });
     if (result.status !== 'success') return null;
     const cards = Array.isArray((result as any).data?.cards) ? (result as any).data.cards : [];
     return cards.length > 0 ? cards[0] : null;
   }
 
-  function readCardDefinitions(): Array<Record<string, unknown>> {
-    const fromCtx = (ctx: BoardContext | null): Array<Record<string, unknown>> => {
-      if (!ctx || !ctx.cardStore) return [];
-      const result = ctx.cardStore.get({});
+  async function readCardDefinitions(): Promise<Array<Record<string, unknown>>> {
+    const fromCtx = async (ctx: BoardContext | null): Promise<Array<Record<string, unknown>>> => {
+      if (!ctx) return [];
+      const result = await ctx.cardStoreOps.get({});
       if (result.status !== 'success' || !Array.isArray((result as any).data?.cards)) {
         return [];
       }
@@ -459,7 +662,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
     const all: Array<Record<string, unknown>> = [];
     for (const ctx of boardContexts) {
-      all.push(...fromCtx(ctx));
+      all.push(...await fromCtx(ctx));
     }
     return all;
   }
@@ -470,52 +673,52 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function mcpBoardFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpBoardDeps {
     return {
-      status() {
-        const status = readStatusSnapshot();
+      async status() {
+        const status = await readStatusSnapshot();
         return status == null
           ? { status: 'fail', error: 'Board status is unavailable' }
           : { status: 'success', data: status };
       },
-      getOutputsDataObject(input) {
+      async getOutputsDataObject(input) {
         const key = input?.params?.key;
         if (!key) return { status: 'fail', error: 'getOutputsDataObject requires params.key' };
-        const dataObjects = readDataObjectsByToken();
+        const dataObjects = await readDataObjectsByToken();
         return { status: 'success', data: dataObjects[key] };
       },
-      getOutputsComputedValues(input) {
+      async getOutputsComputedValues(input) {
         const key = input?.params?.key;
         if (!key) return { status: 'fail', error: 'getOutputsComputedValues requires params.key' };
-        const artifacts = readCardRuntimeArtifacts();
+        const artifacts = await readCardRuntimeArtifacts();
         const entry = artifacts[key] as Record<string, unknown> | undefined;
         return { status: 'success', data: entry?.computed_values };
       },
-      getOutputsFetchedSources(input) {
+      async getOutputsFetchedSources(input) {
         const key = input?.params?.key;
         if (!key) return { status: 'fail', error: 'getOutputsFetchedSources requires params.key' };
         const ctx = cardContextForCard(key) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.board.getOutputsFetchedSources({ params: { key } });
+        return ctx.boardOps.getOutputsFetchedSources({ params: { key } });
       },
-      removeCard(input) {
+      async removeCard(input) {
         const id = input?.params?.id;
         if (!id) return { status: 'fail', error: 'removeCard requires params.id' };
         const ctx = cardContextForCard(id) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.board.removeCard({ params: { id } });
+        return ctx.boardOps.removeCard({ params: { id } });
       },
-      cardRefreshedNotify(input) {
+      async cardRefreshedNotify(input) {
         const cardId = input?.params?.cardId;
         if (!cardId) return { status: 'fail', error: 'cardRefreshedNotify requires params.cardId' };
         const ctx = cardContextForCard(cardId) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.board.cardRefreshedNotify({ params: { cardId } });
+        return ctx.boardOps.cardRefreshedNotify({ params: { cardId } });
       },
-      upsertCard(input) {
+      async upsertCard(input) {
         const cardId = input?.params?.cardId;
         if (!cardId) return { status: 'fail', error: 'upsertCard requires params.cardId' };
         const ctx = cardContextForCard(cardId) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.board.upsertCard({ params: { cardId, restart: input.params.restart === true } });
+        return ctx.boardOps.upsertCard({ params: { cardId, restart: input.params.restart === true } });
       },
     };
   }
@@ -536,18 +739,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  function mcpCardStoreFacade(): import('../cli/common/card-store-lib-public.js').CardStorePublic {
+  function mcpCardStoreFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpCardStoreDeps {
     return {
-      get(input) {
+      async get(input) {
         const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
         if (id) {
-          const card = readCardFromStore(id);
+          const card = await readCardFromStore(id);
           if (!card) return { status: 'success', data: { cards: [] } };
           return { status: 'success', data: { cards: [card as import('../cli/common/board-live-cards-lib.js').LiveCard] } };
         }
-        return { status: 'success', data: { cards: readCardDefinitions() as import('../cli/common/board-live-cards-lib.js').LiveCard[] } };
+        return { status: 'success', data: { cards: await readCardDefinitions() as import('../cli/common/board-live-cards-lib.js').LiveCard[] } };
       },
-      set(input) {
+      async set(input) {
         const body = input.body;
         if (body == null) return { status: 'fail', error: 'set requires a body (card object or array of cards)' };
         const cards = Array.isArray(body) ? body : [body];
@@ -558,38 +761,38 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const ctxIndex = cardOwnerIndex.get(cardId) ?? 0;
           const ctx = boardContexts[ctxIndex] ?? primaryContext();
           if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-          const setResult = ctx.cardStore.set({ body: card });
+          const setResult = await ctx.cardStoreOps.set({ body: card });
           if (setResult.status !== 'success') return setResult;
           cardOwnerIndex.set(cardId, ctxIndex);
         }
         return { status: 'success', data: { count: cards.length } };
       },
-      del(input) {
+      async del(input) {
         const ids = [input.params?.id, ...(((input.body as { ids?: string[] } | undefined)?.ids) ?? [])].filter((id): id is string => typeof id === 'string' && !!id);
         if (ids.length === 0) return { status: 'fail', error: 'del requires body.ids (string[]) or params.id' };
         for (const id of ids) {
           const ctx = cardContextForCard(id) ?? primaryContext();
           if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-          const delResult = ctx.cardStore.del({ params: { id } });
+          const delResult = await ctx.cardStoreOps.del({ params: { id } });
           if (delResult.status !== 'success') return delResult;
           cardOwnerIndex.delete(id);
         }
         return { status: 'success', data: { count: ids.length } };
       },
-      patch(input) {
+      async patch(input: { params?: { id?: string; path?: string }; body?: unknown }) {
         const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
         const path = typeof input.params?.path === 'string' ? input.params.path : undefined;
         if (!id || !path) return { status: 'fail', error: 'patch requires params.id and params.path' };
         const ctx = cardContextForCard(id) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.cardStore.patch(input);
+        return ctx.cardStoreOps.patch(input);
       },
-      appendFiles(input) {
+      async appendFiles(input: { params?: { id?: string }; body?: unknown }) {
         const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
         if (!id) return { status: 'fail', error: 'appendFiles requires params.id' };
         const ctx = cardContextForCard(id) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.cardStore.appendFiles(input);
+        return ctx.cardStoreOps.appendFiles(input);
       },
     };
   }
@@ -610,6 +813,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       readFetchedSourceJsonByRef({ cardId, ref }) {
         const ctx = cardContextForCard(cardId) ?? primaryContext();
         if (!ctx) return null;
+        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) return null;
         const text = ctx.boardAdapter.resolveBlob(parseRef(ref));
         const trimmed = text.trim();
         return trimmed ? JSON.parse(trimmed) : null;
@@ -705,6 +909,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     throw Object.assign(new Error(`${commandName} returned an unexpected response`), { statusCode: 500 });
   }
 
+  async function expectControlplaneSuccessAsync<T>(result: CommandResult<T> | Promise<CommandResult<T>>, commandName: string): Promise<T> {
+    return expectControlplaneSuccess(await result, commandName);
+  }
+
   function getCardMetaKey(args: Record<string, unknown>): string {
     const key = getMcpArgString(args, 'key');
     if (!key) throw Object.assign(new Error('MCP tool requires key'), { statusCode: 400 });
@@ -733,14 +941,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return { status: 'success', data: { boardId, cardId, active: data.active } };
   }
 
-  function setCardMetaFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; key: string } } {
+  async function setCardMetaFromControlplane(args: Record<string, unknown>): Promise<{ status: 'success'; data: { boardId: string; cardId: string; key: string } }> {
     const { cardId } = requireControlplaneCardArgs(args);
     const key = getCardMetaKey(args);
     if (!Object.prototype.hasOwnProperty.call(args, 'value')) throw Object.assign(new Error('MCP tool requires value'), { statusCode: 400 });
     if (key.split('.').includes('__visible_controlplane_only')) {
       // Allow the key through only if the value matches the card's current __visible_controlplane_only flag
       // (idempotent round-trip: client read the full meta, re-submits values, flag value unchanged).
-      const existing = expectControlplaneSuccess<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
+      const existing = await expectControlplaneSuccessAsync<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
       const card = Array.isArray(existing.cards) && existing.cards.length > 0 && typeof existing.cards[0] === 'object' && !Array.isArray(existing.cards[0])
         ? existing.cards[0] as Record<string, unknown>
         : null;
@@ -750,17 +958,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       }
       return { status: 'success', data: { boardId, cardId, key } };
     }
-    expectControlplaneSuccess(mcpCardStoreFacade().patch({
+    expectControlplaneSuccess(await mcpCardStoreFacade().patch({
       params: { id: cardId, path: `meta.${key}` },
       body: { value: args.value },
     }), 'cardStore.patch');
     return { status: 'success', data: { boardId, cardId, key } };
   }
 
-  function getCardMetaFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; key: string; exists: boolean; value: unknown } } {
+  async function getCardMetaFromControlplane(args: Record<string, unknown>): Promise<{ status: 'success'; data: { boardId: string; cardId: string; key: string; exists: boolean; value: unknown } }> {
     const { cardId } = requireControlplaneCardArgs(args);
     const key = getCardMetaKey(args);
-    const result = expectControlplaneSuccess<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
+    const result = await expectControlplaneSuccessAsync<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
     const card = Array.isArray(result.cards) && result.cards.length > 0 && result.cards[0] && typeof result.cards[0] === 'object' && !Array.isArray(result.cards[0])
       ? result.cards[0] as Record<string, unknown>
       : null;
@@ -867,9 +1075,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
         return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
       },
-      'manage.admin-read-card': (args) => {
+      'manage.admin-read-card': async (args) => {
         const { cardId } = requireControlplaneCardArgs(args);
-        const cards = createMcpFacade().adminReadCard({ cardId });
+        const cards = await createMcpFacade().adminReadCard({ cardId });
         return { status: 'success', data: { cards } };
       },
       'manage.admin-upsert-card': (args) => {
@@ -935,17 +1143,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Status & runtime artifacts ───────────────────────────────────────────
 
-  function readStatusSnapshot(): unknown {
-    const statuses = boardContexts.map((ctx) => {
+  async function readStatusSnapshot(): Promise<unknown> {
+    const statuses = (await Promise.all(boardContexts.map(async (ctx) => {
       try {
         const kv = ctx.boardAdapter.kvStorageForRef(ctx.outputsStoreRef);
-        const persisted = kv.read('status');
+        const persisted = await Promise.resolve(kv.read('status'));
         if (persisted !== null && persisted !== undefined) return persisted;
       } catch {
         // Fall back to notification memory if direct KV read fails.
       }
       return ctx.notification.status;
-    }).filter(Boolean);
+    }))).filter(Boolean);
     if (statuses.length === 0) return null;
     if (statuses.length === 1) return statuses[0];
 
@@ -976,9 +1184,26 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  function readCardRuntimeArtifacts(): Record<string, unknown> {
+  async function readCardRuntimeArtifacts(): Promise<Record<string, unknown>> {
     const out: Record<string, unknown> = {};
-    const process = (ctx: BoardContext) => {
+    const process = async (ctx: BoardContext) => {
+      try {
+        const result = await ctx.boardOps.getAllOutputsComputedValues({});
+        if (result.status === 'success' && result.data && typeof result.data === 'object') {
+          for (const [cardId, values] of Object.entries(result.data as Record<string, unknown>)) {
+            const card = ctx.notification.cards[cardId] as Record<string, unknown> | undefined;
+            out[cardId] = {
+              schema_version: 'v1',
+              card_id: cardId,
+              card_data: card?.card_data ?? {},
+              computed_values: values ?? {},
+            };
+          }
+          return;
+        }
+      } catch {
+        // Fall back to notification memory below.
+      }
       for (const [cardId, values] of Object.entries(ctx.notification.computedValues)) {
         const card = ctx.notification.cards[cardId] as Record<string, unknown> | undefined;
         out[cardId] = {
@@ -989,22 +1214,31 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         };
       }
     };
-    for (const ctx of boardContexts) process(ctx);
+    for (const ctx of boardContexts) await process(ctx);
     return out;
   }
 
-  function readDataObjectsByToken(): Record<string, unknown> {
+  async function readDataObjectsByToken(): Promise<Record<string, unknown>> {
     const merged: Record<string, unknown> = {};
     for (const ctx of boardContexts) {
+      try {
+        const result = await ctx.boardOps.getAllOutputsDataObjects({});
+        if (result.status === 'success' && result.data && typeof result.data === 'object') {
+          Object.assign(merged, result.data as Record<string, unknown>);
+          continue;
+        }
+      } catch {
+        // Fall back to notification memory below.
+      }
       Object.assign(merged, ctx.notification.dataObjects || {});
     }
     return merged;
   }
 
-  function buildPublishedRuntimePayload(): unknown {
-    const cardDefinitions = readCardDefinitions();
-    const rawArtifacts = readCardRuntimeArtifacts();
-    const dataObjectsByToken = readDataObjectsByToken();
+  async function buildPublishedRuntimePayload(): Promise<unknown> {
+    const cardDefinitions = await readCardDefinitions();
+    const rawArtifacts = await readCardRuntimeArtifacts();
+    const dataObjectsByToken = await readDataObjectsByToken();
     const cardRuntimeById: Record<string, unknown> = {};
 
     for (const cardDef of cardDefinitions) {
@@ -1048,7 +1282,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return {
       boardId,
       cardDefinitions,
-      statusSnapshot: readStatusSnapshot(),
+      statusSnapshot: await readStatusSnapshot(),
       dataObjectsByToken,
       cardRuntimeById,
       cardChatsByCardId,
@@ -1057,13 +1291,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Card mutations ───────────────────────────────────────────────────────
 
-  function mutateCard(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void, opts?: { syncBoard?: boolean; restartOnlyIfChanged?: boolean }): void {
+  async function mutateCard(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void, opts?: { syncBoard?: boolean; restartOnlyIfChanged?: boolean }): Promise<void> {
     const syncBoard = opts?.syncBoard !== false;
     const restartOnlyIfChanged = opts?.restartOnlyIfChanged === true;
     const ctx = cardContextForCard(cardId);
     if (!ctx) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
 
-    const card = readCardFromStore(cardId);
+    const card = await readCardFromStore(cardId);
     if (!card) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
 
     const beforeJson = restartOnlyIfChanged ? JSON.stringify(card) : null;
@@ -1072,31 +1306,31 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     // If restartOnlyIfChanged and the card content is identical, skip the write and the board sync entirely.
     if (restartOnlyIfChanged && JSON.stringify(nextCard) === beforeJson) return;
 
-    const setResult = ctx.cardStore.set({ body: nextCard });
+    const setResult = await ctx.cardStoreOps.set({ body: nextCard });
     if (setResult.status !== 'success') {
       throw Object.assign(new Error((setResult as any).error || `Failed to persist card: ${cardId}`), { statusCode: 500 });
     }
 
     if (syncBoard) {
-      const upsertResult = ctx.board.upsertCard({ params: { cardId, restart: true } });
+      const upsertResult = await ctx.boardOps.upsertCard({ params: { cardId, restart: true } });
       if (upsertResult.status !== 'success') {
         throw Object.assign(new Error((upsertResult as any).error || `Failed to upsert card: ${cardId}`), { statusCode: 500 });
       }
     }
   }
 
-  function updateCard(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void): void {
-    mutateCard(cardId, updateFn, { syncBoard: true });
+  async function updateCard(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void): Promise<void> {
+    await mutateCard(cardId, updateFn, { syncBoard: true });
   }
 
-  function updateCardLocalOnly(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void): void {
-    mutateCard(cardId, updateFn, { syncBoard: false });
+  async function updateCardLocalOnly(cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void): Promise<void> {
+    await mutateCard(cardId, updateFn, { syncBoard: false });
   }
 
   async function retriggerCard(cardId: string): Promise<void> {
     const ctx = cardContextForCard(cardId);
     if (!ctx) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
-    const card = readCardFromStore(cardId);
+    const card = await readCardFromStore(cardId);
     if (!card) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
     const upsertResult = await ctx.boardOps.upsertCard({ params: { cardId, restart: true } });
     if (upsertResult.status !== 'success') {
@@ -1104,8 +1338,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
   }
 
-  function patchCard(cardId: string, patch: Record<string, unknown>): void {
-    mutateCard(cardId, (card) => {
+  async function patchCard(cardId: string, patch: Record<string, unknown>): Promise<void> {
+    await mutateCard(cardId, (card) => {
       if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) return card;
 
       function deepSet(obj: Record<string, unknown>, dottedPath: string, value: unknown): void {
@@ -1180,10 +1414,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return chatStorage.readAll(cardId) as unknown as Array<Record<string, unknown>>;
   }
 
-  function readCardStoredFileNames(cardId: string): string[] {
+  async function readCardStoredFileNames(cardId: string): Promise<string[]> {
     const names: string[] = [];
     try {
-      const card = readCardFromStore(cardId);
+      const card = await readCardFromStore(cardId);
       if (!card) return names;
       const metadata = cardFileMetadataStoreInstance().read(card.card_data && typeof card.card_data === 'object' ? card.card_data : null);
       for (const entry of metadata) names.push((entry as any).stored_name);
@@ -1191,20 +1425,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return names;
   }
 
-  function persistUploadedFile(cardId: string, requestedName: string, contentType: string, buffer: Uint8Array): Record<string, unknown> {
+  async function persistUploadedFile(cardId: string, requestedName: string, contentType: string, buffer: Uint8Array): Promise<Record<string, unknown>> {
     const sid = safeCardId(cardId);
     const stores = artifactsStores(cardId);
     const displayName = normalizeDisplayFileName(requestedName);
-    const fileStore = fileArtifactsForCard(cardId);
-    const storedName = fileStore
-      ? fileStore.allocateStoredName(sid, displayName, {
-        seedNames: readCardStoredFileNames(cardId),
-        maxLen: MAX_STORED_FILE_NAME_LEN,
-      })
-      : `${String(Date.now())}-${displayName}`;
+    const existingNames = await readCardStoredFileNames(cardId);
+    const serial = String(existingNames.length + 1).padStart(3, '0');
+    const storedName = `${serial}-${displayName}`.slice(-(MAX_STORED_FILE_NAME_LEN + 4));
 
     if (stores.files) {
-      stores.files.putBytes(`${sid}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
+      await stores.files.putBytes(`${sid}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
     }
 
     return {
@@ -1216,22 +1446,22 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  function uploadCardFile(
+  async function uploadCardFile(
     cardId: string,
     requestedName: string,
     contentType: string,
     buffer: Uint8Array,
     opts?: { inChat?: boolean; turnId?: string },
-  ): { ok: true; file: Record<string, unknown> } {
+  ): Promise<{ ok: true; file: Record<string, unknown> }> {
     if (!buffer.length) {
       throw Object.assign(new Error('Empty upload body'), { statusCode: 400 });
     }
 
     const inChat = opts?.inChat === true;
-    const file = persistUploadedFile(cardId, requestedName, contentType, buffer);
+    const file = await persistUploadedFile(cardId, requestedName, contentType, buffer);
     let uploadedFileIndex: number | null = null;
 
-    updateCardLocalOnly(cardId, (card) => {
+    await updateCardLocalOnly(cardId, (card) => {
       const now = new Date().toISOString();
       const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
       card.card_data = cardData;
@@ -1256,15 +1486,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return { ok: true, file };
   }
 
-  function resolveChatHandlerTarget(cardId: string): {
+  async function resolveChatHandlerTarget(cardId: string): Promise<{
     ctx: BoardContext;
     handlerFlow: unknown;
     handlerRef: import('./types.js').ExecutionRef;
-  } | null {
+  } | null> {
     const ctx = cardContextForCard(cardId);
     if (!ctx) return null;
 
-    const flowResult = ctx.board.getConfig({ params: { key: 'chat-handler-flow' } });
+    const flowResult = await ctx.boardOps.getConfig({ params: { key: 'chat-handler-flow' } });
     const handlerFlow = flowResult.status === 'success' ? (flowResult as any).data?.value : null;
     const handlerRef = ctx.chatHandlerRef;
     if (handlerFlow == null && (!handlerRef || typeof handlerRef !== 'object')) return null;
@@ -1276,10 +1506,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  // ── Chat handler invocation ──────────────────────────────────────────────
+  // ── Chat handler queueing + dispatch ─────────────────────────────────────
 
-  function invokeChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = ''): void {
-    const target = resolveChatHandlerTarget(cardId);
+  async function queueChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = ''): Promise<void> {
+    const target = await resolveChatHandlerTarget(cardId);
     if (!target) return;
     const { ctx, handlerFlow, handlerRef } = target;
 
@@ -1296,66 +1526,120 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       ...(serverUrl ? { serverUrl } : {}),
     };
 
-    if (!chatFlowRunner) {
-      if (handlerFlow != null) {
-        try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
-        logger.warn(`[chat-handler-flow] configured for card "${cardId}" but no chatFlowRunner was provided`);
-        return;
-      }
-    }
+    const executionRef = handlerFlow != null
+      ? {
+          meta: 'chat-handler-flow',
+          howToRun: 'built-in' as const,
+          whatToRun: { kind: 'built-in', value: CHAT_HANDLER_FLOW_QUEUE_TARGET },
+        }
+      : handlerRef;
 
-    if (handlerFlow != null) {
+    try {
+      if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
+        await ctx.boardAdapter.chatAgentStore().enqueueRequest({
+          boardId,
+          ref: executionRef,
+          args: handlerFlow != null ? { ...args, __chatHandlerFlow: handlerFlow } : args,
+        });
+      } else {
+        ctx.boardAdapter.chatAgentStore().enqueueRequest({
+          boardId,
+          ref: executionRef,
+          args: handlerFlow != null ? { ...args, __chatHandlerFlow: handlerFlow } : args,
+        });
+      }
+      await Promise.resolve(ctx.boardAdapter.requestProcessAccumulated?.());
+    } catch (err) {
+      try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
+      logger.warn(`[chat-handler] queue failed for card "${cardId}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function dispatchQueuedChatHandler(
+    ctx: BoardContext,
+    ref: import('./types.js').ExecutionRef,
+    args: Record<string, unknown>,
+  ): Promise<{ dispatched: boolean; error?: string }> {
+    if (ref.howToRun === 'built-in' && executionWhatToRunValue(ref) === CHAT_HANDLER_FLOW_QUEUE_TARGET) {
       const flowRunner = chatFlowRunner;
-      if (!flowRunner) return;
-      flowRunner.run(handlerFlow, args, {
+      const handlerFlow = args.__chatHandlerFlow;
+      const cleanArgs = { ...args };
+      delete cleanArgs.__chatHandlerFlow;
+      if (!flowRunner) {
+        return { dispatched: false, error: 'chat-handler-flow configured but no chatFlowRunner was provided' };
+      }
+      return flowRunner.run(handlerFlow, cleanArgs, {
         boardId,
-        cardId: String(cardId),
+        cardId: String(cleanArgs.cardId || ''),
         label: ctx.label,
         logger,
         serverUrl,
         executionExtra,
-      }).then(
-        (result) => {
-          if (result.dispatched) {
-            logger.info(`[chat-handler-flow] invoked for card "${cardId}" (boardId: "${boardId}")`);
-          } else {
-            try { chatStorage.setProcessing(cardId, false); } catch {}
-            logger.warn(`[chat-handler-flow] dispatch failed for card "${cardId}": ${result.error || 'unknown'}`);
-          }
-        },
-        (err) => {
-          try { chatStorage.setProcessing(cardId, false); } catch {}
-          logger.warn(`[chat-handler-flow] invoke failed for card "${cardId}": ${err?.message || String(err)}`);
-        },
-      );
-      return;
+      });
     }
 
-    const executionRef = handlerRef;
-    if (!executionRef) return;
-    invocationAdapter.invoke(executionRef, args).then(
-      (result) => {
-        if (result.dispatched) {
-          logger.info(`[chat-handler] invoked for card "${cardId}" (boardId: "${boardId}")`);
+    return invocationAdapter.invoke(ref, args);
+  }
+
+  async function handleChatAgentRequestInternal(request: BoardWorkerRequest, skipInit = false): Promise<void> {
+    if (!skipInit) await initBoardAndSetup();
+    const cardId = typeof request.args?.cardId === 'string' ? request.args.cardId : '';
+    const ctx = cardId ? cardContextForCard(cardId) : primaryContext();
+    if (!ctx) {
+      throw new Error(cardId
+        ? `Board context is unavailable for chat-agent request: ${cardId}`
+        : 'Board context is unavailable for chat-agent request');
+    }
+    const result = await dispatchQueuedChatHandler(ctx, request.ref, request.args);
+    if (result.dispatched) return;
+    if (cardId) {
+      try { chatStorage.setProcessing(cardId, false); } catch {}
+    }
+    throw new Error(result.error || `chat-agent dispatch failed for card "${cardId || 'unknown'}"`);
+  }
+
+  async function processQueuedChatHandlers(ctx: BoardContext): Promise<CommandResult> {
+    const leased = isAsyncBoardPlatformAdapter(ctx.boardAdapter)
+      ? await ctx.boardAdapter.chatAgentStore().leaseRequests({ max: 32, visibilityMs: 5 * 60_000 })
+      : ctx.boardAdapter.chatAgentStore().leaseRequests({ max: 32, visibilityMs: 5 * 60_000 });
+
+    for (const message of leased) {
+      const cardId = typeof message.request.args?.cardId === 'string' ? message.request.args.cardId : '';
+      try {
+        await handleChatAgentRequestInternal(message.request, true);
+        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
+          await ctx.boardAdapter.chatAgentStore().ackRequest(message.messageId, message.leaseToken);
         } else {
-          try { chatStorage.setProcessing(cardId, false); } catch {}
-          logger.warn(`[chat-handler] dispatch failed for card "${cardId}": ${result.error || 'unknown'}`);
+          ctx.boardAdapter.chatAgentStore().ackRequest(message.messageId, message.leaseToken);
         }
-      },
-      (err) => {
-        try { chatStorage.setProcessing(cardId, false); } catch {}
-        logger.warn(`[chat-handler] invoke failed for card "${cardId}": ${err?.message || String(err)}`);
-      },
-    );
+        logger.info(`[chat-handler] dispatched queued request for card "${cardId}" (boardId: "${boardId}")`);
+      } catch (err) {
+        if (cardId) {
+          try { chatStorage.setProcessing(cardId, false); } catch {}
+        }
+        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
+          await ctx.boardAdapter.chatAgentStore().nackRequest(message.messageId, message.leaseToken, {
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        } else {
+          ctx.boardAdapter.chatAgentStore().nackRequest(message.messageId, message.leaseToken, {
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+        logger.warn(`[chat-handler] invoke failed for card "${cardId}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return { status: 'success' };
   }
 
   // ── Card actions ─────────────────────────────────────────────────────────
 
-  function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): void {
+  async function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): Promise<void> {
     const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
     let chatHandlerResult: { cardId: string; lastEntryId: string; processingAlreadySet: boolean } | undefined;
 
-    persistCard(cardId, (card) => {
+    await persistCard(cardId, (card) => {
       const now = new Date().toISOString();
       const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
       card.card_data = cardData;
@@ -1436,7 +1720,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
 
     if (chatHandlerResult) {
-      invokeChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId, chatHandlerResult.processingAlreadySet, (chatHandlerResult as { turnId?: string }).turnId ?? '');
+      void queueChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId, chatHandlerResult.processingAlreadySet, (chatHandlerResult as { turnId?: string }).turnId ?? '');
     }
   }
 
@@ -1453,11 +1737,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     res.end(body);
   }
 
-  function resolveCardFileDownloadPayload(cardId: string, idx: number, expectedStoredName: string | null): {
+  async function resolveCardFileDownloadPayload(cardId: string, idx: number, expectedStoredName: string | null): Promise<{
     fileRecord: Record<string, unknown>;
     bytes: Uint8Array;
-  } {
-    const card = readCardFromStore(cardId);
+  }> {
+    const card = await readCardFromStore(cardId);
     if (!card) throw Object.assign(new Error('Card not found'), { statusCode: 404 });
 
     const resolved = cardFileMetadataStoreInstance().resolve(card.card_data, idx, expectedStoredName);
@@ -1471,14 +1755,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const stores = artifactsStores(cardId);
     const storedName = String(fileRecord.stored_name || '');
     const fileKey = `${sid}/${storedName}`;
-    const bytes = stores.files ? stores.files.getBytes(fileKey) : null;
+    const bytes = stores.files ? await stores.files.getBytes(fileKey) : null;
     if (!bytes) throw Object.assign(new Error('File not found'), { statusCode: 404 });
 
     return { fileRecord, bytes };
   }
 
-  function sendCardFileDownloadResponse(res: RuntimeResponse, cardId: string, idx: number, expectedStoredName: string | null): void {
-    const { fileRecord, bytes } = resolveCardFileDownloadPayload(cardId, idx, expectedStoredName);
+  async function sendCardFileDownloadResponse(res: RuntimeResponse, cardId: string, idx: number, expectedStoredName: string | null): Promise<void> {
+    const { fileRecord, bytes } = await resolveCardFileDownloadPayload(cardId, idx, expectedStoredName);
 
     const filename = String(fileRecord.name || fileRecord.stored_name || 'download.bin');
     const mimeType = String(fileRecord.mime_type || 'application/octet-stream');
@@ -1768,7 +2052,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     for (const cardId of chatCardIds) broadcastCardChatsToSubscribedSseClients(cardId, true);
   }
 
-  function handleSse(req: RuntimeRequest, res: RuntimeResponse, clientId: string): void {
+  async function handleSse(req: RuntimeRequest, res: RuntimeResponse, clientId: string): Promise<void> {
     const existing = sseClients.get(clientId);
     const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
     if (existing) {
@@ -1785,7 +2069,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
     // On reconnect, Last-Event-ID tells us the client's last received id.
     // We always send the current full snapshot (replay = latest state).
-    const payload = buildPublishedRuntimePayload();
+    const payload = await buildPublishedRuntimePayload();
     const frame = buildSseFrame(payload);
     res.write(frame);
     try { onSseClientConnected?.(clientId, (customPayload: unknown) => { writeSseFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
@@ -1809,7 +2093,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     try {
       if (method === 'GET' && p === `${apiBasePath}/init-board`) {
         await initBoardAndSetup();
-        json(res, 200, buildPublishedRuntimePayload());
+        json(res, 200, await buildPublishedRuntimePayload());
         return true;
       }
 
@@ -1823,7 +2107,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           json(res, 400, { error: 'clientId query param is required for SSE' });
           return true;
         }
-        handleSse(req, res, clientId);
+        await handleSse(req, res, clientId);
         for (let i = 0; i < boardContexts.length; i++) {
           await publishPersistedStateSnapshot(boardContexts[i]);
           await upsertCardsFromSource(boardContexts[i], i);
@@ -1832,7 +2116,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       }
 
       if (method === 'GET' && p === `${apiBasePath}/board-status`) {
-        json(res, 200, buildPublishedRuntimePayload());
+        json(res, 200, await buildPublishedRuntimePayload());
         return true;
       }
 
@@ -1961,9 +2245,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             return true;
           }
         }
-        const descriptor = createMcpFacade().inspectFileContents({ cardId, fileIdx }) as { stored_name?: unknown; mime_type?: unknown; name?: unknown };
+        const descriptor = await createMcpFacade().inspectFileContents({ cardId, fileIdx }) as { stored_name?: unknown; mime_type?: unknown; name?: unknown };
         const expectedStoredName = typeof descriptor?.stored_name === 'string' ? descriptor.stored_name : null;
-        const { fileRecord, bytes } = resolveCardFileDownloadPayload(cardId, fileIdx, expectedStoredName);
+        const { fileRecord, bytes } = await resolveCardFileDownloadPayload(cardId, fileIdx, expectedStoredName);
         const filename = String(fileRecord.name || fileRecord.stored_name || 'download.bin');
         const mimeType = String(fileRecord.mime_type || 'application/octet-stream');
         const respMode = (url.searchParams.get('resp') || '').trim().toLowerCase();
@@ -2009,7 +2293,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (method === 'GET' && cardMatch) {
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardMatch[1]);
-        const card = readCardFromStore(cardId);
+        const card = await readCardFromStore(cardId);
         if (!card) { json(res, 404, { error: `card not found: ${cardId}` }); return true; }
         json(res, 200, card);
         return true;
@@ -2019,7 +2303,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardMatch[1]);
         const body = await readJsonBody(req);
-        patchCard(cardId, body);
+        await patchCard(cardId, body);
         // No immediate broadcast — patchCard triggers an async drain that will
         // produce card_refreshed + other notifications via the transport subscription.
         // upsertCard restart:true is skipped when the card content is unchanged.
@@ -2044,7 +2328,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const requestReceivedAt = new Date(requestReceivedAtMs).toISOString();
         const body = await readJsonBody(req);
         const actionType = body?.actionType as string;
-        if (actionType === 'chat-send' && !resolveChatHandlerTarget(cardId)) {
+        if (actionType === 'chat-send' && !await resolveChatHandlerTarget(cardId)) {
           const responseSentAtMs = Date.now();
           json(res, 409, {
             error: `chat handler is not configured for card: ${cardId}`,
@@ -2078,7 +2362,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             return true;
           }
         }
-        applyCardAction(cardId, actionType, body?.payload as Record<string, unknown> | null);
+        await applyCardAction(cardId, actionType, body?.payload as Record<string, unknown> | null);
         const responseSentAtMs = Date.now();
         json(res, 200, {
           ok: true,
@@ -2214,7 +2498,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const rawName = Array.isArray(encodedName) ? encodedName[0] : encodedName;
         const requestedName = rawName ? decodeURIComponent(String(rawName)) : 'upload.bin';
         const body = await readRawBody(req);
-        json(res, 200, uploadCardFile(cardId, requestedName, contentType, body, { inChat, turnId }));
+        json(res, 200, await uploadCardFile(cardId, requestedName, contentType, body, { inChat, turnId }));
         return true;
       }
 
@@ -2223,7 +2507,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const cardId = decodeURIComponent(cardFileDownloadMatch[1]);
         const idx = parseInt(cardFileDownloadMatch[2], 10);
         const expectedStoredName = url.searchParams.get('sn');
-        sendCardFileDownloadResponse(res, cardId, idx, expectedStoredName);
+        await sendCardFileDownloadResponse(res, cardId, idx, expectedStoredName);
         return true;
       }
 
@@ -2238,8 +2522,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   return {
     get apiBasePath() { return apiBasePath; },
     get corsHeaders() { return corsHeaders; },
+    get queueLaneTuning() { return queueLaneTuning; },
     handleRuntimeApi,
     buildPublishedRuntimePayload,
+    processAccumulatedEvents: processAccumulatedEventsInternal,
+    processAccumulatedLane: processAccumulatedLaneInternal,
+    handleChatAgentRequest: handleChatAgentRequestInternal,
     clearChatRecords,
     reportSourceFetched(token: string, ref: string) {
       return reportSourceFetchedInternal(token, { ref });
@@ -2247,7 +2535,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     reportSourceFetchFailure(token: string, reason: string) {
       return reportSourceFetchFailureInternal(token, { reason });
     },
-    get cardStore() { return boardContexts[0]?.cardStore ?? { set() { return { status: 'fail', error: 'no board context' }; } }; },
+    get cardStore() {
+      return boardContexts[0]?.publicCardStore ?? {
+        get() { return Promise.resolve({ status: 'fail', error: 'no board context' }); },
+        set() { return Promise.resolve({ status: 'fail', error: 'no board context' }); },
+      };
+    },
   };
 }
 

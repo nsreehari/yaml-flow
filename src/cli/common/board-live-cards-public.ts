@@ -31,7 +31,7 @@
  *   const status = board.status();
  */
 
-import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory } from './storage-interface.js';
+import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory, QueueStorage } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
 import type { BoardCallbackTransport } from './board-callback-transport.js';
 import { assertBoardCallbackTransport } from './board-callback-transport.js';
@@ -186,6 +186,19 @@ export interface BoardPlatformAdapter {
    * Implementations may back this with QueueStorage, Service Bus, Pub/Sub, etc.
    */
   boardWorkerStore(): BoardWorkerStore;
+
+  /**
+   * Semantic queue for chat-agent dispatch requests.
+   * Kept separate from task execution so chat work can be drained independently.
+   */
+  chatAgentStore(): BoardWorkerStore;
+
+  /**
+   * Queue of board wake-up requests for processAccumulatedEvents scheduling.
+   * Implementations should use enqueueIfAbsent when they want single-pending
+   * drain semantics.
+   */
+  processAccumulatedStore(): QueueStorage;
 
   /**
    * AtomicRelayLock — non-blocking try-acquire with relay-on-busy semantics.
@@ -377,6 +390,7 @@ export function createBoardLiveCardsPublic(
   adapter: BoardPlatformAdapter,
 ): BoardLiveCardsPublic {
   assertBoardCallbackTransport(adapter.callbackTransport, 'createBoardLiveCardsPublic');
+  const callbackTransport = adapter.callbackTransport;
   const warn = adapter.onWarn ?? (() => { /* no-op */ });
   const boardPath = serializeRef(baseRef);
 
@@ -525,7 +539,11 @@ export function createBoardLiveCardsPublic(
         // Read staged content into overlay so readSourceData sees it immediately
         const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
         const blob = adapter.blobStorage('sources');
-        const content = blob.read(stagedKey);
+        let content = blob.read(stagedKey);
+        if (content == null) {
+          const stagedRef = blob.keyRef?.(stagedKey);
+          if (stagedRef) content = adapter.resolveBlob(stagedRef);
+        }
         if (content == null) return false;
         const key = `${cardId}/${outputFile}`;
         const trimmed = content.trim();
@@ -686,7 +704,7 @@ export function createBoardLiveCardsPublic(
         });
         adapter.dispatchExecution(executorRef, {
           source_def: src, base_ref: serializeRef(baseRef),
-          callback: adapter.callbackTransport.createCallback(sourceToken),
+          callback: callbackTransport.createCallback(sourceToken),
           ...(directOutput ? { output: directOutput } : {}),
         }).catch((e: unknown) => taskFailedFn(cardId, e instanceof Error ? e.message : String(e)));
       }
@@ -694,6 +712,28 @@ export function createBoardLiveCardsPublic(
   }
 
   // ── Public methods ──────────────────────────────────────────────────────────
+
+  function requestQueuedProcessAccumulated(): void {
+    const queue = adapter.processAccumulatedStore();
+    if (queue.enqueueIfAbsent) {
+      queue.enqueueIfAbsent({ boardRef: serializeRef(baseRef) }, `process-accumulated:${serializeRef(baseRef)}`);
+    } else {
+      queue.enqueue({ boardRef: serializeRef(baseRef) });
+    }
+    adapter.requestProcessAccumulated?.();
+  }
+
+  function clearQueuedProcessAccumulatedWakeups(): void {
+    const queue = adapter.processAccumulatedStore();
+    while (true) {
+      const leased = queue.lease<{ boardRef?: string }>({ max: 64, visibilityMs: 1_000 });
+      if (leased.length <= 0) return;
+      for (const message of leased) {
+        queue.ack(message.id, message.leaseToken);
+      }
+      if (leased.length < 64) return;
+    }
+  }
 
   // Internal drain — called directly from within the factory (no CommandInput needed).
   async function drain(): Promise<CommandResult> {
@@ -709,9 +749,7 @@ export function createBoardLiveCardsPublic(
         if (events.length <= 0) {
           return;
         }
-        void drain();
-        // Also fire the platform continuation (e.g. detached process for source fetches)
-        adapter.requestProcessAccumulated?.();
+        requestQueuedProcessAccumulated();
       };
       const ran = await withRelayLock(adapter.lock, drainCycle, continuation);
       return ok({ ran: ran !== false });
@@ -719,8 +757,7 @@ export function createBoardLiveCardsPublic(
   }
 
   function drainFireAndForget(): void {
-    void drain();
-    adapter.requestProcessAccumulated?.();
+    requestQueuedProcessAccumulated();
   }
 
   function init(input: CommandInput): CommandResult {
@@ -816,6 +853,7 @@ export function createBoardLiveCardsPublic(
   }
 
   async function processAccumulatedEvents(_input: CommandInput): Promise<CommandResult> {
+    clearQueuedProcessAccumulatedWakeups();
     return drain();
   }
 

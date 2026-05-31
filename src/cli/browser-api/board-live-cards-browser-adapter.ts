@@ -205,90 +205,112 @@ export function createBrowserBoardPlatformAdapter(
   const memoryBlobs = new Map<string, string>();
 
   const lock = createInMemoryRelayLock();
-  const queueItems = new Map<string, {
-    id: string;
-    body: unknown;
-    enqueuedAt: string;
-    attempt: number;
-    leaseToken?: string;
-    leaseExpiresAt?: string;
-    reason?: string;
-  }>();
-  const deadQueueItems = new Map<string, {
-    id: string;
-    body: unknown;
-    enqueuedAt: string;
-    attempt: number;
-    reason?: string;
-  }>();
+  function createInMemoryQueueStorage(): QueueStorage {
+    const queueItems = new Map<string, {
+      id: string;
+      body: unknown;
+      enqueuedAt: string;
+      attempt: number;
+      leaseToken?: string;
+      leaseExpiresAt?: string;
+      reason?: string;
+      dedupKey?: string;
+    }>();
+    const deadQueueItems = new Map<string, {
+      id: string;
+      body: unknown;
+      enqueuedAt: string;
+      attempt: number;
+      reason?: string;
+    }>();
 
-  const queueStorage: QueueStorage = {
-    enqueue(body) {
-      const item = {
-        id: globalThis.crypto.randomUUID(),
-        body,
-        enqueuedAt: new Date().toISOString(),
-        attempt: 0,
-      };
-      queueItems.set(item.id, item);
-      return item;
-    },
-    lease<T>(opts?: { max?: number; visibilityMs?: number }) {
-      const max = Math.max(1, Math.floor(opts?.max ?? 1));
-      const visibilityMs = Math.max(1, Math.floor(opts?.visibilityMs ?? 60_000));
-      const now = Date.now();
-      for (const item of queueItems.values()) {
-        if (item.leaseExpiresAt && Date.parse(item.leaseExpiresAt) <= now) {
-          delete item.leaseToken;
-          delete item.leaseExpiresAt;
+    return {
+      enqueue(body) {
+        const item = {
+          id: globalThis.crypto.randomUUID(),
+          body,
+          enqueuedAt: new Date().toISOString(),
+          attempt: 0,
+        };
+        queueItems.set(item.id, item);
+        return item;
+      },
+      enqueueIfAbsent(body, dedupKey) {
+        for (const existing of queueItems.values()) {
+          if (existing.dedupKey === dedupKey) return null;
         }
-      }
-      const leased: Array<{ id: string; body: T; enqueuedAt: string; attempt: number; leaseToken: string; leaseExpiresAt: string }> = [];
-      for (const item of queueItems.values()) {
-        if (leased.length >= max) break;
-        if (item.leaseToken) continue;
-        item.attempt += 1;
-        item.leaseToken = globalThis.crypto.randomUUID();
-        item.leaseExpiresAt = new Date(Date.now() + visibilityMs).toISOString();
-        leased.push({
-          id: item.id,
-          body: item.body as T,
-          enqueuedAt: item.enqueuedAt,
-          attempt: item.attempt,
-          leaseToken: item.leaseToken,
-          leaseExpiresAt: item.leaseExpiresAt,
-        });
-      }
-      return leased;
-    },
-    ack(messageId, leaseToken) {
-      const item = queueItems.get(messageId);
-      if (!item || item.leaseToken !== leaseToken) return false;
-      queueItems.delete(messageId);
-      return true;
-    },
-    nack(messageId, leaseToken, opts) {
-      const item = queueItems.get(messageId);
-      if (!item || item.leaseToken !== leaseToken) return false;
-      delete item.leaseToken;
-      delete item.leaseExpiresAt;
-      if (opts?.dead) {
+        const item = {
+          id: globalThis.crypto.randomUUID(),
+          body,
+          enqueuedAt: new Date().toISOString(),
+          attempt: 0,
+          dedupKey,
+        };
+        queueItems.set(item.id, item);
+        return { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+      },
+      lease<T>(opts?: { max?: number; visibilityMs?: number }) {
+        const max = Math.max(1, Math.floor(opts?.max ?? 1));
+        const visibilityMs = Math.max(1, Math.floor(opts?.visibilityMs ?? 60_000));
+        const now = Date.now();
+        for (const item of queueItems.values()) {
+          if (item.leaseExpiresAt && Date.parse(item.leaseExpiresAt) <= now) {
+            delete item.leaseToken;
+            delete item.leaseExpiresAt;
+          }
+        }
+        const leased: Array<{ id: string; body: T; enqueuedAt: string; attempt: number; leaseToken: string; leaseExpiresAt: string }> = [];
+        for (const item of queueItems.values()) {
+          if (leased.length >= max) break;
+          if (item.leaseToken) continue;
+          item.attempt += 1;
+          item.leaseToken = globalThis.crypto.randomUUID();
+          item.leaseExpiresAt = new Date(Date.now() + visibilityMs).toISOString();
+          leased.push({
+            id: item.id,
+            body: item.body as T,
+            enqueuedAt: item.enqueuedAt,
+            attempt: item.attempt,
+            leaseToken: item.leaseToken,
+            leaseExpiresAt: item.leaseExpiresAt,
+          });
+        }
+        return leased;
+      },
+      ack(messageId, leaseToken) {
+        const item = queueItems.get(messageId);
+        if (!item || item.leaseToken !== leaseToken) return false;
         queueItems.delete(messageId);
-        deadQueueItems.set(messageId, { ...item, reason: opts.reason });
-      }
-      return true;
-    },
-    peekActive<T>() {
-      return Array.from(queueItems.values())
-        .filter((item) => !item.leaseToken)
-        .map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
-    },
-    peekDeadLetter<T>() {
-      return Array.from(deadQueueItems.values())
-        .map((item) => ({ ...item, body: item.body as T }));
-    },
-  };
-  const boardWorkerStore = createBoardWorkerStore(queueStorage);
+        return true;
+      },
+      nack(messageId, leaseToken, opts) {
+        const item = queueItems.get(messageId);
+        if (!item || item.leaseToken !== leaseToken) return false;
+        delete item.leaseToken;
+        delete item.leaseExpiresAt;
+        if (opts?.dead) {
+          queueItems.delete(messageId);
+          deadQueueItems.set(messageId, { ...item, reason: opts.reason });
+        }
+        return true;
+      },
+      peekActive<T>() {
+        return Array.from(queueItems.values())
+          .filter((item) => !item.leaseToken)
+          .map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
+      },
+      peekDeadLetter<T>() {
+        return Array.from(deadQueueItems.values())
+          .map((item) => ({ ...item, body: item.body as T }));
+      },
+    };
+  }
+
+  const taskQueueStorage = createInMemoryQueueStorage();
+  const chatQueueStorage = createInMemoryQueueStorage();
+  const processAccumulatedQueueStorage = createInMemoryQueueStorage();
+  const boardWorkerStore = createBoardWorkerStore(taskQueueStorage);
+  const chatAgentStore = createBoardWorkerStore(chatQueueStorage);
 
   return {
     kvStorage: (ns: string) =>
@@ -307,6 +329,10 @@ export function createBrowserBoardPlatformAdapter(
       createLocalStorageJournalStorageAdapter(`${namespace}:journal`),
 
     boardWorkerStore: () => boardWorkerStore,
+
+    chatAgentStore: () => chatAgentStore,
+
+    processAccumulatedStore: () => processAccumulatedQueueStorage,
 
     lock,
 

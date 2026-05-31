@@ -394,6 +394,7 @@ export function createAsyncBoardLiveCardsPublic(
   adapter: AsyncBoardPlatformAdapter,
 ): AsyncBoardLiveCardsPublic {
   assertBoardCallbackTransport(adapter.callbackTransport, 'createAsyncBoardLiveCardsPublic');
+  const callbackTransport = adapter.callbackTransport;
   const warn = adapter.warn ?? (() => undefined);
   const boardPath = serializeRef(baseRef);
   let drainInFlight: Promise<CommandResult> | null = null;
@@ -505,7 +506,12 @@ export function createAsyncBoardLiveCardsPublic(
       },
       async commitSourceData(cardId: string, outputFile: string, deliveryToken: string): Promise<boolean> {
         const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
-        const content = await adapter.blobStorage('sources').read(stagedKey);
+        const blob = adapter.blobStorage('sources');
+        let content = await blob.read(stagedKey);
+        if (content == null) {
+          const stagedRef = await blob.keyRef?.(stagedKey);
+          if (stagedRef) content = await adapter.resolveBlob(stagedRef);
+        }
         if (content == null) return false;
         const key = `${cardId}/${outputFile}`;
         const trimmed = content.trim();
@@ -629,7 +635,7 @@ export function createAsyncBoardLiveCardsPublic(
         const result = await adapter.dispatchExecution(executorRef, {
           source_def: src,
           base_ref: serializeRef(baseRef),
-          callback: adapter.callbackTransport.createCallback(sourceToken),
+          callback: callbackTransport.createCallback(sourceToken),
           ...(directOutput ? { output: directOutput } : {}),
         });
         if (!result.dispatched) {
@@ -645,8 +651,7 @@ export function createAsyncBoardLiveCardsPublic(
         const envelope = await loadEnvelope();
         const { events } = await journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
         if (events.length > 0) {
-          void drain();
-          await adapter.requestProcessAccumulated?.();
+          await requestQueuedProcessAccumulated();
         }
       };
       const ran = await withAsyncRelayLock(adapter.lock, drainCycle, continuation);
@@ -664,9 +669,30 @@ export function createAsyncBoardLiveCardsPublic(
     return drainInFlight;
   }
 
+  async function requestQueuedProcessAccumulated(): Promise<void> {
+    const queue = adapter.processAccumulatedStore();
+    if (queue.enqueueIfAbsent) {
+      await queue.enqueueIfAbsent({ boardRef: serializeRef(baseRef) }, `process-accumulated:${serializeRef(baseRef)}`);
+    } else {
+      await queue.enqueue({ boardRef: serializeRef(baseRef) });
+    }
+    await adapter.requestProcessAccumulated?.();
+  }
+
+  async function clearQueuedProcessAccumulatedWakeups(): Promise<void> {
+    const queue = adapter.processAccumulatedStore();
+    while (true) {
+      const leased = await queue.lease<{ boardRef?: string }>({ max: 64, visibilityMs: 1_000 });
+      if (leased.length <= 0) return;
+      for (const message of leased) {
+        await queue.ack(message.id, message.leaseToken);
+      }
+      if (leased.length < 64) return;
+    }
+  }
+
   function drainFireAndForget(): void {
-    void drain();
-    void adapter.requestProcessAccumulated?.();
+    void requestQueuedProcessAccumulated();
   }
 
   return {
@@ -944,6 +970,7 @@ export function createAsyncBoardLiveCardsPublic(
     },
 
     async processAccumulatedEvents(_input: CommandInput): Promise<CommandResult> {
+      await clearQueuedProcessAccumulatedWakeups();
       return drain();
     },
 

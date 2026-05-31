@@ -193,10 +193,7 @@ describe('BoardLiveCardsPublic — init and status', () => {
     notifications.length = 0;
 
     expect(board.removeCard({ params: { id: 'my-card' } }).status).toBe('success');
-    for (let i = 0; i < 20; i++) {
-      if (notifications.flat().some((note) => note.kind === 'card_removed' && note.cardId === 'my-card')) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
 
     expect(notifications.flat()).toContainEqual({ kind: 'card_removed', cardId: 'my-card' });
   });
