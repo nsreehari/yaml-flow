@@ -1496,8 +1496,9 @@ try {
     console.log('[T5] ok: manage.admin-upsert-card succeeded');
 
     // 3. Verify the card is now invisible on the regular /mcp surface.
+    // Server throws with statusCode:404 for admin cards, so httpResult.status will be 404 (not 200).
     const t5HiddenRead = await httpMcp('manage.read-card', { card_id: t5AdminCardId });
-    assert(t5HiddenRead?.status === 'fail' || (Array.isArray(expectMcpSuccess(t5HiddenRead, 'silent')) && expectMcpSuccess(t5HiddenRead, 'silent').length === 0) || t5HiddenRead?.error,
+    assert(t5HiddenRead?.status !== 200 || t5HiddenRead?.data?.status === 'fail',
       `T5 expected manage.read-card to be blocked after admin upsert, got: ${JSON.stringify(t5HiddenRead)}`);
     console.log('[T5] ok: manage.read-card blocked for admin-only card');
 
