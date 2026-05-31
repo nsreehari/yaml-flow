@@ -22,7 +22,7 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../cli/common/board-live-cards-public.js';
-import type { CommandResult } from '../cli/common/board-live-cards-public.js';
+import type { CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
 import { createBoardLiveCardsMcp } from '../cli/common/board-live-cards-mcp.js';
 import { parseRef } from '../cli/common/storage-interface.js';
 
@@ -82,11 +82,42 @@ const MAX_STORED_FILE_NAME_LEN = 32;
 // Internal types
 // ============================================================================
 
+/**
+ * Internal Awaitable<T> alias. Wrappers on BoardContext (boardOps, cardStoreOps)
+ * always expose Promise-returning shapes so runtime paths can `await` them
+ * uniformly. The underlying public surface is still sync today; this gives us
+ * the seam to swap in an async hosted board without changing call sites again.
+ */
+type Awaitable<T> = T | Promise<T>;
+
+type BoardStatusObjectInternal = import('../cli/common/board-live-cards-lib.js').BoardStatusObject;
+
+/** Awaitable mirror of the BoardLiveCardsPublic methods the runtime needs. */
+interface BoardOpsAwaitable {
+  init(input: CommandInput): Awaitable<CommandResult>;
+  status(input: CommandInput): Awaitable<CommandResult<BoardStatusObjectInternal>>;
+  getAllOutputsDataObjects(input: CommandInput): Awaitable<CommandResult<Record<string, unknown>>>;
+  getAllOutputsComputedValues(input: CommandInput): Awaitable<CommandResult<Record<string, unknown>>>;
+  upsertCard(input: CommandInput): Awaitable<CommandResult>;
+  removeCard(input: CommandInput): Awaitable<CommandResult>;
+  sourceDataFetched(input: CommandInput): Awaitable<CommandResult>;
+  sourceDataFetchFailure(input: CommandInput): Awaitable<CommandResult>;
+}
+
+/** Awaitable mirror of the CardStorePublic methods the runtime needs. */
+interface CardStoreOpsAwaitable {
+  get(input: CommandInput): Awaitable<CommandResult<{ cards: Array<Record<string, unknown>> }>>;
+}
+
 interface BoardContext {
   label: string;
   board: ReturnType<typeof createBoardLiveCardsPublic>;
   nonCore: ReturnType<typeof createBoardLiveCardsNonCorePublic> | null;
   cardStore: ReturnType<typeof createCardStorePublic>;
+  /** Awaitable wrapper around `board` for runtime-internal call sites. */
+  boardOps: BoardOpsAwaitable;
+  /** Awaitable wrapper around `cardStore` for runtime-internal call sites. */
+  cardStoreOps: CardStoreOpsAwaitable;
   readonly filesArtifacts: ReturnType<typeof createArtifactsStore>;
   boardAdapter: import('./types.js').BoardPlatformAdapter;
   cardStoreRef: string;
@@ -206,11 +237,27 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     // that never use file features).
     let _filesArtifacts: ReturnType<typeof createArtifactsStore> | null = null;
 
+    const boardOps: BoardOpsAwaitable = {
+      async init(input) { return board.init(input); },
+      async status(input) { return board.status(input); },
+      async getAllOutputsDataObjects(input) { return board.getAllOutputsDataObjects(input); },
+      async getAllOutputsComputedValues(input) { return board.getAllOutputsComputedValues(input); },
+      async upsertCard(input) { return board.upsertCard(input); },
+      async removeCard(input) { return board.removeCard(input); },
+      async sourceDataFetched(input) { return board.sourceDataFetched(input); },
+      async sourceDataFetchFailure(input) { return board.sourceDataFetchFailure(input); },
+    };
+    const cardStoreOps: CardStoreOpsAwaitable = {
+      async get(input) { return cardStore.get(input) as CommandResult<{ cards: Array<Record<string, unknown>> }>; },
+    };
+
     return {
       label: cfg.label,
       board,
       nonCore,
       cardStore,
+      boardOps,
+      cardStoreOps,
       get filesArtifacts() { return _filesArtifacts ??= (callerFilesArtifactsStore ?? createArtifactsStore(filesBlob)); },
       boardAdapter: cfg.boardAdapter,
       cardStoreRef: cfg.cardStoreRef,
@@ -300,7 +347,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (ctx.chatHandlerFlow !== undefined) body['chat-handler-flow'] = ctx.chatHandlerFlow;
     if (ctx.inferenceAdapterRef) body['inference-adapter-ref'] = ctx.inferenceAdapterRef;
 
-    const initResult = ctx.board.init({ params, body });
+    const initResult = await ctx.boardOps.init({ params, body });
     if (initResult.status !== 'success') {
       throw Object.assign(
         new Error((initResult as any).error || `init failed for ${ctx.label}`),
@@ -326,25 +373,25 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     ctx.initialized = true;
   }
 
-  function publishPersistedStateSnapshot(ctx: BoardContext): void {
+  async function publishPersistedStateSnapshot(ctx: BoardContext): Promise<void> {
     if (!ctx.boardAdapter.publishBoardChangeNotifications) return;
     const notifications: Array<{ kind: string; [k: string]: unknown }> = [];
     // 1. Status
-    const statusResult = ctx.board.status({});
+    const statusResult = await ctx.boardOps.status({});
     if (statusResult.status === 'success' && statusResult.data != null) {
       if (hasNonEmptyCardCountStatus(statusResult.data)) {
         notifications.push({ kind: 'status', status: statusResult.data });
       }
     }
     // 2. All data objects
-    const dataResult = ctx.board.getAllOutputsDataObjects({});
+    const dataResult = await ctx.boardOps.getAllOutputsDataObjects({});
     if (dataResult.status === 'success' && dataResult.data != null) {
       for (const [token, payload] of Object.entries(dataResult.data as Record<string, unknown>)) {
         if (token) notifications.push({ kind: 'data_object', key: token, payload });
       }
     }
     // 3. All computed values
-    const cvResult = ctx.board.getAllOutputsComputedValues({});
+    const cvResult = await ctx.boardOps.getAllOutputsComputedValues({});
     if (cvResult.status === 'success' && cvResult.data != null) {
       for (const [cardId, values] of Object.entries(cvResult.data as Record<string, unknown>)) {
         if (cardId) notifications.push({ kind: 'computed_values', cardId, values });
@@ -355,17 +402,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
   }
 
-  function upsertCardsFromSource(ctx: BoardContext, ctxIndex: number): void {
+  async function upsertCardsFromSource(ctx: BoardContext, ctxIndex: number): Promise<void> {
     if (!ctx) return;
     if (ctx.cardsBootstrapped) return;
-    const result = ctx.cardStore.get({});
+    const result = await ctx.cardStoreOps.get({});
     const cards: Array<Record<string, unknown>> = (result.status === 'success' && Array.isArray((result as any).data?.cards))
       ? (result as any).data.cards
       : [];
     for (const card of cards) {
       if (typeof card.id !== 'string') continue;
       cardOwnerIndex.set(card.id as string, ctxIndex);
-      ctx.board.upsertCard({ params: { cardId: card.id as string } });
+      await ctx.boardOps.upsertCard({ params: { cardId: card.id as string } });
     }
     ctx.cardsBootstrapped = true;
   }
@@ -381,8 +428,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     for (let i = 0; i < boardContexts.length; i++) {
       // Publish persisted state snapshot first — gives clients the last-known
       // state immediately via SSE before any async drain completes.
-      publishPersistedStateSnapshot(boardContexts[i]);
-      upsertCardsFromSource(boardContexts[i], i);
+      await publishPersistedStateSnapshot(boardContexts[i]);
+      await upsertCardsFromSource(boardContexts[i], i);
     }
   }
 
@@ -1046,12 +1093,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     mutateCard(cardId, updateFn, { syncBoard: false });
   }
 
-  function retriggerCard(cardId: string): void {
+  async function retriggerCard(cardId: string): Promise<void> {
     const ctx = cardContextForCard(cardId);
     if (!ctx) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
     const card = readCardFromStore(cardId);
     if (!card) throw Object.assign(new Error(`Card not found: ${cardId}`), { statusCode: 404 });
-    const upsertResult = ctx.board.upsertCard({ params: { cardId, restart: true } });
+    const upsertResult = await ctx.boardOps.upsertCard({ params: { cardId, restart: true } });
     if (upsertResult.status !== 'success') {
       throw Object.assign(new Error((upsertResult as any).error || `Failed to retrigger card: ${cardId}`), { statusCode: 500 });
     }
@@ -1485,35 +1532,35 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return result;
   }
 
-  function reportSourceFetchedInternal(token: string, payload: Record<string, unknown>): CommandResult {
+  async function reportSourceFetchedInternal(token: string, payload: Record<string, unknown>): Promise<CommandResult> {
     const ref = typeof payload.ref === 'string' ? payload.ref.trim() : '';
     if (!ref) return { status: 'fail', error: 'board-worker success callback requires body.ref' };
     const ctx = boardContexts[0];
     if (!ctx) return { status: 'fail', error: 'no board context' };
-    return ctx.board.sourceDataFetched({ params: { token, ref } });
+    return ctx.boardOps.sourceDataFetched({ params: { token, ref } });
   }
 
-  function reportSourceFetchFailureInternal(token: string, payload: Record<string, unknown>): CommandResult {
+  async function reportSourceFetchFailureInternal(token: string, payload: Record<string, unknown>): Promise<CommandResult> {
     const reason = typeof payload.reason === 'string' && payload.reason.trim()
       ? payload.reason
       : 'unknown';
     const ctx = boardContexts[0];
     if (!ctx) return { status: 'fail', error: 'no board context' };
-    return ctx.board.sourceDataFetchFailure({ params: { token, reason } });
+    return ctx.boardOps.sourceDataFetchFailure({ params: { token, reason } });
   }
 
-  function applyBoardWorkerCallback(
+  async function applyBoardWorkerCallback(
     token: string,
     outcome: 'success' | 'failure',
     payload: Record<string, unknown>,
-  ): { statusCode: number; body: unknown } {
+  ): Promise<{ statusCode: number; body: unknown }> {
     const trimmedToken = String(token || '').trim();
     if (!trimmedToken) {
       return { statusCode: 400, body: { error: 'callback token is required' } };
     }
     const result = outcome === 'success'
-      ? reportSourceFetchedInternal(trimmedToken, payload)
-      : reportSourceFetchFailureInternal(trimmedToken, payload);
+      ? await reportSourceFetchedInternal(trimmedToken, payload)
+      : await reportSourceFetchFailureInternal(trimmedToken, payload);
     if (result.status === 'success') return { statusCode: 200, body: result };
     if (result.status === 'fail') return { statusCode: 400, body: { error: result.error } };
     return { statusCode: 500, body: { error: result.error } };
@@ -1778,8 +1825,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         }
         handleSse(req, res, clientId);
         for (let i = 0; i < boardContexts.length; i++) {
-          publishPersistedStateSnapshot(boardContexts[i]);
-          upsertCardsFromSource(boardContexts[i], i);
+          await publishPersistedStateSnapshot(boardContexts[i]);
+          await upsertCardsFromSource(boardContexts[i], i);
         }
         return true;
       }
@@ -1795,7 +1842,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const token = decodeURIComponent(boardWorkerCallbackMatch[1]);
         const outcome = boardWorkerCallbackMatch[2] as 'success' | 'failure';
         const body = await readJsonBody(req);
-        const callbackResult = applyBoardWorkerCallback(token, outcome, body);
+        const callbackResult = await applyBoardWorkerCallback(token, outcome, body);
         json(res, callbackResult.statusCode, callbackResult.body);
         return true;
       }
@@ -1984,7 +2031,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (method === 'POST' && cardRetriggerMatch) {
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardRetriggerMatch[1]);
-        retriggerCard(cardId);
+        await retriggerCard(cardId);
         json(res, 200, { ok: true });
         return true;
       }

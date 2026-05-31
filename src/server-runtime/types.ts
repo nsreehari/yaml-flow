@@ -192,9 +192,9 @@ export interface SingleBoardRuntime {
   buildPublishedRuntimePayload(): unknown;
   clearChatRecords(cardId: string): void;
   /** Report that a source fetch completed. Token is the source callback token; ref is the blob ref (b64:<base64url(json)>). */
-  reportSourceFetched(token: string, ref: string): CommandResult;
+  reportSourceFetched(token: string, ref: string): CommandResult | Promise<CommandResult>;
   /** Report that a source fetch failed. Token is the source callback token. */
-  reportSourceFetchFailure(token: string, reason: string): CommandResult;
+  reportSourceFetchFailure(token: string, reason: string): CommandResult | Promise<CommandResult>;
   /** Exposed card store — host calls cardStore.set({body: cards}) to seed definitions. */
   readonly cardStore: {
     get(input: { params?: { id?: string } }): { status: string; data?: { cards?: Array<Record<string, unknown>> }; error?: string };
