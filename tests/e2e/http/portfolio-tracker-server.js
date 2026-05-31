@@ -28,10 +28,12 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { createSingleBoardServerRuntime } from 'yaml-flow/board-live-cards-server-runtime';
+import { createHostedBoardQueueLaneRegistry } from 'yaml-flow/board-live-cards-server-runtime';
 import {
   createFsBoardPlatformAdapter,
   parseRef,
   serializeRef,
+  startQueueLaneRunners,
 } from 'yaml-flow/board-live-cards-node';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -249,6 +251,13 @@ const runtime = createSingleBoardServerRuntime({
   serverUrl: `http://127.0.0.1:${PORT}`,
 });
 
+const stopQueueLanes = startQueueLaneRunners(createHostedBoardQueueLaneRegistry({
+  boardId: 'portfolio-tracker',
+  runtime,
+  boardAdapter,
+  logger: { info: console.log, warn: console.warn, error: console.error },
+}));
+
 // ── Card store seeding ─────────────────────────────────────────────────────────
 const existing = runtime.cardStore.get({});
 const isEmpty = existing.status !== 'success' || !existing.data?.cards?.length;
@@ -296,4 +305,8 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`  GET  /api/board/board-status`);
   console.log(`  PATCH /api/board/cards/:id`);
   console.log(`  POST  /api/board/cards/:id/actions`);
+});
+
+server.on('close', () => {
+  stopQueueLanes();
 });
