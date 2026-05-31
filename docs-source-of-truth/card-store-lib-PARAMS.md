@@ -1,6 +1,53 @@
 # card-store — Function Signature Reference
 
-> There is no `card-store-public` layer. The CLI (`card-store-cli.ts`) calls `createCardStore` and `createFsCardStorageAdapter` directly.
+There are two layers:
+
+1. **`CardStorePublic`** (`card-store-lib-public.ts`) — `CommandInput` / `CommandResult` envelope wrapper, used by the CLI and any other transport. Most callers should use this.
+2. **`CardAdminStore` / `CardStore`** (`board-live-cards-lib.ts`) — lower-level direct-call interface, returned by `createCardStore(adapter)`. `CardStorePublic` is built on top of it.
+
+The CLI (`card-store-cli.ts`) wires them together:
+
+```ts
+const storePublic = createCardStorePublic(
+  createCardStore(createFsCardStorageAdapter(boardDir), onWarn),
+);
+```
+
+---
+
+## `CardStorePublic` — public envelope API
+
+All methods share the same `CommandInput` / `CommandResult` envelope as `board-live-cards-public`.
+
+```ts
+interface CardStorePublic {
+  /** Read one card (params.id) or all cards. */
+  get(input: CommandInput): CommandResult<{ cards: LiveCard[] }>
+    params: { id? }
+    \u2192 data: { cards: LiveCard[] }       // [] when no cards / id not found returns fail
+
+  /** Write one or many cards. */
+  set(input: CommandInput): CommandResult<{ count: number }>
+    body: LiveCard | LiveCard[]          // each must have a string `id`
+
+  /** Delete by id. */
+  del(input: CommandInput): CommandResult<{ count: number }>
+    params: { id? }                      // single id alternative
+    body:   { ids?: string[] }           // primary form; combines with params.id
+
+  /** Patch one field by dot-path assignment. */
+  patch(input: CommandInput): CommandResult<{ count: number }>
+    params: { id, path }                 // path e.g. "card_data.form.name"
+    body:   { value: unknown } | unknown // body.value if present, else body itself
+
+  /** Append file metadata to card_data.files. */
+  appendFiles(input: CommandInput): CommandResult<{ files_added: Array<{ idx: number; entry: unknown }> }>
+    params: { id }
+    body:   FileMeta | FileMeta[] | { files: FileMeta[] }
+}
+
+function createCardStorePublic(store: CardAdminStore): CardStorePublic
+```
 
 ---
 
@@ -42,6 +89,7 @@ Returned by `createCardStore(...)`.
 ```ts
 interface CardAdminStore extends CardStore {
   writeCard(id: string, card: LiveCard, cardKey?: string): void;
+  patchCard(id: string, jsonPath: string, value: unknown): void;
   removeCard(id: string): void;
   readIndex(): CardIndex;
   validateUpsert(id: string, cardKey: string): { ok: boolean; error?: string };
@@ -56,6 +104,7 @@ interface CardAdminStore extends CardStore {
 | `readChecksumIndex()` | Returns a `{ id → checksum }` map — no card content loaded |
 | `changedSince(snapshot)` | IDs whose checksum differs from the snapshot, plus deleted IDs |
 | `writeCard(id, card, cardKey?)` | Upsert a card; `cardKey` defaults to `id` |
+| `patchCard(id, jsonPath, value)` | Assign `value` at dot-path `jsonPath` on the card and re-write it |
 | `removeCard(id)` | Remove a card and its index entry (no-op if not found) |
 | `readIndex()` | Returns the raw `CardIndex` (id → `CardIndexEntry`) |
 | `validateUpsert(id, cardKey)` | Pre-flight check before writing; returns `{ ok, error? }` |

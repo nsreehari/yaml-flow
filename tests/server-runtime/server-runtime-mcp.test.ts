@@ -526,7 +526,7 @@ process.exit(1);
       tool: 'stage-ai-response-and-any-attachments',
       args: {
         card_id: 'card-1',
-        'turn-id': 'turn-123',
+        turn_id: 'turn-123',
         text: 'Here is your answer.',
         files: [{ file_name: 'result.txt', content_type: 'text/plain', text: 'file content here' }],
       },
@@ -578,7 +578,7 @@ process.exit(1);
       tool: 'stage-ai-response-and-any-attachments',
       args: {
         card_id: 'card-1',
-        'turn-id': 'turn-dup',
+        turn_id: 'turn-dup',
         text: 'First answer',
         files: [{ file_name: 'first.txt', content_type: 'text/plain', text: 'first file' }],
       },
@@ -590,7 +590,7 @@ process.exit(1);
       tool: 'stage-ai-response-and-any-attachments',
       args: {
         card_id: 'card-1',
-        'turn-id': 'turn-dup',
+        turn_id: 'turn-dup',
         text: 'Second answer should be ignored',
         files: [{ file_name: 'second.txt', content_type: 'text/plain', text: 'second file' }],
       },
@@ -626,12 +626,12 @@ process.exit(1);
     const addARes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'stage-ai-response-and-any-attachments',
-      args: { card_id: 'card-1', 'turn-id': 'turn-a', text: 'Message A' },
+      args: { card_id: 'card-1', turn_id: 'turn-a', text: 'Message A' },
     }), addARes, new URL('http://example.test/api/board/mcp'));
     const addBRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'stage-ai-response-and-any-attachments',
-      args: { card_id: 'card-1', 'turn-id': 'turn-b', text: 'Message B' },
+      args: { card_id: 'card-1', turn_id: 'turn-b', text: 'Message B' },
     }), addBRes, new URL('http://example.test/api/board/mcp'));
 
     const httpRes = makeResponse();
@@ -646,7 +646,7 @@ process.exit(1);
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'inspect.chat-messages-on-cards',
-      args: { card_id: 'card-1', 'turn-id': 'turn-a' },
+      args: { card_id: 'card-1', turn_id: 'turn-a' },
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
@@ -698,7 +698,7 @@ process.exit(1);
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'inspect.chat-messages-on-cards',
-      args: { card_id: 'card-1', 'all-turns': true },
+      args: { card_id: 'card-1', all_turns: true },
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
@@ -710,15 +710,15 @@ process.exit(1);
     const runtime = createRuntime();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'stage-ai-response-and-any-attachments',
-      args: { card_id: 'card-1', 'turn-id': 'turn-a', text: 'Message A' },
+      args: { card_id: 'card-1', turn_id: 'turn-a', text: 'Message A' },
     }), makeResponse(), new URL('http://example.test/api/board/mcp'));
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'stage-ai-response-and-any-attachments',
-      args: { card_id: 'card-1', 'turn-id': 'turn-b', text: 'Message B' },
+      args: { card_id: 'card-1', turn_id: 'turn-b', text: 'Message B' },
     }), makeResponse(), new URL('http://example.test/api/board/mcp'));
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'stage-ai-response-and-any-attachments',
-      args: { card_id: 'card-1', 'turn-id': 'turn-c', text: 'Message C' },
+      args: { card_id: 'card-1', turn_id: 'turn-c', text: 'Message C' },
     }), makeResponse(), new URL('http://example.test/api/board/mcp'));
 
     const httpRes = makeResponse();
@@ -732,7 +732,7 @@ process.exit(1);
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'inspect.chat-messages-on-cards',
-      args: { card_id: 'card-1', 'tail-turns': 1, 'tail-turns-before-id': 'turn-c' },
+      args: { card_id: 'card-1', tail_turns: 1, tail_turns_before_id: 'turn-c' },
     }), mcpRes, new URL('http://example.test/api/board/mcp'));
     expect(mcpRes._status).toBe(200);
     const mcpBody = parseJsonBody(mcpRes) as Record<string, unknown>;
@@ -797,6 +797,34 @@ process.exit(1);
     expect(handled).toBe(true);
     expect(res._status).toBe(400);
     expect(parseJsonBody(res)).toEqual({ error: 'Tool does not support raw response: manage.read-card' });
+  });
+
+  it('wraps the file body as JSON { bodyBase64, mimeType, filename, byteLength } when resp=json-b64', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-raw', { tool: 'inspect.file-contents', args: { card_id: 'card-1', file_idx: 0 } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-raw?resp=json-b64'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(res._headers['Content-Type']).toBe('application/json; charset=utf-8');
+    expect(parseJsonBody(res)).toEqual({
+      bodyBase64: Buffer.from('hello').toString('base64'),
+      mimeType: 'text/plain',
+      filename: 'hello.txt',
+      byteLength: 5,
+    });
+  });
+
+  it('rejects unknown resp modes on /mcp-raw', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-raw', { tool: 'inspect.file-contents', args: { card_id: 'card-1', file_idx: 0 } });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-raw?resp=hex'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({ error: 'unsupported resp mode: hex' });
   });
 
   it('routes discover.source-kinds through /mcp using a supplied nonCoreAdapter', async () => {

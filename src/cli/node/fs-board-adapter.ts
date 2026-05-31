@@ -21,11 +21,11 @@ import {
   isAbsolutePath,
   requestProcessAccumulatedDetached,
   publishJsonEventsToNamedPipe,
-  createNodeCommandExecutor,
 } from './process-runner.js';
 import {
   buildLocalBaseSpec,
   dispatchTaskExecutorDetached,
+  invokeExecutionRef,
   resolveWhatToRunValue,
 } from './execution-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
@@ -315,11 +315,16 @@ export function createFsBoardPlatformAdapter(
     selfRef,
 
     async dispatchExecution(ref, args) {
+      const hasDirectHostedOutput = Boolean((args['output'] as Record<string, unknown> | undefined)?.['ref']);
       if (ref.howToRun === 'queue-storage') {
         try {
           const store = boardWorkerStoreCache ?? createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
           if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
           const boardId = typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : undefined;
+          if (hasDirectHostedOutput) {
+            store.enqueueRequest({ boardId, ref, args });
+            return { dispatched: true };
+          }
           const label = (args['source_def'] as Record<string, unknown> | undefined)?.['bindTo'] as string | undefined
             ?? genUUID().slice(0, 8);
           const scratch = createFsScratchStorage(joinPath(dir, '.tmp'));
@@ -331,6 +336,33 @@ export function createFsBoardPlatformAdapter(
           const errRef  = serializeRef(scratch.keyRef(errFile));
           store.enqueueRequest({ boardId, ref, args: { subcommand: 'run-source-fetch', inRef, outRef, errRef } });
           return { dispatched: true };
+        } catch (e) {
+          return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+      if (hasDirectHostedOutput && (ref.howToRun === 'http:post' || ref.howToRun === 'in-process-loop')) {
+        try {
+          if (ref.howToRun === 'http:post') {
+            const url = resolveWhatToRunValue(ref.whatToRun);
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...args, ...(ref.extra ? { extra: ref.extra } : {}) }),
+            });
+            if (!response.ok) {
+              const text = await response.text().catch(() => '');
+              return { dispatched: false, error: `HTTP ${response.status}: ${text}` };
+            }
+            return { dispatched: true };
+          }
+          const result = await invokeExecutionRef(ref, args, {
+            cliDir: resolvedCliDir,
+            cwd: process.cwd(),
+            label: 'dispatchExecution.directHostedWorker',
+          });
+          if (result.result === 'success') return { dispatched: true };
+          const detail = typeof result.data?.error === 'string' ? result.data.error : result.error;
+          return { dispatched: false, error: detail || result.result };
         } catch (e) {
           return { dispatched: false, error: e instanceof Error ? e.message : String(e) };
         }
@@ -362,6 +394,12 @@ export function createFsBoardPlatformAdapter(
         } catch { /* best-effort */ }
         return { dispatched: false, error };
       }
+    },
+
+    supportsDirectSourceOutput(ref) {
+      return ref.howToRun === 'queue-storage'
+        || ref.howToRun === 'http:post'
+        || ref.howToRun === 'in-process-loop';
     },
 
     resolveBlob(ref: KindValueRef): string {
@@ -403,10 +441,8 @@ export function createFsBoardPlatformAdapter(
 }
 
 // ============================================================================
-// createFsBoardNonCorePlatformAdapter — extends the FS adapter with synchronous
-// executor dispatch, schema validation, temp file factory, and absolute blob I/O.
-// Required for: validateCard, validateCardPreflight, probeSource, probeTmpSource,
-//               describeTaskExecutorCapabilities
+// createFsBoardNonCorePlatformAdapter — extends the FS adapter with async
+// executor request/response, schema validation, and absolute blob I/O.
 // ============================================================================
 
 export function createFsBoardNonCorePlatformAdapter(
@@ -417,16 +453,95 @@ export function createFsBoardNonCorePlatformAdapter(
   const { cliDir, opts } = normalizeFsBoardNonCoreAdapterArgs(cliDirOrOpts, maybeOpts);
   const resolvedCliDir = resolveDefaultCliDir(cliDir);
   const base = createFsBoardPlatformAdapter(baseRef, resolvedCliDir, opts);
-  const executor = createNodeCommandExecutor();
   return {
     ...base,
-    invokeExecutorSync(ref, subcommand, args, execOpts) {
+    async invokeExecutor(ref, subcommand, execOpts) {
+      if (ref.howToRun === 'queue-storage') {
+        throw new Error('queue-storage does not support inline executor request/response');
+      }
+
+      if (ref.howToRun === 'http:post' || ref.howToRun === 'http:get' || ref.howToRun === 'in-process-loop') {
+        const result = await invokeExecutionRef(ref, {
+          subcommand,
+          ...(execOpts?.input !== undefined ? { input: execOpts.input } : {}),
+          ...(ref.extra ? { extra: ref.extra } : {}),
+        }, {
+          cliDir: resolvedCliDir,
+          cwd: process.cwd(),
+          timeoutMs: execOpts?.timeout ?? 30_000,
+          label: `invokeExecutor:${subcommand}`,
+        });
+        if (result.result !== 'success') {
+          const detail = typeof result.data?.error === 'string' ? result.data.error : result.error;
+          throw new Error(detail || `executor request failed: ${result.result}`);
+        }
+        if (typeof result.data?.stdout === 'string') return result.data.stdout;
+        return JSON.stringify(result.data ?? {});
+      }
+
       const { command, baseArgs } = buildLocalBaseSpec(ref, resolvedCliDir);
       const extraFlag = ref.extra ? ['--extra', Buffer.from(JSON.stringify(ref.extra)).toString('base64')] : [];
-      return executor.executeSync(command, [...baseArgs, subcommand, ...args, ...extraFlag], {
-        timeout: execOpts?.timeout ?? 30_000,
-        encoding: 'utf-8',
-        input: execOpts?.input,
+      const argv = [...baseArgs, subcommand, ...extraFlag];
+
+      return await new Promise<string>((resolve, reject) => {
+        const child = spawn(command, argv, {
+          cwd: process.cwd(),
+          stdio: 'pipe',
+          windowsHide: true,
+          shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(command),
+        });
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+        let settled = false;
+        let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+        const finishReject = (error: Error & { stdout?: string; stderr?: string }) => {
+          if (settled) return;
+          settled = true;
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          reject(error);
+        };
+
+        const finishResolve = (stdout: string) => {
+          if (settled) return;
+          settled = true;
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          resolve(stdout);
+        };
+
+        child.stdout.on('data', (chunk) => { stdoutChunks.push(Buffer.from(chunk)); });
+        child.stderr.on('data', (chunk) => { stderrChunks.push(Buffer.from(chunk)); });
+        child.on('error', (error) => {
+          const err = error as Error & { stdout?: string; stderr?: string };
+          err.stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+          err.stderr = Buffer.concat(stderrChunks).toString('utf-8');
+          finishReject(err);
+        });
+        child.on('close', (code) => {
+          const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+          const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+          if (code === 0) {
+            finishResolve(stdout);
+            return;
+          }
+          const err = new Error(stderr.trim() || `executor exited with status ${code}`) as Error & { stdout?: string; stderr?: string };
+          err.stdout = stdout;
+          err.stderr = stderr;
+          finishReject(err);
+        });
+
+        if (execOpts?.timeout && execOpts.timeout > 0) {
+          timeoutHandle = setTimeout(() => {
+            child.kill();
+            const err = new Error(`executor timed out after ${execOpts.timeout}ms`) as Error & { stdout?: string; stderr?: string };
+            err.stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+            err.stderr = Buffer.concat(stderrChunks).toString('utf-8');
+            finishReject(err);
+          }, execOpts.timeout);
+        }
+
+        if (execOpts?.input !== undefined) child.stdin.end(execOpts.input);
+        else child.stdin.end();
       });
     },
     validateSchema(card) {

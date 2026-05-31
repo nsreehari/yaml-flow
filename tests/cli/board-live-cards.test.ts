@@ -974,14 +974,14 @@ describe('cli card-refreshed-notify', () => {
 });
 
 // ============================================================================
-// CLI validate-card
+// CLI validate-card-preflight
 // ============================================================================
 
-describe('cli validate-card', () => {
+describe('cli validate-card-preflight', () => {
   let tmpDir: string;
 
   function freshDir() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-card-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-card-preflight-test-'));
     return tmpDir;
   }
 
@@ -994,9 +994,9 @@ describe('cli validate-card', () => {
     return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, testDir, { onWarn: () => {} }));
   }
 
-  it('accepts a valid card', () => {
+  it('accepts a valid card', async () => {
     freshDir();
-    const result = makeNonCore().validateCardPreflight({ body: {
+    const result = await makeNonCore().validateCardPreflight({ body: {
       id: 'ok-card',
       provides: [{ bindTo: 'prices', ref: 'card_data.prices' }],
       card_data: { prices: {} },
@@ -1004,9 +1004,9 @@ describe('cli validate-card', () => {
     expect(result.status).toBe('success');
   });
 
-  it('rejects a card with invalid provides.ref namespace', () => {
+  it('rejects a card with invalid provides.ref namespace', async () => {
     freshDir();
-    const result = makeNonCore().validateCardPreflight({ body: {
+    const result = await makeNonCore().validateCardPreflight({ body: {
       id: 'bad-ns',
       provides: [{ bindTo: 'data', ref: 'source_defs.foo.bar' }],
       card_data: {},
@@ -1017,9 +1017,9 @@ describe('cli validate-card', () => {
     expect(data.issues.length).toBeGreaterThan(0);
   });
 
-  it('rejects a card with an unparseable compute expression', () => {
+  it('rejects a card with an unparseable compute expression', async () => {
     freshDir();
-    const result = makeNonCore().validateCardPreflight({ body: {
+    const result = await makeNonCore().validateCardPreflight({ body: {
       id: 'bad-expr',
       compute: [{ bindTo: 'total', expr: '$$$broken(' }],
       card_data: {},
@@ -1030,9 +1030,9 @@ describe('cli validate-card', () => {
     expect(data.issues.length).toBeGreaterThan(0);
   });
 
-  it('rejects a card missing the id field', () => {
+  it('rejects a card missing the id field', async () => {
     freshDir();
-    const result = makeNonCore().validateCardPreflight({ body: { card_data: { x: 1 } } });
+    const result = await makeNonCore().validateCardPreflight({ body: { card_data: { x: 1 } } });
     // id is '(unknown)' when missing — schema validation should still catch that
     expect(result.status).toBe('success');
     const data = (result as { status: string; data: { cardId: string; isValid: boolean; issues: string[] } }).data;

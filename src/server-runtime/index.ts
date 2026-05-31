@@ -237,7 +237,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function isBoardNonCorePlatformAdapter(adapter: import('./types.js').BoardPlatformAdapter): adapter is import('./types.js').BoardNonCorePlatformAdapter {
     const maybe = adapter as import('./types.js').BoardNonCorePlatformAdapter;
-    return typeof maybe.invokeExecutorSync === 'function' && typeof maybe.validateSchema === 'function';
+    return typeof maybe.invokeExecutor === 'function' && typeof maybe.validateSchema === 'function';
   }
 
   // ── Artifacts stores ─────────────────────────────────────────────────────
@@ -628,8 +628,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   function setChatProcessingFromControlplane(args: Record<string, unknown>, active: boolean): { status: 'success'; data: { boardId: string; cardId: string; active: boolean } } {
-    const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
-    const cardId = getMcpArgString(args, 'card_id', 'cardId');
+    const requestBoardId = getMcpArgString(args, 'board_id');
+    const cardId = getMcpArgString(args, 'card_id');
     if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
     if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
     if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
@@ -638,8 +638,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   function requireControlplaneCardArgs(args: Record<string, unknown>): { cardId: string } {
-    const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
-    const cardId = getMcpArgString(args, 'card_id', 'cardId');
+    const requestBoardId = getMcpArgString(args, 'board_id');
+    const cardId = getMcpArgString(args, 'card_id');
     if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
     if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
     if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
@@ -709,19 +709,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return { status: 'success', data: { boardId, cardId, key, exists: metaValue.exists, value: metaValue.value } };
   }
 
-  function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown> {
+  function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> {
     return {
       'discover.source-kinds': () => mcp.discoverSourceKinds(),
       'inspect.board-runtime-status': () => mcp.inspectBoardRuntimeStatus(),
-      'inspect.card-definition-and-runtime': (args) => mcp.inspectCardDefinitionAndRuntime({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
+      'inspect.card-definition-and-runtime': (args) => mcp.inspectCardDefinitionAndRuntime({ cardId: getMcpArgString(args, 'card_id') }),
       'inspect.chat-messages-on-cards': (args) => {
-        const lastUserTurns = getMcpArgNumber(args, 'tail-turns');
+        const lastUserTurns = getMcpArgNumber(args, 'tail_turns');
         const tail = getMcpArgNumber(args, 'tail');
-        const turnId = getMcpArgString(args, 'turn-id');
-        const allTurns = args['all-turns'] === true;
-        const tailTurnsBeforeId = getMcpArgString(args, 'tail-turns-before-id');
+        const turnId = getMcpArgString(args, 'turn_id');
+        const allTurns = args['all_turns'] === true;
+        const tailTurnsBeforeId = getMcpArgString(args, 'tail_turns_before_id');
         return mcp.inspectChatMessagesOnCards({
-          cardId: getMcpArgString(args, 'card_id', 'cardId'),
+          cardId: getMcpArgString(args, 'card_id'),
           ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
           ...(tail !== undefined ? { tail } : {}),
           ...(turnId ? { turnId } : {}),
@@ -730,55 +730,62 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         });
       },
       'inspect.file-contents': (args) => mcp.inspectFileContents({
-        cardId: getMcpArgString(args, 'card_id', 'cardId'),
-        fileIdx: Number(getMcpArgNumber(args, 'file_idx', 'fileIdx')),
+        cardId: getMcpArgString(args, 'card_id'),
+        fileIdx: Number(getMcpArgNumber(args, 'file_idx')),
       }),
       'preflight.validate-candidate-card-definition': (args) => mcp.preflightValidateCandidateCardDefinition({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
       }),
       'preflight.materialize-candidate-card': (args) => mcp.preflightMaterializeCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
-        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires', 'mockRequires'),
-        mockFetchedSources: getRequiredMcpArgRecord(args, 'mock_fetched_sources', 'mock_fetched_sources', 'mockFetchedSources'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
+        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires'),
+        mockFetchedSources: getRequiredMcpArgRecord(args, 'mock_fetched_sources', 'mock_fetched_sources'),
       }),
       'preflight.probe-single-source-in-candidate-card': (args) => mcp.preflightProbeSingleSourceInCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
-        mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
-        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
+        mockProjections: getMcpArgRecord(args, 'mock_projections'),
+        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx'),
       }),
       'preflight.run-single-source-in-candidate-card': (args) => mcp.preflightRunSingleSourceInCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
-        mockProjections: getMcpArgRecord(args, 'mock_projections', 'mockProjections'),
-        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
+        mockProjections: getMcpArgRecord(args, 'mock_projections'),
+        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx'),
       }),
       'preflight.run-single-source-in-live-card': (args) => mcp.preflightRunSingleSourceInLiveCard({
-        cardId: getMcpArgString(args, 'card_id', 'cardId'),
-        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx', 'sourceIdx'),
-        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires', 'mockRequires'),
+        cardId: getMcpArgString(args, 'card_id'),
+        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx'),
+        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires'),
       }),
       'preflight.run-one-cycle-with-candidate-card': (args) => mcp.preflightRunOneCycleWithCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content', 'candidateCardContent'),
-        mockRequires: getMcpArgRecord(args, 'mock_requires', 'mockRequires'),
+        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
+        mockRequires: getMcpArgRecord(args, 'mock_requires'),
       }),
-      'manage.read-card': (args) => mcp.manageReadCard({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
-      'stage-ai-response-and-any-attachments': (args) => mcp.manageAddChatEntryAndAnyAttachments({
-        cardId: getMcpArgString(args, 'card_id', 'cardId'),
-        role: 'assistant',
-        ...(typeof args.text === 'string' ? { text: args.text } : {}),
-        ...(typeof getMcpArgString(args, 'turn-id', 'turnId', 'turn') === 'string' && getMcpArgString(args, 'turn-id', 'turnId', 'turn') !== ''
-          ? { turn: getMcpArgString(args, 'turn-id', 'turnId', 'turn') }
-          : {}),
-        ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
-      }),
+      'manage.read-card': (args) => mcp.manageReadCard({ cardId: getMcpArgString(args, 'card_id') }),
+      'stage-ai-response-and-any-attachments': (args) => {
+        const turnId = getMcpArgString(args, 'turn_id');
+        if (!turnId) {
+          throw Object.assign(
+            new Error('stage-ai-response-and-any-attachments requires a non-empty turn_id'),
+            { statusCode: 400 },
+          );
+        }
+        return mcp.manageAddChatEntryAndAnyAttachments({
+          cardId: getMcpArgString(args, 'card_id'),
+          role: 'assistant',
+          ...(typeof args.text === 'string' ? { text: args.text } : {}),
+          ...(turnId ? { turn: turnId } : {}),
+          ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
+        });
+      },
       'manage.upsert-card': (args) => mcp.manageUpsertCard({
-        cardId: getMcpArgString(args, 'card_id', 'cardId'),
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content', 'candidateCardContent'),
+        cardId: getMcpArgString(args, 'card_id'),
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),
       }),
-      'manage.remove-card': (args) => mcp.manageRemoveCard({ cardId: getMcpArgString(args, 'card_id', 'cardId') }),
+      'manage.remove-card': (args) => mcp.manageRemoveCard({ cardId: getMcpArgString(args, 'card_id') }),
     };
   }
 
-  function createMcpControlplaneToolRegistry(): Record<string, (args: Record<string, unknown>) => unknown> {
+  function createMcpControlplaneToolRegistry(): Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> {
     return {
       'getstate.is-chat-processing': (args) => getChatProcessingFromControlplane(args),
       'setstate.chat-processing-started': (args) => setChatProcessingFromControlplane(args, true),
@@ -786,10 +793,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       'getstate.card-meta': (args) => getCardMetaFromControlplane(args),
       'setstate.card-meta': (args) => setCardMetaFromControlplane(args),
       'manage.upload-card-file': (args) => {
-        const requestBoardId = getMcpArgString(args, 'board_id', 'boardId');
-        const cardId = getMcpArgString(args, 'card_id', 'cardId');
-        const fileName = getMcpArgString(args, 'file_name', 'fileName', 'name');
-        const contentType = getMcpArgString(args, 'content_type', 'contentType') || 'application/octet-stream';
+        const requestBoardId = getMcpArgString(args, 'board_id');
+        const cardId = getMcpArgString(args, 'card_id');
+        const fileName = getMcpArgString(args, 'file_name');
+        const contentType = getMcpArgString(args, 'content_type') || 'application/octet-stream';
         const bytes = parseMcpUploadBytes(args);
 
         if (!requestBoardId) throw Object.assign(new Error('manage.upload-card-file requires board_id'), { statusCode: 400 });
@@ -803,12 +810,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     };
   }
 
-  function invokeMcpTool(tool: string, args: Record<string, unknown>, registry: Record<string, (args: Record<string, unknown>) => unknown>): unknown {
+  async function invokeMcpTool(tool: string, args: Record<string, unknown>, registry: Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>>): Promise<unknown> {
     const handler = registry[tool];
     if (!handler) {
       throw Object.assign(new Error(`Unknown MCP tool: ${tool}`), { statusCode: 400 });
     }
-    const result = handler(args);
+    const result = await handler(args);
     if (result && typeof result === 'object' && !Array.isArray(result)) {
       const record = result as Record<string, unknown>;
       const status = record.status;
@@ -1780,7 +1787,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           return true;
         }
         try {
-          const result = invokeMcpTool(tool, args, createMcpToolRegistry(createMcpFacade()));
+          const result = await invokeMcpTool(tool, args, createMcpToolRegistry(createMcpFacade()));
           if (result && typeof result === 'object' && !Array.isArray(result)) {
             const record = result as Record<string, unknown>;
             if (record.status === 'fail') {
@@ -1815,7 +1822,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           return true;
         }
         try {
-          const result = invokeMcpTool(tool, args, createMcpControlplaneToolRegistry());
+          const result = await invokeMcpTool(tool, args, createMcpControlplaneToolRegistry());
           if (result && typeof result === 'object' && !Array.isArray(result)) {
             const record = result as Record<string, unknown>;
             if (record.status === 'fail') {
@@ -1883,6 +1890,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const { fileRecord, bytes } = resolveCardFileDownloadPayload(cardId, fileIdx, expectedStoredName);
         const filename = String(fileRecord.name || fileRecord.stored_name || 'download.bin');
         const mimeType = String(fileRecord.mime_type || 'application/octet-stream');
+        const respMode = (url.searchParams.get('resp') || '').trim().toLowerCase();
+        if (respMode && respMode !== 'json-b64') {
+          json(res, 400, { error: `unsupported resp mode: ${respMode}` });
+          return true;
+        }
+        const wantBase64 = respMode === 'json-b64';
+        let outBytes: Uint8Array;
         if (headLines !== undefined || tailLines !== undefined) {
           if (!isLikelyTextMimeType(mimeType)) {
             json(res, 400, { error: 'head-lines/tail-lines are only supported for text-like files; use head-bytes/tail-bytes for binary content' });
@@ -1892,27 +1906,26 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const slicedText = headLines !== undefined
             ? sliceTextByLines(text, 'head', headLines)
             : sliceTextByLines(text, 'tail', tailLines as number);
-          const out = typeof Buffer !== 'undefined' ? Buffer.from(slicedText, 'utf8') : new TextEncoder().encode(slicedText);
-          res.writeHead(200, {
-            'Content-Type': mimeType,
-            'Content-Disposition': `attachment; filename="${filename}"`,
-            'Content-Length': out.length,
-          });
-          res.end(out as unknown as Buffer);
-          return true;
-        }
-        if (headBytes !== undefined || tailBytes !== undefined) {
+          outBytes = typeof Buffer !== 'undefined' ? Buffer.from(slicedText, 'utf8') : new TextEncoder().encode(slicedText);
+        } else if (headBytes !== undefined || tailBytes !== undefined) {
           const count = (headBytes ?? tailBytes) as number;
-          const sliced = headBytes !== undefined ? bytes.slice(0, count) : bytes.slice(Math.max(0, bytes.length - count));
-          res.writeHead(200, {
-            'Content-Type': mimeType,
-            'Content-Disposition': `attachment; filename="${filename}"`,
-            'Content-Length': sliced.length,
-          });
-          res.end(sliced as unknown as Buffer);
+          outBytes = headBytes !== undefined ? bytes.slice(0, count) : bytes.slice(Math.max(0, bytes.length - count));
+        } else {
+          outBytes = bytes;
+        }
+        if (wantBase64) {
+          const bodyBase64 = typeof Buffer !== 'undefined'
+            ? Buffer.from(outBytes).toString('base64')
+            : btoa(String.fromCharCode(...outBytes));
+          json(res, 200, { bodyBase64, mimeType, filename, byteLength: outBytes.length });
           return true;
         }
-        sendCardFileDownloadResponse(res, cardId, fileIdx, expectedStoredName);
+        res.writeHead(200, {
+          'Content-Type': mimeType,
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Length': outBytes.length,
+        });
+        res.end(outBytes as unknown as Buffer);
         return true;
       }
 
@@ -1966,6 +1979,28 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             responseStatus: 409,
           });
           return true;
+        }
+        if (actionType === 'chat-send') {
+          const p = (body?.payload ?? {}) as Record<string, unknown>;
+          const rawTurnId = typeof p['turn-id'] === 'string'
+            ? p['turn-id']
+            : typeof p.turnId === 'string'
+              ? p.turnId
+              : typeof p.turn === 'string'
+                ? p.turn
+                : '';
+          if (!rawTurnId || !String(rawTurnId).trim()) {
+            const responseSentAtMs = Date.now();
+            json(res, 400, {
+              error: `chat-send requires a non-empty 'turn-id' (or 'turnId'/'turn') in payload for card: ${cardId}`,
+              requestReceivedAt,
+              requestReceivedAtMs,
+              responseSentAt: new Date(responseSentAtMs).toISOString(),
+              responseSentAtMs,
+              responseStatus: 400,
+            });
+            return true;
+          }
         }
         applyCardAction(cardId, actionType, body?.payload as Record<string, unknown> | null);
         const responseSentAtMs = Date.now();
@@ -2091,7 +2126,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         await bootstrapBoard();
         const cardId = decodeURIComponent(cardFileMatch[1]);
         const inChat = String(url.searchParams.get('inChat') || '').toLowerCase() === 'true';
-        const turnId = String(url.searchParams.get('turn-id') || '');
+        const turnId = String(url.searchParams.get('turn-id') || '').trim();
+        if (inChat && !turnId) {
+          json(res, 400, {
+            error: `file upload with inChat=true requires a non-empty 'turn-id' query parameter for card: ${cardId}`,
+          });
+          return true;
+        }
         const encodedName = req.headers['x-file-name'];
         const contentType = String(req.headers['content-type'] || 'application/octet-stream');
         const rawName = Array.isArray(encodedName) ? encodedName[0] : encodedName;

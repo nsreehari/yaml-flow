@@ -8,14 +8,6 @@
   "main": "./lib/board-live-cards-public.cjs",
   "module": "./lib/board-live-cards-public.js",
   "types": "./lib/board-live-cards-public.d.ts",
-  "bin": {
-    "board-live-cards-cli": "./cli/bundled/board-live-cards-cli.mjs",
-    "card-store": "./cli/bundled/card-store-cli.mjs",
-    "artifacts-store": "./cli/bundled/artifacts-store-cli.mjs",
-    "chat-store": "./cli/bundled/chat-store-cli.mjs",
-    "step-machine-cli": "./cli/bundled/step-machine-cli.mjs",
-    "batch-runner-cli": "./cli/bundled/batch-runner-cli.mjs"
-  },
   "exports": {
     ".": {
       "types": "./lib/board-live-cards-public.d.ts",
@@ -72,7 +64,6 @@
       "import": "./lib/board-live-cards-server-runtime.js",
       "require": "./lib/board-live-cards-server-runtime.cjs"
     },
-    "./cli-bundled/*": "./cli/bundled/*",
     "./package.json": "./package.json"
   },
   "browser": {
@@ -80,8 +71,6 @@
   },
   "files": [
     "lib",
-    "cli",
-    "!cli/node/**",
     "examples",
     "schema",
     "browser",
@@ -89,7 +78,6 @@
     "!browser/board-livegraph-engine.js",
     "!browser/board-livecards-localstorage.js",
     "!lib/**/*.map",
-    "!cli/**/*.map",
     "!browser/**/*.map",
     "!examples/**/.demo-setup/**",
     "!examples/**/.server-meta/**",

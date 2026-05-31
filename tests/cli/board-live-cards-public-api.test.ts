@@ -365,9 +365,9 @@ describe('BoardLiveCardsNonCorePublic — validateCardPreflight', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('returns success + cardId for a valid card object in body', () => {
+  it('returns success + cardId for a valid card object in body', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({ body: minCard('tmp-card') });
+    const result = await nonCore.validateCardPreflight({ body: minCard('tmp-card') });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('tmp-card');
@@ -375,9 +375,9 @@ describe('BoardLiveCardsNonCorePublic — validateCardPreflight', () => {
     }
   });
 
-  it('uses (unknown) as cardId when card body lacks an id string', () => {
+  it('uses (unknown) as cardId when card body lacks an id string', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({ body: { card_data: { x: 1 } } });
+    const result = await nonCore.validateCardPreflight({ body: { card_data: { x: 1 } } });
     // still returns success — errors embedded in data.errors
     expect(result.status).toBe('success');
     if (result.status === 'success') {
@@ -385,39 +385,39 @@ describe('BoardLiveCardsNonCorePublic — validateCardPreflight', () => {
     }
   });
 
-  it('fails when body is absent', () => {
+  it('fails when body is absent', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({});
+    const result = await nonCore.validateCardPreflight({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/body/);
   });
 
-  it('fails when body is a string', () => {
+  it('fails when body is a string', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({ body: 'not-an-object' });
+    const result = await nonCore.validateCardPreflight({ body: 'not-an-object' });
     expect(result.status).toBe('fail');
   });
 
-  it('fails when body is an array', () => {
+  it('fails when body is an array', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({ body: [] });
+    const result = await nonCore.validateCardPreflight({ body: [] });
     expect(result.status).toBe('fail');
   });
 
-  it('accepts card-content wrapper and still returns success for a valid card', () => {
+  it('accepts card-content wrapper and still returns success for a valid card', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({ body: { 'card-content': minCard('wrapped') } });
+    const result = await nonCore.validateCardPreflight({ body: { 'card-content': minCard('wrapped') } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('wrapped');
     }
   });
 
-  it('returns issues for a card with invalid source_defs structure', () => {
+  it('returns issues for a card with invalid source_defs structure', async () => {
     const { nonCore } = freshNonCore();
     // source_defs entries missing bindTo trigger schema validation issues
     const card = minCard('bad-src', { source_defs: [{ outputFile: 'x.json' }] });
-    const result = nonCore.validateCardPreflight({ body: card });
+    const result = await nonCore.validateCardPreflight({ body: card });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       // Structural validation should flag the missing fields
@@ -425,66 +425,17 @@ describe('BoardLiveCardsNonCorePublic — validateCardPreflight', () => {
     }
   });
 
-  it('merges executor validate-card-preflight issues when executor is registered', () => {
+  it('merges executor validate-card-preflight issues when executor is registered', async () => {
     // This test verifies the pluggable hook path — without a real executor
     // it falls back to structural-only validation (no error).
     const { nonCore } = freshNonCore();
-    const result = nonCore.validateCardPreflight({ body: minCard('exec-test') });
+    const result = await nonCore.validateCardPreflight({ body: minCard('exec-test') });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('exec-test');
       // No executor registered → structural result only (no merge needed)
       expect(Array.isArray(result.data.issues)).toBe(true);
     }
-  });
-});
-
-// ============================================================================
-// BoardLiveCardsNonCorePublic — validateCard
-// ============================================================================
-
-describe('BoardLiveCardsNonCorePublic — validateCard', () => {
-  let tmpDir = '';
-
-  function freshNonCore() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-vc-'));
-    const boardDir = path.join(tmpDir, 'board');
-    const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
-    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    return { nonCore };
-  }
-
-  afterEach(() => {
-    if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
-  });
-
-  it('returns success for a card written to the store', () => {
-    const { nonCore } = freshNonCore();
-    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'known', 'card-content': minCard('known') }] } });
-
-    const result = nonCore.validateCard({ params: { cardId: 'known' } });
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
-      expect(result.data[0].cardId).toBe('known');
-      expect(Array.isArray(result.data[0].issues)).toBe(true);
-    }
-  });
-
-  it('fails when card is not in the store', () => {
-    const { nonCore } = freshNonCore();
-    const result = nonCore.validateCard({ params: { cardId: 'missing' } });
-    expect(result.status).toBe('success');  // returns success with isValid:false, not fail
-    if (result.status === 'success') {
-      expect(result.data[0].isValid).toBe(false);
-    }
-  });
-
-  it('fails when --card-id or --all is missing', () => {
-    const { nonCore } = freshNonCore();
-    const result = nonCore.validateCard({});
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/--card-id.*--all|--all.*--card-id/);
   });
 });
 
@@ -499,14 +450,14 @@ describe('BoardLiveCardsNonCorePublic — describeTaskExecutorCapabilities', () 
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('fails when no task executor is registered', () => {
+  it('fails when no task executor is registered', async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-caps-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
 
-    const result = nonCore.describeTaskExecutorCapabilities({});
+    const result = await nonCore.describeTaskExecutorCapabilities({});
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
@@ -553,14 +504,14 @@ describe('integration: updatesInCardStore → board operations', () => {
     }
   });
 
-  it('write + validate roundtrip: card written via updatesInCardStore passes validateCard', () => {
+  it('write + read roundtrip: card written via updatesInCardStore is returned by readFromCardStore', () => {
     const { nonCore } = freshAll();
     nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'validated', 'card-content': minCard('validated') }] } });
 
-    const result = nonCore.validateCard({ params: { cardId: 'validated' } });
+    const result = nonCore.readFromCardStore({ body: { ids: ['validated'] } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.data[0].cardId).toBe('validated');
+      expect(result.data.cards[0].id).toBe('validated');
     }
   });
 
@@ -926,106 +877,6 @@ describe('BoardLiveCardsPublic — sourceDataFetched', () => {
   });
 });
 
-// ============================================================================
-// BoardLiveCardsNonCorePublic — probeSource / probeTmpSource
-// (No task executor registered — both methods return fail with a clear message)
-// ============================================================================
-
-describe('BoardLiveCardsNonCorePublic — probeSource', () => {
-  let tmpDir = '';
-
-  function freshAll() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-ps-'));
-    const boardDir = path.join(tmpDir, 'board');
-    const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
-    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    return { nonCore };
-  }
-
-  afterEach(() => {
-    if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
-  });
-
-  it('fails when params.cardId is missing', () => {
-    const { nonCore } = freshAll();
-    const result = nonCore.probeSource({ params: { sourceIdx: 0 } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/params\.cardId/);
-  });
-
-  it('fails when params.sourceIdx is missing', () => {
-    const { nonCore } = freshAll();
-    const result = nonCore.probeSource({ params: { cardId: 'x' } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/params\.sourceIdx/);
-  });
-
-  it('fails when card is not in the store', () => {
-    const { nonCore } = freshAll();
-    const result = nonCore.probeSource({ params: { cardId: 'ghost', sourceIdx: 0 } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/not found/);
-  });
-
-  it('fails when sourceIdx is out of range', () => {
-    const { nonCore } = freshAll();
-    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'no-sources', 'card-content': minCard('no-sources') }] } });
-    const result = nonCore.probeSource({ params: { cardId: 'no-sources', sourceIdx: 0 } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/out of range/);
-  });
-
-  it('fails with no-executor message when sourceIdx is valid but no executor registered', () => {
-    const { nonCore } = freshAll();
-    const card = minCard('src-card', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
-    nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'src-card', 'card-content': card }] } });
-    const result = nonCore.probeSource({ params: { cardId: 'src-card', sourceIdx: 0 } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
-  });
-});
-
-describe('BoardLiveCardsNonCorePublic — probeTmpSource', () => {
-  let tmpDir = '';
-
-  function freshAll() {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-pts-'));
-    const boardDir = path.join(tmpDir, 'board');
-    const br = ref(boardDir);
-    createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, adapterOpts)).init({ params: { cardStoreRef: mkCardStoreRef(boardDir), outputsStoreRef: mkOutputsStoreRef(boardDir) } });
-    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
-    return { nonCore };
-  }
-
-  afterEach(() => {
-    if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
-  });
-
-  it('fails when body is absent', () => {
-    const { nonCore } = freshAll();
-    const result = nonCore.probeTmpSource({});
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/body/);
-  });
-
-  it('fails when body."source-def" is missing', () => {
-    const { nonCore } = freshAll();
-    const result = nonCore.probeTmpSource({ body: { 'mock-projections': {} } });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/source-def/);
-  });
-
-  it('fails with no-executor message when body is valid but no executor registered', () => {
-    const { nonCore } = freshAll();
-    const result = nonCore.probeTmpSource({
-      body: { 'source-def': { cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }, 'mock-projections': {} },
-    });
-    expect(result.status).toBe('fail');
-    if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
-  });
-});
-
 describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
   let tmpDir = '';
 
@@ -1041,46 +892,46 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('fails when params.sourceIdx is missing', () => {
+  it('fails when params.sourceIdx is missing', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.probeSourcePreflight({ body: minCard('c') });
+    const result = await nonCore.probeSourcePreflight({ body: minCard('c') });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/params\.sourceIdx/);
   });
 
-  it('fails when body is absent', () => {
+  it('fails when body is absent', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 } });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 0 } });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/card JSON/);
   });
 
-  it('fails when body is not an object', () => {
+  it('fails when body is not an object', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: 'bad' });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: 'bad' });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/card JSON/);
   });
 
-  it('fails when sourceIdx is out of range (no source_defs)', () => {
+  it('fails when sourceIdx is out of range (no source_defs)', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: minCard('c') });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: minCard('c') });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/out of range/);
   });
 
-  it('fails when sourceIdx is out of range (too high)', () => {
+  it('fails when sourceIdx is out of range (too high)', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw' }] });
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 5 }, body: card });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 5 }, body: card });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/out of range/);
   });
 
-  it('accepts card-content wrapper and fails with no-executor when source is valid', () => {
+  it('accepts card-content wrapper and fails with no-executor when source is valid', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
-    const result = nonCore.probeSourcePreflight({
+    const result = await nonCore.probeSourcePreflight({
       params: { sourceIdx: 0 },
       body: { 'card-content': card, 'mock-projections': {} },
     });
@@ -1088,18 +939,18 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 
-  it('accepts flat card body and fails with no-executor when source is valid', () => {
+  it('accepts flat card body and fails with no-executor when source is valid', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', { source_defs: [{ cli: 'fetch.sh', bindTo: 'raw', outputFile: 'raw.json' }] });
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 
-  it('passes mock-projections through from card-content wrapper', () => {
+  it('passes mock-projections through from card-content wrapper', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', { source_defs: [{ mock: 'quotes', bindTo: 'prices', outputFile: 'prices.json' }] });
-    const result = nonCore.probeSourcePreflight({
+    const result = await nonCore.probeSourcePreflight({
       params: { sourceIdx: 0 },
       body: { 'card-content': card, 'mock-projections': { tickers: ['AAPL'] } },
     });
@@ -1109,7 +960,7 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 
-  it('handles sourceIdx = 0 with multiple source_defs correctly', () => {
+  it('handles sourceIdx = 0 with multiple source_defs correctly', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', {
       source_defs: [
@@ -1117,12 +968,12 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
         { cli: 'other.sh', bindTo: 'second', outputFile: 'second.json' },
       ],
     });
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 
-  it('handles sourceIdx = 1 with multiple source_defs correctly', () => {
+  it('handles sourceIdx = 1 with multiple source_defs correctly', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('c', {
       source_defs: [
@@ -1130,12 +981,12 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
         { cli: 'other.sh', bindTo: 'second', outputFile: 'second.json' },
       ],
     });
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 1 }, body: card });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 1 }, body: card });
     expect(result.status).toBe('fail');
     if (result.status === 'fail') expect(result.error).toMatch(/No task-executor/);
   });
 
-  it('does not fall back to run-source-fetch when the lightweight executor hook is unsupported', () => {
+  it('does not fall back to run-source-fetch when the lightweight executor hook is unsupported', async () => {
     const taskExecutorRef = {
       meta: 'task-executor',
       howToRun: 'local-node',
@@ -1150,18 +1001,14 @@ describe('BoardLiveCardsNonCorePublic — probeSourcePreflight', () => {
     });
     const adapter = createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} });
     let runSourceFetchCalled = false;
-    adapter.invokeExecutorSync = ((refArg, subcommand) => {
+    adapter.invokeExecutor = (async (_refArg, subcommand) => {
       if (subcommand === 'probe-source-preflight') throw new Error('unsupported');
-      if (subcommand === 'run-source-fetch') {
-        runSourceFetchCalled = true;
-        throw new Error('should not have attempted run-source-fetch');
-      }
       throw new Error(`unexpected subcommand: ${subcommand}`);
-    }) as typeof adapter.invokeExecutorSync;
+    }) as typeof adapter.invokeExecutor;
 
     const nonCore = createBoardLiveCardsNonCorePublic(br, adapter);
     const card = minCard('c', { source_defs: [{ mock: 'quotes', bindTo: 'first', outputFile: 'first.json' }] });
-    const result = nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
+    const result = await nonCore.probeSourcePreflight({ params: { sourceIdx: 0 }, body: card });
     expect(result.status).toBe('fail');
     expect(runSourceFetchCalled).toBe(false);
     if (result.status === 'fail') expect(result.error).toMatch(/does not support probe-source-preflight/);
@@ -1172,7 +1019,7 @@ describe('BoardLiveCardsNonCorePublic — runSourcePreflight', () => {
   let tmpDir = '';
 
   function freshNonCoreWithExecutorStub(
-    invokeStub: ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync'],
+    invokeStub: ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutor'],
   ) {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-rsp-'));
     const boardDir = path.join(tmpDir, 'board');
@@ -1188,7 +1035,7 @@ describe('BoardLiveCardsNonCorePublic — runSourcePreflight', () => {
       },
     });
     const adapter = createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} });
-    adapter.invokeExecutorSync = invokeStub;
+    adapter.invokeExecutor = invokeStub;
     const nonCore = createBoardLiveCardsNonCorePublic(br, adapter);
     return { nonCore };
   }
@@ -1197,17 +1044,14 @@ describe('BoardLiveCardsNonCorePublic — runSourcePreflight', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('uses the live fetch path for run-source-preflight and returns the simplified shape', () => {
+  it('uses the live fetch path for run-source-preflight and returns the simplified shape', async () => {
     const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
-    const { nonCore: liveNonCore } = freshNonCoreWithExecutorStub((((refArg, subcommand, argv) => {
-      expect(subcommand).toBe('run-source-fetch');
-      const outIdx = argv.indexOf('--out-ref');
-      const outRef = parseRef(argv[outIdx + 1]);
-      fs.writeFileSync(outRef.value, JSON.stringify({ ok: true }));
-      return '';
-    }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+    const { nonCore: liveNonCore } = freshNonCoreWithExecutorStub((async (_refArg, subcommand) => {
+      expect(subcommand).toBe('run-source-preflight');
+      return JSON.stringify({ ok: true, bindTo: 'prices', resultValue: { ok: true } });
+    }) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutor']);
 
-    const result = liveNonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    const result = await liveNonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
     expect(result).toEqual({
       status: 'success',
       data: {
@@ -1219,33 +1063,33 @@ describe('BoardLiveCardsNonCorePublic — runSourcePreflight', () => {
     });
   });
 
-  it('returns ok=false with issues when the live fetch path fails', () => {
-    const { nonCore } = freshNonCoreWithExecutorStub((((refArg, subcommand, argv) => {
-      expect(subcommand).toBe('run-source-fetch');
+  it('returns ok=false with issues when the live fetch path fails', async () => {
+    const { nonCore } = freshNonCoreWithExecutorStub((async (_refArg, subcommand) => {
+      expect(subcommand).toBe('run-source-preflight');
       throw new Error('network timeout');
-    }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+    }) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutor']);
 
     const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
-    const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    const result = await nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
     expect(result).toEqual({
       status: 'success',
       data: {
         bindTo: 'prices',
         ok: false,
         result: null,
-        issues: ['Probe failed: network timeout'],
+        issues: ['network timeout'],
       },
     });
   });
 
-  it('fails when no task executor is configured for run-source-preflight', () => {
+  it('fails when no task executor is configured for run-source-preflight', async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-rsp-noexec-'));
     const boardDir = path.join(tmpDir, 'board');
     const br = ref(boardDir);
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} }));
 
     const card = minCard('c', { source_defs: [{ kind: 'urls', bindTo: 'prices', outputFile: 'prices.json' }] });
-    const result = nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
+    const result = await nonCore.runSourcePreflight({ params: { sourceIdx: 0 }, body: { 'card-content': card, 'mock-projections': {} } });
     expect(result).toEqual({
       status: 'fail',
       error: 'No task-executor registered for this board',
@@ -1423,7 +1267,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
   }
 
   function freshNonCoreWithExecutorStub(
-    invokeStub: ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync'],
+    invokeStub: ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutor'],
   ) {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blc-scc-exec-'));
     const boardDir = path.join(tmpDir, 'board');
@@ -1439,7 +1283,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
       },
     });
     const adapter = createFsBoardNonCorePlatformAdapter(br, cliDir, { onWarn: () => {} });
-    adapter.invokeExecutorSync = invokeStub;
+    adapter.invokeExecutor = invokeStub;
     const nonCore = createBoardLiveCardsNonCorePublic(br, adapter);
     return { nonCore };
   }
@@ -1448,22 +1292,22 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     if (tmpDir) { fs.rmSync(tmpDir, { recursive: true, force: true }); tmpDir = ''; }
   });
 
-  it('fails when body is absent', () => {
+  it('fails when body is absent', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.simulateCardCycle({});
+    const result = await nonCore.simulateCardCycle({});
     expect(result.status).toBe('fail');
   });
 
-  it('fails when body is a string', () => {
+  it('fails when body is a string', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.simulateCardCycle({ body: 'bad' });
+    const result = await nonCore.simulateCardCycle({ body: 'bad' });
     expect(result.status).toBe('fail');
   });
 
-  it('returns full result for a minimal card with no sources or compute', () => {
+  it('returns full result for a minimal card with no sources or compute', async () => {
     const { nonCore } = freshNonCore();
     const card = minCard('minimal');
-    const result = nonCore.simulateCardCycle({ body: { 'card-content': card } });
+    const result = await nonCore.simulateCardCycle({ body: { 'card-content': card } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('minimal');
@@ -1477,9 +1321,9 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('includes validation issues for a structurally bad card', () => {
+  it('includes validation issues for a structurally bad card', async () => {
     const { nonCore } = freshNonCore();
-    const result = nonCore.simulateCardCycle({ body: { 'card-content': { card_data: {} } } });
+    const result = await nonCore.simulateCardCycle({ body: { 'card-content': { card_data: {} } } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('(unknown)');
@@ -1488,7 +1332,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('runs compute with mock-fetched-sources and mock-requires', () => {
+  it('runs compute with mock-fetched-sources and mock-requires', async () => {
     const { nonCore } = freshNonCore();
     const card = {
       ...minCard('compute-sim'),
@@ -1498,7 +1342,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
         { bindTo: 'dep', expr: 'requires.dep_card.x' },
       ],
     };
-    const result = nonCore.simulateCardCycle({
+    const result = await nonCore.simulateCardCycle({
       body: {
         'card-content': card,
         'mock-fetched-sources': { data: { values: [10, 20, 30] } },
@@ -1514,17 +1358,17 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('uses run-source-preflight resultValue as fetched source input for compute', () => {
-    const { nonCore } = freshNonCoreWithExecutorStub((((_refArg, subcommand) => {
+  it('uses run-source-preflight resultValue as fetched source input for compute', async () => {
+    const { nonCore } = freshNonCoreWithExecutorStub((async (_refArg, subcommand) => {
       expect(subcommand).toBe('run-source-preflight');
       return JSON.stringify({ ok: true, reachable: true, latencyMs: 4, resultValue: { values: [10, 20, 30] } });
-    }) as unknown) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutorSync']);
+    }) as ReturnType<typeof createFsBoardNonCorePlatformAdapter>['invokeExecutor']);
     const card = {
       ...minCard('compute-live-sim'),
       source_defs: [{ bindTo: 'data', outputFile: 'data.json', mock: 'quotes' }],
       compute: [{ bindTo: 'total', expr: '$sum(fetched_sources.data.values)' }],
     };
-    const result = nonCore.simulateCardCycle({ body: { 'card-content': card } });
+    const result = await nonCore.simulateCardCycle({ body: { 'card-content': card } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.source_probes).toEqual([
@@ -1536,7 +1380,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('reports compute errors alongside successful steps', () => {
+  it('reports compute errors alongside successful steps', async () => {
     const { nonCore } = freshNonCore();
     const card = {
       ...minCard('mixed'),
@@ -1545,7 +1389,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
         { bindTo: 'bad', expr: '$nosuchfunction()' },
       ],
     };
-    const result = nonCore.simulateCardCycle({ body: { 'card-content': card } });
+    const result = await nonCore.simulateCardCycle({ body: { 'card-content': card } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.ok).toBe(false);
@@ -1555,13 +1399,13 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('marks source probes as skipped when no executor is registered', () => {
+  it('marks source probes as skipped when no executor is registered', async () => {
     const { nonCore } = freshNonCore();
     const card = {
       ...minCard('no-exec'),
       source_defs: [{ bindTo: 'raw', outputFile: 'raw.json', cli: 'fetch.sh' }],
     };
-    const result = nonCore.simulateCardCycle({ body: { 'card-content': card } });
+    const result = await nonCore.simulateCardCycle({ body: { 'card-content': card } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.source_probes.length).toBe(1);
@@ -1570,7 +1414,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('detects projection resolution failures', () => {
+  it('detects projection resolution failures', async () => {
     const { nonCore } = freshNonCore();
     const card = {
       ...minCard('proj-fail'),
@@ -1581,7 +1425,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
         projections: { ticker_list: 'requires.missing_card.tickers' },
       }],
     };
-    const result = nonCore.simulateCardCycle({ body: { 'card-content': card } });
+    const result = await nonCore.simulateCardCycle({ body: { 'card-content': card } });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.ok).toBe(false);
@@ -1591,7 +1435,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('resolves projections successfully from mock-requires', () => {
+  it('resolves projections successfully from mock-requires', async () => {
     const { nonCore } = freshNonCore();
     const card = {
       ...minCard('proj-ok'),
@@ -1602,7 +1446,7 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
         projections: { ticker_list: 'requires.holdings.tickers' },
       }],
     };
-    const result = nonCore.simulateCardCycle({
+    const result = await nonCore.simulateCardCycle({
       body: {
         'card-content': card,
         'mock-requires': { holdings: { tickers: ['AAPL', 'MSFT'] } },
@@ -1614,13 +1458,13 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
-  it('accepts flat card body (no card-content wrapper)', () => {
+  it('accepts flat card body (no card-content wrapper)', async () => {
     const { nonCore } = freshNonCore();
     const card = {
       ...minCard('flat-sim'),
       compute: [{ bindTo: 'val', expr: '42' }],
     };
-    const result = nonCore.simulateCardCycle({ body: card });
+    const result = await nonCore.simulateCardCycle({ body: card });
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data.cardId).toBe('flat-sim');

@@ -26,27 +26,59 @@ The public layer never knows how data arrived.
 
 ```ts
 init(input: CommandInput): CommandResult
-  body:   { "task-executor-ref"?: ExecutionRef, "chat-handler-ref"?: ExecutionRef }
+  params: { cardStoreRef, outputsStoreRef, scratchStoreRef?, archiveStoreRef?, chatStoreRef?, artifactsStoreRef? }
+  body:   {
+    "task-executor-ref"?: ExecutionRef,
+    "chat-handler-flow"?: unknown        // opaque flow descriptor; persisted via writeChatHandlerFlow
+  }
 
 status(input: CommandInput): CommandResult<BoardStatusObject>
   (no params / no body)
 
 getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>
+getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>
+getScratchStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>
+getArchiveStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>
+getChatStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>
+getArtifactsStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>
   (no params / no body)
 
-getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>
-  (no params / no body)
+getConfig(input: CommandInput): CommandResult<{ value: unknown }>
+  params: { key }   // one of: 'task-executor', 'chat-handler-flow', 'card-store-ref',
+                    //         'outputs-store-ref', 'scratch-store-ref', 'archive-store-ref',
+                    //         'chat-store-ref', 'artifacts-store-ref'
 
 getOutputsDataObject(input: CommandInput): CommandResult
   params: { key }   // key = the data-object token (e.g. "holdings")
   → data: stored payload at data-objects/<key>, or null
 
+getAllOutputsDataObjects(input: CommandInput): CommandResult<Record<string, unknown>>
+  (no params / no body)
+
 getOutputsComputedValues(input: CommandInput): CommandResult
   params: { key }   // key = card id
   → data: computed_values map for that card, or null
 
+getAllOutputsComputedValues(input: CommandInput): CommandResult<Record<string, unknown>>
+  (no params / no body)
+
+getOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, string>>
+  params: { key }   // key = card id
+  → data: { <outputFile>: <b64:source-ref>, ... }
+
+getAllOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, Record<string, string>>>
+  (no params / no body)
+  → data: { <cardId>: { <outputFile>: <b64:source-ref>, ... }, ... }
+
 removeCard(input: CommandInput): CommandResult
   params: { id }
+
+addCardFiles(input: CommandInput): CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>
+  params: { cardId }
+  body:   file metadata object | array | { files: [...] }
+
+cardRefreshedNotify(input: CommandInput): CommandResult
+  params: { cardId }
 
 retrigger(input: CommandInput): CommandResult
   params: { id }
@@ -93,41 +125,31 @@ sourceDataFetchFailure(input: CommandInput): CommandResult
 ### Card validation
 
 ```ts
-validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>
-  params: { cardId?, all? }             // cardId or all required
-
-validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>
+validateCardPreflight(input: CommandInput): Promise<CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>>
   body:   { "card-content": <card object> }
   // Runs structural validation inline.
   // If a task-executor is registered and supports `validate-card-preflight`,
-  // delegates to it via stdin and merges any executor-reported issues.
+  // delegates to it via the async executor request/response hook and merges
+  // any executor-reported issues.
 ```
 
 ### Source probing
 
 ```ts
-probeSource(input: CommandInput): CommandResult
-  params: { cardId, sourceIdx, outRef }
-  body:   { "mock-projections": <object> }   // from stdin
-
-probeTmpSource(input: CommandInput): CommandResult
-  params: { outRef }
-  body:   { "source-def": <object>, "mock-projections": <object> }   // from stdin
-
-probeSourcePreflight(input: CommandInput): CommandResult
+probeSourcePreflight(input: CommandInput): Promise<CommandResult>
   params: { sourceIdx, outRef? }
   body:   { "card-content": <card object>, "mock-projections"?: <object> }
   // If a task-executor is registered and supports `probe-source-preflight`,
-  // delegates to it via stdin for a lightweight readiness / reachability check.
+  // delegates to it via the async executor request/response hook for a
+  // lightweight readiness / reachability check.
   // Does not fall back to the full source fetch path.
 
-runSourcePreflight(input: CommandInput): CommandResult
+runSourcePreflight(input: CommandInput): Promise<CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>>
   params: { sourceIdx, outRef? }
   body:   { "card-content": <card object>, "mock-projections"?: <object> }
-  // Runs the selected source through the real fetch flow only.
-  // Returns { bindTo, ok, result, issues }.
+  // Delegates to executor's `run-source-preflight` subcommand via the async
+  // executor request/response hook. Returns { bindTo, ok, result, issues }.
   // Fails when no task executor is configured.
-  // Does not use executor `run-source-preflight` hooks or fallback modes.
 ```
 
 ### Compute evaluation
@@ -147,7 +169,7 @@ evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolea
 ### Full cycle simulation
 
 ```ts
-simulateCardCycle(input: CommandInput): CommandResult<SimulateResult>
+simulateCardCycle(input: CommandInput): Promise<CommandResult<SimulateResult>>
   body:   {
     "card-content": <card object>,
     "mock-fetched-sources"?: <object>,     // keyed by source_defs[].bindTo
@@ -161,7 +183,7 @@ simulateCardCycle(input: CommandInput): CommandResult<SimulateResult>
 ### Task executor introspection
 
 ```ts
-describeTaskExecutorCapabilities(input: CommandInput): CommandResult
+describeTaskExecutorCapabilities(input: CommandInput): Promise<CommandResult>
   (no params / no body)
 ```
 

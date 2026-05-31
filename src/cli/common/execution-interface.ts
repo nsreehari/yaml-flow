@@ -270,7 +270,7 @@ export interface ExecutionRef {
    * Optional JSONata-based transforms applied to the raw invoke result
    * before it reaches the step-machine engine.
    *
-   * Context for all expressions: `{ output: { result, data, error? } }`
+    * Context for all expressions: `{ output: { result, data, error?, headers? } }`
    * where `output` is the raw { result, data, error? } returned by invokeRefSync.
    *
    * All fields are optional — only defined ones override the raw value.

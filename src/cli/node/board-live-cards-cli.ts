@@ -156,7 +156,7 @@ export async function cli(argv: string[]): Promise<void> {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
     const body = await readStdinBody();
-    printResult(nonCore.validateCardPreflight({ body }));
+    printResult(await nonCore.validateCardPreflight({ body }));
     return;
   }
 
@@ -169,7 +169,7 @@ export async function cli(argv: string[]): Promise<void> {
     const body    = await readStdinBody();
     const params: Record<string, string | number | boolean> = { sourceIdx: parseInt(idxRaw, 10) };
     if (outRef) params['outRef'] = outRef;
-    printResult(nonCore.probeSourcePreflight({ params, body }));
+    printResult(await nonCore.probeSourcePreflight({ params, body }));
     return;
   }
 
@@ -182,7 +182,7 @@ export async function cli(argv: string[]): Promise<void> {
     const body    = await readStdinBody();
     const params: Record<string, string | number | boolean> = { sourceIdx: parseInt(idxRaw, 10) };
     if (outRef) params['outRef'] = outRef;
-    printResult(nonCore.runSourcePreflight({ params, body }));
+    printResult(await nonCore.runSourcePreflight({ params, body }));
     return;
   }
 
@@ -200,17 +200,7 @@ export async function cli(argv: string[]): Promise<void> {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
     const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
     const body = await readStdinBody();
-    printResult(nonCore.simulateCardCycle({ body }));
-    return;
-  }
-
-  // ── probe-tmp-source — source-def + mock-projections arrive via stdin ──────
-  if (cmd === 'probe-tmp-source') {
-    const outRef  = requireFlag(rest, '--out-ref', 'probe-tmp-source --out-ref <ref>');
-    const tmpRef  = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
-    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
-    const body    = await readStdinBody();
-    printResult(nonCore.probeTmpSource({ params: { outRef }, body }));
+    printResult(await nonCore.simulateCardCycle({ body }));
     return;
   }
 
@@ -347,28 +337,8 @@ export async function cli(argv: string[]): Promise<void> {
       printResult(board().taskProgress({ params: { token }, body: { update } }));
       return;
     }
-    case 'validate-card': {
-      const cardId = optFlag(rest, '--card-id');
-      const all    = rest.includes('--all');
-      if (!cardId && !all) throw new Error('validate-card requires --card-id <id> or --all');
-      const params: Record<string, string | number | boolean> = {};
-      if (cardId) params['cardId'] = cardId;
-      if (all)    params['all']    = true;
-      printResult(nonCore().validateCard({ params }));
-      return;
-    }
-    case 'probe-source': {
-      const cardId = requireFlag(rest, '--card-id', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --out-ref <ref>');
-      const idxRaw = requireFlag(rest, '--source-idx', 'probe-source --base-ref <ref> --card-id <id> --source-idx <n> --out-ref <ref>');
-      const outRef = optFlag(rest, '--out-ref');
-      const body   = await readStdinBody();
-      const params: Record<string, string | number | boolean> = { cardId, sourceIdx: parseInt(idxRaw, 10) };
-      if (outRef) params['outRef'] = outRef;
-      printResult(nonCore().probeSource({ params, body }));
-      return;
-    }
     case 'describe-task-executor-capabilities': {
-      printResult(nonCore().describeTaskExecutorCapabilities({}));
+      printResult(await nonCore().describeTaskExecutorCapabilities({}));
       return;
     }
     default:

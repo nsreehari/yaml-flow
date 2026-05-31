@@ -110,6 +110,49 @@ card-store del: removed N card(s)
 
 ---
 
+## `patch`
+
+Patch a single field on one card by dot-path assignment.
+
+```
+card-store patch --store-ref <ref> --id <card-id> --path <dot.path> [--value-json <json>]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--store-ref <ref>` | yes | Card store location |
+| `--id <card-id>` | yes | Card to patch |
+| `--path <dot.path>` | yes | Dot-path of the field to assign (e.g. `card_data.form.name`) |
+| `--value-json <json>` | no | JSON value to assign; when omitted, stdin is parsed as a JSON value |
+
+**stderr on success**
+```
+card-store patch: ok
+```
+
+---
+
+## `append-files`
+
+Append one file metadata object (or an array of them) to `card_data.files` on a card.
+
+```
+card-store append-files --store-ref <ref> --id <card-id> [--value-json <json>]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--store-ref <ref>` | yes | Card store location |
+| `--id <card-id>` | yes | Card to append to |
+| `--value-json <json>` | no | File metadata object, array, or `{ "files": [...] }`; when omitted, stdin is parsed as a JSON value |
+
+**stderr on success**
+```
+card-store append-files: {"files_added":[{"idx":N,"entry":{...}}, ...]}
+```
+
+---
+
 ## Comparison with `board-live-cards-cli`
 
 `card-store` is the canonical tool for direct card store read/write.  
@@ -120,7 +163,9 @@ card-store del: removed N card(s)
 | Write / update cards | `set` | removed — use `card-store set` |
 | Delete cards | `del` | removed — use `card-store del` |
 | Read cards | `get` / `get --id <id>` | removed — use `card-store get` |
+| Patch a card field | `patch` | — |
+| Append files to a card | `append-files` | `add-card-files` (emits a board notification) |
 | YAML output | `get --yaml` | — |
 | Output format | raw JSON array / YAML multi-doc | `CommandResult` envelope |
-| Board init required | no | yes — and `init` now requires `--store-ref` |
+| Board init required | no | yes — and `init` now requires `--card-store-ref` |
 | Card store location | `--store-ref` flag (any `b64:<base64url(json)>`) | configured at `init` time, readable via `get-card-store-ref` |

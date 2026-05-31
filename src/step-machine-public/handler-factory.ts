@@ -193,6 +193,13 @@ export function createRefStepHandler(
     try {
       const raw = await invoke(ref, stepInput);
       if (!spec.outputTransforms) return raw;
+      if (raw && raw.result !== 'success') {
+        const dataError = raw.data && typeof (raw.data as Record<string, unknown>).error === 'string'
+          ? String((raw.data as Record<string, unknown>).error)
+          : undefined;
+        if (dataError && !raw.error) return { ...raw, error: dataError };
+        return raw;
+      }
       try {
         return resolveOutputTransforms(spec.outputTransforms, raw, stepName);
       } catch (err) {

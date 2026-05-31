@@ -422,7 +422,7 @@ for (const card of [
   CARD_HOLDINGS_TABLE,
   CARD_PORTFOLIO_VALUE,
 ]) {
-  const vr = makeNonCoreBoard().validateCardPreflight({ body: card });
+  const vr = await makeNonCoreBoard().validateCardPreflight({ body: card });
   if (!vr.data?.isValid) {
     console.error(`[VALIDATE FAILED] card ${card.id}:`, JSON.stringify(vr.data?.issues ?? vr.error));
     process.exit(1);

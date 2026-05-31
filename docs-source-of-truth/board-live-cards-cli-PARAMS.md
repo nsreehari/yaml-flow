@@ -1,5 +1,7 @@
 # board-live-cards CLI — Parameter Reference
 
+**Naming conventions:** CLI flags use `kebab-case` (e.g. `--card-id`, `--store-ref`, `--tail-turns`). JSON read from stdin and written to stdout uses `camelCase` field names (e.g. `cardId`, `boardId`). For the MCP HTTP surface (separate from this CLI) request `args` use `snake_case` — see [mcp-api-tools.md](./mcp-api-tools.md#naming-conventions).
+
 ## CommandInput / CommandResult
 
 Every command accepts a `CommandInput` (built from CLI flags + stdin) and writes a `CommandResult` JSON to stdout:
@@ -27,12 +29,13 @@ type CommandInput = {
 
 | Command | stdin body shape |
 |---------|-----------------|
-| `validate-tmp-card` | `{ "card-content": <card object> }` |
-| `probe-source` | `{ "mock-projections": <object> }` |
-| `probe-tmp-source` | `{ "source-def": <object>, "mock-projections": <object> }` |
-
-| `task-progress` | `{ "update": <update-object> }` |
-| `init` | `{ "task-executor-ref"?: <ExecutionRef>, "chat-handler-ref"?: <ExecutionRef> }` |
+| `validate-card-preflight` | `{ "card-content": <card object> }` |
+| `probe-source-preflight` | `{ "card-content": <card object>, "mock-projections"?: <object> }` |
+| `run-source-preflight` | `{ "card-content": <card object>, "mock-projections"?: <object> }` |
+| `eval-card-compute` | `{ "card-content": <card object>, "mock-fetched-sources"?: <object>, "mock-requires"?: <object> }` |
+| `simulate-card-cycle` | `{ "card-content": <card object>, "mock-fetched-sources"?: <object>, "mock-requires"?: <object> }` |
+| `add-card-files` | file metadata object, array, or `{ "files": [...] }` (only when `--value-json` is omitted) |
+| `init` | `{ "task-executor-ref"?: <ExecutionRef>, "chat-handler-flow"?: <unknown> }` (optional) |
 
 All other commands have no body.
 
@@ -43,12 +46,16 @@ All other commands have no body.
 ## Board management
 
 ```
-init --base-ref <ref> --card-store-ref <ref> [--outputs-store-ref <ref>]  # body via stdin (optional)
-  params: { cardStoreRef, outputsStoreRef? }                # --card-store-ref is required
+init --base-ref <ref> --card-store-ref <ref> --outputs-store-ref <ref> \
+     [--scratch-store-ref <ref>] [--archive-store-ref <ref>] [--artifacts-store-ref <ref>]
+     # body via stdin (optional)
+  params: { cardStoreRef, outputsStoreRef, scratchStoreRef?, archiveStoreRef?, artifactsStoreRef? }
   body: {                                                   # stdin
     "task-executor-ref"?: { "howToRun": "...", "whatToRun": "...", ... },
-    "chat-handler-ref"?:  { "howToRun": "...", "whatToRun": "...", ... }
+    "chat-handler-flow"?: <unknown>     # opaque flow descriptor; stored as-is via writeChatHandlerFlow
   }
+  # Note: `chatStoreRef` is accepted by the underlying lib but the CLI does not
+  # currently expose a `--chat-store-ref` flag.
 
 status --base-ref <ref>
   → data: BoardStatus JSON
@@ -59,13 +66,41 @@ get-card-store-ref --base-ref <ref>
 get-outputs-store-ref --base-ref <ref>
   → data: { "storeRef": "<b64:<base64url(json)>>" }
 
-get-outputs --base-ref <ref> --type <data-object|computed-values> --key <key>
-  params: { type, key }
-  --type data-object     → data: the stored payload at data-objects/<key>, or null
-  --type computed-values → data: the computed_values map for card <key>, or null
+get-scratch-store-ref --base-ref <ref>
+  → data: { "storeRef": "<b64:<base64url(json)>>" | null }
+
+get-archive-store-ref --base-ref <ref>
+  → data: { "storeRef": "<b64:<base64url(json)>>" | null }
+
+get-chat-store-ref --base-ref <ref>
+  → data: { "storeRef": "<b64:<base64url(json)>>" | null }
+
+get-artifacts-store-ref --base-ref <ref>
+  → data: { "storeRef": "<b64:<base64url(json)>>" | null }
+
+get-outputs --base-ref <ref> --type <data-object|computed-values|fetched_sources> (--key <key> | --all)
+  params: { type, key?, all? }
+  --type data-object      --key <key> → data: stored payload at data-objects/<key>, or null
+  --type data-object      --all       → data: { <key>: <payload>, ... }
+  --type computed-values  --key <id>  → data: computed_values map for card <id>, or null
+  --type computed-values  --all       → data: { <cardId>: <computed_values>, ... }
+  --type fetched_sources  --key <id>  → data: { <outputFile>: <b64-ref>, ... }
+  --type fetched_sources  --all       → data: { <cardId>: { <outputFile>: <b64-ref>, ... }, ... }
 
 remove-card --base-ref <ref> --id <card-id>
   params: { id }
+
+add-card-files --base-ref <ref> --card-id <card-id> [--value-json <json>]
+  params: { cardId }
+  body: file metadata object | array | { "files": [...] }   # stdin when --value-json omitted
+  → data: { cardId, files_added: [{ idx, entry }, ...], notified: true }
+
+get-attachment-content --base-ref <ref> --card-id <card-id> [--file-idx <n>]
+  params: { cardId, fileIdx? }
+  # Raw binary attachment bytes are written to stdout (no CommandResult envelope).
+
+card-refreshed-notify --base-ref <ref> --card-id <card-id>
+  params: { cardId }
 
 retrigger --base-ref <ref> --id <card-id>
   params: { id }
@@ -80,32 +115,16 @@ upsert-card --base-ref <ref> (--card-id <card-id> | --all) [--restart]
   params: { cardId?, all?, restart? }   # --card-id or --all required
   → data: none                          #  either all cards succeed or none
 
-validate-card --base-ref <ref> (--card-id <card-id> | --all)
-  params: { cardId?, all? }             # --card-id or --all required
-  → data: [{ "cardId": "<card-id>", "isValid": true|false, "issues": ["<message>", ...] }, ...]
-
-validate-tmp-card
-  body: { "card-content": <card object> }              # stdin
-  → data: { "cardId": "<card-id>", "isValid": true|false, "issues": ["<message>", ...] }
-
 validate-card-preflight
   body: { "card-content": <card object> }              # stdin
   → data: { "cardId": "<card-id>", "isValid": true|false, "issues": ["<message>", ...] }
-  # Same as validate-tmp-card but also delegates to executor's validate-card-preflight
-  # subcommand (if registered) and merges any additional issues.
+  # Structural validation, then (for a registered task-executor, supports
+  # `validate-card-preflight`) delegates to it and merges any executor-reported issues.
 ```
 
 ## Source probing
 
 ```
-probe-source --base-ref <ref> --card-id <card-id> --source-idx <n> --out-ref <ref>
-  params: { cardId, sourceIdx, outRef }
-  body: { "mock-projections": <object> }               # stdin
-
-probe-tmp-source --out-ref <ref>
-  params: { outRef }
-  body: { "source-def": <object>, "mock-projections": <object> }  # stdin
-
 probe-source-preflight --source-idx <n>
   params: { sourceIdx }
   body: { "card-content": <card object>, "mock-projections"?: <object> }  # stdin
@@ -138,14 +157,12 @@ eval-card-compute
             "errors": [{ "bindTo": "<key>", "error": "<msg>" }, ...] }
   # Pure in-process expression evaluation — no executor, no board state.
 ```
-
 ## Full cycle simulation
 
 ```
 simulate-card-cycle
   body: {                                                              # stdin
     "card-content": <card object>,
-    "mock-fetched-sources"?: { "<bindTo>": <data>, ... },
     "mock-requires"?: { "<cardId>": <computed_values>, ... }
   }
   → data: { "cardId": "<id>", "ok": true|false,
@@ -170,9 +187,11 @@ describe-task-executor-capabilities --base-ref <ref>   (no additional params)
 task-failed --token <token> [--error <message>]
   params: { token, error? }
 
-task-progress --token <token>
+task-progress --token <token> [--update <json>]
   params: { token }
-  body: { "update": <update-object> }                 # stdin
+  # --update is a JSON string parsed into { update: <obj> } and forwarded as body.
+  # The lib method signature still takes body = { update: <object> }; the CLI
+  # synthesizes that body from the flag (does not read stdin for this command).
 ```
 
 ## Source callbacks

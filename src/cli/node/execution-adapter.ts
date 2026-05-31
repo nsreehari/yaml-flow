@@ -299,6 +299,8 @@ export interface InvokeRefResult {
   data: Record<string, unknown>;
   /** Optional human-readable error detail. */
   error?: string;
+  /** Optional response headers for HTTP transports. */
+  headers?: Record<string, string>;
 }
 
 export interface InvokeRefSyncOptions {
@@ -388,7 +390,10 @@ export function evaluateArgsMassaging(
   return resolveArgsMassaging(argsMassaging, args, label);
 }
 
-function normalizeSuccessPayload(payload: unknown): InvokeRefResult {
+function normalizeSuccessPayload(
+  payload: unknown,
+  extra?: Pick<InvokeRefResult, 'headers'>,
+): InvokeRefResult {
   if (
     payload
     && typeof payload === 'object'
@@ -398,7 +403,28 @@ function normalizeSuccessPayload(payload: unknown): InvokeRefResult {
     && typeof (payload as { data?: unknown }).data === 'object'
     && !Array.isArray((payload as { data?: unknown }).data)
   ) {
-    return payload as InvokeRefResult;
+    return { ...(payload as InvokeRefResult), ...(extra || {}) };
+  }
+
+  if (
+    payload
+    && typeof payload === 'object'
+    && !Array.isArray(payload)
+    && typeof (payload as { status?: unknown }).status === 'string'
+  ) {
+    const envelope = payload as { status: string; data?: unknown; error?: unknown };
+    const result = envelope.status === 'success'
+      ? 'success'
+      : (envelope.status === 'fail' ? 'failure' : envelope.status);
+    const data = envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
+      ? envelope.data as Record<string, unknown>
+      : (envelope.data === undefined ? {} : { stdout: envelope.data });
+    return {
+      result,
+      data,
+      ...(typeof envelope.error === 'string' ? { error: envelope.error } : {}),
+      ...(extra || {}),
+    };
   }
 
   const data: Record<string, unknown> =
@@ -406,7 +432,7 @@ function normalizeSuccessPayload(payload: unknown): InvokeRefResult {
       ? (payload as Record<string, unknown>)
       : { stdout: payload };
 
-  return { result: 'success', data };
+  return { result: 'success', data, ...(extra || {}) };
 }
 
 function normalizeFailure(message: string): InvokeRefResult {
@@ -503,29 +529,62 @@ async function invokeHttpExecutionRef(
     body = JSON.stringify(massaged.body ?? args);
   }
 
-  try {
-    const response = await fetch(url, {
-      method: ref.howToRun === 'http:get' ? 'GET' : 'POST',
-      headers,
-      body,
-    });
+  const requestInit = {
+    method: ref.howToRun === 'http:get' ? 'GET' : 'POST',
+    headers,
+    body,
+  } as const;
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      return normalizeFailure(`[${label}] HTTP ${response.status}${text ? `: ${text}` : ''}`);
-    }
-
-    const text = await response.text();
-    if (!text.trim()) return { result: 'success', data: {} };
-
+  // Retry once on ECONNRESET to handle stale keep-alive sockets (common when
+  // the same Node process makes an HTTP call to its own server after a long
+  // sync-blocking step that exceeded the server's keep-alive idle timeout).
+  let attempt = 0;
+  while (true) {
     try {
-      return normalizeSuccessPayload(_parseStdoutAsJson(text));
-    } catch {
-      return { result: 'success', data: { stdout: text.trim() } };
+      const response = await fetch(url, requestInit);
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        return normalizeFailure(`[${label}] HTTP ${response.status}${text ? `: ${text}` : ''}`);
+      }
+
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength === 0) return { result: 'success', data: {}, headers: responseHeaders };
+
+      const text = new TextDecoder().decode(bytes);
+
+      try {
+        return normalizeSuccessPayload(_parseStdoutAsJson(text), { headers: responseHeaders });
+      } catch {
+        return {
+          result: 'success',
+          data: { stdout: text },
+          headers: responseHeaders,
+        };
+      }
+    } catch (err) {
+      const causeRaw = (err as { cause?: unknown })?.cause;
+      const causeCode = causeRaw && typeof causeRaw === 'object' && 'code' in causeRaw
+        ? String((causeRaw as { code?: unknown }).code || '')
+        : '';
+      const retryable = causeCode === 'ECONNRESET' || causeCode === 'UND_ERR_SOCKET';
+      if (retryable && attempt === 0) {
+        attempt += 1;
+        continue;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      const cause = causeRaw instanceof Error
+        ? `${causeRaw.name}: ${causeRaw.message}${causeCode ? ` [${causeCode}]` : ''}`
+        : (causeRaw ? String(causeRaw) : '');
+      const urlInfo = massaged.url ?? baseUrl ?? '';
+      const detail = `${msg}${cause ? ` (cause: ${cause})` : ''}${urlInfo ? ` url=${urlInfo}` : ''}`;
+      return normalizeFailure(`[${label}] ${detail}`);
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return normalizeFailure(`[${label}] ${msg}`);
   }
 }
 

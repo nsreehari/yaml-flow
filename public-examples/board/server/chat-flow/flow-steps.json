@@ -7,27 +7,28 @@
   },
   "steps": {
     "read_chats": {
-      "description": "Read chats from runtime storage via chat-store-cli and pass them through the flow",
-      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId"],
+      "description": "Read chats from runtime storage via MCP inspect.chat-messages-on-cards",
+      "expects_data": ["serverUrl", "boardId", "cardId"],
       "produces_data": ["chatMessages"],
       "input_validations": [
-        "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
         "$type(cardId) = \"string\" and $length(cardId) > 0"
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-node",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "yaml-flow-cli",
-          "value": "chat-store-cli.js"
+          "kind": "http-url",
+          "value": ""
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'command': 'read-all', 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId }"
+          "urlTemplate": "serverUrl & '/api/boards/' & boardId & '/mcp'",
+          "bodyTemplate": "{ 'tool': 'inspect.chat-messages-on-cards', 'args': { 'card_id': cardId } }"
         },
         "outputTransforms": {
-          "dataTemplate": "{ 'chatMessages': output.data.records }"
+          "dataTemplate": "{ 'chatMessages': output.data.messages }"
         }
       },
       "transitions": {
@@ -120,18 +121,24 @@
       }
     },
     "probe_in_progress": {
-      "description": "Append a probe-only in-progress system message before generating the deterministic echo reply",
+      "description": "Append a probe-only in-progress system message via the host test endpoint before generating the deterministic echo reply",
+      "expects_data": ["serverUrl", "boardId", "cardId", "turnId"],
+      "input_validations": [
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
+        "$type(cardId) = \"string\" and $length(cardId) > 0"
+      ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-node",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "yaml-flow-cli",
-          "value": "chat-store-cli.js"
+          "kind": "http-url",
+          "value": ""
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'in-progress', 'files': [], 'turn': turnId }] }"
+          "urlTemplate": "serverUrl & '/test-req/boards/' & boardId & '/chat/system-message'",
+          "bodyTemplate": "{ 'cardId': cardId, 'text': 'in-progress', 'turn': turnId, 'files': [] }"
         }
       },
       "transitions": {
@@ -141,35 +148,29 @@
       }
     },
     "probe_attachment_reply": {
-      "description": "Read the current probe attachment via board-live-cards-cli and use its content as the assistant reply",
-      "expects_data": ["boardBaseRef", "cardId", "probeAttachmentFileIdx"],
-      "produces_data": ["replyText"],
+      "description": "Read the current probe attachment via MCP inspect.file-contents and use its content as the assistant reply",
+      "expects_data": ["serverUrl", "boardId", "cardId", "probeAttachmentFileIdx"],
+      "produces_data": ["replyText", "probeAttachmentMimeType", "probeAttachmentBodyBase64"],
       "input_validations": [
-        "$type(boardBaseRef) = \"string\" and $length(boardBaseRef) > 0",
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(probeAttachmentFileIdx) = \"number\" and probeAttachmentFileIdx >= 0"
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-node",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "yaml-flow-cli",
-          "value": "board-live-cards-cli.js"
+          "kind": "http-url",
+          "value": ""
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "cmdTemplate": [
-            "'get-attachment-content'",
-            "'--base-ref'",
-            "boardBaseRef",
-            "'--card-id'",
-            "cardId",
-            "'--file-idx'",
-            "$string(probeAttachmentFileIdx)"
-          ]
+          "urlTemplate": "serverUrl & '/api/boards/' & boardId & '/mcp-raw?resp=json-b64'",
+          "bodyTemplate": "{ 'tool': 'inspect.file-contents', 'args': { 'card_id': cardId, 'file_idx': probeAttachmentFileIdx } }"
         },
         "outputTransforms": {
-          "dataTemplate": "{ 'replyText': $string(output.data.stdout) }"
+          "dataTemplate": "{ 'replyText': ($type(output.data.bodyBase64) = 'string' ? $base64decode(output.data.bodyBase64) : ''), 'probeAttachmentMimeType': output.data.mimeType, 'probeAttachmentBodyBase64': output.data.bodyBase64 }"
         }
       },
       "transitions": {
@@ -226,28 +227,29 @@
       }
     },
     "write_reply": {
-      "description": "Append the assistant reply via chat-store-cli",
-      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "replyText", "turnId"],
+      "description": "Append the assistant reply via MCP stage-ai-response-and-any-attachments",
+      "expects_data": ["serverUrl", "boardId", "cardId", "replyText", "turnId"],
       "produces_data": ["replyId"],
       "input_validations": [
-        "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(replyText) = \"string\""
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-node",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "yaml-flow-cli",
-          "value": "chat-store-cli.js"
+          "kind": "http-url",
+          "value": ""
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'assistant', 'text': replyText, 'files': [], 'turn': turnId }] }"
+          "urlTemplate": "serverUrl & '/api/boards/' & boardId & '/mcp'",
+          "bodyTemplate": "{ 'tool': 'stage-ai-response-and-any-attachments', 'args': { 'card_id': cardId, 'text': replyText, 'turn_id': turnId } }"
         },
         "outputTransforms": {
-          "dataTemplate": "{ 'replyId': output.data.results[0].data.id }"
+          "dataTemplate": "{ 'replyId': output.data.id }"
         }
       },
       "transitions": {
@@ -284,23 +286,24 @@
       }
     },
     "cleanup_failure": {
-      "description": "Write a failure system message via chat-store-cli",
-      "expects_data": ["boardSetupRoot", "boardRuntimeDir", "cardId", "turnId"],
+      "description": "Write a failure system message via the host test endpoint",
+      "expects_data": ["serverUrl", "boardId", "cardId", "turnId"],
       "input_validations": [
-        "$type(boardSetupRoot) = \"string\" and $length(boardSetupRoot) > 0",
+        "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
+        "$type(boardId) = \"string\" and $length(boardId) > 0",
         "$type(cardId) = \"string\" and $length(cardId) > 0"
       ],
       "handler": {
         "type": "ref",
-        "howToRun": "local-node",
+        "howToRun": "http:post",
         "whatToRun": {
-          "kind": "yaml-flow-cli",
-          "value": "chat-store-cli.js"
+          "kind": "http-url",
+          "value": ""
         },
         "meta": "chat-handler",
         "argsMassaging": {
-          "cmdTemplate": ["'--stdin'"],
-          "stdinTemplate": "{ 'storeRef': $fsPathRef(boardSetupRoot & '/' & boardRuntimeDir), 'cardId': cardId, 'commands': [{ 'command': 'append', 'role': 'system', 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'files': [], 'turn': turnId }] }"
+          "urlTemplate": "serverUrl & '/test-req/boards/' & boardId & '/chat/system-message'",
+          "bodyTemplate": "{ 'cardId': cardId, 'text': 'AI response failed - the assistant could not generate a reply. Check server configuration and logs.', 'turn': turnId, 'files': [] }"
         }
       },
       "transitions": {

@@ -213,6 +213,13 @@ export interface BoardPlatformAdapter {
   dispatchExecution(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
 
   /**
+   * Whether dispatchExecution can accept a board-owned staged source output ref
+   * for this executor. When false/absent, the adapter keeps its legacy staging
+   * protocol such as scratch in/out refs for local process launch.
+   */
+  supportsDirectSourceOutput?(ref: ExecutionRef): boolean;
+
+  /**
    * Resolve a blob ref to its string contents.
    * The adapter handles the platform-specific lookup (e.g. absolute FS path vs board-relative key).
    * Throws if the blob does not exist.
@@ -344,15 +351,17 @@ function decodeCallbackToken(token: string): { taskName: string } | null {
   } catch { return null; }
 }
 
-function encodeSourceToken(payload: SourceTokenPayload): string {
+type HostedSourceTokenPayload = SourceTokenPayload & { dt?: string };
+
+function encodeSourceToken(payload: HostedSourceTokenPayload): string {
   return toBase64Url(JSON.stringify(payload));
 }
 
-function decodeSourceToken(token: string): SourceTokenPayload | null {
+function decodeSourceToken(token: string): HostedSourceTokenPayload | null {
   try {
     const p = JSON.parse(fromBase64Url(token));
     if (typeof p?.cbk === 'string' && typeof p?.cid === 'string' &&
-        typeof p?.b === 'string' && typeof p?.d === 'string') return p as SourceTokenPayload;
+        typeof p?.b === 'string' && typeof p?.d === 'string') return p as HostedSourceTokenPayload;
     return null;
   } catch { return null; }
 }
@@ -640,6 +649,7 @@ export function createBoardLiveCardsPublic(
 
     const executorRef = configStore().readTaskExecutorRef()
       ?? { howToRun: 'built-in' as const, whatToRun: serializeRef({ kind: 'built-in', value: 'source-cli-task-executor' }) };
+    const useDirectHostedWorkerRequest = adapter.supportsDirectSourceOutput?.(executorRef) === true;
 
     executionRequestStore.dispatchEntriesForJournalId(newCursor, (entry) => {
       if (entry.taskKind !== 'source-fetch') {
@@ -652,13 +662,31 @@ export function createBoardLiveCardsPublic(
 
       for (const src of sourceDefs) {
         if (!src.outputFile) { warn(`[dispatch] source "${src.bindTo}" has no outputFile — skipping`); continue; }
+        let directOutput: { ref: string; deliveryToken: string; outputFile: string; cardId: string } | undefined;
+        if (useDirectHostedWorkerRequest) {
+          const deliveryToken = adapter.genId();
+          const stagedKey = `${cardId}/.staged/${deliveryToken}/${src.outputFile}`;
+          const stagedRef = adapter.blobStorage('sources').keyRef?.(stagedKey);
+          if (stagedRef) {
+            directOutput = {
+              ref: serializeRef(stagedRef),
+              deliveryToken,
+              outputFile: src.outputFile,
+              cardId,
+            };
+          } else {
+            warn('[dispatch] hosted board-worker requested but sources BlobStorage cannot produce portable refs; falling back to scratch protocol');
+          }
+        }
         const sourceToken = encodeSourceToken({
           cbk: p.callbackToken, rg: baseRef.value, br: serializeRef(baseRef),
           cid: cardId, b: src.bindTo, d: src.outputFile, cs: undefined, rqt: p.rqt,
+          ...(directOutput ? { dt: directOutput.deliveryToken } : {}),
         });
         adapter.dispatchExecution(executorRef, {
           source_def: src, base_ref: serializeRef(baseRef),
           callback: { token: sourceToken, via: adapter.selfRef },
+          ...(directOutput ? { output: directOutput } : {}),
         }).catch((e: unknown) => taskFailedFn(cardId, e instanceof Error ? e.message : String(e)));
       }
     });
@@ -863,15 +891,17 @@ export function createBoardLiveCardsPublic(
       if (!ref)   return fail('sourceDataFetched requires params.ref');
       const payload = decodeSourceToken(token);
       if (!payload) return fail('Invalid source token');
-      const { cbk, cid, b, d, cs, rqt } = payload;
+      const { cbk, cid, b, d, cs, rqt, dt } = payload;
 
       const fetchedSourcesStore = createFetchedSourcesStore(
         adapter.blobStorage('sources'),
         (ref) => adapter.resolveBlob(ref),
       );
 
-      const deliveryToken = adapter.genId();
-      fetchedSourcesStore.ingestSourceDataStaged(cid, d, parseRef(ref), deliveryToken);
+      const deliveryToken = dt || adapter.genId();
+      if (!dt) {
+        fetchedSourcesStore.ingestSourceDataStaged(cid, d, parseRef(ref), deliveryToken);
+      }
 
       const cbkDecoded = decodeCallbackToken(cbk);
       if (!cbkDecoded) return fail('Invalid callback token embedded in source token');
@@ -1062,25 +1092,20 @@ export function createBoardLiveCardsPublic(
 }
 
 // ============================================================================
-// BoardNonCorePlatformAdapter — extends the base adapter with synchronous
-// executor dispatch and schema validation.
-//
-// The 5 non-core commands all require blocking sub-process invocation which
-// is not available in fire-and-forget async dispatch contexts (Azure Fn, etc.)
-// so they live in a separate interface and factory.
+// BoardNonCorePlatformAdapter — extends the base adapter with async
+// executor request/response and schema validation.
 // ============================================================================
 
 export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
   /**
-   * Synchronously invoke a task executor subcommand and return stdout.
-   * Throws on non-zero exit or timeout.
+   * Invoke a task executor subcommand and return stdout.
+   * Throws on transport failure, non-zero exit, or timeout.
    */
-  invokeExecutorSync(
+  invokeExecutor(
     ref: ExecutionRef,
     subcommand: string,
-    args: string[],
     opts?: { timeout?: number; input?: string },
-  ): string;
+  ): Promise<string>;
 
   /** Schema-only card validator (no executor invocation). */
   validateSchema(card: Record<string, unknown>): { ok: boolean; errors: string[] };
@@ -1089,7 +1114,7 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
   absoluteBlob: BlobStorage;
 
   /**
-   * Default timeouts (ms) for synchronous executor invocations.
+  * Default timeouts (ms) for executor request/response calls.
    * Each field can also be overridden per-source via source_def.timeout.
    *
    *   validationMs — validate-source-def, validate-card-preflight (structural, fast). Default: 10_000.
@@ -1106,36 +1131,27 @@ export interface BoardNonCorePlatformAdapter extends BoardPlatformAdapter {
 }
 
 // ============================================================================
-// BoardLiveCardsNonCorePublic — 5 commands requiring synchronous dispatch
+// BoardLiveCardsNonCorePublic — validation, preflight, and compute helpers
 // ============================================================================
 
 export interface BoardLiveCardsNonCorePublic {
-  /** params: cardId? or all?; returns array even for single card */
-  validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
-
   /** body: { "card-content": <card> } — card JSON arrives via stdin; validates schema + JSONata + provides refs + source_defs (executor, if configured) */
-  validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
-
-  /** params: cardId, sourceIdx, outRef?; body — mockProjections object */
-  probeSource(input: CommandInput): CommandResult;
-
-  /** body: { sourceDef, mockProjections }; params: outRef? */
-  probeTmpSource(input: CommandInput): CommandResult;
+  validateCardPreflight(input: CommandInput): Promise<CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>>;
 
   /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — card JSON arrives via stdin; no board state needed */
-  probeSourcePreflight(input: CommandInput): CommandResult;
+  probeSourcePreflight(input: CommandInput): Promise<CommandResult>;
 
   /** body: { "card-content": <card>, "mock-projections"?: {} }; params: sourceIdx, outRef? — runs the real source fetch flow as a preflight */
-  runSourcePreflight(input: CommandInput): CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
+  runSourcePreflight(input: CommandInput): Promise<CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>>;
 
   /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — evaluates compute expressions with supplied data; no board state needed */
   evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
 
   /** body: { "card-content": <card>, "mock-fetched-sources"?: {}, "mock-requires"?: {} } — full cycle: validate → resolve projections → probe sources → compute */
-  simulateCardCycle(input: CommandInput): CommandResult;
+  simulateCardCycle(input: CommandInput): Promise<CommandResult>;
 
   /** no params needed */
-  describeTaskExecutorCapabilities(input: CommandInput): CommandResult;
+  describeTaskExecutorCapabilities(input: CommandInput): Promise<CommandResult>;
 
   /**
    * Write/update cards in the configured card store.
@@ -1176,17 +1192,12 @@ export function createBoardLiveCardsNonCorePublic(
   }
   const cardStore = () => createCardStore(makeCardAdapterNC(), adapter.onWarn ?? (() => { /* no-op */ }));
 
-  const scratchStore = () => {
-    const ref = configStore().readScratchStoreRef();
-    return ref ? adapter.scratchStorageForRef(ref) : adapter.scratchStorage();
-  };
-
   // ── Shared validation helper ───────────────────────────────────────────────
 
-  function validateCardObject(
+  async function validateCardObject(
     cardId: string,
     card: Record<string, unknown>,
-  ): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }> {
+  ): Promise<CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>> {
     const schemaResult = adapter.validateSchema(card);
     const sourceErrors: string[] = [];
 
@@ -1198,7 +1209,7 @@ export function createBoardLiveCardsNonCorePublic(
           let stdout: string;
           try {
             // Pass source_def JSON via stdin; executor reads stdin, writes { ok, errors } to stdout.
-            stdout = adapter.invokeExecutorSync(teRef, 'validate-source-def', [], { timeout: adapter.executorTimeouts?.validationMs ?? 10_000, input: JSON.stringify(src) });
+            stdout = await adapter.invokeExecutor(teRef, 'validate-source-def', { timeout: adapter.executorTimeouts?.validationMs ?? 10_000, input: JSON.stringify(src) });
           } catch (execErr: unknown) {
             const se = execErr as { stdout?: unknown };
             stdout = typeof se?.stdout === 'string' ? se.stdout : '';
@@ -1219,72 +1230,6 @@ export function createBoardLiveCardsNonCorePublic(
 
     const allErrors = [...schemaResult.errors, ...sourceErrors];
     return ok({ cardId, isValid: allErrors.length === 0, issues: allErrors }) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
-  }
-
-  // ── Shared probe helper ────────────────────────────────────────────────────
-
-  function executeSourceProbe(
-    src: Record<string, unknown>,
-    mockProjections: Record<string, unknown>,
-  ): { bindTo: string; result: string } {
-    const teRef = configStore().readTaskExecutorRef();
-    if (!teRef) throw new Error('No task-executor registered for this board');
-
-    const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : 'source';
-    const scratch = scratchStore();
-
-    const inPayload: Record<string, unknown> = {
-      ...src,
-      boardDir: baseRef.value,
-      _projections: mockProjections,
-    };
-
-    const inFile  = scratch.create(JSON.stringify(inPayload, null, 2), `probe-in-${bindTo}`, '.json');
-    const outFile = scratch.getUniqueKey(`probe-out-${bindTo}`, '.json');
-    const errFile = scratch.getUniqueKey(`probe-err-${bindTo}`, '.txt');
-
-    const inRefStr  = serializeRef(scratch.keyRef(inFile));
-    const outRefStr = serializeRef(scratch.keyRef(outFile));
-    const errRefStr = serializeRef(scratch.keyRef(errFile));
-
-    let result: string | null = null;
-    try {
-      adapter.invokeExecutorSync(teRef, 'run-source-fetch',
-        ['--in-ref', inRefStr, '--out-ref', outRefStr, '--err-ref', errRefStr],
-        { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.probeMs ?? 60_000 },
-      );
-      result = scratch.read(outFile);
-      if (result === null) throw new Error('Executor produced no output file');
-    } catch (e) {
-      const errMsg = scratch.read(errFile)?.trim()
-        ?? (e instanceof Error ? e.message : String(e));
-      throw new Error(`Probe failed: ${errMsg}`);
-    } finally {
-      try { scratch.remove(inFile); } catch { /* best-effort */ }
-      try { scratch.remove(errFile); } catch { /* best-effort */ }
-    }
-
-    return { bindTo, result };
-  }
-
-  function runSourceProbe(
-    src: Record<string, unknown>,
-    mockProjections: Record<string, unknown>,
-    outRef?: string,
-  ): CommandResult {
-    let executed: { bindTo: string; result: string };
-    try {
-      executed = executeSourceProbe(src, mockProjections);
-    } catch (e) {
-      return fail(e instanceof Error ? e.message : String(e));
-    }
-
-    if (outRef) {
-      const parsed = parseRef(outRef);
-      adapter.absoluteBlob.write(parsed.value, executed.result);
-    }
-
-    return ok({ bindTo: executed.bindTo, resultSizeBytes: executed.result.length });
   }
 
   function resolvePreflightSource(
@@ -1311,25 +1256,7 @@ export function createBoardLiveCardsNonCorePublic(
 
   // ── Public methods ─────────────────────────────────────────────────────────
 
-  function validateCard(input: CommandInput): CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>> {
-    try {
-      const cardId = input.params?.['cardId'] as string | undefined;
-      const all    = input.params?.['all'];
-      if (!cardId && !all) return fail('validateCard requires --card-id <id> or --all') as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
-      const ids = all ? cardStore().readAllCards().map(c => c.id) : [cardId as string];
-      const results: Array<{ cardId: string; isValid: boolean; issues: string[] }> = [];
-      for (const id of ids) {
-        const card = cardStore().readCard(id);
-        if (!card) { results.push({ cardId: id, isValid: false, issues: [`Card "${id}" not found`] }); continue; }
-        const r = validateCardObject(id, card as Record<string, unknown>);
-        if (r.status !== 'success') return r as unknown as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
-        results.push(r.data!);
-      }
-      return ok(results) as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>;
-    } catch (e) { return err(e) as CommandResult<Array<{ cardId: string; isValid: boolean; issues: string[] }>>; }
-  }
-
-  function validateCardPreflight(input: CommandInput): CommandResult<{ cardId: string; isValid: boolean; issues: string[] }> {
+  async function validateCardPreflight(input: CommandInput): Promise<CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>> {
     try {
       if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
         return fail('validateCardPreflight requires card JSON object in body') as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
@@ -1337,43 +1264,11 @@ export function createBoardLiveCardsNonCorePublic(
       const body = input.body as Record<string, unknown>;
       const card = (body['card-content'] ?? body) as Record<string, unknown>;
       const cardId = typeof card['id'] === 'string' ? card['id'] : '(unknown)';
-      return validateCardObject(cardId, card);
+      return await validateCardObject(cardId, card);
     } catch (e) { return err(e) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>; }
   }
 
-  function probeSource(input: CommandInput): CommandResult {
-    try {
-      const cardId    = input.params?.['cardId']    as string | undefined;
-      const sourceIdx = input.params?.['sourceIdx'] as number | undefined;
-      const outRef    = input.params?.['outRef']    as string | undefined;
-      if (!cardId) return fail('probeSource requires params.cardId');
-      if (sourceIdx === undefined) return fail('probeSource requires params.sourceIdx');
-      const b = (input.body ?? {}) as Record<string, unknown>;
-      const mockProjections = (b['mock-projections'] ?? {}) as Record<string, unknown>;
-
-      const card = cardStore().readCard(cardId) as Record<string, unknown> | null;
-      if (!card) return fail(`Card "${cardId}" not found`);
-      const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
-      if (sourceIdx < 0 || sourceIdx >= sourceDefs.length) {
-        return fail(`sourceIdx ${sourceIdx} out of range (card has ${sourceDefs.length} source(s))`);
-      }
-      return runSourceProbe(sourceDefs[sourceIdx], mockProjections, outRef);
-    } catch (e) { return err(e); }
-  }
-
-  function probeTmpSource(input: CommandInput): CommandResult {
-    try {
-      const outRef = input.params?.['outRef'] as string | undefined;
-      const b = input.body as Record<string, unknown> | undefined;
-      if (!b) return fail('probeTmpSource requires body with "source-def" and "mock-projections"');
-      const sourceDef = b['source-def'] as Record<string, unknown> | undefined;
-      const mockProjections = (b['mock-projections'] ?? {}) as Record<string, unknown>;
-      if (!sourceDef) return fail('probeTmpSource body requires "source-def"');
-      return runSourceProbe(sourceDef, mockProjections, outRef);
-    } catch (e) { return err(e); }
-  }
-
-  function probeSourcePreflight(input: CommandInput): CommandResult {
+  async function probeSourcePreflight(input: CommandInput): Promise<CommandResult> {
     try {
       const resolved = resolvePreflightSource(input, 'probeSourcePreflight');
       if ('status' in resolved) return resolved;
@@ -1383,7 +1278,7 @@ export function createBoardLiveCardsNonCorePublic(
       if (!teRef) return fail('No task-executor registered for this board');
       try {
         const inPayload = { ...resolved.src, _projections: resolved.mockProjections };
-        const stdout = adapter.invokeExecutorSync(teRef, 'probe-source-preflight', [],
+        const stdout = await adapter.invokeExecutor(teRef, 'probe-source-preflight',
           { timeout: (resolved.src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
         const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; note?: string };
         if (!result.ok) return fail(result.error ?? 'Preflight probe failed');
@@ -1394,32 +1289,44 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e); }
   }
 
-  function runSourcePreflight(input: CommandInput): CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }> {
+  async function runSourcePreflight(input: CommandInput): Promise<CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>> {
     try {
       const resolved = resolvePreflightSource(input, 'runSourcePreflight');
       if ('status' in resolved) return resolved as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
 
+      const teRef = configStore().readTaskExecutorRef();
+      if (!teRef) {
+        return fail('No task-executor registered for this board') as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
+      }
+
       try {
-        const executed = executeSourceProbe(resolved.src, resolved.mockProjections);
+        const inPayload = { ...resolved.src, _projections: resolved.mockProjections };
+        const stdout = await adapter.invokeExecutor(teRef, 'run-source-preflight', {
+          timeout: (resolved.src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.probeMs ?? 60_000,
+          input: JSON.stringify(inPayload),
+        });
+        const executed = JSON.parse(stdout.trim()) as { ok?: boolean; bindTo?: string; resultValue?: unknown; error?: string };
+        if (!executed.ok) {
+          return ok({
+            bindTo: resolved.bindTo,
+            ok: false,
+            result: null,
+            issues: [executed.error ?? 'Preflight run failed'],
+          });
+        }
         if (resolved.outRef) {
           const parsed = parseRef(resolved.outRef);
-          adapter.absoluteBlob.write(parsed.value, executed.result);
+          adapter.absoluteBlob.write(parsed.value, JSON.stringify(executed.resultValue, null, 2));
         }
 
-        let resultValue: unknown = executed.result;
-        try { resultValue = JSON.parse(executed.result); } catch { /* keep raw string result */ }
-
         return ok({
-          bindTo: executed.bindTo,
+          bindTo: typeof executed.bindTo === 'string' ? executed.bindTo : resolved.bindTo,
           ok: true,
-          result: resultValue,
+          result: executed.resultValue ?? null,
           issues: [],
         });
       } catch (e) {
         const errorMessage = e instanceof Error ? e.message : String(e);
-        if (errorMessage === 'No task-executor registered for this board') {
-          return fail(errorMessage) as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
-        }
         return ok({
           bindTo: resolved.bindTo,
           ok: false,
@@ -1430,11 +1337,11 @@ export function createBoardLiveCardsNonCorePublic(
     } catch (e) { return err(e) as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>; }
   }
 
-  function describeTaskExecutorCapabilities(_input: CommandInput): CommandResult {
+  async function describeTaskExecutorCapabilities(_input: CommandInput): Promise<CommandResult> {
     try {
       const teRef = configStore().readTaskExecutorRef();
       if (!teRef) return fail('No task-executor registered for this board');
-      const stdout = adapter.invokeExecutorSync(teRef, 'describe-capabilities', [], { timeout: adapter.executorTimeouts?.describeMs ?? 10_000 });
+      const stdout = await adapter.invokeExecutor(teRef, 'describe-capabilities', { timeout: adapter.executorTimeouts?.describeMs ?? 10_000 });
       return ok(JSON.parse(stdout.trim()) as Record<string, unknown>);
     } catch (e) { return err(e); }
   }
@@ -1526,7 +1433,7 @@ export function createBoardLiveCardsNonCorePublic(
     compute_errors: Array<{ bindTo: string; error: string }>;
   };
 
-  function simulateCardCycle(input: CommandInput): CommandResult<SimulateResult> {
+  async function simulateCardCycle(input: CommandInput): Promise<CommandResult<SimulateResult>> {
     try {
       if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
         return fail('simulateCardCycle requires a JSON object in body') as CommandResult<SimulateResult>;
@@ -1538,7 +1445,7 @@ export function createBoardLiveCardsNonCorePublic(
       const mockRequires = (body['mock-requires'] ?? {}) as Record<string, unknown>;
 
       // 1. Structural validation
-      const structResult = validateCardObject(cardId, card);
+      const structResult = await validateCardObject(cardId, card);
       const validation = structResult.status === 'success'
         ? { isValid: structResult.data.isValid, issues: structResult.data.issues }
         : { isValid: false, issues: [structResult.status === 'fail' ? structResult.error : 'internal error'] };
@@ -1588,7 +1495,7 @@ export function createBoardLiveCardsNonCorePublic(
         }
         try {
           const inPayload = { ...src };
-          const stdout = adapter.invokeExecutorSync(teRef!, 'run-source-preflight', [],
+          const stdout = await adapter.invokeExecutor(teRef!, 'run-source-preflight',
             { timeout: (src['timeout'] as number | undefined) ?? adapter.executorTimeouts?.preflightMs ?? 60_000, input: JSON.stringify(inPayload) });
           const result = JSON.parse(stdout.trim()) as { ok: boolean; reachable: boolean; latencyMs?: number; error?: string; resultValue?: unknown };
           if (result.ok && !Object.prototype.hasOwnProperty.call(mockFetchedSources, bindTo) && Object.prototype.hasOwnProperty.call(result, 'resultValue')) {
@@ -1636,8 +1543,8 @@ export function createBoardLiveCardsNonCorePublic(
   }
 
   return {
-    validateCard, validateCardPreflight,
-    probeSource, probeTmpSource, probeSourcePreflight, runSourcePreflight,
+    validateCardPreflight,
+    probeSourcePreflight, runSourcePreflight,
     evalCardCompute,
     simulateCardCycle,
     describeTaskExecutorCapabilities,

@@ -46,9 +46,9 @@ function makeDeps() {
 }
 
 describe('BoardLiveCardsMcp', () => {
-  it('reshapes discover source kinds output to wrapper shape', () => {
+  it('reshapes discover source kinds output to wrapper shape', async () => {
     const mcp = createBoardLiveCardsMcp(makeDeps());
-    expect(mcp.discoverSourceKinds()).toEqual({
+    expect(await mcp.discoverSourceKinds()).toEqual({
       version: '1.0',
       commonSourceFields: { bindTo: { type: 'string' } },
       sourceKinds: { http: { title: 'HTTP' } },
@@ -87,9 +87,9 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
-  it('preserves wrapper behavior by returning card_saved as null on successful manage upsert', () => {
+  it('preserves wrapper behavior by returning card_saved as null on successful manage upsert', async () => {
     const mcp = createBoardLiveCardsMcp(makeDeps());
-    expect(mcp.manageUpsertCard({ cardId: 'card-1', candidateCardContent: { id: 'card-1', card_data: {} } })).toEqual({
+    expect(await mcp.manageUpsertCard({ cardId: 'card-1', candidateCardContent: { id: 'card-1', card_data: {} } })).toEqual({
       status: 'success',
       data: {
         validation: { status: 'success', data: { cardId: 'card-1', isValid: true, issues: [] } },
@@ -143,7 +143,7 @@ describe('BoardLiveCardsMcp', () => {
     });
   });
 
-  it('maps preflight run-one-cycle to issues, provides_outputs, and rendered_view', () => {
+  it('maps preflight run-one-cycle to issues, provides_outputs, and rendered_view', async () => {
     const deps = makeDeps();
     deps.nonCore.simulateCardCycle.mockReturnValue({
       status: 'success',
@@ -159,7 +159,7 @@ describe('BoardLiveCardsMcp', () => {
     });
     const mcp = createBoardLiveCardsMcp(deps);
 
-    expect(mcp.preflightRunOneCycleWithCandidateCard({
+    expect(await mcp.preflightRunOneCycleWithCandidateCard({
       candidateCardContent: {
         id: 'card-1',
         card_data: { title: 'Card One' },

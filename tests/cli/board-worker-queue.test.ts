@@ -104,14 +104,12 @@ describe('board-worker queue transport', () => {
         workerStore: adapter.boardWorkerStore(),
         executeBoardWorkerRequest: async (args, request) => {
           executedBoardIds.push(String(request.boardId || ''));
-          expect(args.subcommand).toBe('run-source-fetch');
-          const queuedInput = JSON.parse(adapter.resolveBlob(parseRef(String(args.inRef)))) as {
-            callback: { token: string; via: typeof callbackVia };
-          };
-          reportComplete(queuedInput.callback, {
-            kind: 'fs-path',
-            value: path.join(root, 'output.json'),
-          });
+          expect(args.source_def).toEqual({ bindTo: 'prices' });
+          const outputRef = parseRef(String((args.output as Record<string, unknown>).ref));
+          expect(outputRef.value.replace(/\\/g, '/')).toContain('/sources/card-1/.staged/delivery-1/prices.json');
+          fs.mkdirSync(path.dirname(outputRef.value), { recursive: true });
+          fs.writeFileSync(outputRef.value, JSON.stringify({ ok: true }), 'utf-8');
+          reportComplete(args.callback as { token: string; via: typeof callbackVia }, outputRef);
         },
         pollIntervalMs: 10,
         visibilityMs: 250,
@@ -126,6 +124,12 @@ describe('board-worker queue transport', () => {
         }, {
           source_def: { bindTo: 'prices' },
           callback: { token: 'source-token', via: callbackVia },
+          output: {
+            ref: serializeRef({ kind: 'fs-path', value: path.join(root, 'sources', 'card-1', '.staged', 'delivery-1', 'prices.json') }),
+            deliveryToken: 'delivery-1',
+            outputFile: 'prices.json',
+            cardId: 'card-1',
+          },
         });
 
         expect(result).toEqual({ dispatched: true });
@@ -134,7 +138,7 @@ describe('board-worker queue transport', () => {
         expect(callbackPayload).toEqual({
           token: 'source-token',
           outcome: 'success',
-          ref: serializeRef({ kind: 'fs-path', value: path.join(root, 'output.json') }),
+          ref: serializeRef({ kind: 'fs-path', value: path.join(root, 'sources', 'card-1', '.staged', 'delivery-1', 'prices.json') }),
         });
         expect(adapter.boardWorkerStore().peekActive()).toHaveLength(0);
       } finally {

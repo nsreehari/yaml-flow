@@ -161,17 +161,17 @@ export interface BoardLiveCardsMcpBoardDeps {
 }
 
 export interface BoardLiveCardsMcpNonCoreDeps {
-  describeTaskExecutorCapabilities(input: {}): CommandResult;
-  validateCardPreflight(input: { body: unknown }): CommandResult;
+  describeTaskExecutorCapabilities(input: {}): Promise<CommandResult>;
+  validateCardPreflight(input: { body: unknown }): Promise<CommandResult>;
   evalCardCompute(input: { body: unknown }): CommandResult<{
     cardId: string;
     ok: boolean;
     computed_values: Record<string, unknown>;
     errors: Array<{ bindTo: string; error: string }>;
   }>;
-  probeSourcePreflight(input: { params: { sourceIdx: number }; body: unknown }): CommandResult;
-  runSourcePreflight(input: { params: { sourceIdx: number }; body: unknown }): CommandResult;
-  simulateCardCycle(input: { body: unknown }): CommandResult;
+  probeSourcePreflight(input: { params: { sourceIdx: number }; body: unknown }): Promise<CommandResult>;
+  runSourcePreflight(input: { params: { sourceIdx: number }; body: unknown }): Promise<CommandResult>;
+  simulateCardCycle(input: { body: unknown }): Promise<CommandResult>;
 }
 
 export interface BoardLiveCardsMcpDeps {
@@ -185,12 +185,12 @@ export interface BoardLiveCardsMcpDeps {
 }
 
 export interface BoardLiveCardsMcp {
-  discoverSourceKinds(): BoardLiveCardsMcpDiscoverSourceKindsResult;
+  discoverSourceKinds(): Promise<BoardLiveCardsMcpDiscoverSourceKindsResult>;
   inspectBoardRuntimeStatus(): BoardLiveCardsMcpBoardStatusResult;
   inspectCardDefinitionAndRuntime(args: { cardId: string }): BoardLiveCardsMcpInspectCardDefinitionAndRuntimeResult;
   inspectChatMessagesOnCards(args: { cardId: string; lastUserTurns?: number; tail?: number; turnId?: string; allTurns?: boolean; tailTurnsBeforeId?: string }): BoardLiveCardsMcpInspectChatMessagesResult;
   inspectFileContents(args: { cardId: string; fileIdx: number }): BoardLiveCardsMcpFileDownloadDescriptor;
-  preflightValidateCandidateCardDefinition(args: { candidateCardContent: UnknownRecord }): unknown;
+  preflightValidateCandidateCardDefinition(args: { candidateCardContent: UnknownRecord }): Promise<unknown>;
   preflightMaterializeCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
@@ -200,21 +200,21 @@ export interface BoardLiveCardsMcp {
     candidateCardContent: UnknownRecord;
     mockProjections: UnknownRecord;
     sourceIdx: number;
-  }): unknown;
+  }): Promise<unknown>;
   preflightRunSingleSourceInCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockProjections: UnknownRecord;
     sourceIdx: number;
-  }): unknown;
+  }): Promise<unknown>;
   preflightRunSingleSourceInLiveCard(args: {
     cardId: string;
     sourceIdx: number;
     mockRequires: UnknownRecord;
-  }): unknown;
+  }): Promise<unknown>;
   preflightRunOneCycleWithCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
-  }): BoardLiveCardsMcpPreflightRunOneCycleResult;
+  }): Promise<BoardLiveCardsMcpPreflightRunOneCycleResult>;
   manageReadCard(args: { cardId: string }): LiveCard[];
   manageAddChatEntryAndAnyAttachments(args: {
     cardId: string;
@@ -223,7 +223,7 @@ export interface BoardLiveCardsMcp {
     turn?: string;
     files?: unknown[];
   }): BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult;
-  manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): BoardLiveCardsMcpManageUpsertCardResult;
+  manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   manageRemoveCard(args: { cardId: string }): unknown;
   getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean };
   setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean };
@@ -398,9 +398,9 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     throw new Error('file entry requires bytes, text, or base64');
   }
 
-  function discoverSourceKinds(): BoardLiveCardsMcpDiscoverSourceKindsResult {
+  async function discoverSourceKinds(): Promise<BoardLiveCardsMcpDiscoverSourceKindsResult> {
     const capabilityReport = ensureRecord(
-      expectSuccess(nonCore.describeTaskExecutorCapabilities({}), 'describeTaskExecutorCapabilities'),
+      await expectSuccessAsync(nonCore.describeTaskExecutorCapabilities({}), 'describeTaskExecutorCapabilities'),
     );
 
     return {
@@ -604,8 +604,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function preflightValidateCandidateCardDefinition(args: { candidateCardContent: UnknownRecord }): unknown {
-    return nonCore.validateCardPreflight({ body: normalizeCandidateCardPayload(args.candidateCardContent) });
+  async function preflightValidateCandidateCardDefinition(args: { candidateCardContent: UnknownRecord }): Promise<unknown> {
+    return await nonCore.validateCardPreflight({ body: normalizeCandidateCardPayload(args.candidateCardContent) });
   }
 
   function preflightMaterializeCandidateCard(args: {
@@ -659,12 +659,12 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function preflightProbeSingleSourceInCandidateCard(args: {
+  async function preflightProbeSingleSourceInCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockProjections: UnknownRecord;
     sourceIdx: number;
-  }): unknown {
-    return nonCore.probeSourcePreflight({
+  }): Promise<unknown> {
+    return await nonCore.probeSourcePreflight({
       params: { sourceIdx: args.sourceIdx },
       body: {
         'card-content': args.candidateCardContent,
@@ -673,12 +673,12 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     });
   }
 
-  function preflightRunSingleSourceInCandidateCard(args: {
+  async function preflightRunSingleSourceInCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockProjections: UnknownRecord;
     sourceIdx: number;
-  }): unknown {
-    return nonCore.runSourcePreflight({
+  }): Promise<unknown> {
+    return await nonCore.runSourcePreflight({
       params: { sourceIdx: args.sourceIdx },
       body: {
         'card-content': args.candidateCardContent,
@@ -687,11 +687,11 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     });
   }
 
-  function preflightRunSingleSourceInLiveCard(args: {
+  async function preflightRunSingleSourceInLiveCard(args: {
     cardId: string;
     sourceIdx: number;
     mockRequires: UnknownRecord;
-  }): unknown {
+  }): Promise<unknown> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) {
       throw new Error('preflightRunSingleSourceInLiveCard requires cardId');
@@ -713,7 +713,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
         mockProjections = ensureRecord((enriched[0] as UnknownRecord)._projections);
       }
     }
-    return nonCore.runSourcePreflight({
+    return await nonCore.runSourcePreflight({
       params: { sourceIdx: args.sourceIdx },
       body: {
         'card-content': liveCard,
@@ -723,11 +723,11 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     });
   }
 
-  function preflightRunOneCycleWithCandidateCard(args: {
+  async function preflightRunOneCycleWithCandidateCard(args: {
     candidateCardContent: UnknownRecord;
     mockRequires: UnknownRecord;
-  }): BoardLiveCardsMcpPreflightRunOneCycleResult {
-    const result = ensureRecord(expectSuccess(nonCore.simulateCardCycle({
+  }): Promise<BoardLiveCardsMcpPreflightRunOneCycleResult> {
+    const result = ensureRecord(await expectSuccessAsync(nonCore.simulateCardCycle({
       body: {
         'card-content': args.candidateCardContent,
         'mock-requires': args.mockRequires,
@@ -875,7 +875,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): BoardLiveCardsMcpManageUpsertCardResult {
+  async function manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
     const cardId = String(args.cardId || '').trim();
     const incomingCandidateCard = ensureRecord(args.candidateCardContent);
     const candidateCard = stripMcpPrivateCardFields(incomingCandidateCard);
@@ -887,7 +887,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       throw new Error(`candidateCardContent.id must match cardId (${cardId})`);
     }
 
-    const validation = preflightValidateCandidateCardDefinition({ candidateCardContent: candidateCard });
+    const validation = await preflightValidateCandidateCardDefinition({ candidateCardContent: candidateCard });
     const validationObj = ensureRecord(validation);
     const validationData = ensureRecord(validationObj.data);
     if (validationObj.status !== 'success' || validationData.isValid !== true) {
@@ -996,4 +996,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     getChatProcessing,
     setChatProcessing,
   };
+}
+
+async function expectSuccessAsync<T>(result: CommandResult<T> | Promise<CommandResult<T>>, commandName: string): Promise<T> {
+  return expectSuccess(await result, commandName);
 }

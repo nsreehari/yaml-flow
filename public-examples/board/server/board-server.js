@@ -181,6 +181,7 @@ const PORT = Number(process.env.DEMO_SERVER_PORT || serverConfig.port || 7799);
 const cardsPatternArgIndex = cliArgs.indexOf('--cards-pattern');
 const cliCardsPattern = cardsPatternArgIndex !== -1 ? cliArgs[cardsPatternArgIndex + 1] : null;
 const selectedCardsPattern = (process.env.DEMO_CARDS_PATTERN || cliCardsPattern || '').trim() || null;
+const enableTestReq = /^(1|true|yes|on)$/i.test((process.env.BOARD_SERVER_ENABLE_TEST_REQ || '').trim());
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -335,12 +336,10 @@ function createHostedBoardWorkerDispatcher(boardId, taskExecPath) {
   return async (request) => {
     const mod = await loadBoardWorkerModule(taskExecPath);
     if (typeof mod.executeBoardWorkerRequest === 'function') {
-      await mod.executeBoardWorkerRequest(request);
-      return;
+      return await mod.executeBoardWorkerRequest(request);
     }
     if (typeof mod.executeTaskExecutorRequest === 'function') {
-      await mod.executeTaskExecutorRequest(request);
-      return;
+      return await mod.executeTaskExecutorRequest(request);
     }
     throw new Error(`Hosted board worker for board ${boardId} must export executeBoardWorkerRequest(request)`);
   };
@@ -402,6 +401,7 @@ const notificationTransport = createNamedPipeNotificationTransport();
 const logger = { info: console.log, warn: console.warn, error: console.error };
 const hostedBoardWorkerDispatchers = new Map();
 const hostedBoardWorkerQueueStops = new Map();
+const hostedBoardChatStorages = new Map();
 
 // Map config keys to board entries for the factory
 const boardConfigEntries = serverConfig.boards ? Object.entries(serverConfig.boards) : [];
@@ -432,10 +432,10 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   });
   const localSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
   if (localSyncTaskExecutorRef) {
-    const invokeExecutorSync = nonCoreAdapter.invokeExecutorSync.bind(nonCoreAdapter);
-    nonCoreAdapter.invokeExecutorSync = (ref, subcommand, args, execOpts) => {
+    const invokeExecutor = nonCoreAdapter.invokeExecutor.bind(nonCoreAdapter);
+    nonCoreAdapter.invokeExecutor = (ref, subcommand, execOpts) => {
       const syncRef = isHostedTaskExecutorRef(ref) ? localSyncTaskExecutorRef : ref;
-      return invokeExecutorSync(syncRef, subcommand, args, execOpts);
+      return invokeExecutor(syncRef, subcommand, execOpts);
     };
   }
   boardAdapter.requestProcessAccumulated = () => {};
@@ -583,6 +583,7 @@ const runtime = createMultiBoardServerRuntime({
     demoPrepSetup({ cardsDir, boardDir });
 
     const chatStorage = createFsBoardChatStorage(boardDir);
+    hostedBoardChatStorages.set(boardId, chatStorage);
 
     const singleBoardRuntime = createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
@@ -695,6 +696,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  const testSystemChatMatch = pathname.match(/^\/test-req\/boards\/([^/]+)\/chat\/system-message$/);
+  if (method === 'POST' && testSystemChatMatch) {
+    if (!enableTestReq) {
+      jsonReply(res, 404, { error: 'Not found' });
+      return;
+    }
+
+    try {
+      const boardId = decodeURIComponent(testSystemChatMatch[1]);
+      runtime.requireBoardService(boardId);
+      const chatStorage = hostedBoardChatStorages.get(boardId);
+      if (!chatStorage) {
+        jsonReply(res, 409, { error: `No hosted chat storage configured for board: ${boardId}` });
+        return;
+      }
+
+      const body = await readJsonRequest(req);
+      const cardId = typeof body?.cardId === 'string' ? body.cardId.trim() : '';
+      const text = typeof body?.text === 'string' ? body.text : '';
+      const turn = typeof body?.turn === 'string' ? body.turn : '';
+      const files = Array.isArray(body?.files) ? body.files : [];
+
+      if (!cardId) {
+        jsonReply(res, 400, { error: 'cardId is required' });
+        return;
+      }
+      if (typeof body?.text !== 'string') {
+        jsonReply(res, 400, { error: 'text is required' });
+        return;
+      }
+
+      const id = chatStorage.append(cardId, 'system', text, files, turn);
+      jsonReply(res, 200, {
+        status: 'success',
+        data: {
+          id,
+          boardId,
+          cardId,
+          role: 'system',
+          text,
+          turn,
+          files,
+        },
+      });
+      return;
+    } catch (err) {
+      jsonReply(res, 404, { error: String(err && err.message || err) });
+      return;
+    }
+  }
+
   if (method === 'POST' && pathname === '/api/board-worker') {
     try {
       const body = await readJsonRequest(req);
@@ -709,10 +761,15 @@ const server = http.createServer(async (req, res) => {
         jsonReply(res, 409, { error: `No hosted board-worker configured for board: ${boardId}` });
         return;
       }
-      void dispatcher(body).catch((err) => {
-        logger.error(`[board-server] hosted board-worker failed for ${boardId}: ${String(err && err.message || err)}`);
-      });
-      jsonReply(res, 202, { status: 'success', dispatched: true });
+      if (body?.source_def) {
+        void dispatcher(body).catch((err) => {
+          logger.error(`[board-server] hosted board-worker failed for ${boardId}: ${String(err && err.message || err)}`);
+        });
+        jsonReply(res, 202, { status: 'success', dispatched: true });
+        return;
+      }
+      const workerResult = await dispatcher(body);
+      jsonReply(res, 200, workerResult ?? { status: 'success', data: {} });
       return;
     } catch (err) {
       jsonReply(res, 404, { error: String(err && err.message || err) });
@@ -747,4 +804,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`  POST ${apiBasePath}/:boardId/cards/:id/chats/subscribe-sse`);
   console.log(`  POST ${apiBasePath}/:boardId/cards/:id/chats/unsubscribe-sse`);
   console.log('  POST /api/board-worker');
+  if (enableTestReq) {
+    console.log('  POST /test-req/boards/:boardId/chat/system-message');
+  }
 });

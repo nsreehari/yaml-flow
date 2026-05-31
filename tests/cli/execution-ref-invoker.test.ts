@@ -159,7 +159,11 @@ describe('ExecutionRef public invoker API', () => {
       };
 
       const result = await invokeExecutionRef(ref, { value: 'payload' });
-      expect(result).toEqual({ result: 'posted', data: { body: { renamed: 'payload' } } });
+      expect(result).toMatchObject({
+        result: 'posted',
+        data: { body: { renamed: 'payload' } },
+        headers: { 'content-type': 'application/json' },
+      });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
     }

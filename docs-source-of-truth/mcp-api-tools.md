@@ -30,6 +30,19 @@ Every board server exposes three MCP endpoints under `/api/boards/:boardId`:
 }
 ```
 
+## Naming conventions
+
+Different surfaces deliberately use different identifier styles, matching the convention idiomatic for each surface:
+
+| Surface | Style | Example |
+|---|---|---|
+| MCP `args` (request body fields) | `snake_case` | `card_id`, `turn_id`, `tail_turns`, `candidate_card_content` |
+| MCP `data` (response body fields) | `camelCase` | `cardId`, `boardId`, `fileIdx`, `tailTurns` |
+| HTTP URL query-string params (other routes) | `kebab-case` | `?tail-turns=1&turn-id=abc` (see [server-runtime-public-api-PARAMS.md](./server-runtime-public-api-PARAMS.md)) |
+| CLI flags | `kebab-case` | `--card-id`, `--tail-turns` (see [board-live-cards-cli-PARAMS.md](./board-live-cards-cli-PARAMS.md)) |
+
+The MCP server accepts exactly one wire spelling per arg field — the snake_case form. There are no camelCase or kebab-case aliases.
+
 ---
 
 ## Tool reference
@@ -157,11 +170,11 @@ Returns chat records for one or all cards, with flexible filtering.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `card_id` | string | — | Target card |
-| `all-turns` | boolean | `false` | Return all turns (ignores `tail-turns`) |
-| `tail-turns` | number | — | Last N user turns only |
+| `all_turns` | boolean | `false` | Return all turns (ignores `tail_turns`) |
+| `tail_turns` | number | — | Last N user turns only |
 | `tail` | number | — | Last N individual messages |
-| `turn-id` | string | — | Only messages with this turn id |
-| `tail-turns-before-id` | string | — | Requires `tail-turns`; messages before the given turn id |
+| `turn_id` | string | — | Only messages with this turn id |
+| `tail_turns_before_id` | string | — | Requires `tail_turns`; messages before the given turn id |
 
 **Returns:**
 ```json
@@ -199,9 +212,24 @@ Downloads the raw bytes of a file attachment stored on a card.
 | `card_id` | string | yes |
 | `file_idx` | number | yes |
 
-**On `/mcp-raw`:** returns raw bytes (`application/octet-stream`) with headers:
+Optional slicing args (at most one): `head-lines`, `tail-lines` (text-like mime types only), `head-bytes`, `tail-bytes`.
+
+**Default response:** raw bytes (`application/octet-stream`) with headers:
 - `Content-Disposition: attachment; filename="<name>"`
 - `Content-Type: <mime_type>`
+
+**JSON-wrapped response (opt-in):** append `?resp=json-b64` to the URL. The server then returns `application/json` with the body base64-encoded and the file metadata alongside it, instead of streaming raw bytes. Use this when the caller cannot conveniently consume binary HTTP bodies (e.g. step-machine flows whose `output.data` must be a JSON object, or UIs that want a single JSON envelope).
+
+```json
+{
+  "bodyBase64": "<base64 of (possibly sliced) bytes>",
+  "mimeType": "<mime_type>",
+  "filename": "<name>",
+  "byteLength": <number>
+}
+```
+
+Unknown values of `resp` are rejected with HTTP 400 (`{ "error": "unsupported resp mode: <value>" }`). Slicing args apply to both response shapes — `byteLength` reflects the sliced length.
 
 **On `/mcp`:** this tool is rejected. Use `/mcp-raw`.
 
@@ -296,6 +324,37 @@ Removes a card from both the live board runtime and persistent card storage.
 > **Behavior notes:**
 > - The card is fully removed from persistent storage. `readAll` will not return it after removal.
 > - Re-upserting a card with the same `card_id` after removal creates a fresh card with no prior state.
+
+---
+
+### `stage-ai-response-and-any-attachments`
+
+Stages an assistant response (with optional file attachments) directly into a card's chat store. Used by agent pipelines to inject a response without going through the SSE chat flow.
+
+**Endpoint:** `POST /api/boards/:boardId/mcp`
+
+**Args:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `card_id` | string | required |
+| `text` | string | response text |
+| `turn_id` | string | turn id to associate the message with |
+| `files` | array | optional array of file metadata objects |
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "cardId": "my-card",
+    "id": "msg-uuid-...",
+    "role": "assistant",
+    "turn": "abc123",
+    "files": []
+  }
+}
+```
 
 ---
 
@@ -468,37 +527,6 @@ Uploads a file to a card's attachment store (outside the chat flow).
       "size": 204800,
       "uploaded_at": "2026-05-28T10:00:00.000Z"
     }
-  }
-}
-```
-
----
-
-### `stage-ai-response-and-any-attachments`
-
-Stages an assistant response (with optional file attachments) directly into a card's chat store. Used by agent pipelines to inject a response without going through the SSE chat flow.
-
-**Endpoint:** `POST /api/boards/:boardId/mcp`
-
-**Args:**
-
-| Field | Type | Notes |
-|---|---|---|
-| `card_id` | string | required |
-| `text` | string | response text |
-| `turn-id` | string | turn id to associate the message with |
-| `files` | array | optional array of file metadata objects |
-
-**Returns:**
-```json
-{
-  "status": "success",
-  "data": {
-    "cardId": "my-card",
-    "id": "msg-uuid-...",
-    "role": "assistant",
-    "turn": "abc123",
-    "files": []
   }
 }
 ```

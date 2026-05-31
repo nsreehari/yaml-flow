@@ -56,7 +56,7 @@ A full payload for browser runtime hydration must include:
 - `cardDefinitions`
 - `statusSnapshot`
 - `dataObjectsByToken`
-- `cardRuntimeById` (`card_data`, `computed_values`, `fetched_sources`, `requires`)
+- `cardRuntimeById` (per-card object with `schema_version`, `card_id`, `card_data`, `computed_values`)
 
 Construction policy:
 - Card definitions come from card-store public API.
@@ -104,3 +104,10 @@ Tests for server runtime should validate:
 - multi-board context isolation and merge behavior
 
 CLI-specific tests belong to CLI surfaces, not to server runtime behavior.
+
+
+## Naming conventions
+
+- Notification event `kind` values use `snake_case`: `computed_values`, `data_object`, `card_refreshed`, `status`. Event payload fields use `camelCase` (`cardId`, `key`, `values`, `payload`, `card`).
+- Snapshot envelope fields use `camelCase`: `cardDefinitions`, `statusSnapshot`, `dataObjectsByToken`, `cardRuntimeById`.
+- Per-card runtime object keys under `cardRuntimeById[id]` use `snake_case` (`schema_version`, `card_id`, `card_data`, `computed_values`) because they mirror the card-namespace protocol — see [mcp-api-tools.md](./mcp-api-tools.md#naming-conventions) for the cross-surface convention table.

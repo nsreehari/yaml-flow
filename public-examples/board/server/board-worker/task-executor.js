@@ -283,6 +283,60 @@ async function runSourceFetchSubcommand(argv) {
 
 }
 
+async function executeLogicalSourceFetchRequest(request) {
+  const sourceDef = request?.source_def;
+  const callback = request?.callback;
+  const outputRefStr = typeof request?.output?.ref === 'string' ? request.output.ref : undefined;
+  const diagnosticsRefStr = typeof request?.diagnostics?.ref === 'string' ? request.diagnostics.ref : undefined;
+  const extra = request?.extra && typeof request.extra === 'object' && !Array.isArray(request.extra) ? request.extra : {};
+
+  if (!sourceDef || typeof sourceDef !== 'object' || Array.isArray(sourceDef)) {
+    throw new Error('executeBoardWorkerRequest requires source_def');
+  }
+  if (!outputRefStr) {
+    throw new Error('executeBoardWorkerRequest requires output.ref');
+  }
+
+  const outRef = parseRef(outputRefStr);
+  const errRef = diagnosticsRefStr ? parseRef(diagnosticsRefStr) : undefined;
+  const outStorage = blobStorageForRef(outRef);
+  const errStorage = errRef ? blobStorageForRef(errRef) : undefined;
+
+  const reportHostedFailure = (msg) => {
+    if (errStorage && errRef) { try { errStorage.write(errRef.value, msg); } catch {} }
+    console.error(`${LOG_PREFIX} ${msg}`);
+    if (callback) { try { reportFailed(callback, msg); } catch {} }
+  };
+
+  let flowResult;
+  try {
+    const resolved = await resolveAndExecuteSourceFlow(sourceDef, extra, { outRef, errRef });
+    flowResult = resolved.flowResult;
+  } catch (err) {
+    const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
+    reportHostedFailure(`source invocation failed: ${String(err && err.message || err)}${detail}`);
+    return;
+  }
+
+  if (!flowResult?.wroteOutputDirectly) {
+    try {
+      outStorage.write(outRef.value, JSON.stringify(flowResult?.resultValue, null, 2));
+    } catch (err) {
+      const msg = `Cannot write output: ${String(err && err.message || err)}`;
+      reportHostedFailure(msg);
+      throw new Error(msg);
+    }
+  }
+
+  if (callback) {
+    try {
+      reportComplete(callback, outRef);
+    } catch (err) {
+      throw new Error(`reportComplete failed: ${String(err && err.message || err)}`);
+    }
+  }
+}
+
 async function probeSourcePreflightSubcommand(argv) {
   const extraIdx = argv.indexOf('--extra');
   const extraB64 = extraIdx !== -1 ? argv[extraIdx + 1] : undefined;
@@ -293,24 +347,27 @@ async function probeSourcePreflightSubcommand(argv) {
     catch { /* ignore malformed extra */ }
   }
 
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const result = await probeSourcePreflightRequest(Buffer.concat(chunks).toString('utf-8').trim(), extra);
+  console.log(JSON.stringify(result));
+}
+
+async function probeSourcePreflightRequest(raw, extra = {}) {
+
   const startedAt = Date.now();
   try {
-    const chunks = [];
-    for await (const chunk of process.stdin) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const raw = Buffer.concat(chunks).toString('utf-8').trim();
     if (!raw) {
-      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: 'Missing probe input JSON on stdin' }));
-      return;
+      return { ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: 'Missing probe input JSON on stdin' };
     }
 
     let sourceDef;
     try {
       sourceDef = JSON.parse(raw);
     } catch (err) {
-      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `Invalid probe JSON: ${String(err && err.message || err)}` }));
-      return;
+      return { ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `Invalid probe JSON: ${String(err && err.message || err)}` };
     }
 
     const projections = sourceDef?._projections;
@@ -320,18 +377,16 @@ async function probeSourcePreflightSubcommand(argv) {
       : undefined;
 
     const { flowResult } = await resolveAndExecuteSourceFlow(sourceDef, extra);
-    console.log(JSON.stringify({
+    return {
       ok: true,
       reachable: true,
       latencyMs: Date.now() - startedAt,
       ...(mockProjectionWarning ? { note: mockProjectionWarning } : {}),
       ...(!mockProjectionWarning ? { resultValue: flowResult?.resultValue } : {}),
-    }));
-    return;
+    };
   } catch (err) {
     const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
-    console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `source invocation failed: ${String(err && err.message || err)}${detail}` }));
-    return;
+    return { ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `source invocation failed: ${String(err && err.message || err)}${detail}` };
   }
 }
 
@@ -364,26 +419,29 @@ async function runSourcePreflightSubcommand(argv) {
     catch { /* ignore malformed extra */ }
   }
 
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const result = await runSourcePreflightRequest(Buffer.concat(chunks).toString('utf-8').trim(), extra);
+  console.log(JSON.stringify(result));
+}
+
+async function runSourcePreflightRequest(raw, extra = {}) {
+
   const startedAt = Date.now();
   let bindTo;
   let kind;
   try {
-    const chunks = [];
-    for await (const chunk of process.stdin) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const raw = Buffer.concat(chunks).toString('utf-8').trim();
     if (!raw) {
-      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: 'Missing run-source-preflight input JSON on stdin' }));
-      return;
+      return { ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: 'Missing run-source-preflight input JSON on stdin' };
     }
 
     let sourceDef;
     try {
       sourceDef = JSON.parse(raw);
     } catch (err) {
-      console.log(JSON.stringify({ ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `Invalid run-source-preflight JSON: ${String(err && err.message || err)}` }));
-      return;
+      return { ok: false, reachable: false, latencyMs: Date.now() - startedAt, error: `Invalid run-source-preflight JSON: ${String(err && err.message || err)}` };
     }
 
     bindTo = typeof sourceDef?.bindTo === 'string' ? sourceDef.bindTo : undefined;
@@ -391,7 +449,7 @@ async function runSourcePreflightSubcommand(argv) {
 
     const resolved = await resolveAndExecuteSourceFlow(sourceDef, extra);
     kind = resolved.kind;
-    console.log(JSON.stringify({
+    return {
       ok: true,
       reachable: true,
       latencyMs: Date.now() - startedAt,
@@ -399,19 +457,17 @@ async function runSourcePreflightSubcommand(argv) {
       ...(kind ? { kind } : {}),
       resultValue: resolved.flowResult?.resultValue,
       note: 'Actual fetch preflight passed',
-    }));
-    return;
+    };
   } catch (err) {
     const detail = (err && (err.stderr || err.stdout)) ? `\n${err.stderr || err.stdout}`.trimEnd() : '';
-    console.log(JSON.stringify({
+    return {
       ok: false,
       reachable: false,
       latencyMs: Date.now() - startedAt,
       ...(bindTo ? { bindTo } : {}),
       ...(kind ? { kind } : {}),
       error: `${String(err && err.message || err)}${detail}`,
-    }));
-    return;
+    };
   }
 }
 
@@ -455,26 +511,16 @@ function matchesValidateRule(sourceDef, rule) {
 // ---------------------------------------------------------------------------
 // validate-source-def — registry-driven validation of a source definition
 // ---------------------------------------------------------------------------
-function validateSourceDefSubcommand() {
-  let rawInput = '';
-  try {
-    rawInput = fs.readFileSync(0, 'utf-8').trim();
-  } catch (err) {
-    console.log(JSON.stringify({ ok: false, errors: [`Cannot read stdin: ${err && err.message || err}`] }));
-    process.exit(1);
-  }
-
+function validateSourceDefPayload(rawInput) {
   if (!rawInput) {
-    console.error(`${LOG_PREFIX} Usage: validate-source-def < source.json`);
-    process.exit(1);
+    return { ok: false, errors: ['Missing source JSON on stdin'] };
   }
 
   let sourceDef;
   try {
     sourceDef = JSON.parse(rawInput);
   } catch (err) {
-    console.log(JSON.stringify({ ok: false, errors: [`Cannot parse source JSON from stdin: ${err && err.message || err}`] }));
-    process.exit(1);
+    return { ok: false, errors: [`Cannot parse source JSON from stdin: ${err && err.message || err}`] };
   }
 
   const errors = [];
@@ -500,12 +546,23 @@ function validateSourceDefSubcommand() {
     }
   }
 
-  const result = { ok: errors.length === 0, errors };
-  console.log(JSON.stringify(result));
-  process.exit(errors.length === 0 ? 0 : 1);
+  return { ok: errors.length === 0, errors };
 }
 
-function describeCapabilities() {
+function validateSourceDefSubcommand() {
+  let rawInput = '';
+  try {
+    rawInput = fs.readFileSync(0, 'utf-8').trim();
+  } catch (err) {
+    console.log(JSON.stringify({ ok: false, errors: [`Cannot read stdin: ${err && err.message || err}`] }));
+    process.exit(1);
+  }
+  const result = validateSourceDefPayload(rawInput);
+  console.log(JSON.stringify(result));
+  process.exit(result.ok ? 0 : 1);
+}
+
+function describeCapabilitiesPayload() {
   const registry = loadSourceDefFlowsConfig();
   const sourceKinds = Object.fromEntries(
     Object.entries(registry?.kinds || {}).map(([kind, spec]) => [
@@ -516,7 +573,7 @@ function describeCapabilities() {
       },
     ]),
   );
-  const payload = {
+  return {
     version: registry?.version || '1.0',
     executor: registry?.executor || EXECUTOR_NAME,
     subcommands: Array.isArray(registry?.subcommands)
@@ -525,7 +582,10 @@ function describeCapabilities() {
     sourceKinds,
     ...(registry?.extraSchema ? { extraSchema: registry.extraSchema } : {}),
   };
-  console.log(JSON.stringify(payload, null, 2));
+}
+
+function describeCapabilities() {
+  console.log(JSON.stringify(describeCapabilitiesPayload(), null, 2));
 }
 
 function buildTaskExecutorArgvFromRequest(request) {
@@ -545,27 +605,33 @@ function buildTaskExecutorArgvFromRequest(request) {
 }
 
 export async function executeBoardWorkerRequest(request) {
+  if (request?.source_def) {
+    await executeLogicalSourceFetchRequest(request);
+    return { ok: true };
+  }
   const { subcommand, argv } = buildTaskExecutorArgvFromRequest(request);
+  const inlineInput = typeof request?.input === 'string'
+    ? request.input
+    : request?.input !== undefined
+      ? JSON.stringify(request.input)
+      : '';
+  const inlineExtra = request?.extra && typeof request.extra === 'object' && !Array.isArray(request.extra) ? request.extra : {};
 
   if (subcommand === 'run-source-fetch') {
     await runSourceFetchSubcommand(argv);
     return { ok: true };
   }
   if (subcommand === 'probe-source-preflight') {
-    await probeSourcePreflightSubcommand(argv);
-    return { ok: true };
+    return await probeSourcePreflightRequest(inlineInput, inlineExtra);
   }
   if (subcommand === 'run-source-preflight') {
-    await runSourcePreflightSubcommand(argv);
-    return { ok: true };
+    return await runSourcePreflightRequest(inlineInput, inlineExtra);
   }
   if (subcommand === 'describe' || subcommand === 'describe-capabilities') {
-    describeCapabilities();
-    return { ok: true };
+    return describeCapabilitiesPayload();
   }
   if (subcommand === 'validate-source-def') {
-    validateSourceDefSubcommand();
-    return { ok: true };
+    return validateSourceDefPayload(inlineInput);
   }
 
   throw new Error(`Unknown subcommand: ${subcommand}`);
