@@ -303,7 +303,7 @@ describe('platform-free server runtime (Node host)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         actionType: 'chat-send',
-        payload: { text: 'hello from integration test' },
+        payload: { text: 'hello from integration test', 'turn-id': 'test-turn-no-handler' },
       }),
     });
     expect(res.status).toBe(409);
@@ -606,7 +606,7 @@ describe('platform-free server runtime (Node host)', () => {
     const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow should fail dispatch' } }),
+      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow should fail dispatch', 'turn-id': 'test-turn-fail-dispatch' } }),
     });
     expect(chatRes.ok).toBe(true);
 
@@ -696,7 +696,7 @@ describe('platform-free server runtime (Node host)', () => {
     const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/card-portfolio/actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow preferred' } }),
+      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow preferred', 'turn-id': 'test-turn-flow-preferred' } }),
     });
     expect(chatRes.ok).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -785,7 +785,7 @@ describe('platform-free server runtime (Node host)', () => {
     const port = typeof addr === 'object' && addr ? addr.port : 0;
     const cardId = 'card-portfolio';
 
-    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/files?inChat=true`, {
+    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/files?inChat=true&turn-id=test-turn-upload-send`, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/plain',
@@ -822,6 +822,7 @@ describe('platform-free server runtime (Node host)', () => {
         payload: {
           text: 'please use the uploaded file',
           files: [uploadedFile],
+          'turn-id': 'test-turn-upload-send',
         },
       }),
     });

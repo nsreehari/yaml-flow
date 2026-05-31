@@ -15,6 +15,16 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 const VENDOR_EXCLUDE = new Set(['jsonata-sync.cjs']);
+
+/**
+ * Files that are genuinely minified but too small / inherently compact to
+ * produce avg chars/line >= MIN_AVG_CHARS_PER_LINE.  Exempt rather than
+ * lower the global threshold.
+ */
+const COMPACT_EXEMPT = new Set([
+  'board-worker-adapter.js',
+  'board-worker-adapter.cjs',
+]);
 const DIRS_TO_CHECK = ['lib', 'cli/bundled'];
 
 /** Minimum average chars-per-line to consider a file minified. */
@@ -28,7 +38,7 @@ function* walkJs(dir) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walkJs(full);
-    } else if (/\.(js|cjs|mjs)$/.test(entry.name) && !VENDOR_EXCLUDE.has(entry.name)) {
+    } else if (/\.(js|cjs|mjs)$/.test(entry.name) && !VENDOR_EXCLUDE.has(entry.name) && !COMPACT_EXEMPT.has(entry.name)) {
       yield full;
     }
   }
