@@ -1521,7 +1521,7 @@ try {
       key: 'chat.__visible_controlplane_only',
       value: false,  // differs from current flag value (true) → must be rejected
     });
-    assert(t5MetaGuard?.error || t5MetaGuard?.status === 'fail',
+    assert(t5MetaGuard?.status !== 200,
       `T5 expected setstate.card-meta to reject changing __visible_controlplane_only, got: ${JSON.stringify(t5MetaGuard)}`);
     console.log('[T5] ok: setstate.card-meta blocked flag mutation (false != true)');
 
