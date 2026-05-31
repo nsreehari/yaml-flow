@@ -84,6 +84,7 @@ import {
   getCardMetaKey,
   readCardMetaValue,
 } from './controlplane-helpers.js';
+import { createSseHub } from './sse-hub.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -182,11 +183,6 @@ interface BoardContext {
   cardsBootstrapped: boolean;
 }
 
-interface SseClientState {
-  res: RuntimeResponse;
-  subscribedChatCardIds: Set<string>;
-}
-
 // ============================================================================
 // createSingleBoardServerRuntime
 // ============================================================================
@@ -209,10 +205,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const onChannelSubscribed = options.onChannelSubscribed;
   const onChannelUnsubscribed = options.onChannelUnsubscribed;
 
-  const sseClients = new Map<string, SseClientState>();
-  const lastChatCursorByCardId = new Map<string, string | null>();
-  const lastChatProcessingByCardId = new Map<string, boolean>();
-  let chatSubscriptionScanTimer: ReturnType<typeof setInterval> | null = null;
+  // SSE hub: owns the client registry, broadcast helpers, and chat-subscription scanner.
+  // Constructed lazily-bound to readChatRecords (defined further down in the closure).
+  const sseHub = createSseHub({
+    chatStorage,
+    readChatRecords: (cardId: string) => readChatRecords(cardId),
+    onSseClientDisconnected,
+  });
 
   // ── Build board contexts from injected configs ───────────────────────────
 
@@ -472,7 +471,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       const notifications = (event as Record<string, unknown>).kind === 'notification-batch'
         ? (event as Record<string, unknown[]>).notifications as unknown[]
         : [event];
-      broadcastNotificationBatchToSseClients(notifications);
+      sseHub.broadcastNotificationBatch(notifications);
     });
     ctx.notificationTeardown = teardown;
   }
@@ -1523,7 +1522,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           // Emit SSE notification so connected clients receive updated chat state immediately
           try {
             const allRecords = readChatRecords(cardId);
-            broadcastNotificationBatchToSseClients([{
+            sseHub.broadcastNotificationBatch([{
               kind: 'card_chats',
               cardId,
               messages: allRecords.map((r: Record<string, unknown>) => ({
@@ -1679,51 +1678,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   // ── SSE ──────────────────────────────────────────────────────────────────
-
-  let sseEventId = 0;
-
-  function buildSseFrame(payload: unknown): string {
-    const jsonStr = JSON.stringify(payload);
-    sseEventId++;
-    return `id: ${sseEventId}\ndata: ${jsonStr}\n\n`;
-  }
-
-  function flushSseTransport(res: RuntimeResponse): void {
-    const resWithTransport = res as RuntimeResponse & {
-      flushHeaders?: () => void;
-      flush?: () => void;
-      socket?: {
-        setNoDelay?: (noDelay?: boolean) => void;
-        uncork?: () => void;
-      } | null;
-    };
-    try { resWithTransport.flushHeaders?.(); } catch { /* ignore */ }
-    try { resWithTransport.flush?.(); } catch { /* ignore */ }
-    try { resWithTransport.socket?.setNoDelay?.(true); } catch { /* ignore */ }
-    try { resWithTransport.socket?.uncork?.(); } catch { /* ignore */ }
-  }
-
-  function disconnectSseClient(clientId: string, expectedRes?: RuntimeResponse): void {
-    const client = sseClients.get(clientId);
-    if (!client) return;
-    if (expectedRes && client.res !== expectedRes) return;
-    sseClients.delete(clientId);
-    stopChatSubscriptionScanIfIdle();
-    try { onSseClientDisconnected?.(clientId); } catch { /* ignore host hook failures */ }
-    try { client.res.end(); } catch { /* ignore */ }
-  }
-
-  function writeSseFrame(clientId: string, payload: unknown): void {
-    const client = sseClients.get(clientId);
-    if (!client) return;
-    const frame = buildSseFrame(payload);
-    try {
-      client.res.write(frame);
-      flushSseTransport(client.res);
-    } catch {
-      disconnectSseClient(clientId, client.res);
-    }
-  }
+  // The bulk of SSE plumbing (client registry, broadcast helpers, chat
+  // subscription scanner) lives in ./sse-hub.ts. The handlers below sequence
+  // SSE registration with runtime bootstrap, which is the only piece tied to
+  // index.ts (it needs buildPublishedRuntimePayload + corsHeaders + hooks).
 
   function handleChannelSubscription(
     res: RuntimeResponse,
@@ -1732,7 +1690,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     params: { cardId?: string },
     subscribed: boolean,
   ): void {
-    if (!sseClients.has(clientId)) {
+    if (!sseHub.has(clientId)) {
       json(res, 404, { error: `SSE client not connected: ${clientId}` });
       return;
     }
@@ -1750,164 +1708,31 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
   }
 
-  function currentSubscribedChatCardIds(): string[] {
-    const ids = new Set<string>();
-    for (const client of sseClients.values()) {
-      for (const cardId of client.subscribedChatCardIds) ids.add(cardId);
-    }
-    return Array.from(ids);
-  }
-
-  /** Returns true when there are new messages or the processing flag changed since last call. Advances cursor as a side effect. */
-  function hasChatChanges(cardId: string): boolean {
-    const lastCursor = lastChatCursorByCardId.has(cardId) ? lastChatCursorByCardId.get(cardId)! : null;
-    const { cursor: newCursor } = chatStorage.readAfter(cardId, lastCursor);
-    const processing = chatStorage.isProcessing(cardId);
-    const processingChanged = processing !== (lastChatProcessingByCardId.get(cardId) ?? false);
-    const hasNewRecords = newCursor !== lastCursor;
-    if (hasNewRecords) lastChatCursorByCardId.set(cardId, newCursor);
-    lastChatProcessingByCardId.set(cardId, processing);
-    return hasNewRecords || processingChanged;
-  }
-
-  function buildCardChatsNotification(cardId: string, receiving = true): Record<string, unknown> {
-    const records = readChatRecords(cardId);
-    const sentAtMs = Date.now();
-    return {
-      kind: 'card_chats',
-      cardId,
-      sentAt: new Date(sentAtMs).toISOString(),
-      sentAtMs,
-      messages: records.map((r: Record<string, unknown>) => ({
-        role: String(r.role || 'system'),
-        text: String(r.text || ''),
-        files: Array.isArray(r.files) ? r.files : [],
-      })),
-      receiving,
-      processing: chatStorage.isProcessing(cardId),
-    };
-  }
-
-  function broadcastCardChatsToSubscribedSseClients(cardId: string, receiving = true): void {
-    const payload = { kind: 'notification-batch', notifications: [buildCardChatsNotification(cardId, receiving)] };
-    for (const [clientId, client] of sseClients.entries()) {
-      if (!client.subscribedChatCardIds.has(cardId)) continue;
-      writeSseFrame(clientId, payload);
-    }
-  }
-
-  function stopChatSubscriptionScanIfIdle(): void {
-    if (currentSubscribedChatCardIds().length > 0) return;
-    if (chatSubscriptionScanTimer) {
-      clearInterval(chatSubscriptionScanTimer);
-      chatSubscriptionScanTimer = null;
-    }
-    lastChatCursorByCardId.clear();
-    lastChatProcessingByCardId.clear();
-  }
-
-  function ensureChatSubscriptionScan(): void {
-    if (chatSubscriptionScanTimer) return;
-    const scan = () => {
-      const activeCardIds = currentSubscribedChatCardIds();
-      if (activeCardIds.length === 0) {
-        stopChatSubscriptionScanIfIdle();
-        return;
-      }
-      const activeSet = new Set(activeCardIds);
-      for (const cardId of Array.from(lastChatCursorByCardId.keys())) {
-        if (!activeSet.has(cardId)) lastChatCursorByCardId.delete(cardId);
-      }
-      for (const cardId of Array.from(lastChatProcessingByCardId.keys())) {
-        if (!activeSet.has(cardId)) lastChatProcessingByCardId.delete(cardId);
-      }
-      for (const cardId of activeCardIds) {
-        if (hasChatChanges(cardId)) {
-          broadcastCardChatsToSubscribedSseClients(cardId, true);
-        }
-      }
-    };
-    scan();
-    chatSubscriptionScanTimer = setInterval(scan, 1000);
-  }
-
-  function subscribeClientToCardChats(clientId: string, cardId: string): boolean {
-    const client = sseClients.get(clientId);
-    if (!client) return false;
-    client.subscribedChatCardIds.add(cardId);
-    // Initialise cursor to latest so we only push deltas from this point forward.
-    const { cursor: latestCursor } = chatStorage.readAfter(cardId, null);
-    lastChatCursorByCardId.set(cardId, latestCursor);
-    lastChatProcessingByCardId.set(cardId, chatStorage.isProcessing(cardId));
-    ensureChatSubscriptionScan();
-    writeSseFrame(clientId, { kind: 'notification-batch', notifications: [buildCardChatsNotification(cardId, true)] });
-    return true;
-  }
-
-  function unsubscribeClientFromCardChats(clientId: string, cardId: string): boolean {
-    const client = sseClients.get(clientId);
-    if (!client) return false;
-    client.subscribedChatCardIds.delete(cardId);
-    if (!currentSubscribedChatCardIds().includes(cardId)) {
-      lastChatCursorByCardId.delete(cardId);
-      lastChatProcessingByCardId.delete(cardId);
-    }
-    stopChatSubscriptionScanIfIdle();
-    return true;
-  }
-
-  function isChatScopedNotification(notification: unknown): notification is Record<string, unknown> {
-    if (!notification || typeof notification !== 'object') return false;
-    const kind = (notification as Record<string, unknown>).kind;
-    return kind === 'card_chats' || kind === 'chat_messages';
-  }
-
-  function broadcastNotificationBatchToSseClients(notifications: unknown[]): void {
-    if (!notifications || notifications.length === 0) return;
-    const generalNotifications: unknown[] = [];
-    const chatCardIds = new Set<string>();
-    for (const note of notifications) {
-      if (isChatScopedNotification(note) && typeof (note as Record<string, unknown>).cardId === 'string') {
-        chatCardIds.add(String((note as Record<string, unknown>).cardId));
-      } else {
-        generalNotifications.push(note);
-      }
-    }
-    if (generalNotifications.length > 0) {
-      const payload = { kind: 'notification-batch', notifications: generalNotifications };
-      for (const clientId of sseClients.keys()) writeSseFrame(clientId, payload);
-    }
-    for (const cardId of chatCardIds) broadcastCardChatsToSubscribedSseClients(cardId, true);
-  }
-
   async function handleSse(req: RuntimeRequest, res: RuntimeResponse, clientId: string): Promise<void> {
-    const existing = sseClients.get(clientId);
+    const existing = sseHub.get(clientId);
     const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
-    if (existing) {
-      disconnectSseClient(clientId, existing.res);
-    }
     res.writeHead(200, {
       ...corsHeaders,
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     });
-    flushSseTransport(res);
-    sseClients.set(clientId, { res, subscribedChatCardIds });
+    sseHub.flushTransport(res);
+    sseHub.register(clientId, res, subscribedChatCardIds);
 
     // On reconnect, Last-Event-ID tells us the client's last received id.
     // We always send the current full snapshot (replay = latest state).
     const payload = await buildPublishedRuntimePayload();
-    const frame = buildSseFrame(payload);
+    const frame = sseHub.buildFrame(payload);
     res.write(frame);
-    try { onSseClientConnected?.(clientId, (customPayload: unknown) => { writeSseFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
+    try { onSseClientConnected?.(clientId, (customPayload: unknown) => { sseHub.writeFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
 
     const keepAlive = setInterval(() => {
       try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
     }, 15_000);
     req.on('close', () => {
       clearInterval(keepAlive);
-      disconnectSseClient(clientId, res);
+      sseHub.disconnect(clientId, res);
     });
   }
 
@@ -1928,7 +1753,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       if (method === 'GET' && p === `${apiBasePath}/sse`) {
         // Initialize runtime first, then register SSE client, then bootstrap.
         // This prevents a race where bootstrap emits early notifications before
-        // the newly connected SSE client is added to sseClients.
+        // the newly connected SSE client is added to the SSE hub.
         await initBoardAndSetup();
         const clientId = String(url.searchParams.get('clientId') || '').trim();
         if (!clientId) {
@@ -2250,7 +2075,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const done = body?.done === true;
         const entryId = chatStorage.append(cardId, role, text, files, turn);
         if (done) chatStorage.setProcessing(cardId, false);
-        broadcastCardChatsToSubscribedSseClients(cardId, !done);
+        sseHub.broadcastCardChats(cardId, !done);
         json(res, 200, { ok: true, id: entryId });
         return true;
       }
@@ -2262,7 +2087,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const body = await readJsonBody(req);
         const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
         if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        if (!subscribeClientToCardChats(clientId, cardId)) {
+        if (!sseHub.subscribeChat(clientId, cardId)) {
           json(res, 404, { error: `SSE client not connected: ${clientId}` });
           return true;
         }
@@ -2277,7 +2102,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         const body = await readJsonBody(req);
         const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
         if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        if (!unsubscribeClientFromCardChats(clientId, cardId)) {
+        if (!sseHub.unsubscribeChat(clientId, cardId)) {
           json(res, 404, { error: `SSE client not connected: ${clientId}` });
           return true;
         }
