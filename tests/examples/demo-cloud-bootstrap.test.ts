@@ -25,7 +25,6 @@ describe('demo cloud bootstrap', () => {
   it('default cloud-mode bootstrap reaches completed board-status', () => {
     const r = run(process.execPath, [
       path.join('public-examples', 'board', 'test', 'server-http-test.js'),
-      '--skip-t3a',
     ]);
 
     if (r.error) throw r.error;
