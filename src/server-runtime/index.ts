@@ -81,6 +81,7 @@ import {
 import { createSseHub } from './sse-hub.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import { createControlplaneToolHandlers } from './controlplane-tool-handlers.js';
+import { createRuntimePayloadModule } from './runtime-payload.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -926,152 +927,22 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   // ── Status & runtime artifacts ───────────────────────────────────────────
+  // Read-only payload aggregation lives in ./runtime-payload.ts. The module
+  // takes a live reference to boardContexts plus narrow callbacks for chat
+  // reads and chat-processing state.
 
-  async function readStatusSnapshot(): Promise<unknown> {
-    const statuses = (await Promise.all(boardContexts.map(async (ctx) => {
-      try {
-        const kv = ctx.boardAdapter.kvStorageForRef(ctx.outputsStoreRef);
-        const persisted = await Promise.resolve(kv.read('status'));
-        if (persisted !== null && persisted !== undefined) return persisted;
-      } catch {
-        // Fall back to notification memory if direct KV read fails.
-      }
-      return ctx.notification.status;
-    }))).filter(Boolean);
-    if (statuses.length === 0) return null;
-    if (statuses.length === 1) return statuses[0];
+  const runtimePayloadModule = createRuntimePayloadModule({
+    boardId,
+    boardContexts,
+    readCardDefinitions: () => readCardDefinitions(),
+    readChatRecords: (cardId) => readChatRecords(cardId),
+    getChatProcessing: (cardId) => createMcpFacade().getChatProcessing({ cardId }).active,
+  });
 
-    // Merge multiple board statuses into a single snapshot
-    const mergedCards: unknown[] = [];
-    const summaryKeys = ['completed', 'eligible', 'pending', 'blocked', 'unresolved', 'failed', 'in_progress', 'orphan_cards'];
-    const totals: Record<string, number> = {};
-    for (const k of summaryKeys) totals[k] = 0;
-
-    for (const status of statuses) {
-      const obj = status as Record<string, unknown>;
-      const cards = Array.isArray(obj.cards) ? obj.cards : [];
-      mergedCards.push(...cards);
-      for (const k of summaryKeys) {
-        totals[k] += Number((obj as any)?.summary?.[k] || 0);
-      }
-    }
-
-    const first = statuses[0] as Record<string, unknown>;
-    return {
-      ...first,
-      cards: mergedCards,
-      summary: {
-        ...((first.summary || {}) as Record<string, unknown>),
-        card_count: mergedCards.length,
-        ...totals,
-      },
-    };
-  }
-
-  async function readCardRuntimeArtifacts(): Promise<Record<string, unknown>> {
-    const out: Record<string, unknown> = {};
-    const process = async (ctx: BoardContext) => {
-      try {
-        const result = await ctx.boardOps.getAllOutputsComputedValues({});
-        if (result.status === 'success' && result.data && typeof result.data === 'object') {
-          for (const [cardId, values] of Object.entries(result.data as Record<string, unknown>)) {
-            const card = ctx.notification.cards[cardId] as Record<string, unknown> | undefined;
-            out[cardId] = {
-              schema_version: 'v1',
-              card_id: cardId,
-              card_data: card?.card_data ?? {},
-              computed_values: values ?? {},
-            };
-          }
-          return;
-        }
-      } catch {
-        // Fall back to notification memory below.
-      }
-      for (const [cardId, values] of Object.entries(ctx.notification.computedValues)) {
-        const card = ctx.notification.cards[cardId] as Record<string, unknown> | undefined;
-        out[cardId] = {
-          schema_version: 'v1',
-          card_id: cardId,
-          card_data: card?.card_data ?? {},
-          computed_values: values ?? {},
-        };
-      }
-    };
-    for (const ctx of boardContexts) await process(ctx);
-    return out;
-  }
-
-  async function readDataObjectsByToken(): Promise<Record<string, unknown>> {
-    const merged: Record<string, unknown> = {};
-    for (const ctx of boardContexts) {
-      try {
-        const result = await ctx.boardOps.getAllOutputsDataObjects({});
-        if (result.status === 'success' && result.data && typeof result.data === 'object') {
-          Object.assign(merged, result.data as Record<string, unknown>);
-          continue;
-        }
-      } catch {
-        // Fall back to notification memory below.
-      }
-      Object.assign(merged, ctx.notification.dataObjects || {});
-    }
-    return merged;
-  }
-
-  async function buildPublishedRuntimePayload(): Promise<unknown> {
-    const cardDefinitions = await readCardDefinitions();
-    const rawArtifacts = await readCardRuntimeArtifacts();
-    const dataObjectsByToken = await readDataObjectsByToken();
-    const cardRuntimeById: Record<string, unknown> = {};
-
-    for (const cardDef of cardDefinitions) {
-      if (!cardDef?.id) continue;
-      const id = cardDef.id as string;
-      const raw = (rawArtifacts[id] || {}) as Record<string, unknown>;
-      const cardData: Record<string, unknown> = {
-        ...((raw.card_data && typeof raw.card_data === 'object' ? raw.card_data
-          : cardDef.card_data && typeof cardDef.card_data === 'object' ? cardDef.card_data
-            : {}) as Record<string, unknown>),
-      };
-      cardRuntimeById[id] = {
-        schema_version: raw.schema_version || 'v1',
-        card_id: raw.card_id || id,
-        card_data: cardData,
-        computed_values: raw.computed_values && typeof raw.computed_values === 'object' ? raw.computed_values : {},
-      };
-    }
-
-    const cardChatsByCardId: Record<string, unknown> = {};
-    for (const cardDef of cardDefinitions) {
-      if (!cardDef?.id) continue;
-      const id = cardDef.id as string;
-      try {
-        const records = readChatRecords(id);
-        const processing = createMcpFacade().getChatProcessing({ cardId: id }).active;
-        if (records.length > 0 || processing) {
-          cardChatsByCardId[id] = {
-            messages: records.map((r: Record<string, unknown>) => ({
-              role: String(r.role || 'system'),
-              text: String(r.text || ''),
-              files: Array.isArray(r.files) ? r.files : [],
-            })),
-            receiving: false,
-            processing,
-          };
-        }
-      } catch { /* ignore errors reading chat records for this card */ }
-    }
-
-    return {
-      boardId,
-      cardDefinitions,
-      statusSnapshot: await readStatusSnapshot(),
-      dataObjectsByToken,
-      cardRuntimeById,
-      cardChatsByCardId,
-    };
-  }
+  const readStatusSnapshot = runtimePayloadModule.readStatusSnapshot;
+  const readCardRuntimeArtifacts = runtimePayloadModule.readCardRuntimeArtifacts;
+  const readDataObjectsByToken = runtimePayloadModule.readDataObjectsByToken;
+  const buildPublishedRuntimePayload = runtimePayloadModule.buildPublishedRuntimePayload;
 
   // ── Card mutations ───────────────────────────────────────────────────────
 
