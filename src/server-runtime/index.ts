@@ -976,6 +976,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const processingAlreadySet = true;
 
           chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet, turnId } as typeof chatHandlerResult & { turnId: string };
+          // Immediately broadcast processing=true to subscribed SSE clients.
+          // The scan loop runs every ~1s; for fast (sub-second) flows the
+          // processing flag is already cleared by the time the loop fires,
+          // so clients would never see the processing-started transition.
+          try { sseHub.broadcastCardChats(cardId); } catch { /* best-effort */ }
         }
         return card;
       }

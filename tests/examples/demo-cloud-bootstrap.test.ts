@@ -30,7 +30,6 @@ describe('demo cloud bootstrap', () => {
       '--skip-t3',
       '--skip-t3a',
       '--skip-t3b',
-      '--skip-t3d',
       '--skip-t4',
       '--skip-t5',
     ]);
