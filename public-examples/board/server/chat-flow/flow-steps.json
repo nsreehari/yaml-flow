@@ -39,7 +39,7 @@
     },
     "open_turn": {
       "description": "Resolve the current user turn from flow-provided chat messages and parse any chat envelope options",
-      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "turnId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx", "serverUrl"],
+      "produces_data": ["boardId", "cardId", "boardSetupRoot", "boardBaseRef", "boardRuntimeDir", "runtimeStatusDir", "cardsDir", "projectRoot", "chatFlowRoot", "chatMessages", "userText", "lastChatEntryId", "turnId", "probe", "chatHandlerMode", "chatCopilotTimeoutMs", "probeAttachmentFileIdx", "probeGenerateAttachment", "replyFiles", "serverUrl"],
       "input_validations": [
         "$type(cardId) = \"string\" and $length(cardId) > 0",
         "$type(chatMessages) = \"array\"",
@@ -72,6 +72,10 @@
           "data._legacyEnvelope = data._hasLegacyEnvelope ? $eval(data._rawMessageText) : null",
           "data._legacyPrompt = ($type(data._legacyEnvelope.prompt) = \"string\" and $length($trim(data._legacyEnvelope.prompt)) > 0) ? data._legacyEnvelope.prompt : (($type(data._legacyEnvelope.text) = \"string\" and $length($trim(data._legacyEnvelope.text)) > 0) ? data._legacyEnvelope.text : (($type(data._legacyEnvelope.userText) = \"string\" and $length($trim(data._legacyEnvelope.userText)) > 0) ? data._legacyEnvelope.userText : (($type(data._legacyEnvelope.query) = \"string\" and $length($trim(data._legacyEnvelope.query)) > 0) ? data._legacyEnvelope.query : null)))",
           "data.userText = data._isEchoProbe ? $trim($substring(data._rawMessageText, data._markerLen, $length(data._rawMessageText) - (data._markerLen * 2))) : (($type(data._legacyPrompt) = \"string\" and $length($trim(data._legacyPrompt)) > 0) ? $trim(data._legacyPrompt) : data._rawMessageText)",
+          "data._attachMarker = \"[attach]\"",
+          "data.probeGenerateAttachment = $lowercase($substring(data.userText, 0, $length(data._attachMarker))) = data._attachMarker",
+          "data.userText = data.probeGenerateAttachment ? $trim($substring(data.userText, $length(data._attachMarker))) : data.userText",
+          "data.replyFiles = []",
           "data.probe = data._isEchoProbe ? true : (data._legacyEnvelope.probe = true or data._legacyEnvelope.probe = 1 or ($type(data._legacyEnvelope.probe) = \"string\" and $count($filter([\"1\", \"true\", \"yes\", \"on\"], function($value) { $value = $lowercase($trim(data._legacyEnvelope.probe)) })) > 0))",
           "data.chatHandlerMode = data._isEchoProbe ? \"echo-probe\" : (($type(data._legacyEnvelope.chatHandlerMode) = \"string\" and $length($trim(data._legacyEnvelope.chatHandlerMode)) > 0) ? $lowercase($trim(data._legacyEnvelope.chatHandlerMode)) : (data.probe ? \"probe\" : \"copilot\"))",
           "data.chatCopilotTimeoutMs = ($parsePositiveInt := function($value) { ($type($value) = \"number\" and $value > 0) ? $floor($value) : (($type($value) = \"string\" and $count($match($trim($value), /^[0-9]+$/)) > 0 and $number($trim($value)) > 0) ? $floor($number($trim($value))) : null) }; $legacyTimeout := $parsePositiveInt(data._legacyEnvelope.chatTimeoutMs); $legacyCopilotTimeout := $parsePositiveInt(data._legacyEnvelope.chatCopilotTimeoutMs); $fallbackTimeout := $parsePositiveInt(expects_data.chatCopilotTimeoutMs); $legacyTimeout ? $legacyTimeout : ($legacyCopilotTimeout ? $legacyCopilotTimeout : ($fallbackTimeout ? $fallbackTimeout : 300000)))",
@@ -208,8 +212,8 @@
     },
     "probe_assistant": {
       "description": "Compute the deterministic echo assistant reply for echo-probe and test flows",
-      "expects_data": ["userText"],
-      "produces_data": ["replyText"],
+      "expects_data": ["userText", "probeGenerateAttachment"],
+      "produces_data": ["replyText", "replyFiles"],
       "input_validations": [
         "$type(userText) = \"string\""
       ],
@@ -217,6 +221,7 @@
         "type": "compute-jsonata",
         "expr": [
           "data.replyText = \"Echo: \" & expects_data.userText",
+          "data.replyFiles = expects_data.probeGenerateAttachment ? [{ 'file_name': 'probe-generated.txt', 'content_type': 'text/plain', 'text': data.replyText }] : []",
           "result = $contains($lowercase(expects_data.userText), \"simulate-failure\") ? \"failure\" : \"success\""
         ]
       },
@@ -228,7 +233,7 @@
     },
     "write_reply": {
       "description": "Append the assistant reply via MCP stage-ai-response-and-any-attachments",
-      "expects_data": ["serverUrl", "boardId", "cardId", "replyText", "turnId"],
+      "expects_data": ["serverUrl", "boardId", "cardId", "replyText", "replyFiles", "turnId"],
       "produces_data": ["replyId"],
       "input_validations": [
         "$type(serverUrl) = \"string\" and $length(serverUrl) > 0",
@@ -246,7 +251,7 @@
         "meta": "chat-handler",
         "argsMassaging": {
           "urlTemplate": "serverUrl & '/api/boards/' & boardId & '/mcp'",
-          "bodyTemplate": "{ 'tool': 'stage-ai-response-and-any-attachments', 'args': { 'card_id': cardId, 'text': replyText, 'turn_id': turnId } }"
+          "bodyTemplate": "{ 'tool': 'stage-ai-response-and-any-attachments', 'args': { 'card_id': cardId, 'text': replyText, 'turn_id': turnId, 'files': ($type(replyFiles) = 'array' ? replyFiles : []) } }"
         },
         "outputTransforms": {
           "dataTemplate": "{ 'replyId': output.data.id }"

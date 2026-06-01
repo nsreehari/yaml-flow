@@ -187,7 +187,7 @@ export interface BoardLiveCardsMcpDeps {
   nonCore: BoardLiveCardsMcpNonCoreDeps;
   cardStore: BoardLiveCardsMcpCardStoreDeps;
   chatStore: ChatStorePublic;
-  uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array }): Awaitable<{ ok: true; file: Record<string, unknown> }>;
+  uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array }): Awaitable<{ ok: true; file: Record<string, unknown>; file_idx?: number | null }>;
   buildFileDownloadUrl(args: { cardId: string; fileIdx: number; storedName?: string | null }): string;
   readFetchedSourceJsonByRef?(args: { cardId: string; ref: string }): unknown | null;
 }
@@ -860,18 +860,24 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       const fileName = String(fileEntry.file_name ?? fileEntry.fileName ?? fileEntry.name ?? '').trim();
       const contentType = String(fileEntry.content_type ?? fileEntry.contentType ?? 'application/octet-stream');
       if (!fileName) throw new Error('file entry requires file_name');
-      return (await uploadCardFile({
+      return await uploadCardFile({
         cardId,
         fileName,
         contentType,
         bytes: decodeAttachmentBytes(fileEntry),
-      })).file;
+      });
     }));
 
-    uploadedFiles.forEach((file, index) => {
+    const uploadedFileRecords = uploadedFiles.map((uploadResult) => uploadResult.file);
+
+    uploadedFiles.forEach((uploadResult, index) => {
+      const file = ensureRecord(uploadResult.file);
+      const mergedIndex = typeof uploadResult.file_idx === 'number' && Number.isInteger(uploadResult.file_idx) && uploadResult.file_idx >= 0
+        ? uploadResult.file_idx
+        : index;
       const systemText = role === 'assistant'
-        ? `AI generated: ${String(file.name || '')} as ${String(file.stored_name || '')} #${index}`
-        : `file uploaded: ${String(file.name || '')} as ${String(file.stored_name || '')} #${index}`;
+        ? `AI generated: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`
+        : `file uploaded: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`;
       expectSuccess(chatStore.append({
         params: { cardId },
         body: { role: 'system', text: systemText, files: [], turn },
@@ -880,7 +886,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
     const appendResult = expectSuccess(chatStore.append({
       params: { cardId },
-      body: { role, text, files: uploadedFiles, turn },
+      body: { role, text, files: uploadedFileRecords, turn },
     }), 'chatStore.append');
 
     return {
@@ -890,7 +896,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
         id: String(appendResult.id),
         role,
         turn,
-        files: uploadedFiles,
+        files: uploadedFileRecords,
       },
     };
   }

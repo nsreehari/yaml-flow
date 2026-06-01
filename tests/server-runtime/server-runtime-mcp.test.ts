@@ -442,10 +442,10 @@ process.exit(1);
     const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/files?inChat=true&turn-id=turn-upload'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
-    expect(parseJsonBody(res)).toEqual({
+    expect(parseJsonBody(res)).toEqual(expect.objectContaining({
       ok: true,
       file: expect.objectContaining({ name: 'upload.txt', mime_type: 'text/plain', size: 12 }),
-    });
+    }));
 
     const cardReq = makeRequest('GET', '/api/board/cards/card-1');
     const cardRes = makeResponse();
@@ -544,10 +544,10 @@ process.exit(1);
     expect(res._status).toBe(200);
     expect(parseJsonBody(res)).toEqual({
       status: 'success',
-      data: {
+      data: expect.objectContaining({
         ok: true,
         file: expect.objectContaining({ name: 'tool-upload.txt', mime_type: 'text/plain', size: 15 }),
-      },
+      }),
     });
 
     const cardReq = makeRequest('GET', '/api/board/cards/card-1');
@@ -684,7 +684,7 @@ process.exit(1);
     await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
     const messages = chatsBody.messages as Array<Record<string, unknown>>;
-    const systemMessage = messages.find((message) => message.role === 'system' && /^AI generated: result\.txt as .*result\.txt #0$/.test(String(message.text || '')));
+    const systemMessage = messages.find((message) => message.role === 'system' && /^AI generated: result\.txt as .*result\.txt #\d+$/.test(String(message.text || '')));
     expect(systemMessage).toBeTruthy();
     expect(systemMessage?.turn).toBe('turn-123');
     const assistantMessage = messages.find((message) => message.role === 'assistant' && message.text === 'Here is your answer.');

@@ -136,7 +136,15 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
       writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, [], opts?.turnId ?? '');
     }
 
-    return { ok: true, file };
+    return {
+      ok: true,
+      file: {
+        ...file,
+        ...(typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? { file_idx: uploadedFileIndex } : {}),
+        chat: inChat,
+      },
+      ...(typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? { file_idx: uploadedFileIndex } : {}),
+    };
   }
 
   return { uploadCardFile, readCardStoredFileNames };
