@@ -27,8 +27,6 @@ import { createAsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-p
 import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
 import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
 import type { AsyncCardAdminStore } from '../cli/cloud/board-live-cards-storage-async.js';
-import { createBoardLiveCardsMcp } from '../cli/common/board-live-cards-mcp.js';
-import { parseRef } from '../cli/common/storage-interface.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
 import { createCardStore } from '../cli/common/board-live-cards-lib.js';
@@ -83,6 +81,8 @@ import {
   createMcpToolRegistry as createMcpToolRegistryImpl,
   createMcpControlplaneToolRegistry as createMcpControlplaneToolRegistryImpl,
 } from './mcp-tool-registries.js';
+import { createMcpFacadeModule } from './mcp-facade.js';
+import type { McpFacadeBoardContextLike } from './mcp-facade.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -627,162 +627,28 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return boardContexts[0] ?? null;
   }
 
-  function mcpBoardFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpBoardDeps {
-    return {
-      async status() {
-        const status = await readStatusSnapshot();
-        return status == null
-          ? { status: 'fail', error: 'Board status is unavailable' }
-          : { status: 'success', data: status };
-      },
-      async getOutputsDataObject(input) {
-        const key = input?.params?.key;
-        if (!key) return { status: 'fail', error: 'getOutputsDataObject requires params.key' };
-        const dataObjects = await readDataObjectsByToken();
-        return { status: 'success', data: dataObjects[key] };
-      },
-      async getOutputsComputedValues(input) {
-        const key = input?.params?.key;
-        if (!key) return { status: 'fail', error: 'getOutputsComputedValues requires params.key' };
-        const artifacts = await readCardRuntimeArtifacts();
-        const entry = artifacts[key] as Record<string, unknown> | undefined;
-        return { status: 'success', data: entry?.computed_values };
-      },
-      async getOutputsFetchedSources(input) {
-        const key = input?.params?.key;
-        if (!key) return { status: 'fail', error: 'getOutputsFetchedSources requires params.key' };
-        const ctx = cardContextForCard(key) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.boardOps.getOutputsFetchedSources({ params: { key } });
-      },
-      async removeCard(input) {
-        const id = input?.params?.id;
-        if (!id) return { status: 'fail', error: 'removeCard requires params.id' };
-        const ctx = cardContextForCard(id) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.boardOps.removeCard({ params: { id } });
-      },
-      async cardRefreshedNotify(input) {
-        const cardId = input?.params?.cardId;
-        if (!cardId) return { status: 'fail', error: 'cardRefreshedNotify requires params.cardId' };
-        const ctx = cardContextForCard(cardId) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.boardOps.cardRefreshedNotify({ params: { cardId } });
-      },
-      async upsertCard(input) {
-        const cardId = input?.params?.cardId;
-        if (!cardId) return { status: 'fail', error: 'upsertCard requires params.cardId' };
-        const ctx = cardContextForCard(cardId) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        const result = await ctx.boardOps.upsertCard({ params: { cardId, restart: input.params.restart === true } });
-        if (result.status !== 'success') return result;
-        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
-          const drainResult = await processAccumulatedLaneInternal(true);
-          if (drainResult.status !== 'success') return drainResult;
-        }
-        return result;
-      },
-    };
-  }
+  // MCP facade wiring lives in ./mcp-facade.ts. The factory takes narrow
+  // callbacks for every closure-owned helper the facade reaches into;
+  // returned methods are re-bound to local names so existing call sites
+  // (createMcpFacade(), mcpCardStoreFacade(), etc.) are unchanged.
+  const mcpFacadeModule = createMcpFacadeModule({
+    boardContexts: boardContexts as unknown as McpFacadeBoardContextLike[],
+    cardOwnerIndex,
+    cardContextForCard: (cardId) => cardContextForCard(cardId) as McpFacadeBoardContextLike | null,
+    readStatusSnapshot: () => readStatusSnapshot(),
+    readDataObjectsByToken: () => readDataObjectsByToken(),
+    readCardRuntimeArtifacts: () => readCardRuntimeArtifacts(),
+    readCardFromStore: (cardId) => readCardFromStore(cardId),
+    readCardDefinitions: () => readCardDefinitions(),
+    processAccumulatedLaneInternal: (skipInit) => processAccumulatedLaneInternal(skipInit),
+    uploadCardFile: (cardId, fileName, contentType, bytes, opts) => uploadCardFile(cardId, fileName, contentType, bytes, opts),
+    chatStorePublic,
+    serverUrl,
+    apiBasePath,
+  });
 
-  function mcpNonCoreFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpNonCoreDeps {
-    const getNonCore = () => {
-      const ctx = primaryContext();
-      if (!ctx?.nonCore) throw new Error('Board non-core adapter is not configured for MCP preflight/discovery tools');
-      return ctx.nonCore;
-    };
-    return {
-      describeTaskExecutorCapabilities(input) { return getNonCore().describeTaskExecutorCapabilities(input); },
-      validateCardPreflight(input) { return getNonCore().validateCardPreflight(input); },
-      evalCardCompute(input) { return getNonCore().evalCardCompute(input); },
-      probeSourcePreflight(input) { return getNonCore().probeSourcePreflight(input); },
-      runSourcePreflight(input) { return getNonCore().runSourcePreflight(input); },
-      simulateCardCycle(input) { return getNonCore().simulateCardCycle(input); },
-    };
-  }
-
-  function mcpCardStoreFacade(): import('../cli/common/board-live-cards-mcp.js').BoardLiveCardsMcpCardStoreDeps {
-    return {
-      async get(input) {
-        const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
-        if (id) {
-          const card = await readCardFromStore(id);
-          if (!card) return { status: 'success', data: { cards: [] } };
-          return { status: 'success', data: { cards: [card as import('../cli/common/board-live-cards-lib.js').LiveCard] } };
-        }
-        return { status: 'success', data: { cards: await readCardDefinitions() as import('../cli/common/board-live-cards-lib.js').LiveCard[] } };
-      },
-      async set(input) {
-        const body = input.body;
-        if (body == null) return { status: 'fail', error: 'set requires a body (card object or array of cards)' };
-        const cards = Array.isArray(body) ? body : [body];
-        for (const rawCard of cards) {
-          const card = rawCard as Record<string, unknown>;
-          const cardId = typeof card.id === 'string' ? card.id : '';
-          if (!cardId) return { status: 'fail', error: 'each card must have a string `id` field' };
-          const ctxIndex = cardOwnerIndex.get(cardId) ?? 0;
-          const ctx = boardContexts[ctxIndex] ?? primaryContext();
-          if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-          const setResult = await ctx.cardStoreOps.set({ body: card });
-          if (setResult.status !== 'success') return setResult;
-          cardOwnerIndex.set(cardId, ctxIndex);
-        }
-        return { status: 'success', data: { count: cards.length } };
-      },
-      async del(input) {
-        const ids = [input.params?.id, ...(((input.body as { ids?: string[] } | undefined)?.ids) ?? [])].filter((id): id is string => typeof id === 'string' && !!id);
-        if (ids.length === 0) return { status: 'fail', error: 'del requires body.ids (string[]) or params.id' };
-        for (const id of ids) {
-          const ctx = cardContextForCard(id) ?? primaryContext();
-          if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-          const delResult = await ctx.cardStoreOps.del({ params: { id } });
-          if (delResult.status !== 'success') return delResult;
-          cardOwnerIndex.delete(id);
-        }
-        return { status: 'success', data: { count: ids.length } };
-      },
-      async patch(input: { params?: { id?: string; path?: string }; body?: unknown }) {
-        const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
-        const path = typeof input.params?.path === 'string' ? input.params.path : undefined;
-        if (!id || !path) return { status: 'fail', error: 'patch requires params.id and params.path' };
-        const ctx = cardContextForCard(id) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.cardStoreOps.patch(input);
-      },
-      async appendFiles(input: { params?: { id?: string }; body?: unknown }) {
-        const id = typeof input.params?.id === 'string' ? input.params.id : undefined;
-        if (!id) return { status: 'fail', error: 'appendFiles requires params.id' };
-        const ctx = cardContextForCard(id) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.cardStoreOps.appendFiles(input);
-      },
-    };
-  }
-
-  function createMcpFacade() {
-    return createBoardLiveCardsMcp({
-      board: mcpBoardFacade(),
-      nonCore: mcpNonCoreFacade(),
-      cardStore: mcpCardStoreFacade(),
-      chatStore: chatStorePublic,
-      uploadCardFile({ cardId, fileName, contentType, bytes }) {
-        return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
-      },
-      buildFileDownloadUrl({ cardId, fileIdx, storedName }) {
-        const base = `${serverUrl || ''}${apiBasePath}/cards/${encodeURIComponent(cardId)}/files/${fileIdx}`;
-        return storedName ? `${base}?sn=${encodeURIComponent(storedName)}` : base;
-      },
-      readFetchedSourceJsonByRef({ cardId, ref }) {
-        const ctx = cardContextForCard(cardId) ?? primaryContext();
-        if (!ctx) return null;
-        if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) return null;
-        const text = ctx.boardAdapter.resolveBlob(parseRef(ref));
-        const trimmed = text.trim();
-        return trimmed ? JSON.parse(trimmed) : null;
-      },
-    });
-  }
-
+  const mcpCardStoreFacade = mcpFacadeModule.mcpCardStoreFacade;
+  const createMcpFacade = mcpFacadeModule.createMcpFacade;
   const controlplaneToolHandlers = createControlplaneToolHandlers({
     boardId,
     getMcpFacade: () => createMcpFacade(),
