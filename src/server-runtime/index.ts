@@ -78,7 +78,9 @@ import {
 } from './mcp-tool-registries.js';
 import { createMcpFacadeModule } from './mcp-facade.js';
 import type { McpFacadeBoardContextLike } from './mcp-facade.js';
-import { createRoutesSse } from './routes-sse.js';
+import { createRoutesAgentface } from './routes-agentface.js';
+import { createRoutesWebhooks } from './routes-webhooks.js';
+import { createRoutesWatchers } from './routes-watchers.js';
 import { createRoutesRuntimeApi } from './routes-runtime-api.js';
 
 export type {
@@ -1117,14 +1119,11 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return { statusCode: 500, body: { error: result.error } };
   }
 
-  // ── SSE ──────────────────────────────────────────────────────────────────
-  // The bulk of SSE plumbing (client registry, broadcast helpers, chat
-  // subscription scanner) lives in ./sse-hub.ts. The handlers below sequence
-  // SSE registration with runtime bootstrap, which is the only piece tied to
-  // index.ts (it needs buildPublishedRuntimePayload + corsHeaders + hooks).
-
-  // SSE connection + channel-subscription handlers live in ./routes-sse.ts.
-  const routesSse = createRoutesSse({
+  // ── SSE + watcher routes ─────────────────────────────────────────────────
+  // createRoutesWatchers composes routes-sse.ts internally and adds the
+  // HTTP subscription management endpoints on top. It is the sole owner
+  // of sseHub from a routing perspective.
+  const routesWatchers = createRoutesWatchers({
     sseHub,
     corsHeaders,
     json,
@@ -1132,28 +1131,52 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     onSseClientConnected,
     onChannelSubscribed,
     onChannelUnsubscribed,
+    apiBasePath,
+    readJsonBody: (req) => readJsonBody(req),
+    initBoardAndSetup: () => initBoardAndSetup(),
+    bootstrapBoard: () => bootstrapBoard(),
+    boardContexts,
+    publishPersistedStateSnapshot: (ctx) => publishPersistedStateSnapshot(ctx as BoardContext),
+    upsertCardsFromSource: (ctx, idx) => upsertCardsFromSource(ctx as BoardContext, idx),
   });
-  const handleChannelSubscription = routesSse.handleChannelSubscription;
-  const handleSse = routesSse.handleSse;
+  const handleWatchersRoutes = routesWatchers.handleWatchersRoutes;
 
-  // ── Route handler ────────────────────────────────────────────────────────
+  // ── Agent-face routes ──────────────────────────────────────────────────
+  // POST /mcp, POST /mcp-raw
+  const routesAgentface = createRoutesAgentface({
+    apiBasePath,
+    json,
+    readJsonBody: (req) => readJsonBody(req),
+    bootstrapBoard: () => bootstrapBoard(),
+    createMcpFacade: () => createMcpFacade(),
+    createMcpToolRegistry: (mcp) => createMcpToolRegistry(mcp as ReturnType<typeof createMcpFacade>),
+    resolveCardFileDownloadPayload: (cardId, idx, expectedStoredName) => resolveCardFileDownloadPayload(cardId, idx, expectedStoredName),
+    isLikelyTextMimeType: (mimeType) => isLikelyTextMimeType(mimeType),
+    sliceTextByLines: (text, mode, count) => sliceTextByLines(text, mode, count),
+  });
+  const handleAgentfaceApi = routesAgentface.handleAgentfaceApi;
+
+  // ── Webhook routes ─────────────────────────────────────────────────────
+  // POST /callback/board-worker/:token/(success|failure)
+  const routesWebhooks = createRoutesWebhooks({
+    apiBasePath,
+    json,
+    readJsonBody: (req) => readJsonBody(req),
+    initBoardAndSetup: () => initBoardAndSetup(),
+    applyBoardWorkerCallback: (token, outcome, body) => applyBoardWorkerCallback(token, outcome, body),
+  });
+  const handleWebhooksApi = routesWebhooks.handleWebhooksApi;
+
+  // ── Control-face routes ────────────────────────────────────────────────
   // The single-board HTTP route table lives in ./routes-runtime-api.ts.
   const routesRuntimeApi = createRoutesRuntimeApi({
     apiBasePath,
-    boardContexts,
     json,
     readJsonBody: (req) => readJsonBody(req),
     readRawBody: (req) => readRawBody(req),
     initBoardAndSetup: () => initBoardAndSetup(),
     bootstrapBoard: () => bootstrapBoard(),
     buildPublishedRuntimePayload: () => buildPublishedRuntimePayload(),
-    publishPersistedStateSnapshot: (ctx) => publishPersistedStateSnapshot(ctx as BoardContext),
-    upsertCardsFromSource: (ctx, idx) => upsertCardsFromSource(ctx as BoardContext, idx),
-    applyBoardWorkerCallback: (token, outcome, body) => applyBoardWorkerCallback(token, outcome, body),
-    handleSse: (req, res, clientId) => handleSse(req, res, clientId),
-    handleChannelSubscription: (res, clientId, channelName, params, subscribed) => handleChannelSubscription(res, clientId, channelName, params, subscribed),
-    createMcpFacade: () => createMcpFacade(),
-    createMcpToolRegistry: (mcp) => createMcpToolRegistry(mcp as ReturnType<typeof createMcpFacade>),
     createMcpControlplaneToolRegistry: () => createMcpControlplaneToolRegistry(),
     readCardFromStore: (cardId) => readCardFromStore(cardId),
     patchCard: (cardId, patch) => patchCard(cardId, patch),
@@ -1165,20 +1188,28 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       append: (cardId, role, text, files, turn) => chatStorage.append(cardId, role, text, files as Array<Record<string, unknown>>, turn),
       setProcessing: (cardId, active) => chatStorage.setProcessing(cardId, active),
     },
-    sseHub,
     uploadCardFile: (cardId, fileName, contentType, bytes, opts) => uploadCardFile(cardId, fileName, contentType, bytes, opts),
     sendCardFileDownloadResponse: (res, cardId, idx, expectedStoredName) => sendCardFileDownloadResponse(res, cardId, idx, expectedStoredName),
-    resolveCardFileDownloadPayload: (cardId, idx, expectedStoredName) => resolveCardFileDownloadPayload(cardId, idx, expectedStoredName),
-    isLikelyTextMimeType: (mimeType) => isLikelyTextMimeType(mimeType),
-    sliceTextByLines: (text, mode, count) => sliceTextByLines(text, mode, count),
   });
   const handleRuntimeApi = routesRuntimeApi.handleRuntimeApi;
+
+  // ── Full request dispatcher ──────────────────────────────────────────────
+  // Chains all 4 faces. Exposed as handleRuntimeApi on the service object so
+  // that the host (HTTP server / createMultiBoardServerRuntime) has a single
+  // entry point.
+  async function handleAllRoutes(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean> {
+    if (await handleAgentfaceApi(req, res, parsedUrl)) return true;
+    if (await handleWebhooksApi(req, res, parsedUrl)) return true;
+    if (await handleWatchersRoutes(req, res, parsedUrl)) return true;
+    if (await handleRuntimeApi(req, res, parsedUrl)) return true;
+    return false;
+  }
 
   return {
     get apiBasePath() { return apiBasePath; },
     get corsHeaders() { return corsHeaders; },
     get queueLaneTuning() { return queueLaneTuning; },
-    handleRuntimeApi,
+    handleRuntimeApi: handleAllRoutes,
     buildPublishedRuntimePayload,
     processAccumulatedEvents: processAccumulatedEventsInternal,
     processAccumulatedLane: processAccumulatedLaneInternal,

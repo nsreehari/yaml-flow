@@ -1,17 +1,18 @@
 /**
- * server-runtime/routes-runtime-api.ts
+ * server-runtime/routes-runtime-api.ts  (controlface)
  *
- * The single-board HTTP route table extracted from
- * createSingleBoardServerRuntime. The body is the original
- * `handleRuntimeApi` verbatim; everything it touches in the runtime
- * closure (board lifecycle, MCP, chat, file ops, etc.) is passed in as
- * a narrow callback in `RoutesRuntimeApiDeps`.
+ * Control-plane HTTP routes extracted from createSingleBoardServerRuntime.
+ * Handles board lifecycle, card CRUD, chats, file upload/download, and
+ * the MCP controlplane tool endpoint.
+ *
+ * The following routes live in sibling modules:
+ *   routes-agentface.ts  — POST /mcp, /mcp-raw
+ *   routes-webhooks.ts   — POST /callback/board-worker/:token/*
+ *   routes-watchers.ts   — GET /sse + subscribe/unsubscribe endpoints
  */
 
 import type { RuntimeRequest, RuntimeResponse } from './types.js';
-import type { SseHub } from './sse-hub.js';
 import { escapeRegExp } from './internal-helpers.js';
-import { getMcpArgString, getMcpArgNumber } from './mcp-args.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import type { ToolRegistry } from './mcp-tool-registries.js';
 import type { ChatStorePublic } from '../cli/common/chat-store-lib-public.js';
@@ -21,19 +22,8 @@ interface ChatStorageLike {
   setProcessing: (cardId: string, active: boolean) => void;
 }
 
-interface McpFacadeLike {
-  inspectFileContents: (args: { cardId: string; fileIdx: number }) => unknown;
-}
-
-interface CardFileRecord {
-  name?: unknown;
-  stored_name?: unknown;
-  mime_type?: unknown;
-}
-
 export interface RoutesRuntimeApiDeps {
   apiBasePath: string;
-  boardContexts: ReadonlyArray<unknown>;
 
   json: (res: RuntimeResponse, status: number, payload: unknown) => void;
   readJsonBody: (req: RuntimeRequest) => Promise<Record<string, unknown>>;
@@ -42,25 +32,7 @@ export interface RoutesRuntimeApiDeps {
   initBoardAndSetup: () => Promise<void>;
   bootstrapBoard: () => Promise<void>;
   buildPublishedRuntimePayload: () => Promise<unknown>;
-  publishPersistedStateSnapshot: (ctx: unknown) => Promise<void>;
-  upsertCardsFromSource: (ctx: unknown, ctxIndex: number) => Promise<void>;
-  applyBoardWorkerCallback: (
-    token: string,
-    outcome: 'success' | 'failure',
-    body: Record<string, unknown>,
-  ) => Promise<{ statusCode: number; body: unknown }>;
 
-  handleSse: (req: RuntimeRequest, res: RuntimeResponse, clientId: string) => Promise<void>;
-  handleChannelSubscription: (
-    res: RuntimeResponse,
-    clientId: string,
-    channelName: string,
-    params: { cardId?: string },
-    subscribed: boolean,
-  ) => void;
-
-  createMcpFacade: () => McpFacadeLike;
-  createMcpToolRegistry: (mcp: McpFacadeLike) => ToolRegistry;
   createMcpControlplaneToolRegistry: () => ToolRegistry;
 
   readCardFromStore: (cardId: string) => Promise<Record<string, unknown> | null>;
@@ -71,7 +43,6 @@ export interface RoutesRuntimeApiDeps {
 
   chatStorePublic: ChatStorePublic;
   chatStorage: ChatStorageLike;
-  sseHub: SseHub;
 
   uploadCardFile: (
     cardId: string,
@@ -86,13 +57,6 @@ export interface RoutesRuntimeApiDeps {
     idx: number,
     expectedStoredName: string | null,
   ) => Promise<void>;
-  resolveCardFileDownloadPayload: (
-    cardId: string,
-    idx: number,
-    expectedStoredName: string | null,
-  ) => Promise<{ fileRecord: CardFileRecord; bytes: Uint8Array }>;
-  isLikelyTextMimeType: (mimeType: string) => boolean;
-  sliceTextByLines: (text: string, mode: 'head' | 'tail', count: number) => string;
 }
 
 export interface RoutesRuntimeApi {
@@ -102,20 +66,12 @@ export interface RoutesRuntimeApi {
 export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntimeApi {
   const {
     apiBasePath,
-    boardContexts,
     json,
     readJsonBody,
     readRawBody,
     initBoardAndSetup,
     bootstrapBoard,
     buildPublishedRuntimePayload,
-    publishPersistedStateSnapshot,
-    upsertCardsFromSource,
-    applyBoardWorkerCallback,
-    handleSse,
-    handleChannelSubscription,
-    createMcpFacade,
-    createMcpToolRegistry,
     createMcpControlplaneToolRegistry,
     readCardFromStore,
     patchCard,
@@ -124,12 +80,8 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
     resolveChatHandlerTarget,
     chatStorePublic,
     chatStorage,
-    sseHub,
     uploadCardFile,
     sendCardFileDownloadResponse,
-    resolveCardFileDownloadPayload,
-    isLikelyTextMimeType,
-    sliceTextByLines,
   } = deps;
 
   async function handleRuntimeApi(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean> {
@@ -144,74 +96,8 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
         return true;
       }
 
-      if (method === 'GET' && p === `${apiBasePath}/sse`) {
-        await initBoardAndSetup();
-        const clientId = String(url.searchParams.get('clientId') || '').trim();
-        if (!clientId) {
-          json(res, 400, { error: 'clientId query param is required for SSE' });
-          return true;
-        }
-        await handleSse(req, res, clientId);
-        for (let i = 0; i < boardContexts.length; i++) {
-          await publishPersistedStateSnapshot(boardContexts[i]);
-          await upsertCardsFromSource(boardContexts[i], i);
-          await publishPersistedStateSnapshot(boardContexts[i]);
-        }
-        return true;
-      }
-
       if (method === 'GET' && p === `${apiBasePath}/board-status`) {
         json(res, 200, await buildPublishedRuntimePayload());
-        return true;
-      }
-
-      const boardWorkerCallbackMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/callback/board-worker/([^/]+)/(success|failure)$`));
-      if (method === 'POST' && boardWorkerCallbackMatch) {
-        await initBoardAndSetup();
-        const token = decodeURIComponent(boardWorkerCallbackMatch[1]);
-        const outcome = boardWorkerCallbackMatch[2] as 'success' | 'failure';
-        const body = await readJsonBody(req);
-        const callbackResult = await applyBoardWorkerCallback(token, outcome, body);
-        json(res, callbackResult.statusCode, callbackResult.body);
-        return true;
-      }
-
-      if (method === 'POST' && p === `${apiBasePath}/mcp`) {
-        await bootstrapBoard();
-        const body = await readJsonBody(req);
-        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
-        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
-          ? body.args as Record<string, unknown>
-          : {};
-        if (!tool) {
-          json(res, 400, { error: 'tool is required' });
-          return true;
-        }
-        if (tool === 'inspect.file-contents') {
-          json(res, 400, { error: 'inspect.file-contents is only available on /mcp-raw' });
-          return true;
-        }
-        try {
-          const result = await invokeMcpTool(tool, args, createMcpToolRegistry(createMcpFacade()));
-          if (result && typeof result === 'object' && !Array.isArray(result)) {
-            const record = result as Record<string, unknown>;
-            if (record.status === 'fail') {
-              json(res, 400, { error: extractMcpFailureMessage(result, 'Request failed') });
-              return true;
-            }
-            if (record.status === 'error') {
-              json(res, 500, { error: extractMcpFailureMessage(result, 'Internal error') });
-              return true;
-            }
-          }
-          json(res, 200, result);
-        } catch (error) {
-          const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
-            ? Number((error as { statusCode: number }).statusCode)
-            : 500;
-          const message = error instanceof Error ? error.message : String(error);
-          json(res, statusCode, { error: message });
-        }
         return true;
       }
 
@@ -247,90 +133,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
           const message = error instanceof Error ? error.message : String(error);
           json(res, statusCode, { error: message });
         }
-        return true;
-      }
-
-      if (method === 'POST' && p === `${apiBasePath}/mcp-raw`) {
-        await bootstrapBoard();
-        const body = await readJsonBody(req);
-        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
-        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
-          ? body.args as Record<string, unknown>
-          : {};
-        if (!tool) {
-          json(res, 400, { error: 'tool is required' });
-          return true;
-        }
-        if (tool !== 'inspect.file-contents') {
-          json(res, 400, { error: `Tool does not support raw response: ${tool}` });
-          return true;
-        }
-        const cardId = getMcpArgString(args, 'card_id', 'cardId');
-        const fileIdx = getMcpArgNumber(args, 'file_idx', 'fileIdx');
-        const headLines = getMcpArgNumber(args, 'head-lines', 'headLines');
-        const tailLines = getMcpArgNumber(args, 'tail-lines', 'tailLines');
-        const headBytes = getMcpArgNumber(args, 'head-bytes', 'headBytes');
-        const tailBytes = getMcpArgNumber(args, 'tail-bytes', 'tailBytes');
-        if (!cardId) {
-          json(res, 400, { error: 'inspect.file-contents requires card_id' });
-          return true;
-        }
-        if (fileIdx === undefined || !Number.isInteger(fileIdx) || fileIdx < 0) {
-          json(res, 400, { error: 'inspect.file-contents requires file_idx to be a non-negative integer' });
-          return true;
-        }
-        const rawModes = [headLines, tailLines, headBytes, tailBytes].filter((value) => value !== undefined);
-        if (rawModes.length > 1) {
-          json(res, 400, { error: 'inspect.file-contents accepts at most one of head-lines, tail-lines, head-bytes, tail-bytes' });
-          return true;
-        }
-        for (const [name, value] of [['head-lines', headLines], ['tail-lines', tailLines], ['head-bytes', headBytes], ['tail-bytes', tailBytes]] as const) {
-          if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
-            json(res, 400, { error: `inspect.file-contents requires ${name} to be a non-negative integer` });
-            return true;
-          }
-        }
-        const descriptor = await createMcpFacade().inspectFileContents({ cardId, fileIdx }) as { stored_name?: unknown; mime_type?: unknown; name?: unknown };
-        const expectedStoredName = typeof descriptor?.stored_name === 'string' ? descriptor.stored_name : null;
-        const { fileRecord, bytes } = await resolveCardFileDownloadPayload(cardId, fileIdx, expectedStoredName);
-        const filename = String(fileRecord.name || fileRecord.stored_name || 'download.bin');
-        const mimeType = String(fileRecord.mime_type || 'application/octet-stream');
-        const respMode = (url.searchParams.get('resp') || '').trim().toLowerCase();
-        if (respMode && respMode !== 'json-b64') {
-          json(res, 400, { error: `unsupported resp mode: ${respMode}` });
-          return true;
-        }
-        const wantBase64 = respMode === 'json-b64';
-        let outBytes: Uint8Array;
-        if (headLines !== undefined || tailLines !== undefined) {
-          if (!isLikelyTextMimeType(mimeType)) {
-            json(res, 400, { error: 'head-lines/tail-lines are only supported for text-like files; use head-bytes/tail-bytes for binary content' });
-            return true;
-          }
-          const text = new TextDecoder().decode(bytes);
-          const slicedText = headLines !== undefined
-            ? sliceTextByLines(text, 'head', headLines)
-            : sliceTextByLines(text, 'tail', tailLines as number);
-          outBytes = typeof Buffer !== 'undefined' ? Buffer.from(slicedText, 'utf8') : new TextEncoder().encode(slicedText);
-        } else if (headBytes !== undefined || tailBytes !== undefined) {
-          const count = (headBytes ?? tailBytes) as number;
-          outBytes = headBytes !== undefined ? bytes.slice(0, count) : bytes.slice(Math.max(0, bytes.length - count));
-        } else {
-          outBytes = bytes;
-        }
-        if (wantBase64) {
-          const bodyBase64 = typeof Buffer !== 'undefined'
-            ? Buffer.from(outBytes).toString('base64')
-            : btoa(String.fromCharCode(...outBytes));
-          json(res, 200, { bodyBase64, mimeType, filename, byteLength: outBytes.length });
-          return true;
-        }
-        res.writeHead(200, {
-          'Content-Type': mimeType,
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Content-Length': outBytes.length,
-        });
-        res.end(outBytes as unknown as Buffer);
         return true;
       }
 
@@ -464,61 +266,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
         const entryId = chatStorage.append(cardId, role, text, files, turn);
         if (done) chatStorage.setProcessing(cardId, false);
         json(res, 200, { ok: true, id: entryId });
-        return true;
-      }
-
-      const cardChatsSubscribeMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/chats/subscribe-sse$`));
-      if (method === 'POST' && cardChatsSubscribeMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardChatsSubscribeMatch[1]);
-        const body = await readJsonBody(req);
-        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
-        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        if (!sseHub.subscribeChat(clientId, cardId)) {
-          json(res, 404, { error: `SSE client not connected: ${clientId}` });
-          return true;
-        }
-        json(res, 200, { ok: true, clientId, cardId, subscribed: true });
-        return true;
-      }
-
-      const cardChatsUnsubscribeMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/chats/unsubscribe-sse$`));
-      if (method === 'POST' && cardChatsUnsubscribeMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardChatsUnsubscribeMatch[1]);
-        const body = await readJsonBody(req);
-        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
-        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        if (!sseHub.unsubscribeChat(clientId, cardId)) {
-          json(res, 404, { error: `SSE client not connected: ${clientId}` });
-          return true;
-        }
-        json(res, 200, { ok: true, clientId, cardId, subscribed: false });
-        return true;
-      }
-
-      const boardWatchChannelMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/watch-channel/([^/]+)/(subscribe|unsubscribe)-sse$`));
-      if (method === 'POST' && boardWatchChannelMatch) {
-        await bootstrapBoard();
-        const channelName = decodeURIComponent(boardWatchChannelMatch[1]);
-        const subscribed = boardWatchChannelMatch[2] === 'subscribe';
-        const body = await readJsonBody(req);
-        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
-        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        handleChannelSubscription(res, clientId, channelName, {}, subscribed);
-        return true;
-      }
-
-      const cardWatchChannelMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/watch-channel/([^/]+)/(subscribe|unsubscribe)-sse$`));
-      if (method === 'POST' && cardWatchChannelMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardWatchChannelMatch[1]);
-        const channelName = decodeURIComponent(cardWatchChannelMatch[2]);
-        const subscribed = cardWatchChannelMatch[3] === 'subscribe';
-        const body = await readJsonBody(req);
-        const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
-        if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        handleChannelSubscription(res, clientId, channelName, { cardId }, subscribed);
         return true;
       }
 

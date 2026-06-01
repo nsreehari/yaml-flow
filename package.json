@@ -74,6 +74,31 @@
       "import": "./lib/server-runtime-core/index.js",
       "require": "./lib/server-runtime-core/index.cjs"
     },
+    "./server-runtime-agentface": {
+      "types": "./lib/server-runtime-agentface/index.d.ts",
+      "import": "./lib/server-runtime-agentface/index.js",
+      "require": "./lib/server-runtime-agentface/index.cjs"
+    },
+    "./server-runtime-controlface": {
+      "types": "./lib/server-runtime-controlface/index.d.ts",
+      "import": "./lib/server-runtime-controlface/index.js",
+      "require": "./lib/server-runtime-controlface/index.cjs"
+    },
+    "./server-runtime-watchers": {
+      "types": "./lib/server-runtime-watchers/index.d.ts",
+      "import": "./lib/server-runtime-watchers/index.js",
+      "require": "./lib/server-runtime-watchers/index.cjs"
+    },
+    "./server-runtime-webhooks": {
+      "types": "./lib/server-runtime-webhooks/index.d.ts",
+      "import": "./lib/server-runtime-webhooks/index.js",
+      "require": "./lib/server-runtime-webhooks/index.cjs"
+    },
+    "./server-jobs-queue-runner": {
+      "types": "./lib/server-jobs-queue-runner/index.d.ts",
+      "import": "./lib/server-jobs-queue-runner/index.js",
+      "require": "./lib/server-jobs-queue-runner/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "browser": {
