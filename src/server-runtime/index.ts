@@ -83,6 +83,7 @@ import {
 } from './mcp-tool-registries.js';
 import { createMcpFacadeModule } from './mcp-facade.js';
 import type { McpFacadeBoardContextLike } from './mcp-facade.js';
+import { createRoutesSse } from './routes-sse.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -1141,58 +1142,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // SSE registration with runtime bootstrap, which is the only piece tied to
   // index.ts (it needs buildPublishedRuntimePayload + corsHeaders + hooks).
 
-  function handleChannelSubscription(
-    res: RuntimeResponse,
-    clientId: string,
-    channelName: string,
-    params: { cardId?: string },
-    subscribed: boolean,
-  ): void {
-    if (!sseHub.has(clientId)) {
-      json(res, 404, { error: `SSE client not connected: ${clientId}` });
-      return;
-    }
-    if (subscribed) {
-      onChannelSubscribed?.(clientId, channelName, params);
-    } else {
-      onChannelUnsubscribed?.(clientId, channelName, params);
-    }
-    json(res, 200, {
-      ok: true,
-      clientId,
-      channelName,
-      ...(params.cardId ? { cardId: params.cardId } : {}),
-      subscribed,
-    });
-  }
-
-  async function handleSse(req: RuntimeRequest, res: RuntimeResponse, clientId: string): Promise<void> {
-    const existing = sseHub.get(clientId);
-    const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
-    res.writeHead(200, {
-      ...corsHeaders,
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
-    sseHub.flushTransport(res);
-    sseHub.register(clientId, res, subscribedChatCardIds);
-
-    // On reconnect, Last-Event-ID tells us the client's last received id.
-    // We always send the current full snapshot (replay = latest state).
-    const payload = await buildPublishedRuntimePayload();
-    const frame = sseHub.buildFrame(payload);
-    res.write(frame);
-    try { onSseClientConnected?.(clientId, (customPayload: unknown) => { sseHub.writeFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
-
-    const keepAlive = setInterval(() => {
-      try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
-    }, 15_000);
-    req.on('close', () => {
-      clearInterval(keepAlive);
-      sseHub.disconnect(clientId, res);
-    });
-  }
+  // SSE connection + channel-subscription handlers live in ./routes-sse.ts.
+  const routesSse = createRoutesSse({
+    sseHub,
+    corsHeaders,
+    json,
+    buildPublishedRuntimePayload: () => buildPublishedRuntimePayload(),
+    onSseClientConnected,
+    onChannelSubscribed,
+    onChannelUnsubscribed,
+  });
+  const handleChannelSubscription = routesSse.handleChannelSubscription;
+  const handleSse = routesSse.handleSse;
 
   // ── Route handler ────────────────────────────────────────────────────────
 
