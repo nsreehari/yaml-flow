@@ -69,6 +69,11 @@
       "import": "./lib/board-live-cards-server-runtime.js",
       "require": "./lib/board-live-cards-server-runtime.cjs"
     },
+    "./server-runtime-core": {
+      "types": "./lib/server-runtime-core/index.d.ts",
+      "import": "./lib/server-runtime-core/index.js",
+      "require": "./lib/server-runtime-core/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "browser": {

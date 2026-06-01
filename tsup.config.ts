@@ -58,6 +58,7 @@ export default defineConfig({
     'execution-refs': 'src/cli/common/execution-interface.ts',
     'server-runtime/index': 'src/server-runtime/index.ts',
     'board-live-cards-server-runtime': 'src/server-runtime/index.ts',
+    'server-runtime-core/index': 'src/server-runtime-core/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
