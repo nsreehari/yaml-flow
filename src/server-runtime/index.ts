@@ -73,16 +73,16 @@ import {
 import {
   getMcpArgString,
   getMcpArgNumber,
-  getMcpArgRecord,
-  getRequiredMcpArgRecord,
-  getRequiredMcpArgNumber,
-  parseMcpUploadBytes,
 } from './mcp-args.js';
 import { createSseHub } from './sse-hub.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import { createControlplaneToolHandlers } from './controlplane-tool-handlers.js';
 import { createRuntimePayloadModule } from './runtime-payload.js';
 import { createCardFileOps } from './card-file-ops.js';
+import {
+  createMcpToolRegistry as createMcpToolRegistryImpl,
+  createMcpControlplaneToolRegistry as createMcpControlplaneToolRegistryImpl,
+} from './mcp-tool-registries.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -789,143 +789,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     getMcpCardStoreFacade: () => mcpCardStoreFacade(),
   });
 
-  function setChatProcessingFromControlplane(args: Record<string, unknown>, active: boolean) {
-    return controlplaneToolHandlers.setChatProcessing(args, active);
+  function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>) {
+    return createMcpToolRegistryImpl(mcp);
   }
 
-  function requireControlplaneCardArgs(args: Record<string, unknown>): { cardId: string } {
-    return controlplaneToolHandlers.requireCardArgs(args);
+  function createMcpControlplaneToolRegistry() {
+    return createMcpControlplaneToolRegistryImpl({
+      boardId,
+      uploadCardFile,
+      getMcpFacade: () => createMcpFacade(),
+      controlplane: controlplaneToolHandlers,
+    });
   }
-
-  function getChatProcessingFromControlplane(args: Record<string, unknown>) {
-    return controlplaneToolHandlers.getChatProcessing(args);
-  }
-
-  function setCardMetaFromControlplane(args: Record<string, unknown>) {
-    return controlplaneToolHandlers.setCardMeta(args);
-  }
-
-  function getCardMetaFromControlplane(args: Record<string, unknown>) {
-    return controlplaneToolHandlers.getCardMeta(args);
-  }
-
-  function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> {
-    return {
-      'discover.source-kinds': () => mcp.discoverSourceKinds(),
-      'inspect.board-runtime-status': () => mcp.inspectBoardRuntimeStatus(),
-      'inspect.card-definition-and-runtime': (args) => mcp.inspectCardDefinitionAndRuntime({ cardId: getMcpArgString(args, 'card_id') }),
-      'inspect.chat-messages-on-cards': (args) => {
-        const lastUserTurns = getMcpArgNumber(args, 'tail_turns');
-        const tail = getMcpArgNumber(args, 'tail');
-        const turnId = getMcpArgString(args, 'turn_id');
-        const allTurns = args['all_turns'] === true;
-        const tailTurnsBeforeId = getMcpArgString(args, 'tail_turns_before_id');
-        return mcp.inspectChatMessagesOnCards({
-          cardId: getMcpArgString(args, 'card_id'),
-          ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
-          ...(tail !== undefined ? { tail } : {}),
-          ...(turnId ? { turnId } : {}),
-          ...(allTurns ? { allTurns: true } : {}),
-          ...(tailTurnsBeforeId ? { tailTurnsBeforeId } : {}),
-        });
-      },
-      'inspect.file-contents': (args) => mcp.inspectFileContents({
-        cardId: getMcpArgString(args, 'card_id'),
-        fileIdx: Number(getMcpArgNumber(args, 'file_idx')),
-      }),
-      'preflight.validate-candidate-card-definition': (args) => mcp.preflightValidateCandidateCardDefinition({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
-      }),
-      'preflight.materialize-candidate-card': (args) => mcp.preflightMaterializeCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
-        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires'),
-        mockFetchedSources: getRequiredMcpArgRecord(args, 'mock_fetched_sources', 'mock_fetched_sources'),
-      }),
-      'preflight.probe-single-source-in-candidate-card': (args) => mcp.preflightProbeSingleSourceInCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
-        mockProjections: getMcpArgRecord(args, 'mock_projections'),
-        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx'),
-      }),
-      'preflight.run-single-source-in-candidate-card': (args) => mcp.preflightRunSingleSourceInCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
-        mockProjections: getMcpArgRecord(args, 'mock_projections'),
-        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx'),
-      }),
-      'preflight.run-single-source-in-live-card': (args) => mcp.preflightRunSingleSourceInLiveCard({
-        cardId: getMcpArgString(args, 'card_id'),
-        sourceIdx: getRequiredMcpArgNumber(args, 'source_idx', 'source_idx'),
-        mockRequires: getRequiredMcpArgRecord(args, 'mock_requires', 'mock_requires'),
-      }),
-      'preflight.run-one-cycle-with-candidate-card': (args) => mcp.preflightRunOneCycleWithCandidateCard({
-        candidateCardContent: getRequiredMcpArgRecord(args, 'candidate_card_content', 'candidate_card_content'),
-        mockRequires: getMcpArgRecord(args, 'mock_requires'),
-      }),
-      'manage.read-card': (args) => mcp.manageReadCard({ cardId: getMcpArgString(args, 'card_id') }),
-      'stage-ai-response-and-any-attachments': (args) => {
-        const turnId = getMcpArgString(args, 'turn_id');
-        if (!turnId) {
-          throw Object.assign(
-            new Error('stage-ai-response-and-any-attachments requires a non-empty turn_id'),
-            { statusCode: 400 },
-          );
-        }
-        return mcp.manageAddChatEntryAndAnyAttachments({
-          cardId: getMcpArgString(args, 'card_id'),
-          role: 'assistant',
-          ...(typeof args.text === 'string' ? { text: args.text } : {}),
-          ...(turnId ? { turn: turnId } : {}),
-          ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
-        });
-      },
-      'manage.upsert-card': (args) => mcp.manageUpsertCard({
-        cardId: getMcpArgString(args, 'card_id'),
-        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),
-      }),
-      'manage.remove-card': (args) => mcp.manageRemoveCard({ cardId: getMcpArgString(args, 'card_id') }),
-    };
-  }
-
-  function createMcpControlplaneToolRegistry(): Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> {
-    return {
-      'getstate.is-chat-processing': (args) => getChatProcessingFromControlplane(args),
-      'setstate.chat-processing-started': (args) => setChatProcessingFromControlplane(args, true),
-      'setstate.chat-processing-done': (args) => setChatProcessingFromControlplane(args, false),
-      'getstate.card-meta': (args) => getCardMetaFromControlplane(args),
-      'setstate.card-meta': (args) => setCardMetaFromControlplane(args),
-      'manage.upload-card-file': (args) => {
-        const requestBoardId = getMcpArgString(args, 'board_id');
-        const cardId = getMcpArgString(args, 'card_id');
-        const fileName = getMcpArgString(args, 'file_name');
-        const contentType = getMcpArgString(args, 'content_type') || 'application/octet-stream';
-        const bytes = parseMcpUploadBytes(args);
-
-        if (!requestBoardId) throw Object.assign(new Error('manage.upload-card-file requires board_id'), { statusCode: 400 });
-        if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
-        if (!cardId) throw Object.assign(new Error('manage.upload-card-file requires card_id'), { statusCode: 400 });
-        if (!fileName) throw Object.assign(new Error('manage.upload-card-file requires file_name'), { statusCode: 400 });
-        if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
-
-        return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
-      },
-      'manage.admin-read-card': async (args) => {
-        const { cardId } = requireControlplaneCardArgs(args);
-        const cards = await createMcpFacade().adminReadCard({ cardId });
-        return { status: 'success', data: { cards } };
-      },
-      'manage.admin-upsert-card': (args) => {
-        const requestBoardId = getMcpArgString(args, 'board_id');
-        const cardId = getMcpArgString(args, 'card_id');
-        if (!requestBoardId) throw Object.assign(new Error('manage.admin-upsert-card requires board_id'), { statusCode: 400 });
-        if (!cardId) throw Object.assign(new Error('manage.admin-upsert-card requires card_id'), { statusCode: 400 });
-        if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
-        return createMcpFacade().adminUpsertCard({
-          cardId,
-          candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),
-        });
-      },
-    };
-  }
-
   // ── Status & runtime artifacts ───────────────────────────────────────────
   // Read-only payload aggregation lives in ./runtime-payload.ts. The module
   // takes a live reference to boardContexts plus narrow callbacks for chat
