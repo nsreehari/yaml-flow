@@ -26,7 +26,6 @@ describe('demo cloud bootstrap', () => {
     const r = run(process.execPath, [
       path.join('public-examples', 'board', 'test', 'server-http-test.js'),
       '--skip-t3a',
-      '--skip-t4',
     ]);
 
     if (r.error) throw r.error;
