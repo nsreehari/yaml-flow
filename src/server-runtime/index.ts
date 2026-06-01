@@ -974,21 +974,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           const processingAlreadySet = true;
 
           chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet, turnId } as typeof chatHandlerResult & { turnId: string };
-          // Emit SSE notification so connected clients receive updated chat state immediately
-          try {
-            const allRecords = readChatRecords(cardId);
-            sseHub.broadcastNotificationBatch([{
-              kind: 'card_chats',
-              cardId,
-              messages: allRecords.map((r: Record<string, unknown>) => ({
-                role: String(r.role || 'system'),
-                text: String(r.text || ''),
-                files: Array.isArray(r.files) ? r.files : [],
-              })),
-              receiving: true,
-              processing: chatStorage.isProcessing(cardId),
-            }]);
-          } catch { /* best-effort SSE broadcast */ }
         }
         return card;
       }

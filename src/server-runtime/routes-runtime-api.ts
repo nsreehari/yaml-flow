@@ -463,7 +463,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
         const done = body?.done === true;
         const entryId = chatStorage.append(cardId, role, text, files, turn);
         if (done) chatStorage.setProcessing(cardId, false);
-        sseHub.broadcastCardChats(cardId, !done);
         json(res, 200, { ok: true, id: entryId });
         return true;
       }
