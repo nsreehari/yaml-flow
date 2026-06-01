@@ -78,14 +78,9 @@ import {
   getRequiredMcpArgNumber,
   parseMcpUploadBytes,
 } from './mcp-args.js';
-import {
-  expectControlplaneSuccess,
-  expectControlplaneSuccessAsync,
-  getCardMetaKey,
-  readCardMetaValue,
-} from './controlplane-helpers.js';
 import { createSseHub } from './sse-hub.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
+import { createControlplaneToolHandlers } from './controlplane-tool-handlers.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -787,65 +782,30 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     });
   }
 
-  function setChatProcessingFromControlplane(args: Record<string, unknown>, active: boolean): { status: 'success'; data: { boardId: string; cardId: string; active: boolean } } {
-    const requestBoardId = getMcpArgString(args, 'board_id');
-    const cardId = getMcpArgString(args, 'card_id');
-    if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
-    if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
-    if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
-    createMcpFacade().setChatProcessing({ cardId, active });
-    return { status: 'success', data: { boardId, cardId, active } };
+  const controlplaneToolHandlers = createControlplaneToolHandlers({
+    boardId,
+    getMcpFacade: () => createMcpFacade(),
+    getMcpCardStoreFacade: () => mcpCardStoreFacade(),
+  });
+
+  function setChatProcessingFromControlplane(args: Record<string, unknown>, active: boolean) {
+    return controlplaneToolHandlers.setChatProcessing(args, active);
   }
 
   function requireControlplaneCardArgs(args: Record<string, unknown>): { cardId: string } {
-    const requestBoardId = getMcpArgString(args, 'board_id');
-    const cardId = getMcpArgString(args, 'card_id');
-    if (!requestBoardId) throw Object.assign(new Error('MCP tool requires board_id'), { statusCode: 400 });
-    if (!cardId) throw Object.assign(new Error('MCP tool requires card_id'), { statusCode: 400 });
-    if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
-    return { cardId };
+    return controlplaneToolHandlers.requireCardArgs(args);
   }
 
-  function getChatProcessingFromControlplane(args: Record<string, unknown>): { status: 'success'; data: { boardId: string; cardId: string; active: boolean } } {
-    const { cardId } = requireControlplaneCardArgs(args);
-    const data = createMcpFacade().getChatProcessing({ cardId });
-    return { status: 'success', data: { boardId, cardId, active: data.active } };
+  function getChatProcessingFromControlplane(args: Record<string, unknown>) {
+    return controlplaneToolHandlers.getChatProcessing(args);
   }
 
-  async function setCardMetaFromControlplane(args: Record<string, unknown>): Promise<{ status: 'success'; data: { boardId: string; cardId: string; key: string } }> {
-    const { cardId } = requireControlplaneCardArgs(args);
-    const key = getCardMetaKey(args);
-    if (!Object.prototype.hasOwnProperty.call(args, 'value')) throw Object.assign(new Error('MCP tool requires value'), { statusCode: 400 });
-    if (key.split('.').includes('__visible_controlplane_only')) {
-      // Allow the key through only if the value matches the card's current __visible_controlplane_only flag
-      // (idempotent round-trip: client read the full meta, re-submits values, flag value unchanged).
-      const existing = await expectControlplaneSuccessAsync<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
-      const card = Array.isArray(existing.cards) && existing.cards.length > 0 && typeof existing.cards[0] === 'object' && !Array.isArray(existing.cards[0])
-        ? existing.cards[0] as Record<string, unknown>
-        : null;
-      const currentFlag = card ? readCardMetaValue(card, '__visible_controlplane_only').value : undefined;
-      if (args.value !== currentFlag) {
-        throw Object.assign(new Error('MCP tool cannot change the reserved meta flag __visible_controlplane_only'), { statusCode: 403 });
-      }
-      return { status: 'success', data: { boardId, cardId, key } };
-    }
-    expectControlplaneSuccess(await mcpCardStoreFacade().patch({
-      params: { id: cardId, path: `meta.${key}` },
-      body: { value: args.value },
-    }), 'cardStore.patch');
-    return { status: 'success', data: { boardId, cardId, key } };
+  function setCardMetaFromControlplane(args: Record<string, unknown>) {
+    return controlplaneToolHandlers.setCardMeta(args);
   }
 
-  async function getCardMetaFromControlplane(args: Record<string, unknown>): Promise<{ status: 'success'; data: { boardId: string; cardId: string; key: string; exists: boolean; value: unknown } }> {
-    const { cardId } = requireControlplaneCardArgs(args);
-    const key = getCardMetaKey(args);
-    const result = await expectControlplaneSuccessAsync<{ cards?: unknown[] }>(mcpCardStoreFacade().get({ params: { id: cardId } }), 'cardStore.get');
-    const card = Array.isArray(result.cards) && result.cards.length > 0 && result.cards[0] && typeof result.cards[0] === 'object' && !Array.isArray(result.cards[0])
-      ? result.cards[0] as Record<string, unknown>
-      : null;
-    if (!card) throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
-    const metaValue = readCardMetaValue(card, key);
-    return { status: 'success', data: { boardId, cardId, key, exists: metaValue.exists, value: metaValue.value } };
+  function getCardMetaFromControlplane(args: Record<string, unknown>) {
+    return controlplaneToolHandlers.getCardMeta(args);
   }
 
   function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>): Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> {
