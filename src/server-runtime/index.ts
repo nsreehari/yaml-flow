@@ -82,6 +82,7 @@ import { createSseHub } from './sse-hub.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import { createControlplaneToolHandlers } from './controlplane-tool-handlers.js';
 import { createRuntimePayloadModule } from './runtime-payload.js';
+import { createCardFileOps } from './card-file-ops.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -106,7 +107,6 @@ const DEFAULT_CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
 };
 
-const MAX_STORED_FILE_NAME_LEN = 32;
 const CHAT_HANDLER_FLOW_QUEUE_TARGET = 'chat-handler-flow-queue';
 
 // ============================================================================
@@ -1045,15 +1045,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat & file operations ───────────────────────────────────────────────
 
-  function normalizeDisplayFileName(name: string): string {
-    const input = String(name || '').trim();
-    if (!input) return 'upload.bin';
-    // Extract basename: take last segment after / or \
-    const lastSlash = Math.max(input.lastIndexOf('/'), input.lastIndexOf('\\'));
-    const base = lastSlash >= 0 ? input.slice(lastSlash + 1) : input;
-    return base || 'upload.bin';
-  }
-
   function clearChatRecords(cardId: string): void {
     chatStorage.clear(cardId);
     try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
@@ -1069,77 +1060,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return chatStorage.readAll(cardId) as unknown as Array<Record<string, unknown>>;
   }
 
-  async function readCardStoredFileNames(cardId: string): Promise<string[]> {
-    const names: string[] = [];
-    try {
-      const card = await readCardFromStore(cardId);
-      if (!card) return names;
-      const metadata = cardFileMetadataStoreInstance().read(card.card_data && typeof card.card_data === 'object' ? card.card_data : null);
-      for (const entry of metadata) names.push((entry as any).stored_name);
-    } catch { /* ignore */ }
-    return names;
-  }
+  // File operations live in ./card-file-ops.ts. The factory takes narrow
+  // callbacks for the closure-owned helpers it needs.
+  const cardFileOps = createCardFileOps({
+    safeCardId: (cardId) => safeCardId(cardId),
+    artifactsStores: (cardId) => artifactsStores(cardId),
+    cardFileMetadataStore: () => cardFileMetadataStoreInstance(),
+    readCardFromStore: (cardId) => readCardFromStore(cardId),
+    updateCardLocalOnly: (cardId, fn) => updateCardLocalOnly(cardId, fn),
+    writeChatRecord: (cardId, role, text, files, turnId) => writeChatRecord(cardId, role, text, files as Array<Record<string, unknown>>, turnId),
+  });
 
-  async function persistUploadedFile(cardId: string, requestedName: string, contentType: string, buffer: Uint8Array): Promise<Record<string, unknown>> {
-    const sid = safeCardId(cardId);
-    const stores = artifactsStores(cardId);
-    const displayName = normalizeDisplayFileName(requestedName);
-    const existingNames = await readCardStoredFileNames(cardId);
-    const serial = String(existingNames.length + 1).padStart(3, '0');
-    const storedName = `${serial}-${displayName}`.slice(-(MAX_STORED_FILE_NAME_LEN + 4));
-
-    if (stores.files) {
-      await stores.files.putBytes(`${sid}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
-    }
-
-    return {
-      name: displayName,
-      stored_name: storedName,
-      size: buffer.length,
-      mime_type: contentType || 'application/octet-stream',
-      uploaded_at: new Date().toISOString(),
-    };
-  }
-
-  async function uploadCardFile(
-    cardId: string,
-    requestedName: string,
-    contentType: string,
-    buffer: Uint8Array,
-    opts?: { inChat?: boolean; turnId?: string },
-  ): Promise<{ ok: true; file: Record<string, unknown> }> {
-    if (!buffer.length) {
-      throw Object.assign(new Error('Empty upload body'), { statusCode: 400 });
-    }
-
-    const inChat = opts?.inChat === true;
-    const file = await persistUploadedFile(cardId, requestedName, contentType, buffer);
-    let uploadedFileIndex: number | null = null;
-
-    await updateCardLocalOnly(cardId, (card) => {
-      const now = new Date().toISOString();
-      const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
-      card.card_data = cardData;
-      const incoming = cardFileMetadataStoreInstance().normalizeIncoming([{
-        name: file.name,
-        stored_name: file.stored_name,
-        size: file.size,
-        mime_type: file.mime_type,
-        uploaded_at: file.uploaded_at || now,
-        chat: inChat,
-      }], now);
-      const merged = cardFileMetadataStoreInstance().merge(cardData, incoming);
-      uploadedFileIndex = merged.findIndex((entry) => entry.stored_name === file.stored_name);
-      return card;
-    });
-
-    if (inChat) {
-      const idxSuffix = typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? ` #${uploadedFileIndex}` : '';
-      writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, [], opts?.turnId ?? '');
-    }
-
-    return { ok: true, file };
-  }
+  const uploadCardFile = cardFileOps.uploadCardFile;
 
   async function resolveChatHandlerTarget(cardId: string): Promise<{
     ctx: BoardContext;
