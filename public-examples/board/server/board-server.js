@@ -11,8 +11,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createMultiBoardServerRuntime,
   createSingleBoardServerRuntime,
+} from 'yaml-flow/server-runtime-controlface';
+import {
   createHostedBoardQueueLaneRegistry,
-} from 'yaml-flow/board-live-cards-server-runtime';
+} from 'yaml-flow/server-jobs-queue-runner';
 import {
   createHostedAsyncBoardPlatformAdapter,
 } from 'yaml-flow/cloud-storage';
