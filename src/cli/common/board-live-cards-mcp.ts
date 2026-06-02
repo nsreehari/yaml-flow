@@ -395,7 +395,14 @@ function normalizeCandidateCardPayload(card: UnknownRecord): UnknownRecord {
 }
 
 function stripMcpPrivateCardFields<T extends UnknownRecord>(card: T): T {
-  const { meta: _meta, ...publicCard } = card;
+  const publicCard = { ...card } as UnknownRecord;
+  const meta = ensureRecord(card.meta);
+  const publicMetaEntries = Object.entries(meta).filter(([key]) => !key.startsWith('__'));
+  if (publicMetaEntries.length > 0) {
+    publicCard.meta = Object.fromEntries(publicMetaEntries);
+  } else {
+    delete publicCard.meta;
+  }
   return publicCard as T;
 }
 

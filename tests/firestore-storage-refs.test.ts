@@ -70,4 +70,22 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
     expect(parseRef(bundle.refs.artifactsStoreRef)).toEqual({ kind: 'firestore', value: 'external/files' });
     expect(parseRef(bundle.refs.cardStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/cards' });
   });
+
+  it('exposes a non-core preflight surface for hosted runtimes', async () => {
+    const db = makeFakeFirestore() as any;
+    const bundle = createFirestoreBoardRuntimeBundle(db, 'board-A');
+
+    const result = await bundle.nonCore.validateCardPreflight({
+      body: {
+        id: 'card-a',
+        card_data: { rows: [] },
+      },
+    });
+
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cardId).toBe('card-a');
+      expect(result.data.isValid).toBe(true);
+    }
+  });
 });

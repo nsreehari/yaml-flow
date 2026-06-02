@@ -140,7 +140,7 @@ export default defineConfig([
   // Global: window.ServerRuntimeControlface
   {
     ...sharedBrowserOptions,
-    entry: { 'server-runtime-controlface': 'src/server-runtime-controlface/index.ts' },
+    entry: { 'server-runtime-controlface': 'src/server-runtime-controlface/browser.ts' },
     globalName: 'ServerRuntimeControlface',
     esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
   },

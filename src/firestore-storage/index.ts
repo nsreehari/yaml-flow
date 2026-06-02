@@ -6,6 +6,12 @@ import {
 import type {
   AsyncBoardPlatformAdapter,
 } from '../cli/cloud/index.js';
+import { CardCompute } from '../card-compute/index.js';
+import { validateCardPreflight as validateStandaloneCardPreflight } from '../card-validation.js';
+import { createAsyncBoardConfigStore } from '../cli/cloud/index.js';
+import type { BoardRuntimeNonCorePublic } from '../server-runtime/types.js';
+import type { CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
+import type { ComputeNode } from '../card-compute/index.js';
 import type {
   AsyncArchiveFactory,
   AsyncAtomicRelayLock,
@@ -80,6 +86,92 @@ export interface FirestoreBoardRefs {
   artifactsStoreRef: string;
 }
 
+function ok<T>(data: T): CommandResult<T> {
+  return { status: 'success', data } as CommandResult<T>;
+}
+
+function fail<T = never>(message: string): CommandResult<T> {
+  return { status: 'fail', error: message } as CommandResult<T>;
+}
+
+function err<T = never>(error: unknown): CommandResult<T> {
+  return { status: 'error', error: error instanceof Error ? error.message : String(error) } as CommandResult<T>;
+}
+
+function createFirestoreBoardNonCorePublic(adapter: AsyncBoardPlatformAdapter): BoardRuntimeNonCorePublic {
+  const configStore = () => createAsyncBoardConfigStore(adapter.kvStorage('config'));
+
+  async function validateCardPreflight(input: CommandInput): Promise<CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>> {
+    try {
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('validateCardPreflight requires card JSON object in body') as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
+      }
+      const body = input.body as Record<string, unknown>;
+      const card = (body['card-content'] ?? body) as Record<string, unknown>;
+      const cardId = typeof card.id === 'string' ? card.id : '(unknown)';
+      const result = validateStandaloneCardPreflight(card);
+      const hasSources = Array.isArray(card.source_defs) && card.source_defs.length > 0;
+      const issues = [...result.issues];
+      if (hasSources) {
+        const taskExecutorRef = await configStore().readTaskExecutorRef().catch(() => undefined);
+        if (taskExecutorRef) {
+        issues.push('executor-backed source_def preflight is not supported on the hosted Firestore runtime yet');
+        }
+      }
+      return ok({ cardId, isValid: issues.length === 0, issues });
+    } catch (error) {
+      return err(error) as CommandResult<{ cardId: string; isValid: boolean; issues: string[] }>;
+    }
+  }
+
+  function evalCardCompute(input: CommandInput): CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }> {
+    try {
+      if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) {
+        return fail('evalCardCompute requires a JSON object in body') as CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
+      }
+      const body = input.body as Record<string, unknown>;
+      const card = (body['card-content'] ?? body) as Record<string, unknown>;
+      const cardId = typeof card.id === 'string' ? card.id : '(unknown)';
+      const mockFetchedSources = (body['mock-fetched-sources'] ?? {}) as Record<string, unknown>;
+      const mockRequires = (body['mock-requires'] ?? {}) as Record<string, unknown>;
+      const computeSteps = card.compute as Array<{ bindTo: string; expr: string }> | undefined;
+      if (!computeSteps || !Array.isArray(computeSteps) || computeSteps.length === 0) {
+        return ok({ cardId, ok: true, computed_values: {}, errors: [] });
+      }
+      const node: ComputeNode = {
+        id: cardId,
+        card_data: (card.card_data ?? {}) as Record<string, unknown>,
+        requires: mockRequires,
+        source_defs: card.source_defs as ComputeNode['source_defs'],
+        compute: computeSteps,
+      };
+      const result = CardCompute.runSync(node, { sourcesData: mockFetchedSources });
+      return ok({
+        cardId,
+        ok: (result.errors ?? []).length === 0,
+        computed_values: result.node.computed_values ?? {},
+        errors: result.errors ?? [],
+      });
+    } catch (error) {
+      return err(error) as CommandResult<{ cardId: string; ok: boolean; computed_values: Record<string, unknown>; errors: Array<{ bindTo: string; error: string }> }>;
+    }
+  }
+
+  async function unsupported<T = never>(toolName: string): Promise<CommandResult<T>> {
+    await configStore().readTaskExecutorRef().catch(() => undefined);
+    return fail(`${toolName} is not supported on the hosted Firestore runtime yet`);
+  }
+
+  return {
+    describeTaskExecutorCapabilities: () => unsupported('describeTaskExecutorCapabilities'),
+    validateCardPreflight,
+    evalCardCompute,
+    probeSourcePreflight: () => unsupported('probeSourcePreflight'),
+    runSourcePreflight: () => unsupported('runSourcePreflight'),
+    simulateCardCycle: () => unsupported('simulateCardCycle'),
+  };
+}
+
 export interface FirestoreQueueStorageOptions {
   defaultVisibilityMs?: number;
 }
@@ -144,6 +236,20 @@ function requireCollectionPath(ref: string, fallback: string): string {
   return fallback;
 }
 
+function stripUndefinedDeep<T>(value: T): T {
+  if (value === undefined) return null as T;
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripUndefinedDeep(entry === undefined ? null : entry)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .map(([key, entry]) => [key, stripUndefinedDeep(entry)]);
+    return Object.fromEntries(entries) as T;
+  }
+  return value;
+}
+
 function boardDoc(db: FirestoreLike, boardId: string): FirestoreDocumentLike {
   return db.collection('boards').doc(boardId);
 }
@@ -179,7 +285,7 @@ export function createFirestoreKvStorage(col: FirestoreCollectionLike): AsyncKVS
       return snap.exists ? (snap.data()?.value ?? null) : null;
     },
     async write(key: string, value: unknown) {
-      await col.doc(encodeDocId(key)).set({ k: key, value });
+      await col.doc(encodeDocId(key)).set(stripUndefinedDeep({ k: key, value }));
     },
     async delete(key: string) {
       await col.doc(encodeDocId(key)).delete();
@@ -198,7 +304,7 @@ export function createFirestoreJournalStorage(col: FirestoreCollectionLike): Asy
   return {
     async append(payload: unknown) {
       const id = lexicalId();
-      await col.doc(id).set({ id, createdAt: new Date().toISOString(), payload });
+      await col.doc(id).set(stripUndefinedDeep({ id, createdAt: new Date().toISOString(), payload }));
       return { id, payload };
     },
     async readAll() {
@@ -349,7 +455,7 @@ export function createFirestoreArchiveFactory(db: FirestoreLike, boardId: string
         return snap.exists ? (snap.data()?.[k] ?? null) : null;
       },
       async set(k: string, v: unknown) {
-        await doc.collection('archive-config').doc('main').set({ [k]: v }, { merge: true });
+        await doc.collection('archive-config').doc('main').set(stripUndefinedDeep({ [k]: v }), { merge: true });
       },
     },
   };
@@ -406,7 +512,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
     async enqueue<T>(body: T) {
       const id = lexicalId();
       const nowIso = new Date().toISOString();
-      await col.doc(id).set({
+      await col.doc(id).set(stripUndefinedDeep({
         id,
         body,
         enqueuedAt: nowIso,
@@ -416,7 +522,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
         leaseExpiresAt: null,
         dead: false,
         deadReason: null,
-      });
+      }));
       return { id, body, enqueuedAt: nowIso, attempt: 0 };
     },
     async enqueueIfAbsent<T>(body: T, dedupKey: string) {
@@ -424,7 +530,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
       if (existing.docs.length > 0) return null;
       const id = lexicalId();
       const nowIso = new Date().toISOString();
-      await col.doc(id).set({
+      await col.doc(id).set(stripUndefinedDeep({
         id,
         body,
         dedupKey,
@@ -435,7 +541,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
         leaseExpiresAt: null,
         dead: false,
         deadReason: null,
-      });
+      }));
       return { id, body, enqueuedAt: nowIso, attempt: 0 };
     },
     async lease(options: { max?: number; visibilityMs?: number } = {}) {
@@ -609,8 +715,10 @@ export function createFirestoreBoardRuntimeBundle(db: FirestoreLike, boardId: st
     ...createFirestoreBoardRefs(boardId),
     ...(options.refs ?? {}),
   };
+  const boardAdapter = createFirestoreBoardAdapter(db, boardId, options);
   return {
     refs,
-    boardAdapter: createFirestoreBoardAdapter(db, boardId, options),
+    boardAdapter,
+    nonCore: createFirestoreBoardNonCorePublic(boardAdapter),
   };
 }

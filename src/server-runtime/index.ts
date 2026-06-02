@@ -51,6 +51,7 @@ import type {
   RuntimeResponse,
   RuntimeLogger,
   BoardContextConfig,
+  BoardRuntimeNonCorePublic,
   BoardRuntimePlatformAdapter,
   InvocationAdapter,
   NotificationTransport,
@@ -88,6 +89,7 @@ export type {
   SingleBoardRuntimeOptions,
   MultiBoardRuntimeOptions,
   SingleBoardRuntime,
+  BoardRuntimeNonCorePublic,
   MultiBoardRuntime,
   RuntimeRequest,
   RuntimeResponse,
@@ -156,7 +158,7 @@ interface RuntimeFilesArtifactsStore {
 interface BoardContext {
   label: string;
   board: ReturnType<typeof createBoardLiveCardsPublic> | AsyncBoardLiveCardsPublic;
-  nonCore: ReturnType<typeof createBoardLiveCardsNonCorePublic> | null;
+  nonCore: BoardRuntimeNonCorePublic | null;
   publicCardStore: SingleBoardRuntime['cardStore'];
   /** Awaitable wrapper around `board` for runtime-internal call sites. */
   boardOps: BoardOpsAwaitable;
@@ -310,7 +312,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       : createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter);
     const nonCoreAdapter = cfg.nonCoreAdapter
       ?? (!isAsyncBoardPlatformAdapter(cfg.boardAdapter) && isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
-    const nonCore = nonCoreAdapter ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter) : null;
+    const nonCore = cfg.nonCore ?? (nonCoreAdapter ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter) : null);
     let publicCardStore: SingleBoardRuntime['cardStore'];
     const cardStoreOps = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
       ? (() => {

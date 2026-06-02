@@ -18,7 +18,7 @@
 
 import http from 'node:http';
 import { Buffer } from 'node:buffer';
-import { createSingleBoardServerRuntime } from 'yaml-flow/server-runtime-controlface';
+import { createSingleBoardServerRuntime } from 'yaml-flow/board-live-cards-server-runtime';
 import { createHostedBoardQueueLaneRegistry } from 'yaml-flow/server-jobs-queue-runner';
 import { startQueueLaneRunners } from 'yaml-flow/board-live-cards-node';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';

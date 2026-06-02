@@ -1121,9 +1121,9 @@ export function liveCardToTaskConfig(card: LiveCard): TaskConfig {
   const provides = (card.provides as Array<{ bindTo: string }> | undefined)?.map(p => p.bindTo) ?? [];
 
   return {
-    requires: requires && requires.length > 0 ? requires : undefined,
     provides,
     taskHandlers: ['card-handler'],
     description: (card.meta as { title?: string } | undefined)?.title ?? card.id,
+    ...(requires && requires.length > 0 ? { requires } : {}),
   };
 }

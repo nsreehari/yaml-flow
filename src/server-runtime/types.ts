@@ -10,7 +10,7 @@
  * of these interfaces when constructing the runtime.
  */
 
-import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
+import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, BoardLiveCardsNonCorePublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
 import type { BoardWorkerRequest } from '../cli/common/board-worker-store.js';
 import type { AsyncBoardPlatformAdapter } from '../cli/cloud/board-platform-adapter-async.js';
 import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
@@ -25,6 +25,13 @@ export type { AsyncBoardPlatformAdapter, AsyncBoardLiveCardsPublic };
 export type { ExecutionRef };
 export type { KindValueRef, KVStorage, BlobStorage };
 export type { ChatStorage };
+export type BoardRuntimeNonCorePublic = Pick<BoardLiveCardsNonCorePublic,
+  'describeTaskExecutorCapabilities'
+  | 'validateCardPreflight'
+  | 'evalCardCompute'
+  | 'probeSourcePreflight'
+  | 'runSourcePreflight'
+  | 'simulateCardCycle'>;
 
 export type Awaitable<T> = T | Promise<T>;
 export type BoardRuntimePlatformAdapter = BoardPlatformAdapter | AsyncBoardPlatformAdapter;
@@ -127,6 +134,7 @@ export interface HostedBoardQueueLaneTuning {
 export interface BoardContextConfig {
   label: string;
   boardAdapter: BoardRuntimePlatformAdapter;
+  nonCore?: BoardRuntimeNonCorePublic;
   nonCoreAdapter?: BoardNonCorePlatformAdapter;
   /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
   artifactsAdapter?: BoardRuntimePlatformAdapter;
