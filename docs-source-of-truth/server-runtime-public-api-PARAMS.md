@@ -170,8 +170,7 @@ All paths are relative to `apiBasePath` (default `/api/board`). `:cardId`, `:tok
 | POST   | `/mcp` | Routed MCP request (high-level wrapper, returns wrapper-shape JSON). |
 | POST   | `/mcp-controlplane` | MCP control-plane request (admin / discovery). |
 | POST   | `/mcp-raw` | Pass-through MCP request, returning the raw envelope. |
-| POST   | `/callback/board-worker/:token/success` | Board-worker success callback (executor → runtime). |
-| POST   | `/callback/board-worker/:token/failure` | Board-worker failure callback. |
+| POST   | `/mcp-webhooks` | Webhook MCP endpoint for board-worker callbacks and process-accumulated triggers. |
 | GET    | `/cards/:cardId` | Read one card by id. |
 | PATCH  | `/cards/:cardId` | Patch a card field. Body `{ path, value }`. |
 | POST   | `/cards/:cardId/retrigger` | Force re-evaluation of a card. |

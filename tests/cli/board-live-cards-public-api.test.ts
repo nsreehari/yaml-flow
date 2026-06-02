@@ -167,7 +167,7 @@ describe('BoardLiveCardsPublic — init and status', () => {
 
     const adapter = createFsBoardPlatformAdapter(br, path.join(tmpDir, 'missing-cli-dir'), {
       suppressSpawn: true,
-      callbackTransport: createHttpBoardCallbackTransport('http://127.0.0.1:9999/api/board/callback/board-worker'),
+      callbackTransport: createHttpBoardCallbackTransport('http://127.0.0.1:9999/api/board/mcp-webhooks'),
     });
 
     expect(() => createBoardLiveCardsPublic(br, adapter)).not.toThrow();

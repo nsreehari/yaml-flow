@@ -318,7 +318,7 @@ function makeBoardWorkerCallbackTransport(serverUrl, boardApiBasePath, transport
   const normalizedServerUrl = typeof serverUrl === 'string' ? serverUrl.trim().replace(/\/+$/, '') : '';
   const normalizedApiBasePath = typeof boardApiBasePath === 'string' ? boardApiBasePath.trim().replace(/\/+$/, '') : '';
   if (!normalizedServerUrl || !normalizedApiBasePath) return undefined;
-  return createHttpBoardCallbackTransport(`${normalizedServerUrl}${normalizedApiBasePath}/callback/board-worker`);
+  return createHttpBoardCallbackTransport(`${normalizedServerUrl}${normalizedApiBasePath}/mcp-webhooks`);
 }
 
 async function readJsonRequest(req) {
