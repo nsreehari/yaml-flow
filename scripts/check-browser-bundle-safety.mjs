@@ -6,8 +6,9 @@ import path from 'node:path';
 const bundleNames = [
   'board-livecards-client.js',
   'server-runtime-controlface.js',
-  'firestore-storage.js',
-  'localstorage-storage.js',
+  'adapters/firestore-storage.js',
+  'adapters/localstorage-storage.js',
+  'adapters/firebase-storage.js',
 ];
 
 const forbidden = [

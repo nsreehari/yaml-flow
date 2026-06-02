@@ -585,8 +585,11 @@ process.exit(1);
     expect(parseJsonBody(res)).toEqual({
       status: 'success',
       data: expect.objectContaining({
-        ok: true,
-        file: expect.objectContaining({ name: 'chat-upload.txt', mime_type: 'text/plain', size: 20, chat: true }),
+        cardId: 'card-1',
+        turn: 'turn-chat-file',
+        files: [
+          expect.objectContaining({ name: 'chat-upload.txt', mime_type: 'text/plain', size: 20, chat: true }),
+        ],
       }),
     });
 
