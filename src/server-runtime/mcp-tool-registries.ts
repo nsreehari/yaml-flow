@@ -178,8 +178,8 @@ export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryD
     'getstate.is-chat-processing': (args) => controlplane.getChatProcessing(args),
     'setstate.chat-processing-started': (args) => controlplane.setChatProcessing(args, true),
     'setstate.chat-processing-done': (args) => controlplane.setChatProcessing(args, false),
-    'getstate.card-meta': (args) => controlplane.getCardMeta(args),
-    'setstate.card-meta': (args) => controlplane.setCardMeta(args),
+    'getstate.card-private': (args) => controlplane.getCardMeta(args),
+    'setstate.card-private': (args) => controlplane.setCardMeta(args),
     'manage.upload-card-file': (args) => {
       const cardId = getMcpArgString(args, 'card_id');
       const fileName = getMcpArgString(args, 'file_name');

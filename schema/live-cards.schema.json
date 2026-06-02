@@ -134,6 +134,7 @@
       }
     },
     "meta": {
+      "description": "Fully public authored metadata visible on all MCP surfaces. Keys must not start with '__'. Use the top-level '__private' field for control-plane-only state.",
       "type": "object",
       "properties": {
         "title": {
@@ -145,7 +146,13 @@
             "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": true
+    },
+    "__private": {
+      "description": "Control-plane-owned private state. Stripped entirely from all regular /mcp read responses. Writable only via 'setstate.card-private' and 'manage.admin-upsert-card'. Agents must never author this field.",
+      "type": "object",
+      "additionalProperties": true
     },
     "requires": {
       "type": "array",
@@ -505,6 +512,9 @@
     },
     "meta": {
       "$ref": "#/definitions/meta"
+    },
+    "__private": {
+      "$ref": "#/definitions/__private"
     },
     "view": {
       "$ref": "#/definitions/view"

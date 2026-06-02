@@ -333,7 +333,7 @@ process.exit(1);
 
     const setMetaRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
-      tool: 'setstate.card-meta',
+      tool: 'setstate.card-private',
       args: { board_id: 'mcp-test-board', card_id: 'card-1', key: 'chat.foundry_thread_id', value: 'thread-123' },
     }), setMetaRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(setMetaRes._status).toBe(200);
@@ -344,7 +344,7 @@ process.exit(1);
 
     const getMetaRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
-      tool: 'getstate.card-meta',
+      tool: 'getstate.card-private',
       args: { board_id: 'mcp-test-board', card_id: 'card-1', key: 'chat.foundry_thread_id' },
     }), getMetaRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(getMetaRes._status).toBe(200);
@@ -375,7 +375,7 @@ process.exit(1);
 
     const setMetaRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
-      tool: 'setstate.card-meta',
+      tool: 'setstate.card-private',
       args: { board_id: 'mcp-test-board', card_id: 'card-1', key: 'chat.foundry_thread_id', value: 'thread-original' },
     }), setMetaRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(setMetaRes._status).toBe(200);

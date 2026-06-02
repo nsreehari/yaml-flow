@@ -433,7 +433,7 @@ Marks a card chat as no longer processing.
 }
 ```
 
-### `getstate.card-meta`
+### `getstate.card-private`
 
 Reads control-plane-owned card metadata under `meta.chat.*`.
 
@@ -459,7 +459,7 @@ Reads control-plane-owned card metadata under `meta.chat.*`.
 }
 ```
 
-### `setstate.card-meta`
+### `setstate.card-private`
 
 Sets control-plane-owned card metadata under `meta.chat.*` using the card store patch path `meta.<key>`.
 
@@ -475,7 +475,7 @@ Sets control-plane-owned card metadata under `meta.chat.*` using the card store 
 **Example:**
 ```json
 {
-  "tool": "setstate.card-meta",
+  "tool": "setstate.card-private",
   "args": {
     "board_id": "live",
     "card_id": "card-portfolio",

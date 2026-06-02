@@ -1551,14 +1551,14 @@ try {
 
     const t5ThreadId = `thread-t5-${Date.now()}`;
     expectMcpSuccess(
-      await httpMcpControlplane('setstate.card-meta', { board_id: BOARD_ID, card_id: T5_CARD_ID, key: 'chat.foundry_thread_id', value: t5ThreadId }),
-      'T5 setstate.card-meta',
+      await httpMcpControlplane('setstate.card-private', { board_id: BOARD_ID, card_id: T5_CARD_ID, key: 'chat.foundry_thread_id', value: t5ThreadId }),
+      'T5 setstate.card-private',
     );
     const t5GetMeta = expectMcpSuccess(
-      await httpMcpControlplane('getstate.card-meta', { board_id: BOARD_ID, card_id: T5_CARD_ID, key: 'chat.foundry_thread_id' }),
-      'T5 getstate.card-meta',
+      await httpMcpControlplane('getstate.card-private', { board_id: BOARD_ID, card_id: T5_CARD_ID, key: 'chat.foundry_thread_id' }),
+      'T5 getstate.card-private',
     );
-    assert(t5GetMeta?.exists === true && t5GetMeta?.value === t5ThreadId, `T5 getstate.card-meta mismatch: ${JSON.stringify(t5GetMeta)}`);
+    assert(t5GetMeta?.exists === true && t5GetMeta?.value === t5ThreadId, `T5 getstate.card-private mismatch: ${JSON.stringify(t5GetMeta)}`);
 
     const t5ReadCards = expectMcpSuccess(
       await httpMcp('manage.read-card', { card_id: T5_CARD_ID }),
@@ -1613,31 +1613,31 @@ try {
     assert(t5AdminCards[0]?.meta?.__visible_controlplane_only === true, `T5 expected meta.__visible_controlplane_only=true, got: ${JSON.stringify(t5AdminCards[0]?.meta)}`);
     console.log('[T5] ok: manage.admin-read-card returns card with __visible_controlplane_only=true');
 
-    // 5. Guard: setstate.card-meta must block changing the flag to a different value.
+    // 5. Guard: setstate.card-private must block changing the flag to a different value.
     // key = 'chat.__visible_controlplane_only' passes the chat.* format check but contains
     // the reserved segment, so it reaches the guard.
-    const t5MetaGuard = await httpMcpControlplane('setstate.card-meta', {
+    const t5MetaGuard = await httpMcpControlplane('setstate.card-private', {
       board_id: BOARD_ID,
       card_id: t5AdminCardId,
       key: 'chat.__visible_controlplane_only',
       value: false,  // differs from current flag value (true) → must be rejected
     });
     assert(t5MetaGuard?.status !== 200,
-      `T5 expected setstate.card-meta to reject changing __visible_controlplane_only, got: ${JSON.stringify(t5MetaGuard)}`);
-    console.log('[T5] ok: setstate.card-meta blocked flag mutation (false != true)');
+      `T5 expected setstate.card-private to reject changing __visible_controlplane_only, got: ${JSON.stringify(t5MetaGuard)}`);
+    console.log('[T5] ok: setstate.card-private blocked flag mutation (false != true)');
 
     // 6. Guard: same key with value matching the current flag (true) must pass (idempotent).
     const t5MetaIdempotent = expectMcpSuccess(
-      await httpMcpControlplane('setstate.card-meta', {
+      await httpMcpControlplane('setstate.card-private', {
         board_id: BOARD_ID,
         card_id: t5AdminCardId,
         key: 'chat.__visible_controlplane_only',
         value: true,  // matches current flag value → idempotent, allowed
       }),
-      'T5 setstate.card-meta idempotent same-value',
+      'T5 setstate.card-private idempotent same-value',
     );
-    assert(t5MetaIdempotent, 'T5 expected setstate.card-meta to succeed with matching flag value');
-    console.log('[T5] ok: setstate.card-meta idempotent same-value allowed');
+    assert(t5MetaIdempotent, 'T5 expected setstate.card-private to succeed with matching flag value');
+    console.log('[T5] ok: setstate.card-private idempotent same-value allowed');
   }
   }
 
