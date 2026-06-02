@@ -745,56 +745,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
   }
 
-  async function patchCard(cardId: string, patch: Record<string, unknown>): Promise<void> {
-    await mutateCard(cardId, (card) => {
-      if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) return card;
-
-      function deepSet(obj: Record<string, unknown>, dottedPath: string, value: unknown): void {
-        const parts = String(dottedPath || '').split('.').filter(Boolean);
-        if (!parts.length) return;
-        let target = obj;
-        for (let i = 0; i < parts.length - 1; i++) {
-          const key = parts[i];
-          if (!target[key] || typeof target[key] !== 'object') target[key] = {};
-          target = target[key] as Record<string, unknown>;
-        }
-        target[parts[parts.length - 1]] = value;
-      }
-
-      if (patch.fieldValues !== undefined && patch.fieldValues !== null) {
-        // fieldValues can be: plain object (form/filter), array (editable-table), or primitive (notes).
-        let writeTo: string | null = null;
-        const view = card.view as Record<string, unknown> | undefined;
-        if (view && Array.isArray(view.elements)) {
-          for (const elem of view.elements) {
-            if (elem?.data && (elem as any).data.writeTo) { writeTo = (elem as any).data.writeTo; break; }
-          }
-        }
-        if (writeTo) {
-          // writeTo present: deepSet handles any value type (object, array, primitive)
-          deepSet(card, writeTo, patch.fieldValues);
-        } else if (typeof patch.fieldValues === 'object' && !Array.isArray(patch.fieldValues)) {
-          // No writeTo + plain object: merge-spread into card_data
-          card.card_data = { ...((card.card_data || {}) as Record<string, unknown>), ...(patch.fieldValues as Record<string, unknown>) };
-        }
-        // No writeTo + array or primitive: skip — no safe implicit target
-      } else if (Array.isArray(patch._stagedFiles) && (patch._stagedFiles as unknown[]).length > 0) {
-        return card;
-      } else {
-        for (const [key, value] of Object.entries(patch)) {
-          if (key === '_stagedFiles') continue;
-          if (value !== null && typeof value === 'object' && !Array.isArray(value) &&
-              card[key] !== null && typeof card[key] === 'object' && !Array.isArray(card[key])) {
-            card[key] = { ...(card[key] as Record<string, unknown>), ...(value as Record<string, unknown>) };
-          } else {
-            card[key] = value;
-          }
-        }
-      }
-      return card;
-    }, { syncBoard: true, restartOnlyIfChanged: true });
-  }
-
   // ── Chat & file operations ───────────────────────────────────────────────
 
   function clearChatRecords(cardId: string): void {
@@ -1095,13 +1045,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return JSON.parse(raw);
   }
 
-  async function readRawBody(req: RuntimeRequest): Promise<Uint8Array> {
-    const chunks: Array<Buffer | Uint8Array> = [];
-    for await (const c of req) chunks.push(c);
-    if (typeof Buffer !== 'undefined') return Buffer.concat(chunks as Buffer[]);
-    return concatUint8Arrays(chunks as Uint8Array[]);
-  }
-
   async function reportSourceFetchedInternal(token: string, payload: Record<string, unknown>): Promise<CommandResult> {
     const ref = typeof payload.ref === 'string' ? payload.ref.trim() : '';
     if (!ref) return { status: 'fail', error: 'board-worker success callback requires body.ref' };
@@ -1173,19 +1116,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     apiBasePath,
     json,
     readJsonBody: (req) => readJsonBody(req),
-    readRawBody: (req) => readRawBody(req),
     initBoardAndSetup: () => initBoardAndSetup(),
     bootstrapBoard: () => bootstrapBoard(),
     buildPublishedRuntimePayload: () => buildPublishedRuntimePayload(),
     createMcpControlplaneToolRegistry: () => createMcpControlplaneToolRegistry(),
-    readCardFromStore: (cardId) => readCardFromStore(cardId),
-    patchCard: (cardId, patch) => patchCard(cardId, patch),
     retriggerCard: (cardId) => retriggerCard(cardId),
     applyCardAction: (cardId, actionType, payload) => applyCardAction(cardId, actionType, payload),
     resolveChatHandlerTarget: (cardId) => resolveChatHandlerTarget(cardId),
-    createMcpFacade: () => createMcpFacade(),
-    chatStorePublic,
-    uploadCardFile: (cardId, fileName, contentType, bytes, opts) => uploadCardFile(cardId, fileName, contentType, bytes, opts),
     sendCardFileDownloadResponse: (res, cardId, idx, expectedStoredName) => sendCardFileDownloadResponse(res, cardId, idx, expectedStoredName),
   });
   const handleRuntimeApi = routesRuntimeApi.handleRuntimeApi;

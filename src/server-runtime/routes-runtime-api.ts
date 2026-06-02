@@ -2,7 +2,7 @@
  * server-runtime/routes-runtime-api.ts  (controlface)
  *
  * Control-plane HTTP routes extracted from createSingleBoardServerRuntime.
- * Handles board lifecycle, card CRUD, chats, file upload/download, and
+ * Handles board lifecycle, card retrigger/actions, file download, and
  * the MCP controlplane tool endpoint.
  *
  * The following routes live in sibling modules:
@@ -15,25 +15,11 @@ import type { RuntimeRequest, RuntimeResponse } from './types.js';
 import { escapeRegExp } from './internal-helpers.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import type { ToolRegistry } from './mcp-tool-registries.js';
-import type { ChatStorePublic } from '../cli/common/chat-store-lib-public.js';
-
-interface McpFacadeLike {
-  manageAddChatEntryAndAnyAttachments: (args: {
-    cardId: string;
-    role: string;
-    text?: string;
-    turn?: string;
-    files?: unknown[];
-  }) => Promise<{ status: 'success'; data: { id: string } }>;
-  setChatProcessing: (args: { cardId: string; active: boolean }) => { cardId: string; active: boolean };
-}
-
 export interface RoutesRuntimeApiDeps {
   apiBasePath: string;
 
   json: (res: RuntimeResponse, status: number, payload: unknown) => void;
   readJsonBody: (req: RuntimeRequest) => Promise<Record<string, unknown>>;
-  readRawBody: (req: RuntimeRequest) => Promise<Uint8Array>;
 
   initBoardAndSetup: () => Promise<void>;
   bootstrapBoard: () => Promise<void>;
@@ -41,22 +27,9 @@ export interface RoutesRuntimeApiDeps {
 
   createMcpControlplaneToolRegistry: () => ToolRegistry;
 
-  readCardFromStore: (cardId: string) => Promise<Record<string, unknown> | null>;
-  patchCard: (cardId: string, patch: Record<string, unknown>) => Promise<void>;
   retriggerCard: (cardId: string) => Promise<void>;
   applyCardAction: (cardId: string, actionType: string, payload: Record<string, unknown> | null) => Promise<void>;
   resolveChatHandlerTarget: (cardId: string) => Promise<unknown>;
-  createMcpFacade: () => McpFacadeLike;
-
-  chatStorePublic: ChatStorePublic;
-
-  uploadCardFile: (
-    cardId: string,
-    fileName: string,
-    contentType: string,
-    bytes: Uint8Array,
-    opts?: { inChat?: boolean; turnId?: string },
-  ) => Promise<unknown>;
   sendCardFileDownloadResponse: (
     res: RuntimeResponse,
     cardId: string,
@@ -74,19 +47,13 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
     apiBasePath,
     json,
     readJsonBody,
-    readRawBody,
     initBoardAndSetup,
     bootstrapBoard,
     buildPublishedRuntimePayload,
     createMcpControlplaneToolRegistry,
-    readCardFromStore,
-    patchCard,
     retriggerCard,
     applyCardAction,
     resolveChatHandlerTarget,
-    createMcpFacade,
-    chatStorePublic,
-    uploadCardFile,
     sendCardFileDownloadResponse,
   } = deps;
 
@@ -98,11 +65,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
     try {
       if (method === 'GET' && p === `${apiBasePath}/init-board`) {
         await initBoardAndSetup();
-        json(res, 200, await buildPublishedRuntimePayload());
-        return true;
-      }
-
-      if (method === 'GET' && p === `${apiBasePath}/board-status`) {
         json(res, 200, await buildPublishedRuntimePayload());
         return true;
       }
@@ -139,25 +101,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
           const message = error instanceof Error ? error.message : String(error);
           json(res, statusCode, { error: message });
         }
-        return true;
-      }
-
-      const cardMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)$`));
-      if (method === 'GET' && cardMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardMatch[1]);
-        const card = await readCardFromStore(cardId);
-        if (!card) { json(res, 404, { error: `card not found: ${cardId}` }); return true; }
-        json(res, 200, card);
-        return true;
-      }
-
-      if (method === 'PATCH' && cardMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardMatch[1]);
-        const body = await readJsonBody(req);
-        await patchCard(cardId, body);
-        json(res, 200, { ok: true });
         return true;
       }
 
@@ -222,79 +165,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
           responseSentAtMs,
           responseStatus: 200,
         });
-        return true;
-      }
-
-      const cardChatsMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/chats$`));
-      if (method === 'GET' && cardChatsMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardChatsMatch[1]);
-        const turnId = String(url.searchParams.get('turn-id') || '');
-        const allTurns = String(url.searchParams.get('all-turns') || '').toLowerCase() === 'true';
-        const tailTurnsBeforeId = String(url.searchParams.get('tail-turns-before-id') || '');
-        const lastUserTurnsRaw = url.searchParams.get('tail-turns');
-        const lastUserTurns = lastUserTurnsRaw == null || lastUserTurnsRaw === ''
-          ? (allTurns ? undefined : (turnId ? undefined : 1))
-          : Number.parseInt(lastUserTurnsRaw, 10);
-        const readResult = chatStorePublic.readAll({
-          params: { cardId },
-          body: {
-            ...(lastUserTurns === undefined ? {} : { tailTurns: lastUserTurns }),
-            ...(turnId ? { turnId } : {}),
-            ...(allTurns ? { allTurns: true } : {}),
-            ...(tailTurnsBeforeId ? { tailTurnsBeforeId } : {}),
-          },
-        });
-        if (readResult.status !== 'success') {
-          json(res, 400, { error: readResult.error || 'Failed to read chats' });
-          return true;
-        }
-        const messages = readResult.data.records as unknown as Array<Record<string, unknown>>;
-        json(res, 200, { ok: true, messages });
-        return true;
-      }
-
-      if (method === 'POST' && cardChatsMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardChatsMatch[1]);
-        const body = await readJsonBody(req);
-        const role = typeof body?.role === 'string' ? body.role : 'assistant';
-        const text = typeof body?.text === 'string' ? body.text : '';
-        const files = Array.isArray(body?.files) ? body.files : [];
-        const turn = typeof body?.turn === 'string'
-          ? body.turn
-          : typeof body?.['turn-id'] === 'string'
-            ? body['turn-id']
-            : typeof body?.turnId === 'string'
-              ? body.turnId
-              : '';
-        const done = body?.done === true;
-        const mcp = createMcpFacade();
-        const result = await mcp.manageAddChatEntryAndAnyAttachments({ cardId, role, text, files, turn });
-        const entryId = result.data.id;
-        if (done) mcp.setChatProcessing({ cardId, active: false });
-        json(res, 200, { ok: true, id: entryId });
-        return true;
-      }
-
-      const cardFileMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/cards/([^/]+)/files$`));
-      if (method === 'POST' && cardFileMatch) {
-        await bootstrapBoard();
-        const cardId = decodeURIComponent(cardFileMatch[1]);
-        const inChat = String(url.searchParams.get('inChat') || '').toLowerCase() === 'true';
-        const turnId = String(url.searchParams.get('turn-id') || '').trim();
-        if (inChat && !turnId) {
-          json(res, 400, {
-            error: `file upload with inChat=true requires a non-empty 'turn-id' query parameter for card: ${cardId}`,
-          });
-          return true;
-        }
-        const encodedName = req.headers['x-file-name'];
-        const contentType = String(req.headers['content-type'] || 'application/octet-stream');
-        const rawName = Array.isArray(encodedName) ? encodedName[0] : encodedName;
-        const requestedName = rawName ? decodeURIComponent(String(rawName)) : 'upload.bin';
-        const body = await readRawBody(req);
-        json(res, 200, await uploadCardFile(cardId, requestedName, contentType, body, { inChat, turnId }));
         return true;
       }
 
