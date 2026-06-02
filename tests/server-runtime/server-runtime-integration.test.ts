@@ -235,12 +235,15 @@ describe('platform-free server runtime (Node host)', () => {
     expect(data).toHaveProperty('cardRuntimeById');
   });
 
-  it('POST /api/board/callback/board-worker/:token/success returns a client error for an invalid source token', async () => {
+  it('POST /api/board/mcp-webhooks returns a client error for an invalid source token', async () => {
     const ref = serializeRef({ kind: 'fs-path', value: path.join(TEST_ROOT, 'missing-source.json') });
-    const res = await fetch(`${API_BASE}/callback/board-worker/${encodeURIComponent('not-a-valid-token')}/success`, {
+    const res = await fetch(`${API_BASE}/mcp-webhooks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ref }),
+      body: JSON.stringify({
+        tool: 'webhook.source-fetch-done',
+        args: { token: 'not-a-valid-token', ref },
+      }),
     });
     expect(res.status).toBe(400);
     const data = await res.json() as Record<string, unknown>;

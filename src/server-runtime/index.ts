@@ -74,6 +74,7 @@ import { createRuntimePayloadModule } from './runtime-payload.js';
 import { createCardFileOps } from './card-file-ops.js';
 import {
   createMcpToolRegistry as createMcpToolRegistryImpl,
+  createMcpWebhookToolRegistry as createMcpWebhookToolRegistryImpl,
   createMcpControlplaneToolRegistry as createMcpControlplaneToolRegistryImpl,
 } from './mcp-tool-registries.js';
 import { createMcpFacadeModule } from './mcp-facade.js';
@@ -166,6 +167,7 @@ interface BoardContext {
   cardStoreRef: string;
   outputsStoreRef: string;
   artifactsStoreRef?: string;
+  chatStoreRef?: string;
   scratchStoreRef?: string;
   archiveStoreRef?: string;
   notifyRef?: import('./types.js').KindValueRef;
@@ -412,6 +414,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
       artifactsStoreRef: cfg.artifactsStoreRef,
+      chatStoreRef: cfg.chatStoreRef,
       scratchStoreRef: cfg.scratchStoreRef,
       archiveStoreRef: cfg.archiveStoreRef,
       notifyRef: cfg.notifyRef,
@@ -483,6 +486,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       outputsStoreRef: ctx.outputsStoreRef,
     };
     if (ctx.artifactsStoreRef) params.artifactsStoreRef = ctx.artifactsStoreRef;
+    if (ctx.chatStoreRef) params.chatStoreRef = ctx.chatStoreRef;
     if (ctx.scratchStoreRef) params.scratchStoreRef = ctx.scratchStoreRef;
     if (ctx.archiveStoreRef) params.archiveStoreRef = ctx.archiveStoreRef;
     const body: Record<string, unknown> = {};
@@ -640,6 +644,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     readCardFromStore: (cardId) => readCardFromStore(cardId),
     readCardDefinitions: () => readCardDefinitions(),
     processAccumulatedLaneInternal: (skipInit) => processAccumulatedLaneInternal(skipInit),
+    reportSourceFetched: (token, ref) => reportSourceFetchedInternal(token, { ref }),
+    reportSourceFetchFailure: (token, reason) => reportSourceFetchFailureInternal(token, { reason }),
     uploadCardFile: (cardId, fileName, contentType, bytes, opts) => uploadCardFile(cardId, fileName, contentType, bytes, opts),
     chatStorePublic,
     serverUrl,
@@ -656,6 +662,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   function createMcpToolRegistry(mcp: ReturnType<typeof createMcpFacade>) {
     return createMcpToolRegistryImpl(mcp);
+  }
+
+  function createMcpWebhookToolRegistry() {
+    return createMcpWebhookToolRegistryImpl(createMcpFacade());
   }
 
   function createMcpControlplaneToolRegistry() {
@@ -1107,23 +1117,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return ctx.boardOps.sourceDataFetchFailure({ params: { token, reason } });
   }
 
-  async function applyBoardWorkerCallback(
-    token: string,
-    outcome: 'success' | 'failure',
-    payload: Record<string, unknown>,
-  ): Promise<{ statusCode: number; body: unknown }> {
-    const trimmedToken = String(token || '').trim();
-    if (!trimmedToken) {
-      return { statusCode: 400, body: { error: 'callback token is required' } };
-    }
-    const result = outcome === 'success'
-      ? await reportSourceFetchedInternal(trimmedToken, payload)
-      : await reportSourceFetchFailureInternal(trimmedToken, payload);
-    if (result.status === 'success') return { statusCode: 200, body: result };
-    if (result.status === 'fail') return { statusCode: 400, body: { error: result.error } };
-    return { statusCode: 500, body: { error: result.error } };
-  }
-
   // ── SSE + watcher routes ─────────────────────────────────────────────────
   // createRoutesWatchers composes routes-sse.ts internally and adds the
   // HTTP subscription management endpoints on top. It is the sole owner
@@ -1162,13 +1155,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const handleAgentfaceApi = routesAgentface.handleAgentfaceApi;
 
   // ── Webhook routes ─────────────────────────────────────────────────────
-  // POST /callback/board-worker/:token/(success|failure)
+  // POST /mcp-webhooks
   const routesWebhooks = createRoutesWebhooks({
     apiBasePath,
     json,
     readJsonBody: (req) => readJsonBody(req),
     initBoardAndSetup: () => initBoardAndSetup(),
-    applyBoardWorkerCallback: (token, outcome, body) => applyBoardWorkerCallback(token, outcome, body),
+    createMcpWebhookToolRegistry: () => createMcpWebhookToolRegistry(),
   });
   const handleWebhooksApi = routesWebhooks.handleWebhooksApi;
 
@@ -1188,11 +1181,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     retriggerCard: (cardId) => retriggerCard(cardId),
     applyCardAction: (cardId, actionType, payload) => applyCardAction(cardId, actionType, payload),
     resolveChatHandlerTarget: (cardId) => resolveChatHandlerTarget(cardId),
+    createMcpFacade: () => createMcpFacade(),
     chatStorePublic,
-    chatStorage: {
-      append: (cardId, role, text, files, turn) => chatStorage.append(cardId, role, text, files as Array<Record<string, unknown>>, turn),
-      setProcessing: (cardId, active) => chatStorage.setProcessing(cardId, active),
-    },
     uploadCardFile: (cardId, fileName, contentType, bytes, opts) => uploadCardFile(cardId, fileName, contentType, bytes, opts),
     sendCardFileDownloadResponse: (res, cardId, idx, expectedStoredName) => sendCardFileDownloadResponse(res, cardId, idx, expectedStoredName),
   });

@@ -1,9 +1,8 @@
 /**
  * server-runtime-webhooks
  *
- * Worker-callback webhook routes.
- *   POST /callback/board-worker/:token/success
- *   POST /callback/board-worker/:token/failure
+ * Worker webhook MCP route.
+ *   POST /mcp-webhooks
  */
 export type { RoutesWebhooksDeps, RoutesWebhooks } from '../server-runtime/routes-webhooks.js';
 export { createRoutesWebhooks } from '../server-runtime/routes-webhooks.js';

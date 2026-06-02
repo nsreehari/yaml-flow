@@ -2,10 +2,8 @@
  * Browser IIFE entry for vendored jsonata-sync.
  *
  * Bundles jsonata-sync.cjs inline (esbuild CJS interop) and sets
- * globalThis.jsonataSync so board-livecards-localstorage.js can call
- * the jsonata function at runtime via the createRequire shim.
- *
- * Consumers: load this before board-livecards-localstorage.js.
+ * globalThis.jsonataSync for browser bundles that resolve jsonata through
+ * the createRequire shim.
  * No other scripts need to know about this global.
  */
 

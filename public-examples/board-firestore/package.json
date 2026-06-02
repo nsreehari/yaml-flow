@@ -1,0 +1,14 @@
+{
+  "name": "board-firestore",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "worker": "node server/worker.js",
+    "agents": "node server/agents.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "yaml-flow": "*"
+  }
+}

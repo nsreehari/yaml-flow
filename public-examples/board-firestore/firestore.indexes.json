@@ -1,0 +1,29 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "worker-queue",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dead", "order": "ASCENDING" },
+        { "fieldPath": "visibleAfter", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chat-queue",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dead", "order": "ASCENDING" },
+        { "fieldPath": "visibleAfter", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "process-queue",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dead", "order": "ASCENDING" },
+        { "fieldPath": "visibleAfter", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

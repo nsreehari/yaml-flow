@@ -127,6 +127,15 @@ export interface BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult {
   };
 }
 
+export interface BoardLiveCardsMcpManageAddChatAttachmentResult {
+  status: 'success';
+  data: {
+    cardId: string;
+    turn: string;
+    files: Array<Record<string, unknown>>;
+  };
+}
+
 export interface BoardLiveCardsMcpPreflightRunOneCycleResult {
   status: 'success';
   data: {
@@ -187,12 +196,16 @@ export interface BoardLiveCardsMcpDeps {
   nonCore: BoardLiveCardsMcpNonCoreDeps;
   cardStore: BoardLiveCardsMcpCardStoreDeps;
   chatStore: ChatStorePublic;
+  processAccumulated?: () => Awaitable<CommandResult>;
+  sourceFetchDone?: (args: { token: string; ref: string }) => Awaitable<CommandResult>;
+  sourceFetchFailed?: (args: { token: string; reason: string }) => Awaitable<CommandResult>;
   uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array }): Awaitable<{ ok: true; file: Record<string, unknown>; file_idx?: number | null }>;
   buildFileDownloadUrl(args: { cardId: string; fileIdx: number; storedName?: string | null }): string;
   readFetchedSourceJsonByRef?(args: { cardId: string; ref: string }): unknown | null;
 }
 
 export interface BoardLiveCardsMcp {
+  listRuntimeCards(): Promise<LiveCard[]>;
   discoverSourceKinds(): Promise<BoardLiveCardsMcpDiscoverSourceKindsResult>;
   inspectBoardRuntimeStatus(): Promise<BoardLiveCardsMcpBoardStatusResult>;
   inspectCardDefinitionAndRuntime(args: { cardId: string }): Promise<BoardLiveCardsMcpInspectCardDefinitionAndRuntimeResult>;
@@ -224,6 +237,12 @@ export interface BoardLiveCardsMcp {
     mockRequires: UnknownRecord;
   }): Promise<BoardLiveCardsMcpPreflightRunOneCycleResult>;
   manageReadCard(args: { cardId: string }): Promise<LiveCard[]>;
+  manageAddChatAttachment(args: {
+    cardId: string;
+    role?: string;
+    turn?: string;
+    files?: unknown[];
+  }): Promise<BoardLiveCardsMcpManageAddChatAttachmentResult>;
   manageAddChatEntryAndAnyAttachments(args: {
     cardId: string;
     role: string;
@@ -231,12 +250,16 @@ export interface BoardLiveCardsMcp {
     turn?: string;
     files?: unknown[];
   }): Promise<BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult>;
+  managePatchCard(args: { cardId: string; patch: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   manageRemoveCard(args: { cardId: string }): Promise<unknown>;
   adminReadCard(args: { cardId: string }): Promise<LiveCard[]>;
   adminUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean };
   setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean };
+  webhookProcessAccumulated(): Promise<CommandResult<{ runtime_result: unknown }>>;
+  webhookSourceFetchDone(args: { token: string; ref: string }): Promise<CommandResult<{ token: string; ref: string; runtime_result: unknown }>>;
+  webhookSourceFetchFailed(args: { token: string; reason: string }): Promise<CommandResult<{ token: string; reason: string; runtime_result: unknown }>>;
 }
 
 function expectSuccess<T>(result: CommandResult<T>, commandName: string): T {
@@ -380,6 +403,75 @@ function hasOwn(value: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function cloneRecord<T extends UnknownRecord>(value: T): T {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function applyManageCardPatch(card: UnknownRecord, patch: UnknownRecord): UnknownRecord {
+  const nextCard = cloneRecord(card);
+  if (!patch || Object.keys(patch).length === 0) return nextCard;
+
+  function deepSet(obj: Record<string, unknown>, dottedPath: string, value: unknown): void {
+    const parts = String(dottedPath || '').split('.').filter(Boolean);
+    if (!parts.length) return;
+    let target = obj;
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      const key = parts[index];
+      if (!target[key] || typeof target[key] !== 'object') target[key] = {};
+      target = target[key] as Record<string, unknown>;
+    }
+    target[parts[parts.length - 1]] = value;
+  }
+
+  if (patch.fieldValues !== undefined && patch.fieldValues !== null) {
+    let writeTo: string | null = null;
+    const view = ensureRecord(nextCard.view);
+    const elements = ensureArray(view.elements);
+    for (const rawElement of elements) {
+      const data = ensureRecord(ensureRecord(rawElement).data);
+      if (typeof data.writeTo === 'string' && data.writeTo) {
+        writeTo = data.writeTo;
+        break;
+      }
+    }
+
+    if (writeTo) {
+      deepSet(nextCard, writeTo, patch.fieldValues);
+    } else if (typeof patch.fieldValues === 'object' && !Array.isArray(patch.fieldValues)) {
+      nextCard.card_data = {
+        ...ensureRecord(nextCard.card_data),
+        ...(patch.fieldValues as Record<string, unknown>),
+      };
+    }
+    return nextCard;
+  }
+
+  if (Array.isArray(patch._stagedFiles) && patch._stagedFiles.length > 0) {
+    return nextCard;
+  }
+
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === '_stagedFiles') continue;
+    if (
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      nextCard[key] !== null &&
+      typeof nextCard[key] === 'object' &&
+      !Array.isArray(nextCard[key])
+    ) {
+      nextCard[key] = { ...(nextCard[key] as Record<string, unknown>), ...(value as Record<string, unknown>) };
+    } else {
+      nextCard[key] = value;
+    }
+  }
+
+  return nextCard;
+}
+
 function isAdminCard(card: UnknownRecord): boolean {
   const meta = ensureRecord(card.meta);
   return meta.__visible_controlplane_only === true;
@@ -395,7 +487,32 @@ async function readOneCard(cardStore: BoardLiveCardsMcpCardStoreDeps, cardId: st
 }
 
 export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveCardsMcp {
-  const { board, nonCore, cardStore, chatStore, uploadCardFile, buildFileDownloadUrl, readFetchedSourceJsonByRef } = deps;
+  const {
+    board,
+    nonCore,
+    cardStore,
+    chatStore,
+    processAccumulated,
+    sourceFetchDone,
+    sourceFetchFailed,
+    uploadCardFile,
+    buildFileDownloadUrl,
+    readFetchedSourceJsonByRef,
+  } = deps;
+
+  function requireWebhookHandler<T>(handler: T | undefined, toolName: string): T {
+    if (typeof handler === 'function') {
+      return handler;
+    }
+    throw new Error(`${toolName} is not configured for this MCP facade`);
+  }
+
+  async function listRuntimeCards(): Promise<LiveCard[]> {
+    const result = await expectSuccessAsync(cardStore.get({}), 'cardStore.get');
+    return Array.isArray(result.cards)
+      ? result.cards.map((card) => ensureRecord(card) as LiveCard)
+      : [];
+  }
 
   function decodeAttachmentBytes(fileEntry: UnknownRecord): Uint8Array {
     if (Array.isArray(fileEntry.bytes)) {
@@ -817,6 +934,64 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     return cards.map((card) => stripMcpPrivateCardFields(card) as LiveCard);
   }
 
+  async function uploadChatAttachments(args: {
+    cardId: string;
+    role: string;
+    turn: string;
+    files?: unknown[];
+  }): Promise<Array<Record<string, unknown>>> {
+    const uploadedFiles = await Promise.all(ensureArray(args.files).map(async (rawFile) => {
+      const fileEntry = ensureRecord(rawFile);
+      const fileName = String(fileEntry.file_name ?? fileEntry.fileName ?? fileEntry.name ?? '').trim();
+      const contentType = String(fileEntry.content_type ?? fileEntry.contentType ?? 'application/octet-stream');
+      if (!fileName) throw new Error('file entry requires file_name');
+      return await uploadCardFile({
+        cardId: args.cardId,
+        fileName,
+        contentType,
+        bytes: decodeAttachmentBytes(fileEntry),
+      });
+    }));
+
+    uploadedFiles.forEach((uploadResult, index) => {
+      const file = ensureRecord(uploadResult.file);
+      const mergedIndex = typeof uploadResult.file_idx === 'number' && Number.isInteger(uploadResult.file_idx) && uploadResult.file_idx >= 0
+        ? uploadResult.file_idx
+        : index;
+      const systemText = args.role === 'assistant'
+        ? `AI generated: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`
+        : `file uploaded: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`;
+      expectSuccess(chatStore.append({
+        params: { cardId: args.cardId },
+        body: { role: 'system', text: systemText, files: [], turn: args.turn },
+      }), 'chatStore.append(system attachment message)');
+    });
+
+    return uploadedFiles.map((uploadResult) => uploadResult.file);
+  }
+
+  async function manageAddChatAttachment(args: {
+    cardId: string;
+    role?: string;
+    turn?: string;
+    files?: unknown[];
+  }): Promise<BoardLiveCardsMcpManageAddChatAttachmentResult> {
+    const cardId = String(args.cardId || '').trim();
+    const role = String(args.role || 'user').trim() || 'user';
+    const turn = typeof args.turn === 'string' ? args.turn : '';
+    if (!cardId) throw new Error('manageAddChatAttachment requires cardId');
+
+    const uploadedFileRecords = await uploadChatAttachments({ cardId, role, turn, files: args.files });
+    return {
+      status: 'success',
+      data: {
+        cardId,
+        turn,
+        files: uploadedFileRecords,
+      },
+    };
+  }
+
   async function manageAddChatEntryAndAnyAttachments(args: {
     cardId: string;
     role: string;
@@ -855,34 +1030,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       }
     }
 
-    const uploadedFiles = await Promise.all(ensureArray(args.files).map(async (rawFile) => {
-      const fileEntry = ensureRecord(rawFile);
-      const fileName = String(fileEntry.file_name ?? fileEntry.fileName ?? fileEntry.name ?? '').trim();
-      const contentType = String(fileEntry.content_type ?? fileEntry.contentType ?? 'application/octet-stream');
-      if (!fileName) throw new Error('file entry requires file_name');
-      return await uploadCardFile({
-        cardId,
-        fileName,
-        contentType,
-        bytes: decodeAttachmentBytes(fileEntry),
-      });
-    }));
-
-    const uploadedFileRecords = uploadedFiles.map((uploadResult) => uploadResult.file);
-
-    uploadedFiles.forEach((uploadResult, index) => {
-      const file = ensureRecord(uploadResult.file);
-      const mergedIndex = typeof uploadResult.file_idx === 'number' && Number.isInteger(uploadResult.file_idx) && uploadResult.file_idx >= 0
-        ? uploadResult.file_idx
-        : index;
-      const systemText = role === 'assistant'
-        ? `AI generated: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`
-        : `file uploaded: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`;
-      expectSuccess(chatStore.append({
-        params: { cardId },
-        body: { role: 'system', text: systemText, files: [], turn },
-      }), 'chatStore.append(system attachment message)');
-    });
+    const uploadedFileRecords = await uploadChatAttachments({ cardId, role, turn, files: args.files });
 
     const appendResult = expectSuccess(chatStore.append({
       params: { cardId },
@@ -899,6 +1047,16 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
         files: uploadedFileRecords,
       },
     };
+  }
+
+  async function managePatchCard(args: { cardId: string; patch: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
+    const cardId = String(args.cardId || '').trim();
+    const patch = ensureRecord(args.patch);
+    if (!cardId) throw new Error('managePatchCard requires cardId');
+    const cards = await manageReadCard({ cardId });
+    const currentCard = ensureRecord(cards[0]);
+    const patchedCard = applyManageCardPatch(currentCard, patch);
+    return manageUpsertCard({ cardId, candidateCardContent: patchedCard });
   }
 
   async function manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
@@ -1072,7 +1230,65 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     return { cardId, active: args.active };
   }
 
+  async function webhookProcessAccumulated(): Promise<CommandResult<{ runtime_result: unknown }>> {
+    const runtimeResult = await requireWebhookHandler(processAccumulated, 'webhook.process-accumulated')();
+    if (runtimeResult?.status === 'fail' || runtimeResult?.status === 'error') {
+      return runtimeResult;
+    }
+    return {
+      status: 'success',
+      data: {
+        runtime_result: Object.prototype.hasOwnProperty.call(runtimeResult ?? {}, 'data')
+          ? (runtimeResult as { data?: unknown }).data ?? null
+          : null,
+      },
+    };
+  }
+
+  async function webhookSourceFetchDone(args: { token: string; ref: string }): Promise<CommandResult<{ token: string; ref: string; runtime_result: unknown }>> {
+    const token = String(args.token || '').trim();
+    const ref = String(args.ref || '').trim();
+    if (!token) throw new Error('webhookSourceFetchDone requires token');
+    if (!ref) throw new Error('webhookSourceFetchDone requires ref');
+    const runtimeResult = await requireWebhookHandler(sourceFetchDone, 'webhook.source-fetch-done')({ token, ref });
+    if (runtimeResult?.status === 'fail' || runtimeResult?.status === 'error') {
+      return runtimeResult;
+    }
+    return {
+      status: 'success',
+      data: {
+        token,
+        ref,
+        runtime_result: Object.prototype.hasOwnProperty.call(runtimeResult ?? {}, 'data')
+          ? (runtimeResult as { data?: unknown }).data ?? null
+          : null,
+      },
+    };
+  }
+
+  async function webhookSourceFetchFailed(args: { token: string; reason: string }): Promise<CommandResult<{ token: string; reason: string; runtime_result: unknown }>> {
+    const token = String(args.token || '').trim();
+    const reason = String(args.reason || '').trim();
+    if (!token) throw new Error('webhookSourceFetchFailed requires token');
+    if (!reason) throw new Error('webhookSourceFetchFailed requires reason');
+    const runtimeResult = await requireWebhookHandler(sourceFetchFailed, 'webhook.source-fetch-failed')({ token, reason });
+    if (runtimeResult?.status === 'fail' || runtimeResult?.status === 'error') {
+      return runtimeResult;
+    }
+    return {
+      status: 'success',
+      data: {
+        token,
+        reason,
+        runtime_result: Object.prototype.hasOwnProperty.call(runtimeResult ?? {}, 'data')
+          ? (runtimeResult as { data?: unknown }).data ?? null
+          : null,
+      },
+    };
+  }
+
   return {
+    listRuntimeCards,
     discoverSourceKinds,
     inspectBoardRuntimeStatus,
     inspectCardDefinitionAndRuntime,
@@ -1085,13 +1301,18 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     preflightRunSingleSourceInLiveCard,
     preflightRunOneCycleWithCandidateCard,
     manageReadCard,
+    manageAddChatAttachment,
     manageAddChatEntryAndAnyAttachments,
+    managePatchCard,
     manageUpsertCard,
     manageRemoveCard,
     adminReadCard,
     adminUpsertCard,
     getChatProcessing,
     setChatProcessing,
+    webhookProcessAccumulated,
+    webhookSourceFetchDone,
+    webhookSourceFetchFailed,
   };
 }
 

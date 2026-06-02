@@ -1,8 +1,7 @@
 /**
  * Browser IIFE bundles for yaml-flow.
  *
- * Outputs: browser/board-livecards-localstorage.js
- * Global:  window.BoardLiveCardsLocalStorage
+ * Outputs: browser/*.js browser/*.map
  *
  * Exports: create(), selectLiveCardModel(), selectAllLiveCardModels()
  *
@@ -122,19 +121,11 @@ export default defineConfig([
     esbuildPlugins: [browserStubPlugin],
   },
   // ── compute-jsonata — vendored jsonata-sync, sets globalThis.jsonataSync ─────────────
-  // Load this before board-livecards-localstorage.js. No other globals exposed.
   {
     ...sharedBrowserOptions,
     entry: { 'compute-jsonata': 'src/card-compute/browser-jsonata-entry.ts' },
     globalName: 'ComputeJsonata',
     esbuildPlugins: [browserStubPlugin],
-  },
-  // ── board-livecards-localstorage — full board engine + localStorage adapter + selectors ─
-  {
-    ...sharedBrowserOptions,
-    entry: { 'board-livecards-localstorage': 'src/board-livecards-localstorage-runtime/index.ts' },
-    globalName: 'BoardLiveCardsLocalStorage',
-    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
   },
   // ── board-livecards-client — platform-free state + SSE/HTTP server transport ──────────
   {
@@ -142,5 +133,42 @@ export default defineConfig([
     entry: { 'board-livecards-client': 'src/board-livecards-client/index.ts' },
     globalName: 'BoardLiveCardsClient',
     esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
+  },
+  // ── server-runtime-controlface — board control-plane runtime (browser edition) ────────
+  // Platform-free: no node:* imports in the runtime or its transitive deps.
+  // Use with a Firestore JS SDK adapter for in-browser board orchestration.
+  // Global: window.ServerRuntimeControlface
+  {
+    ...sharedBrowserOptions,
+    entry: { 'server-runtime-controlface': 'src/server-runtime-controlface/index.ts' },
+    globalName: 'ServerRuntimeControlface',
+    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
+  },
+  // ── Storage adapters — emitted under browser/adapters/ so CDN/NPM consumers
+  //    can address them as a clearly-scoped subdir of pluggable adapters.
+  // ── firestore-storage — browser-safe Firestore storage/queue adapter primitives ─────
+  {
+    ...sharedBrowserOptions,
+    outDir: 'browser/adapters',
+    entry: { 'firestore-storage': 'src/firestore-storage/index.ts' },
+    globalName: 'FirestoreStorage',
+    esbuildPlugins: [browserStubPlugin],
+  },
+  // ── localstorage-storage — browser-safe in-memory/localStorage adapter ────────────────
+  {
+    ...sharedBrowserOptions,
+    outDir: 'browser/adapters',
+    entry: { 'localstorage-storage': 'src/localstorage-storage/index.ts' },
+    globalName: 'LocalStorageStorage',
+    esbuildPlugins: [browserStubPlugin],
+  },
+  // ── firebase-storage — Firebase Storage (GCS) blob/scratch wrappers.
+  //    No firebase SDK imports; host passes in a firebase.storage() handle.
+  {
+    ...sharedBrowserOptions,
+    outDir: 'browser/adapters',
+    entry: { 'firebase-storage': 'src/firebase-storage/index.ts' },
+    globalName: 'FirebaseStorage',
+    esbuildPlugins: [browserStubPlugin],
   },
 ]);

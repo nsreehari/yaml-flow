@@ -1,9 +1,7 @@
 /**
  * board-state-reducer — shared reactive state helpers for browser board shells.
  *
- * Used by both:
- *   - board-livecards-localstorage-runtime (in-browser full engine)
- *   - board-livecards-server-runtime-client (SSE/HTTP thin client)
+ * Used by browser board shells and transport clients.
  *
  * Pure functions; no side effects; no DOM/localStorage/fetch dependencies.
  */

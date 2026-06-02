@@ -14,7 +14,10 @@ fs.mkdirSync(browserDir, { recursive: true });
 fs.copyFileSync(schemaSource, schemaTarget);
 
 const targets = [
-  'board-livecards-localstorage.js',
+  'board-livecards-client.js',
+  'server-runtime-controlface.js',
+  'firestore-storage.js',
+  'localstorage-storage.js',
   'live-cards.schema.json',
 ];
 

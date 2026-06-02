@@ -142,6 +142,8 @@ export interface BoardContextConfig {
   baseRef: KindValueRef;
   cardStoreRef: string;
   outputsStoreRef: string;
+  /** Optional ref pointing persisted card chat storage at a different backend. */
+  chatStoreRef?: string;
   /** Optional ref pointing scratch storage at a different backend than the board runtime. */
   scratchStoreRef?: string;
   /** Optional ref pointing archive storage at a different backend than the board runtime. */

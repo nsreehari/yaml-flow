@@ -60,6 +60,8 @@ export interface McpFacadeDeps {
   readCardFromStore: (cardId: string) => Promise<Record<string, unknown> | null>;
   readCardDefinitions: () => Promise<unknown[]>;
   processAccumulatedLaneInternal: (skipInit?: boolean) => Promise<CommandResult>;
+  reportSourceFetched: (token: string, ref: string) => Promise<CommandResult>;
+  reportSourceFetchFailure: (token: string, reason: string) => Promise<CommandResult>;
   uploadCardFile: (
     cardId: string,
     fileName: string,
@@ -90,6 +92,8 @@ export function createMcpFacadeModule(deps: McpFacadeDeps): McpFacadeModule {
     readCardFromStore,
     readCardDefinitions,
     processAccumulatedLaneInternal,
+    reportSourceFetched,
+    reportSourceFetchFailure,
     uploadCardFile,
     chatStorePublic,
     serverUrl,
@@ -238,8 +242,11 @@ export function createMcpFacadeModule(deps: McpFacadeDeps): McpFacadeModule {
       nonCore: mcpNonCoreFacade(),
       cardStore: mcpCardStoreFacade(),
       chatStore: chatStorePublic,
+      processAccumulated: () => processAccumulatedLaneInternal(true),
+      sourceFetchDone: ({ token, ref }) => reportSourceFetched(token, ref),
+      sourceFetchFailed: ({ token, reason }) => reportSourceFetchFailure(token, reason),
       uploadCardFile({ cardId, fileName, contentType, bytes }) {
-          return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: true }) as ReturnType<NonNullable<Parameters<typeof createBoardLiveCardsMcp>[0]['uploadCardFile']>>;
+          return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false }) as ReturnType<NonNullable<Parameters<typeof createBoardLiveCardsMcp>[0]['uploadCardFile']>>;
       },
       buildFileDownloadUrl({ cardId, fileIdx, storedName }) {
         const base = `${serverUrl || ''}${apiBasePath}/cards/${encodeURIComponent(cardId)}/files/${fileIdx}`;

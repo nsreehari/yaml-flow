@@ -3,14 +3,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const bundlePath = path.join(process.cwd(), 'browser', 'board-livecards-localstorage.js');
-
-if (!fs.existsSync(bundlePath)) {
-  console.error('[browser-safety] missing browser bundle: browser/board-livecards-localstorage.js');
-  process.exit(1);
-}
-
-const bundle = fs.readFileSync(bundlePath, 'utf8');
+const bundleNames = [
+  'board-livecards-client.js',
+  'server-runtime-controlface.js',
+  'firestore-storage.js',
+  'localstorage-storage.js',
+];
 
 const forbidden = [
   /\bchild_process\b/g,
@@ -21,13 +19,22 @@ const forbidden = [
 ];
 
 let hasFailure = false;
-for (const pattern of forbidden) {
-  const matched = pattern.test(bundle);
-  if (matched) {
-    console.error(`[browser-safety] forbidden pattern found: ${pattern}`);
+for (const bundleName of bundleNames) {
+  const bundlePath = path.join(process.cwd(), 'browser', bundleName);
+  if (!fs.existsSync(bundlePath)) {
+    console.error(`[browser-safety] missing browser bundle: browser/${bundleName}`);
     hasFailure = true;
-  } else {
-    console.log(`[browser-safety] ok: ${pattern}`);
+    continue;
+  }
+  const bundle = fs.readFileSync(bundlePath, 'utf8');
+  for (const pattern of forbidden) {
+    const matched = pattern.test(bundle);
+    if (matched) {
+      console.error(`[browser-safety] ${bundleName}: forbidden pattern found: ${pattern}`);
+      hasFailure = true;
+    } else {
+      console.log(`[browser-safety] ${bundleName}: ok: ${pattern}`);
+    }
   }
 }
 

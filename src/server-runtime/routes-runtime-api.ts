@@ -7,7 +7,7 @@
  *
  * The following routes live in sibling modules:
  *   routes-agentface.ts  — POST /mcp, /mcp-raw
- *   routes-webhooks.ts   — POST /callback/board-worker/:token/*
+ *   routes-webhooks.ts   — POST /mcp-webhooks
  *   routes-watchers.ts   — GET /sse + subscribe/unsubscribe endpoints
  */
 
@@ -17,9 +17,15 @@ import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import type { ToolRegistry } from './mcp-tool-registries.js';
 import type { ChatStorePublic } from '../cli/common/chat-store-lib-public.js';
 
-interface ChatStorageLike {
-  append: (cardId: string, role: string, text: string, files: unknown[], turn: string) => string;
-  setProcessing: (cardId: string, active: boolean) => void;
+interface McpFacadeLike {
+  manageAddChatEntryAndAnyAttachments: (args: {
+    cardId: string;
+    role: string;
+    text?: string;
+    turn?: string;
+    files?: unknown[];
+  }) => Promise<{ status: 'success'; data: { id: string } }>;
+  setChatProcessing: (args: { cardId: string; active: boolean }) => { cardId: string; active: boolean };
 }
 
 export interface RoutesRuntimeApiDeps {
@@ -40,9 +46,9 @@ export interface RoutesRuntimeApiDeps {
   retriggerCard: (cardId: string) => Promise<void>;
   applyCardAction: (cardId: string, actionType: string, payload: Record<string, unknown> | null) => Promise<void>;
   resolveChatHandlerTarget: (cardId: string) => Promise<unknown>;
+  createMcpFacade: () => McpFacadeLike;
 
   chatStorePublic: ChatStorePublic;
-  chatStorage: ChatStorageLike;
 
   uploadCardFile: (
     cardId: string,
@@ -78,8 +84,8 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
     retriggerCard,
     applyCardAction,
     resolveChatHandlerTarget,
+    createMcpFacade,
     chatStorePublic,
-    chatStorage,
     uploadCardFile,
     sendCardFileDownloadResponse,
   } = deps;
@@ -263,8 +269,10 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
               ? body.turnId
               : '';
         const done = body?.done === true;
-        const entryId = chatStorage.append(cardId, role, text, files, turn);
-        if (done) chatStorage.setProcessing(cardId, false);
+        const mcp = createMcpFacade();
+        const result = await mcp.manageAddChatEntryAndAnyAttachments({ cardId, role, text, files, turn });
+        const entryId = result.data.id;
+        if (done) mcp.setChatProcessing({ cardId, active: false });
         json(res, 200, { ok: true, id: entryId });
         return true;
       }

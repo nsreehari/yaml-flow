@@ -99,6 +99,21 @@
       "import": "./lib/server-jobs-queue-runner/index.js",
       "require": "./lib/server-jobs-queue-runner/index.cjs"
     },
+    "./firestore-storage": {
+      "types": "./lib/firestore-storage/index.d.ts",
+      "import": "./lib/firestore-storage/index.js",
+      "require": "./lib/firestore-storage/index.cjs"
+    },
+    "./localstorage-storage": {
+      "types": "./lib/localstorage-storage/index.d.ts",
+      "import": "./lib/localstorage-storage/index.js",
+      "require": "./lib/localstorage-storage/index.cjs"
+    },
+    "./firebase-storage": {
+      "types": "./lib/firebase-storage/index.d.ts",
+      "import": "./lib/firebase-storage/index.js",
+      "require": "./lib/firebase-storage/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "browser": {
@@ -111,7 +126,6 @@
     "browser",
     "!browser/card-compute.js",
     "!browser/board-livegraph-engine.js",
-    "!browser/board-livecards-localstorage.js",
     "!lib/**/*.map",
     "!browser/**/*.map",
     "!examples/**/.demo-setup/**",

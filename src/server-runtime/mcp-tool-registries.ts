@@ -24,6 +24,11 @@ export type ToolRegistry = Record<string, ToolHandler>;
 /** Subset of the per-board MCP facade consumed by the tool registry. */
 export type McpFacadeForRegistry = BoardLiveCardsMcp;
 
+export type McpWebhookFacadeForRegistry = Pick<
+  BoardLiveCardsMcp,
+  'webhookProcessAccumulated' | 'webhookSourceFetchDone' | 'webhookSourceFetchFailed'
+>;
+
 export function createMcpToolRegistry(mcp: McpFacadeForRegistry): ToolRegistry {
   return {
     'discover.source-kinds': () => mcp.discoverSourceKinds(),
@@ -100,6 +105,20 @@ export function createMcpToolRegistry(mcp: McpFacadeForRegistry): ToolRegistry {
   };
 }
 
+export function createMcpWebhookToolRegistry(mcp: McpWebhookFacadeForRegistry): ToolRegistry {
+  return {
+    'webhook.process-accumulated': () => mcp.webhookProcessAccumulated(),
+    'webhook.source-fetch-done': (args) => mcp.webhookSourceFetchDone({
+      token: getMcpArgString(args, 'token'),
+      ref: getMcpArgString(args, 'ref'),
+    }),
+    'webhook.source-fetch-failed': (args) => mcp.webhookSourceFetchFailed({
+      token: getMcpArgString(args, 'token'),
+      reason: getMcpArgString(args, 'reason'),
+    }),
+  };
+}
+
 /** Per-board upload entry point as exposed by createCardFileOps. */
 type UploadCardFile = (
   cardId: string,
@@ -113,7 +132,7 @@ export interface McpControlplaneRegistryDeps {
   boardId: string;
   uploadCardFile: UploadCardFile;
   /** Resolves the (lazy) per-board MCP facade for admin tool dispatch. */
-  getMcpFacade: () => Pick<McpFacadeForRegistry, 'adminReadCard' | 'adminUpsertCard'>;
+  getMcpFacade: () => Pick<McpFacadeForRegistry, 'listRuntimeCards' | 'adminReadCard' | 'adminUpsertCard' | 'manageAddChatAttachment' | 'manageAddChatEntryAndAnyAttachments' | 'managePatchCard' | 'manageRemoveCard' | 'manageUpsertCard'>;
   controlplane: {
     getChatProcessing: (args: Record<string, unknown>) => unknown;
     setChatProcessing: (args: Record<string, unknown>, active: boolean) => unknown;
@@ -125,26 +144,91 @@ export interface McpControlplaneRegistryDeps {
 
 export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryDeps): ToolRegistry {
   const { boardId, uploadCardFile, getMcpFacade, controlplane } = deps;
+
+  function requireBoardId(args: Record<string, unknown>, toolName: string): void {
+    const requestBoardId = getMcpArgString(args, 'board_id');
+    if (!requestBoardId) throw Object.assign(new Error(`${toolName} requires board_id`), { statusCode: 400 });
+    if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
+  }
+
+  function handleAddChatAttachment(args: Record<string, unknown>, toolName: string) {
+    const { cardId } = controlplane.requireCardArgs(args);
+    const turnId = getMcpArgString(args, 'turn_id');
+
+    requireBoardId(args, toolName);
+    return getMcpFacade().manageAddChatAttachment({
+      cardId,
+      role: getMcpArgString(args, 'role') || 'user',
+      ...(turnId ? { turn: turnId } : {}),
+      files: [{
+        file_name: getMcpArgString(args, 'file_name'),
+        content_type: getMcpArgString(args, 'content_type') || 'application/octet-stream',
+        ...(typeof args.text === 'string' ? { text: args.text } : {}),
+        ...(typeof args.base64 === 'string' ? { base64: args.base64 } : {}),
+        ...(Array.isArray(args.bytes) ? { bytes: args.bytes } : {}),
+      }],
+    });
+  }
+
   return {
+    'list-runtime-cards': (args) => {
+      requireBoardId(args, 'list-runtime-cards');
+      return getMcpFacade().listRuntimeCards();
+    },
     'getstate.is-chat-processing': (args) => controlplane.getChatProcessing(args),
     'setstate.chat-processing-started': (args) => controlplane.setChatProcessing(args, true),
     'setstate.chat-processing-done': (args) => controlplane.setChatProcessing(args, false),
     'getstate.card-meta': (args) => controlplane.getCardMeta(args),
     'setstate.card-meta': (args) => controlplane.setCardMeta(args),
     'manage.upload-card-file': (args) => {
-      const requestBoardId = getMcpArgString(args, 'board_id');
       const cardId = getMcpArgString(args, 'card_id');
       const fileName = getMcpArgString(args, 'file_name');
       const contentType = getMcpArgString(args, 'content_type') || 'application/octet-stream';
       const bytes = parseMcpUploadBytes(args);
 
-      if (!requestBoardId) throw Object.assign(new Error('manage.upload-card-file requires board_id'), { statusCode: 400 });
-      if (requestBoardId !== boardId) throw Object.assign(new Error(`Unknown board_id: ${requestBoardId}`), { statusCode: 400 });
+      requireBoardId(args, 'manage.upload-card-file');
       if (!cardId) throw Object.assign(new Error('manage.upload-card-file requires card_id'), { statusCode: 400 });
       if (!fileName) throw Object.assign(new Error('manage.upload-card-file requires file_name'), { statusCode: 400 });
       if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
 
       return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
+    },
+    'manage.add-chat-attachment': (args) => handleAddChatAttachment(args, 'manage.add-chat-attachment'),
+    'manage.add-chat-attachement': (args) => handleAddChatAttachment(args, 'manage.add-chat-attachement'),
+    'manage.add-chat-entry-and-any-attachments': (args) => {
+      const { cardId } = controlplane.requireCardArgs(args);
+      const role = getMcpArgString(args, 'role') || 'user';
+      const turnId = getMcpArgString(args, 'turn_id');
+
+      requireBoardId(args, 'manage.add-chat-entry-and-any-attachments');
+      return getMcpFacade().manageAddChatEntryAndAnyAttachments({
+        cardId,
+        role,
+        ...(typeof args.text === 'string' ? { text: args.text } : {}),
+        ...(turnId ? { turn: turnId } : {}),
+        ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
+      });
+    },
+    'manage.patch-card': (args) => {
+      const { cardId } = controlplane.requireCardArgs(args);
+      requireBoardId(args, 'manage.patch-card');
+      return getMcpFacade().managePatchCard({
+        cardId,
+        patch: getMcpArgRecord(args, 'patch'),
+      });
+    },
+    'manage.upsert-card': (args) => {
+      const { cardId } = controlplane.requireCardArgs(args);
+      requireBoardId(args, 'manage.upsert-card');
+      return getMcpFacade().manageUpsertCard({
+        cardId,
+        candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),
+      });
+    },
+    'manage.remove-card': (args) => {
+      const { cardId } = controlplane.requireCardArgs(args);
+      requireBoardId(args, 'manage.remove-card');
+      return getMcpFacade().manageRemoveCard({ cardId });
     },
     'manage.admin-read-card': async (args) => {
       const { cardId } = controlplane.requireCardArgs(args);

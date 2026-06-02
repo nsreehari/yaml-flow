@@ -5,7 +5,7 @@
  *   - server-runtime-agentface  (POST /mcp, /mcp-raw)
  *   - server-runtime-controlface (/board/*, /cards/*, /mcp-controlplane)
  *   - server-runtime-watchers    (/sse + chat/notify watchers; sole sseHub owner)
- *   - server-runtime-webhooks    (/callback/board-worker/:token/*)
+ *   - server-runtime-webhooks    (/mcp-webhooks)
  *   - server-jobs-queue-runner   (drains 3 lanes; no HTTP)
  *
  * This package exposes types, MCP tool registries, queue-lane registry,
@@ -31,11 +31,13 @@ export type { NotificationState } from '../server-runtime/notifications.js';
 // ── MCP tool registries ─────────────────────────────────────────────────────
 export {
   createMcpToolRegistry,
+  createMcpWebhookToolRegistry,
   createMcpControlplaneToolRegistry,
 } from '../server-runtime/mcp-tool-registries.js';
 export type {
   ToolRegistry,
   McpFacadeForRegistry,
+  McpWebhookFacadeForRegistry,
   McpControlplaneRegistryDeps,
 } from '../server-runtime/mcp-tool-registries.js';
 

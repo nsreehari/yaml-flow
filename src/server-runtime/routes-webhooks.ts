@@ -1,24 +1,20 @@
 /**
  * server-runtime/routes-webhooks.ts
  *
- * Worker-callback webhook routes extracted from createSingleBoardServerRuntime.
- *   POST /callback/board-worker/:token/success
- *   POST /callback/board-worker/:token/failure
+ * Worker webhook MCP route extracted from createSingleBoardServerRuntime.
+ *   POST /mcp-webhooks
  */
 
 import type { RuntimeRequest, RuntimeResponse } from './types.js';
-import { escapeRegExp } from './internal-helpers.js';
+import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
+import type { ToolRegistry } from './mcp-tool-registries.js';
 
 export interface RoutesWebhooksDeps {
   apiBasePath: string;
   json: (res: RuntimeResponse, status: number, payload: unknown) => void;
   readJsonBody: (req: RuntimeRequest) => Promise<Record<string, unknown>>;
   initBoardAndSetup: () => Promise<void>;
-  applyBoardWorkerCallback: (
-    token: string,
-    outcome: 'success' | 'failure',
-    body: Record<string, unknown>,
-  ) => Promise<{ statusCode: number; body: unknown }>;
+  createMcpWebhookToolRegistry: () => ToolRegistry;
 }
 
 export interface RoutesWebhooks {
@@ -26,21 +22,45 @@ export interface RoutesWebhooks {
 }
 
 export function createRoutesWebhooks(deps: RoutesWebhooksDeps): RoutesWebhooks {
-  const { apiBasePath, json, readJsonBody, initBoardAndSetup, applyBoardWorkerCallback } = deps;
+  const { apiBasePath, json, readJsonBody, initBoardAndSetup, createMcpWebhookToolRegistry } = deps;
 
   async function handleWebhooksApi(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean> {
     const method = req.method || 'GET';
     const p = parsedUrl.pathname;
 
     try {
-      const boardWorkerCallbackMatch = p.match(new RegExp(`^${escapeRegExp(apiBasePath)}/callback/board-worker/([^/]+)/(success|failure)$`));
-      if (method === 'POST' && boardWorkerCallbackMatch) {
+      if (method === 'POST' && p === `${apiBasePath}/mcp-webhooks`) {
         await initBoardAndSetup();
-        const token = decodeURIComponent(boardWorkerCallbackMatch[1]);
-        const outcome = boardWorkerCallbackMatch[2] as 'success' | 'failure';
         const body = await readJsonBody(req);
-        const callbackResult = await applyBoardWorkerCallback(token, outcome, body);
-        json(res, callbackResult.statusCode, callbackResult.body);
+        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
+        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+          ? body.args as Record<string, unknown>
+          : {};
+        if (!tool) {
+          json(res, 400, { error: 'tool is required' });
+          return true;
+        }
+        try {
+          const result = await invokeMcpTool(tool, args, createMcpWebhookToolRegistry());
+          if (result && typeof result === 'object' && !Array.isArray(result)) {
+            const record = result as Record<string, unknown>;
+            if (record.status === 'fail') {
+              json(res, 400, { error: extractMcpFailureMessage(result, 'Request failed') });
+              return true;
+            }
+            if (record.status === 'error') {
+              json(res, 500, { error: extractMcpFailureMessage(result, 'Internal error') });
+              return true;
+            }
+          }
+          json(res, 200, result);
+        } catch (error) {
+          const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+            ? Number((error as { statusCode: number }).statusCode)
+            : 500;
+          const message = error instanceof Error ? error.message : String(error);
+          json(res, statusCode, { error: message });
+        }
         return true;
       }
 

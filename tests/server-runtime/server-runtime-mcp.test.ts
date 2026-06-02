@@ -564,6 +564,64 @@ process.exit(1);
     expect((chatsBody.messages as Array<Record<string, unknown>>).some((message) => String(message.text || '').includes('file uploaded: tool-upload.txt'))).toBe(false);
   });
 
+  it('routes manage.add-chat-attachment through /mcp-controlplane and appends only the chat attachment system message', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-attachment',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        turn_id: 'turn-chat-file',
+        file_name: 'chat-upload.txt',
+        content_type: 'text/plain',
+        text: 'hello from chat tool',
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: expect.objectContaining({
+        ok: true,
+        file: expect.objectContaining({ name: 'chat-upload.txt', mime_type: 'text/plain', size: 20, chat: true }),
+      }),
+    });
+
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-chat-file'));
+    expect(chatsRes._status).toBe(200);
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    expect(messages.filter((message) => message.role === 'system')).toHaveLength(1);
+    expect(messages.filter((message) => message.role === 'user' || message.role === 'assistant')).toHaveLength(0);
+    expect(messages[0]?.turn).toBe('turn-chat-file');
+    expect(String(messages[0]?.text || '')).toContain('file uploaded: chat-upload.txt');
+  });
+
+  it('keeps the misspelled add-chat-attachement tool name as a compatibility alias', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-attachement',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        turn_id: 'turn-chat-file-compat',
+        file_name: 'chat-upload-compat.txt',
+        content_type: 'text/plain',
+        text: 'hello from chat tool compat',
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect((parseJsonBody(res) as Record<string, unknown>).status).toBe('success');
+  });
+
   it('rejects manage.upload-card-file on /mcp after it moves to /mcp-controlplane', async () => {
     const runtime = createRuntime();
     const req = makeRequest('POST', '/api/board/mcp', {
@@ -686,6 +744,7 @@ process.exit(1);
     const messages = chatsBody.messages as Array<Record<string, unknown>>;
     const systemMessage = messages.find((message) => message.role === 'system' && /^AI generated: result\.txt as .*result\.txt #\d+$/.test(String(message.text || '')));
     expect(systemMessage).toBeTruthy();
+    expect(messages.filter((message) => message.role === 'system')).toHaveLength(1);
     expect(systemMessage?.turn).toBe('turn-123');
     const assistantMessage = messages.find((message) => message.role === 'assistant' && message.text === 'Here is your answer.');
     expect(assistantMessage).toBeTruthy();
@@ -693,6 +752,92 @@ process.exit(1);
     expect(Array.isArray(assistantMessage?.files)).toBe(true);
     expect((assistantMessage?.files as Array<Record<string, unknown>>).length).toBe(1);
     expect((assistantMessage?.files as Array<Record<string, unknown>>)[0]).toEqual(expect.objectContaining({ name: 'result.txt', mime_type: 'text/plain' }));
+  });
+
+  it('routes manage.add-chat-entry-and-any-attachments through /mcp-controlplane for user chat messages', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        role: 'user',
+        turn_id: 'turn-user-chat',
+        text: 'User prompt with attachment',
+        files: [{ file_name: 'user-note.txt', content_type: 'text/plain', text: 'user supplied attachment' }],
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        id: expect.any(String),
+        role: 'user',
+        turn: 'turn-user-chat',
+        files: [expect.objectContaining({ name: 'user-note.txt', mime_type: 'text/plain' })],
+      },
+    });
+
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-user-chat'));
+    expect(chatsRes._status).toBe(200);
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    const systemMessage = messages.find((message) => message.role === 'system');
+    const userMessage = messages.find((message) => message.role === 'user');
+    expect(systemMessage).toBeTruthy();
+    expect(String(systemMessage?.text || '')).toContain('file uploaded: user-note.txt');
+    expect(userMessage).toBeTruthy();
+    expect(userMessage?.text).toBe('User prompt with attachment');
+    expect(userMessage?.turn).toBe('turn-user-chat');
+    expect(Array.isArray(userMessage?.files)).toBe(true);
+    expect((userMessage?.files as Array<Record<string, unknown>>)[0]).toEqual(expect.objectContaining({ name: 'user-note.txt', mime_type: 'text/plain' }));
+  });
+
+  it('routes manage.patch-card through /mcp-controlplane using the MCP manage read-patch-upsert path', async () => {
+    const runtime = createRuntime({ withNonCore: true });
+
+    const seedValidCardRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.upsert-card',
+      args: {
+        card_id: 'card-1',
+        candidate_card_content: {
+          id: 'card-1',
+          card_data: { title: 'Card One' },
+          view: { elements: [{ id: 'title', kind: 'text', data: { bind: 'card_data.title' } }] },
+        },
+      },
+    }), seedValidCardRes, new URL('http://example.test/api/board/mcp'));
+    expect(seedValidCardRes._status).toBe(200);
+
+    const req = makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.patch-card',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        patch: {
+          fieldValues: { title: 'Patched Through MCP' },
+        },
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect((parseJsonBody(res) as Record<string, unknown>).status).toBe('success');
+
+    const cardRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    expect(cardRes._status).toBe(200);
+    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    expect((card.card_data as Record<string, unknown>).title).toBe('Patched Through MCP');
   });
 
   it('silently ignores a second staged AI response for the same turn-id', async () => {
@@ -992,6 +1137,44 @@ process.exit(1);
           expect.objectContaining({ 'card-id': 'card-1' }),
         ]),
       }),
+    });
+  });
+
+  it('routes webhook.process-accumulated through /mcp-webhooks', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-webhooks', {
+      tool: 'webhook.process-accumulated',
+      args: {},
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-webhooks'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        runtime_result: null,
+      },
+    });
+  });
+
+  it('routes webhook.source-fetch-done through /mcp-webhooks and returns a client error for an invalid token', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp-webhooks', {
+      tool: 'webhook.source-fetch-done',
+      args: {
+        token: 'not-a-valid-token',
+        ref: serializeRef({ kind: 'fs-path', value: path.join(os.tmpdir(), 'missing-source.json') }),
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-webhooks'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(400);
+    expect(parseJsonBody(res)).toEqual({
+      error: expect.stringContaining('Invalid source token'),
     });
   });
 

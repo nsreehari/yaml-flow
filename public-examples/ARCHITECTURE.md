@@ -72,39 +72,13 @@ Include them with a `<script>` tag. Each sets a global on `window`.
 
 ### compute-jsonata.js → `window.jsonataSync`
 
-Vendored jsonata engine for in-browser card computation.
-**Must be loaded before** `board-livecards-localstorage.js`.
+Vendored jsonata engine for browser bundles that need in-browser card computation.
 
 ```html
 <script src="compute-jsonata.js"></script>
 ```
 
-No public API — just sets `window.jsonataSync` for the other bundles to pick up.
-
----
-
-### board-livecards-localstorage.js → `window.BoardLiveCardsLocalStorage`
-
-**Drop-in full board engine for the browser** — no server required.
-
-Bundles: board engine + card computation + localStorage adapter.
-Ideal for demos, offline use, or prototyping before wiring up a server.
-
-```html
-<script src="compute-jsonata.js"></script>
-<script src="board-livecards-localstorage.js"></script>
-<script>
-  const app = BoardLiveCardsLocalStorage.create('my-board', {
-    cards: [ /* card JSON objects */ ],
-    taskExecutor: async (ref, args) => { /* your async task handler */ },
-  });
-  await app.bootstrap();
-  const state = app.getState();
-  // → feed to live-cards.js via LiveCard.init(...)
-</script>
-```
-
-Key exports: `create()`, `selectLiveCardModel()`, `selectAllLiveCardModels()`
+No public API — just sets `window.jsonataSync` for other bundles to pick up.
 
 ---
 
@@ -181,8 +155,7 @@ charts fall back to tables and markdown renders as escaped plain text.
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 
-<!-- 2. yaml-flow bundles — order matters -->
-<script src="compute-jsonata.js"></script>        <!-- sets window.jsonataSync -->
-<script src="board-livecards-localstorage.js"></script>  <!-- or board-livecards-client.js -->
-<script src="live-cards.js"></script>             <!-- sets window.LiveCard -->
+<!-- 2. yaml-flow bundles -->
+<script src="board-livecards-client.js"></script>
+<script src="live-cards.js"></script>
 ```

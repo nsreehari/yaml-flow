@@ -1,15 +1,21 @@
 import { spawnSync } from 'node:child_process';
 
 export function reportBoardWorkerCallbackHttpSuccess(baseUrl: string, token: string, ref: string): void {
-  postBoardWorkerCallbackHttp(buildBoardWorkerCallbackUrl(baseUrl, token, 'success'), JSON.stringify({ ref }));
+  postBoardWorkerCallbackHttp(normalizeBoardWebhookUrl(baseUrl), JSON.stringify({
+    tool: 'webhook.source-fetch-done',
+    args: { token, ref },
+  }));
 }
 
 export function reportBoardWorkerCallbackHttpFailure(baseUrl: string, token: string, reason: string): void {
-  postBoardWorkerCallbackHttp(buildBoardWorkerCallbackUrl(baseUrl, token, 'failure'), JSON.stringify({ reason }));
+  postBoardWorkerCallbackHttp(normalizeBoardWebhookUrl(baseUrl), JSON.stringify({
+    tool: 'webhook.source-fetch-failed',
+    args: { token, reason },
+  }));
 }
 
-function buildBoardWorkerCallbackUrl(baseUrl: string, token: string, outcome: 'success' | 'failure'): string {
-  return `${String(baseUrl || '').replace(/\/+$/, '')}/${encodeURIComponent(token)}/${outcome}`;
+function normalizeBoardWebhookUrl(baseUrl: string): string {
+  return String(baseUrl || '').replace(/\/+$/, '');
 }
 
 function postBoardWorkerCallbackHttp(url: string, body: string): void {

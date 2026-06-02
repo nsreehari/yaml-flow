@@ -39,7 +39,12 @@ function makeDeps() {
           ],
         },
       })),
+      isProcessing: vi.fn(() => ({ status: 'success', data: { active: false } })),
+      setProcessing: vi.fn(() => ({ status: 'success', data: { active: false } })),
     },
+    processAccumulated: vi.fn(() => ({ status: 'success', data: { drained: true } })),
+    sourceFetchDone: vi.fn(() => ({ status: 'success', data: { applied: true } })),
+    sourceFetchFailed: vi.fn(() => ({ status: 'success', data: { applied: true } })),
     buildFileDownloadUrl: vi.fn(({ cardId, fileIdx }: { cardId: string; fileIdx: number }) => `/api/board/cards/${cardId}/files/${fileIdx}`),
     readFetchedSourceJsonByRef: vi.fn(() => ({ rows: [1, 2, 3] })),
   };
@@ -269,5 +274,42 @@ describe('BoardLiveCardsMcp', () => {
       params: { cardId: 'card-1' },
       body: { role: 'assistant', text: 'Turned message', files: [], turn: 'turn-z' },
     });
+  });
+
+  it('supports webhook.process-accumulated through the MCP facade', async () => {
+    const deps = makeDeps();
+    const mcp = createBoardLiveCardsMcp(deps);
+
+    await expect(mcp.webhookProcessAccumulated()).resolves.toEqual({
+      status: 'success',
+      data: {
+        runtime_result: { drained: true },
+      },
+    });
+    expect(deps.processAccumulated).toHaveBeenCalledTimes(1);
+  });
+
+  it('supports webhook source-fetch done and failed through the MCP facade', async () => {
+    const deps = makeDeps();
+    const mcp = createBoardLiveCardsMcp(deps);
+
+    await expect(mcp.webhookSourceFetchDone({ token: 'tok-1', ref: 'b64:abc' })).resolves.toEqual({
+      status: 'success',
+      data: {
+        token: 'tok-1',
+        ref: 'b64:abc',
+        runtime_result: { applied: true },
+      },
+    });
+    await expect(mcp.webhookSourceFetchFailed({ token: 'tok-2', reason: 'boom' })).resolves.toEqual({
+      status: 'success',
+      data: {
+        token: 'tok-2',
+        reason: 'boom',
+        runtime_result: { applied: true },
+      },
+    });
+    expect(deps.sourceFetchDone).toHaveBeenCalledWith({ token: 'tok-1', ref: 'b64:abc' });
+    expect(deps.sourceFetchFailed).toHaveBeenCalledWith({ token: 'tok-2', reason: 'boom' });
   });
 });
