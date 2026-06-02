@@ -544,22 +544,13 @@ try {
   console.log(`[T0.3] completed: ${JSON.stringify(t0Summary)}`);
 
   console.log('\n=== T0 Step 4: board-status cross-check ===');
-  const statusRes = await httpGet(`${BASE}/board-status`);
-  assert(statusRes.status === 200, `board-status returned ${statusRes.status}`);
-  const httpSummary = statusRes.data?.statusSnapshot?.summary;
-  assert(httpSummary, 'statusSnapshot.summary missing from board-status');
   const statusMcpRes = await httpMcp('inspect.board-runtime-status', {});
   assert(statusMcpRes.status === 200, `inspect.board-runtime-status returned ${statusMcpRes.status}`);
   assert(statusMcpRes.data?.status === 'success', `inspect.board-runtime-status failed: ${JSON.stringify(statusMcpRes.data)}`);
   const mcpSummary = statusMcpRes.data?.data?.summary;
   assert(mcpSummary, 'summary missing from inspect.board-runtime-status');
-  const comparableStatusKeys = ['card_count', 'completed', 'eligible', 'pending', 'blocked', 'in_progress', 'failed', 'unresolved'];
-  const httpComparableSummary = Object.fromEntries(comparableStatusKeys.map((key) => [key, httpSummary[key]]));
-  const mcpComparableSummary = Object.fromEntries(comparableStatusKeys.map((key) => [key, mcpSummary[key]]));
-  assert(JSON.stringify(httpComparableSummary) === JSON.stringify(mcpComparableSummary),
-    `HTTP board-status summary mismatch vs MCP summary: http=${JSON.stringify(httpComparableSummary)} mcp=${JSON.stringify(mcpComparableSummary)}`);
-  assert(httpSummary.completed === httpSummary.card_count, `not all complete: ${JSON.stringify(httpSummary)}`);
-  console.log(`[T0.4] board-status: ${JSON.stringify(httpSummary)}`);
+  assert(mcpSummary.completed === mcpSummary.card_count, `not all complete: ${JSON.stringify(mcpSummary)}`);
+  console.log(`[T0.4] board-status: ${JSON.stringify(mcpSummary)}`);
 
   // Verify computed_values arrived for portfolio-value card
   const t0Positions = NS.computedValues['card-portfolio-value']?.positions;
@@ -634,30 +625,32 @@ try {
   if (skipT2) {
     console.log('\n=== T2: skipped (--skip-t2) ===');
   } else {
-    console.log('\n=== T2: plain file upload -> card_data.files -> download ===');
-    const t2CardBefore = await httpGet(`${BASE}/cards/${T2_FILE_CARD_ID}`);
+    console.log('\n=== T2: MCP file upload -> card_data.files -> download ===');
+    const t2CardBefore = await httpMcp('manage.read-card', { card_id: T2_FILE_CARD_ID });
     assert(t2CardBefore.status === 200, `T2 pre card read returned ${t2CardBefore.status}`);
-    const t2FilesBefore = Array.isArray(t2CardBefore.data?.card_data?.files)
-      ? t2CardBefore.data.card_data.files
+    const t2FilesBefore = Array.isArray(t2CardBefore.data?.data?.[0]?.card_data?.files)
+      ? t2CardBefore.data.data[0].card_data.files
       : [];
     const t2BeforeCount = t2FilesBefore.length;
 
     const t2UploadText = `plain-file-upload-${Date.now()}`;
     const t2UploadName = 't2-upload.txt';
-    const t2UploadRes = await httpUploadChatFile(
-      `${BASE}/cards/${T2_FILE_CARD_ID}/files`,
-      t2UploadName,
-      t2UploadText,
-    );
+    const t2UploadRes = await httpMcpControlplane('manage.upload-card-file', {
+      board_id: BOARD_ID,
+      card_id: T2_FILE_CARD_ID,
+      file_name: t2UploadName,
+      content_type: 'text/plain; charset=utf-8',
+      base64: Buffer.from(t2UploadText, 'utf-8').toString('base64'),
+    });
     assert(t2UploadRes.status === 200, `T2 file upload returned ${t2UploadRes.status}`);
-    const t2UploadedFile = t2UploadRes.data?.file;
+    const t2UploadedFile = t2UploadRes.data?.data?.file;
     assert(t2UploadedFile && typeof t2UploadedFile === 'object', 'T2 upload response missing file metadata');
     assert(String(t2UploadedFile?.name || '') === t2UploadName, 'T2 uploaded file name mismatch');
 
-    const t2CardAfter = await httpGet(`${BASE}/cards/${T2_FILE_CARD_ID}`);
+    const t2CardAfter = await httpMcp('manage.read-card', { card_id: T2_FILE_CARD_ID });
     assert(t2CardAfter.status === 200, `T2 post card read returned ${t2CardAfter.status}`);
-    const t2FilesAfter = Array.isArray(t2CardAfter.data?.card_data?.files)
-      ? t2CardAfter.data.card_data.files
+    const t2FilesAfter = Array.isArray(t2CardAfter.data?.data?.[0]?.card_data?.files)
+      ? t2CardAfter.data.data[0].card_data.files
       : [];
     assert(t2FilesAfter.length === t2BeforeCount + 1, `T2 expected files +1 (before=${t2BeforeCount}, after=${t2FilesAfter.length})`);
 
@@ -736,10 +729,10 @@ try {
       assert(subRes.status === 200, `chat subscribe returned ${subRes.status}`);
 
       t3Dbg('step 3: fetching pre-chat transcript');
-      const t2Before = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+      const t2Before = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
       t3Dbg(`step 3: pre-chat fetch returned status=${t2Before.status}`);
       assert(t2Before.status === 200, `T3 pre chats returned ${t2Before.status}`);
-      const t2BeforeMessages = Array.isArray(t2Before.data?.messages) ? t2Before.data.messages : [];
+      const t2BeforeMessages = Array.isArray(t2Before.data?.data?.messages) ? t2Before.data.data.messages : [];
       const t2BeforeCount = t2BeforeMessages.length;
       const t2EventStart = NS.chatEvents.length;
       const t2ProbePrompt = `Probe protocol validation ${Date.now()}`;
@@ -770,10 +763,10 @@ try {
       assert(!!t2Lifecycle, 'T3 ordered lifecycle not observed');
 
       t3Dbg('step 6: fetching post-chat transcript');
-      const t2After = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+      const t2After = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
       t3Dbg(`step 6: post-chat fetch returned status=${t2After.status}`);
       assert(t2After.status === 200, `T3 post chats returned ${t2After.status}`);
-      const t2AfterMessages = Array.isArray(t2After.data?.messages) ? t2After.data.messages : [];
+      const t2AfterMessages = Array.isArray(t2After.data?.data?.messages) ? t2After.data.data.messages : [];
       const t2NewMessages = t2AfterMessages.slice(t2BeforeCount);
       t3Dbg(`step 6: validating ${t2NewMessages.length} new messages`);
       assert(t2NewMessages.length >= 3, `T3 expected at least 3 new chat messages, got ${t2NewMessages.length}`);
@@ -815,10 +808,10 @@ try {
     console.log('\n=== T3a: non-probe chat protocol (expect paris) ===');
     const t3aDbg = (msg) => console.log(`[T3a.DBG ${new Date().toISOString()}] ${msg}`);
     t3aDbg('step 1: fetching pre-chat transcript');
-    const t2aBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2aBefore = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     t3aDbg(`step 1: pre-chat fetch returned status=${t2aBefore.status}`);
     assert(t2aBefore.status === 200, `T3a pre chats returned ${t2aBefore.status}`);
-    const t2aBeforeMessages = Array.isArray(t2aBefore.data?.messages) ? t2aBefore.data.messages : [];
+    const t2aBeforeMessages = Array.isArray(t2aBefore.data?.data?.messages) ? t2aBefore.data.data.messages : [];
     const t2aBeforeCount = t2aBeforeMessages.length;
     const t2aPrompt = 'Just answer what is the capital of France. No Fluff. No COmmentary.  No Markup Respond in lower case in one word.';
     t3aDbg(`step 1: beforeCount=${t2aBeforeCount}`);
@@ -854,10 +847,10 @@ try {
     t3aDbg(`step 3: assistant SSE text=${JSON.stringify(String(t2aSseLast?.text || '').slice(0, 400))}`);
 
     t3aDbg('step 4: fetching post-chat transcript');
-    const t2aAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2aAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     t3aDbg(`step 4: post-chat fetch returned status=${t2aAfter.status}`);
     assert(t2aAfter.status === 200, `T3a post chats returned ${t2aAfter.status}`);
-    const t2aAfterMessages = Array.isArray(t2aAfter.data?.messages) ? t2aAfter.data.messages : [];
+    const t2aAfterMessages = Array.isArray(t2aAfter.data?.data?.messages) ? t2aAfter.data.data.messages : [];
     const t2aNewMessages = t2aAfterMessages.slice(t2aBeforeCount);
     t3aDbg(`step 4: validating ${t2aNewMessages.length} new messages`);
     assert(t2aNewMessages.length >= 2, `T3a expected at least 2 new chat messages, got ${t2aNewMessages.length}`);
@@ -873,33 +866,36 @@ try {
     console.log('\n=== T3b: skipped (--skip-t3b) ===');
   } else {
     console.log('\n=== T3b: probe-echo chat with file upload protocol ===');
-    const t2bBefore = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2bBefore = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     assert(t2bBefore.status === 200, `T3b pre chats returned ${t2bBefore.status}`);
-    const t2bBeforeMessages = Array.isArray(t2bBefore.data?.messages) ? t2bBefore.data.messages : [];
+    const t2bBeforeMessages = Array.isArray(t2bBefore.data?.data?.messages) ? t2bBefore.data.data.messages : [];
     const t2bBeforeCount = t2bBeforeMessages.length;
 
     const t3bTurnId = randomTurnId();
-    const t2bUploadRes = await httpUploadChatFile(
-      `${BASE}/cards/${CHAT_CARD_ID}/files?inChat=true&turn-id=${encodeURIComponent(t3bTurnId)}`,
-      'q1.txt',
-      'tokyo',
-    );
+    const t2bUploadRes = await httpMcpControlplane('manage.add-chat-attachment', {
+      board_id: BOARD_ID,
+      card_id: CHAT_CARD_ID,
+      turn_id: t3bTurnId,
+      file_name: 'q1.txt',
+      content_type: 'text/plain; charset=utf-8',
+      base64: Buffer.from('tokyo', 'utf-8').toString('base64'),
+    });
     assert(t2bUploadRes.status === 200, `T3b file upload returned ${t2bUploadRes.status}`);
-    const uploadedFile = t2bUploadRes.data?.file;
+    const uploadedFile = t2bUploadRes.data?.data?.files?.[0];
     assert(uploadedFile && typeof uploadedFile === 'object', 'T3b upload response missing file metadata');
 
-    const t2bAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2bAfterUpload = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     assert(t2bAfterUpload.status === 200, `T3b chats after upload returned ${t2bAfterUpload.status}`);
-    const t2bUploadMessages = Array.isArray(t2bAfterUpload.data?.messages) ? t2bAfterUpload.data.messages : [];
+    const t2bUploadMessages = Array.isArray(t2bAfterUpload.data?.data?.messages) ? t2bAfterUpload.data.data.messages : [];
     const t2bUploadNewMessages = t2bUploadMessages.slice(t2bBeforeCount);
     const t2bUploadSystem = t2bUploadNewMessages.find((m) => m?.role === 'system');
     assert(!!t2bUploadSystem, 'T3b upload protocol missing system chat file');
     assert(String(t2bUploadSystem?.text || '').toLowerCase().includes('file uploaded:'), 'T3b upload system message does not describe uploaded file');
 
-    const t2bCardAfterUpload = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    const t2bCardAfterUpload = await httpMcp('manage.read-card', { card_id: CHAT_CARD_ID });
     assert(t2bCardAfterUpload.status === 200, `T3b card read after upload returned ${t2bCardAfterUpload.status}`);
-    const t2bFilesAfterUpload = Array.isArray(t2bCardAfterUpload.data?.card_data?.files)
-      ? t2bCardAfterUpload.data.card_data.files
+    const t2bFilesAfterUpload = Array.isArray(t2bCardAfterUpload.data?.data?.[0]?.card_data?.files)
+      ? t2bCardAfterUpload.data.data[0].card_data.files
       : [];
     const t2bFileIndex = t2bFilesAfterUpload.findIndex((f) => String(f?.stored_name || '') === String(uploadedFile?.stored_name || ''));
     assert(t2bFileIndex >= 0, 'T3b uploaded file metadata not found in card_data.files');
@@ -935,9 +931,9 @@ try {
     }, 60_000, 'T3b ordered lifecycle');
     assert(!!t2bLifecycle, 'T3b ordered lifecycle not observed');
 
-    const t2bAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2bAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     assert(t2bAfter.status === 200, `T3b post chats returned ${t2bAfter.status}`);
-    const t2bAfterMessages = Array.isArray(t2bAfter.data?.messages) ? t2bAfter.data.messages : [];
+    const t2bAfterMessages = Array.isArray(t2bAfter.data?.data?.messages) ? t2bAfter.data.data.messages : [];
     const t2bNewMessages = t2bAfterMessages.slice(t2bSendBaseline);
     assert(t2bNewMessages.length >= 3, `T3b expected at least 3 chat messages after send, got ${t2bNewMessages.length}`);
 
@@ -972,15 +968,15 @@ try {
       t3dOwnedSseClient = true;
     }
 
-    const t2dBeforeChats = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2dBeforeChats = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     assert(t2dBeforeChats.status === 200, `T3d pre chats returned ${t2dBeforeChats.status}`);
-    const t2dBeforeMessages = Array.isArray(t2dBeforeChats.data?.messages) ? t2dBeforeChats.data.messages : [];
+    const t2dBeforeMessages = Array.isArray(t2dBeforeChats.data?.data?.messages) ? t2dBeforeChats.data.data.messages : [];
     const t2dBeforeCount = t2dBeforeMessages.length;
 
-    const t2dBeforeCard = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    const t2dBeforeCard = await httpMcp('manage.read-card', { card_id: CHAT_CARD_ID });
     assert(t2dBeforeCard.status === 200, `T3d pre card returned ${t2dBeforeCard.status}`);
-    const t2dBeforeFiles = Array.isArray(t2dBeforeCard.data?.card_data?.files)
-      ? t2dBeforeCard.data.card_data.files
+    const t2dBeforeFiles = Array.isArray(t2dBeforeCard.data?.data?.[0]?.card_data?.files)
+      ? t2dBeforeCard.data.data[0].card_data.files
       : [];
 
     const t3dTurnId = randomTurnId();
@@ -1006,9 +1002,9 @@ try {
     }, 60_000, 'T3d ordered lifecycle');
     assert(!!t2dLifecycle, 'T3d ordered lifecycle not observed');
 
-    const t2dAfter = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}/chats?all-turns=true`);
+    const t2dAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
     assert(t2dAfter.status === 200, `T3d post chats returned ${t2dAfter.status}`);
-    const t2dAfterMessages = Array.isArray(t2dAfter.data?.messages) ? t2dAfter.data.messages : [];
+    const t2dAfterMessages = Array.isArray(t2dAfter.data?.data?.messages) ? t2dAfter.data.data.messages : [];
     const t2dNewMessages = t2dAfterMessages.slice(t2dBeforeCount);
     assert(t2dNewMessages.length >= 4, `T3d expected at least 4 chat messages after send, got ${t2dNewMessages.length}`);
 
@@ -1031,10 +1027,10 @@ try {
     const t2dFileIndex = Number.parseInt(t2dFileIndexMatch[1], 10);
     assert(Number.isInteger(t2dFileIndex) && t2dFileIndex >= 0, 'T3d AI-generated message file index should be non-negative');
 
-    const t2dAfterCard = await httpGet(`${BASE}/cards/${CHAT_CARD_ID}`);
+    const t2dAfterCard = await httpMcp('manage.read-card', { card_id: CHAT_CARD_ID });
     assert(t2dAfterCard.status === 200, `T3d post card returned ${t2dAfterCard.status}`);
-    const t2dAfterFiles = Array.isArray(t2dAfterCard.data?.card_data?.files)
-      ? t2dAfterCard.data.card_data.files
+    const t2dAfterFiles = Array.isArray(t2dAfterCard.data?.data?.[0]?.card_data?.files)
+      ? t2dAfterCard.data.data[0].card_data.files
       : [];
     assert(t2dAfterFiles.length === t2dBeforeFiles.length + 1, `T3d expected exactly one new stored file, got ${t2dAfterFiles.length - t2dBeforeFiles.length}`);
     const t2dStoredFile = t2dAfterFiles[t2dFileIndex];
@@ -1565,14 +1561,14 @@ try {
       'T5 manage.read-card meta-redaction',
     );
     const t5ReadCard = Array.isArray(t5ReadCards) ? t5ReadCards[0] : null;
-    assert(t5ReadCard && t5ReadCard.meta === undefined, 'T5 expected manage.read-card to redact top-level meta');
+    assert(t5ReadCard && t5ReadCard.__private === undefined, 'T5 expected manage.read-card to redact __private');
 
     const t5Inspect = expectMcpSuccess(
       await httpMcp('inspect.card-definition-and-runtime', { card_id: T5_CARD_ID }),
       'T5 inspect.card-definition-and-runtime meta-redaction',
     );
-    assert(t5Inspect?.card_definition_and_static_data?.meta === undefined, 'T5 expected inspect to redact card_definition_and_static_data.meta');
-    console.log('[T5] ok: regular /mcp surfaces redact card meta');
+    assert(t5Inspect?.card_definition_and_static_data?.__private === undefined, 'T5 expected inspect to redact card_definition_and_static_data.__private');
+    console.log('[T5] ok: regular /mcp surfaces redact __private');
 
     // ── T5: admin-only card round-trip ──────────────────────────────────────
     // 1. Read the existing card definition via the normal read-card path.
@@ -1610,20 +1606,18 @@ try {
     );
     const t5AdminCards = Array.isArray(t5AdminRead?.cards) ? t5AdminRead.cards : [];
     assert(t5AdminCards.length > 0, 'T5 expected admin-read-card to return the card');
-    assert(t5AdminCards[0]?.meta?.__visible_controlplane_only === true, `T5 expected meta.__visible_controlplane_only=true, got: ${JSON.stringify(t5AdminCards[0]?.meta)}`);
-    console.log('[T5] ok: manage.admin-read-card returns card with __visible_controlplane_only=true');
+    assert(t5AdminCards[0]?.__private?.visible_controlplane_only === true, `T5 expected __private.visible_controlplane_only=true, got: ${JSON.stringify(t5AdminCards[0]?.__private)}`);
+    console.log('[T5] ok: manage.admin-read-card returns card with __private.visible_controlplane_only=true');
 
     // 5. Guard: setstate.card-private must block changing the flag to a different value.
-    // key = 'chat.__visible_controlplane_only' passes the chat.* format check but contains
-    // the reserved segment, so it reaches the guard.
     const t5MetaGuard = await httpMcpControlplane('setstate.card-private', {
       board_id: BOARD_ID,
       card_id: t5AdminCardId,
-      key: 'chat.__visible_controlplane_only',
+      key: 'chat.visible_controlplane_only',
       value: false,  // differs from current flag value (true) → must be rejected
     });
     assert(t5MetaGuard?.status !== 200,
-      `T5 expected setstate.card-private to reject changing __visible_controlplane_only, got: ${JSON.stringify(t5MetaGuard)}`);
+      `T5 expected setstate.card-private to reject changing visible_controlplane_only, got: ${JSON.stringify(t5MetaGuard)}`);
     console.log('[T5] ok: setstate.card-private blocked flag mutation (false != true)');
 
     // 6. Guard: same key with value matching the current flag (true) must pass (idempotent).
@@ -1631,7 +1625,7 @@ try {
       await httpMcpControlplane('setstate.card-private', {
         board_id: BOARD_ID,
         card_id: t5AdminCardId,
-        key: 'chat.__visible_controlplane_only',
+        key: 'chat.visible_controlplane_only',
         value: true,  // matches current flag value → idempotent, allowed
       }),
       'T5 setstate.card-private idempotent same-value',

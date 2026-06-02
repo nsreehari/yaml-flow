@@ -88,4 +88,52 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
       expect(result.data.isValid).toBe(true);
     }
   });
+
+  it('routes hosted non-core executor-backed preflight calls through the immediate hook', async () => {
+    const db = makeFakeFirestore() as any;
+    const calls: Array<{ subcommand: string; input?: string }> = [];
+    const bundle = createFirestoreBoardRuntimeBundle(db, 'board-A', {
+      nonCoreTaskExecutor: async (request) => {
+        calls.push({ subcommand: request.subcommand, input: request.input });
+        if (request.subcommand === 'describe-capabilities') {
+          return { executor: 'hosted-hook', sourceKinds: { json: {} } };
+        }
+        if (request.subcommand === 'validate-source-def') {
+          return { ok: true, errors: [] };
+        }
+        throw new Error(`unexpected subcommand ${request.subcommand}`);
+      },
+    });
+
+    const describeResult = await bundle.nonCore.describeTaskExecutorCapabilities({});
+    expect(describeResult.status).toBe('success');
+    if (describeResult.status === 'success') {
+      expect(describeResult.data).toMatchObject({ executor: 'hosted-hook' });
+    }
+
+    const validateResult = await bundle.nonCore.validateCardPreflight({
+      body: {
+        id: 'card-with-source',
+        card_data: { rows: [] },
+        source_defs: [
+          {
+            kind: 'json',
+            bindTo: 'prices',
+            outputFile: 'prices.json',
+          },
+        ],
+      },
+    });
+
+    expect(validateResult.status).toBe('success');
+    if (validateResult.status === 'success') {
+      expect(validateResult.data.isValid).toBe(true);
+      expect(validateResult.data.issues).toEqual([]);
+    }
+
+    expect(calls.map((entry) => entry.subcommand)).toEqual([
+      'describe-capabilities',
+      'validate-source-def',
+    ]);
+  });
 });

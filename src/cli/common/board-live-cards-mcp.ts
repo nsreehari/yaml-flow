@@ -396,13 +396,7 @@ function normalizeCandidateCardPayload(card: UnknownRecord): UnknownRecord {
 
 function stripMcpPrivateCardFields<T extends UnknownRecord>(card: T): T {
   const publicCard = { ...card } as UnknownRecord;
-  const meta = ensureRecord(card.meta);
-  const publicMetaEntries = Object.entries(meta).filter(([key]) => !key.startsWith('__'));
-  if (publicMetaEntries.length > 0) {
-    publicCard.meta = Object.fromEntries(publicMetaEntries);
-  } else {
-    delete publicCard.meta;
-  }
+  delete publicCard.__private;
   return publicCard as T;
 }
 
@@ -480,8 +474,8 @@ function applyManageCardPatch(card: UnknownRecord, patch: UnknownRecord): Unknow
 }
 
 function isAdminCard(card: UnknownRecord): boolean {
-  const meta = ensureRecord(card.meta);
-  return meta.__visible_controlplane_only === true;
+  const priv = ensureRecord(card.__private);
+  return priv.visible_controlplane_only === true;
 }
 
 async function readOneCard(cardStore: BoardLiveCardsMcpCardStoreDeps, cardId: string): Promise<LiveCard> {
@@ -1096,9 +1090,12 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       previousCard = null;
     }
 
-    const cardToStore = previousCard && hasOwn(ensureRecord(previousCard), 'meta')
-      ? { ...candidateCard, meta: ensureRecord(previousCard).meta }
-      : candidateCard;
+    const previousCardRecord = previousCard ? ensureRecord(previousCard) : null;
+    const cardToStore = {
+      ...candidateCard,
+      ...(previousCardRecord && hasOwn(previousCardRecord, 'meta') ? { meta: previousCardRecord.meta } : {}),
+      ...(previousCardRecord && hasOwn(previousCardRecord, '__private') ? { __private: previousCardRecord.__private } : {}),
+    };
 
     const storeUpdate = await cardStore.set({ body: cardToStore });
     expectSuccess(storeUpdate, 'cardStore.set');
@@ -1188,9 +1185,9 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       previousCard = null;
     }
 
-    // Preserve existing meta fields but always force __visible_controlplane_only = true
-    const existingMeta = previousCard ? ensureRecord(ensureRecord(previousCard).meta) : {};
-    const cardToStore = { ...candidateCard, meta: { ...existingMeta, __visible_controlplane_only: true } };
+    // Preserve existing __private state but always force visible_controlplane_only = true
+    const existingPrivate = previousCard ? ensureRecord(ensureRecord(previousCard).__private) : {};
+    const cardToStore = { ...candidateCard, __private: { ...existingPrivate, visible_controlplane_only: true } };
 
     const storeUpdate = await cardStore.set({ body: cardToStore });
     expectSuccess(storeUpdate, 'cardStore.set');

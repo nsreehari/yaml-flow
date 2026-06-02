@@ -361,16 +361,20 @@ process.exit(1);
     expect(readRes._status).toBe(200);
     const readBody = parseJsonBody(readRes) as Record<string, unknown>;
     const readCards = readBody.data as Array<Record<string, unknown>>;
-    expect(readCards[0].meta).toBeUndefined();
+    expect(readCards[0].__private).toBeUndefined();
 
     const directCardRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), directCardRes, new URL('http://example.test/api/board/cards/card-1'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.admin-read-card',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), directCardRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(directCardRes._status).toBe(200);
-    const directCard = parseJsonBody(directCardRes) as Record<string, unknown>;
-    expect(directCard.meta).toEqual({ chat: { foundry_thread_id: 'thread-123' } });
+    const directCardBody = parseJsonBody(directCardRes) as Record<string, unknown>;
+    const directCard = ((directCardBody.data as Record<string, unknown>)?.cards as Array<Record<string, unknown>>)?.[0];
+    expect(directCard?.__private).toEqual({ chat: { foundry_thread_id: 'thread-123' } });
   });
 
-  it('strips incoming meta on regular /mcp upsert-card while preserving stored controlplane meta', async () => {
+  it('preserves __private on regular /mcp upsert-card and passes meta through unchanged', async () => {
     const runtime = createRuntime({ withNonCore: true });
 
     const setMetaRes = makeResponse();
@@ -398,11 +402,16 @@ process.exit(1);
     expect((await runtime.processAccumulatedEvents()).status).toBe('success');
 
     const directCardRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), directCardRes, new URL('http://example.test/api/board/cards/card-1'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.admin-read-card',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1' },
+    }), directCardRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(directCardRes._status).toBe(200);
-    const directCard = parseJsonBody(directCardRes) as Record<string, unknown>;
-    expect((directCard.card_data as Record<string, unknown>).title).toBe('Updated Card One');
-    expect(directCard.meta).toEqual({ chat: { foundry_thread_id: 'thread-original' } });
+    const directCardBody = parseJsonBody(directCardRes) as Record<string, unknown>;
+    const directCard = ((directCardBody.data as Record<string, unknown>)?.cards as Array<Record<string, unknown>>)?.[0];
+    expect((directCard?.card_data as Record<string, unknown>).title).toBe('Updated Card One');
+    expect(directCard?.__private).toEqual({ chat: { foundry_thread_id: 'thread-original' } });
+    expect(directCard?.meta).toEqual({ chat: { foundry_thread_id: 'thread-from-caller' }, title: 'caller title' });
 
     const inspectRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -412,7 +421,7 @@ process.exit(1);
     expect(inspectRes._status).toBe(200);
     const inspectBody = parseJsonBody(inspectRes) as Record<string, unknown>;
     const inspectData = inspectBody.data as Record<string, unknown>;
-    expect((inspectData.card_definition_and_static_data as Record<string, unknown>).meta).toBeUndefined();
+    expect((inspectData.card_definition_and_static_data as Record<string, unknown>).__private).toBeUndefined();
   });
 
   it('rejects manage.upsert-card validation failures on /mcp with a 400 error payload', async () => {
@@ -432,33 +441,53 @@ process.exit(1);
     expect(parseJsonBody(res)).toEqual({ error: "Validation failed: /view/elements/0: must have required property 'kind'" });
   });
 
-  it('POST /cards/:id/files uploads bytes, appends metadata, and emits a chat system message with turn when inChat=true', async () => {
+  it('routes manage.add-chat-attachment through /mcp-controlplane, appends metadata, and emits a chat system message with turn', async () => {
     const runtime = createRuntime();
-    const req = makeRequest('POST', '/api/board/cards/card-1/files?inChat=true', 'hello upload');
-    req.headers['content-type'] = 'text/plain';
-    req.headers['x-file-name'] = encodeURIComponent('upload.txt');
+    const req = makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-attachment',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        turn_id: 'turn-upload',
+        file_name: 'upload.txt',
+        content_type: 'text/plain',
+        text: 'hello upload',
+      },
+    });
     const res = makeResponse();
 
-    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/files?inChat=true&turn-id=turn-upload'));
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
-    expect(parseJsonBody(res)).toEqual(expect.objectContaining({
-      ok: true,
-      file: expect.objectContaining({ name: 'upload.txt', mime_type: 'text/plain', size: 12 }),
-    }));
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: expect.objectContaining({
+        cardId: 'card-1',
+        turn: 'turn-upload',
+        files: [expect.objectContaining({ name: 'upload.txt', mime_type: 'text/plain', size: 12, chat: true })],
+      }),
+    });
 
-    const cardReq = makeRequest('GET', '/api/board/cards/card-1');
     const cardRes = makeResponse();
-    await runtime.handleRuntimeApi(cardReq, cardRes, new URL('http://example.test/api/board/cards/card-1'));
-    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), cardRes, new URL('http://example.test/api/board/mcp'));
+    expect(cardRes._status).toBe(200);
+    const cardBody = parseJsonBody(cardRes) as Record<string, unknown>;
+    const card = (cardBody.data as Array<Record<string, unknown>>)[0];
     const files = (card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>;
     expect(files.length).toBe(2);
 
-    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', turn_id: 'turn-upload' },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const uploadSystemMessage = (chatsBody.messages as Array<Record<string, unknown>>).find((message) => String(message.text || '').includes('file uploaded: upload.txt'));
+    const uploadSystemMessage = (((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>)
+      .find((message) => String(message.text || '').includes('file uploaded: upload.txt'));
     expect(uploadSystemMessage).toBeTruthy();
     expect(uploadSystemMessage?.turn).toBe('turn-upload');
   });
@@ -489,37 +518,47 @@ process.exit(1);
     expect(res._status).toBe(200);
     await drainQueuedChatRequests(runtime, boardAdapter);
 
-    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?all-turns=true'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', all_turns: true },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const userMessage = (chatsBody.messages as Array<Record<string, unknown>>).find((message) => message.role === 'user' && message.text === 'Hello turn aware world');
+    const userMessage = (((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>)
+      .find((message) => message.role === 'user' && message.text === 'Hello turn aware world');
     expect(userMessage).toBeTruthy();
     expect(userMessage?.turn).toBe('turn-chat-send');
     expect(observed.length).toBe(1);
     expect(observed[0].turnId).toBe('turn-chat-send');
   });
 
-  it('POST /cards/:id/chats preserves turn on appended assistant messages', async () => {
+  it('routes manage.add-chat-entry-and-any-attachments through /mcp-controlplane for assistant chat messages', async () => {
     const runtime = createRuntime();
-    const postReq = makeRequest('POST', '/api/board/cards/card-1/chats', {
-      role: 'assistant',
-      text: 'Turn aware assistant reply',
-      files: [],
-      turn: 'turn-post-chat',
-      done: true,
+    const postReq = makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        role: 'assistant',
+        turn_id: 'turn-post-chat',
+        text: 'Turn aware assistant reply',
+      },
     });
     const postRes = makeResponse();
 
-    const handled = await runtime.handleRuntimeApi(postReq, postRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    const handled = await runtime.handleRuntimeApi(postReq, postRes, new URL('http://example.test/api/board/mcp-controlplane'));
     expect(handled).toBe(true);
     expect(postRes._status).toBe(200);
 
-    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?all-turns=true'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', all_turns: true },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const assistantMessage = (chatsBody.messages as Array<Record<string, unknown>>)
+    const assistantMessage = (((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>)
       .find((message) => message.role === 'assistant' && message.text === 'Turn aware assistant reply');
     expect(assistantMessage).toBeTruthy();
     expect(assistantMessage?.turn).toBe('turn-post-chat');
@@ -550,18 +589,25 @@ process.exit(1);
       }),
     });
 
-    const cardReq = makeRequest('GET', '/api/board/cards/card-1');
     const cardRes = makeResponse();
-    await runtime.handleRuntimeApi(cardReq, cardRes, new URL('http://example.test/api/board/cards/card-1'));
-    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), cardRes, new URL('http://example.test/api/board/mcp'));
+    expect(cardRes._status).toBe(200);
+    const cardBody = parseJsonBody(cardRes) as Record<string, unknown>;
+    const card = (cardBody.data as Array<Record<string, unknown>>)[0];
     const files = (card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>;
     expect(files.length).toBe(2);
 
-    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', all_turns: true },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    expect((chatsBody.messages as Array<Record<string, unknown>>).some((message) => String(message.text || '').includes('file uploaded: tool-upload.txt'))).toBe(false);
+    expect((((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>).some((message) => String(message.text || '').includes('file uploaded: tool-upload.txt'))).toBe(false);
   });
 
   it('routes manage.add-chat-attachment through /mcp-controlplane and appends only the chat attachment system message', async () => {
@@ -594,10 +640,13 @@ process.exit(1);
     });
 
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-chat-file'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', turn_id: 'turn-chat-file' },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
     expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    const messages = ((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     expect(messages.filter((message) => message.role === 'system')).toHaveLength(1);
     expect(messages.filter((message) => message.role === 'user' || message.role === 'assistant')).toHaveLength(0);
     expect(messages[0]?.turn).toBe('turn-chat-file');
@@ -733,21 +782,28 @@ process.exit(1);
       },
     });
 
-    const cardReq = makeRequest('GET', '/api/board/cards/card-1');
     const cardRes = makeResponse();
-    await runtime.handleRuntimeApi(cardReq, cardRes, new URL('http://example.test/api/board/cards/card-1'));
-    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), cardRes, new URL('http://example.test/api/board/mcp'));
+    expect(cardRes._status).toBe(200);
+    const cardBody = parseJsonBody(cardRes) as Record<string, unknown>;
+    const card = (cardBody.data as Array<Record<string, unknown>>)[0];
     const files = (card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>;
     expect(files.length).toBe(2);
 
-    const chatsReq = makeRequest('GET', '/api/board/cards/card-1/chats');
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(chatsReq, chatsRes, new URL('http://example.test/api/board/cards/card-1/chats'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', all_turns: true },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    const messages = ((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     const systemMessage = messages.find((message) => message.role === 'system' && /^AI generated: result\.txt as .*result\.txt #\d+$/.test(String(message.text || '')));
     expect(systemMessage).toBeTruthy();
-    expect(messages.filter((message) => message.role === 'system')).toHaveLength(1);
+    expect(messages.filter((message) => /^AI generated: result\.txt as .*result\.txt #\d+$/.test(String(message.text || '')))).toHaveLength(1);
     expect(systemMessage?.turn).toBe('turn-123');
     const assistantMessage = messages.find((message) => message.role === 'assistant' && message.text === 'Here is your answer.');
     expect(assistantMessage).toBeTruthy();
@@ -787,10 +843,13 @@ process.exit(1);
     });
 
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-user-chat'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', turn_id: 'turn-user-chat' },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
     expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    const messages = ((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     const systemMessage = messages.find((message) => message.role === 'system');
     const userMessage = messages.find((message) => message.role === 'user');
     expect(systemMessage).toBeTruthy();
@@ -837,9 +896,13 @@ process.exit(1);
     expect((parseJsonBody(res) as Record<string, unknown>).status).toBe('success');
 
     const cardRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), cardRes, new URL('http://example.test/api/board/mcp'));
     expect(cardRes._status).toBe(200);
-    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    const cardBody = parseJsonBody(cardRes) as Record<string, unknown>;
+    const card = (cardBody.data as Array<Record<string, unknown>>)[0];
     expect((card.card_data as Record<string, unknown>).title).toBe('Patched Through MCP');
   });
 
@@ -875,26 +938,33 @@ process.exit(1);
     expect(((secondBody.data as Record<string, unknown>).id)).toBe(((firstBody.data as Record<string, unknown>).id));
 
     const chatsRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), chatsRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-dup'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', turn_id: 'turn-dup' },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
     expect(chatsRes._status).toBe(200);
     const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
-    const messages = chatsBody.messages as Array<Record<string, unknown>>;
+    const messages = ((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
     expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
     expect(messages.filter((message) => message.role === 'assistant')[0]?.text).toBe('First answer');
     expect(messages.filter((message) => message.role === 'system')).toHaveLength(1);
     expect(messages.filter((message) => /^AI generated: /.test(String(message.text || '')))).toHaveLength(1);
 
     const cardRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), cardRes, new URL('http://example.test/api/board/cards/card-1'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), cardRes, new URL('http://example.test/api/board/mcp'));
     expect(cardRes._status).toBe(200);
-    const card = parseJsonBody(cardRes) as Record<string, unknown>;
+    const cardBody = parseJsonBody(cardRes) as Record<string, unknown>;
+    const card = (cardBody.data as Array<Record<string, unknown>>)[0];
     const files = ((card.card_data as Record<string, unknown>).files as Array<Record<string, unknown>>)
       .filter((file) => file.name === 'first.txt' || file.name === 'second.txt');
     expect(files).toHaveLength(1);
     expect(files[0]?.name).toBe('first.txt');
   });
 
-  it('filters chats by turn consistently in HTTP and MCP read surfaces', async () => {
+  it('filters chats by turn in the MCP read surface', async () => {
     const runtime = createRuntime();
     const addARes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -906,15 +976,6 @@ process.exit(1);
       tool: 'stage-ai-response-and-any-attachments',
       args: { card_id: 'card-1', turn_id: 'turn-b', text: 'Message B' },
     }), addBRes, new URL('http://example.test/api/board/mcp'));
-
-    const httpRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats?turn-id=turn-a'));
-    expect(httpRes._status).toBe(200);
-    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
-    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
-    expect(httpMessages.length).toBe(1);
-    expect(httpMessages[0].text).toBe('Message A');
-    expect(httpMessages[0].turn).toBe('turn-a');
 
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -931,17 +992,22 @@ process.exit(1);
 
   it('defaults chat reads to the last 1 user turn when neither turn-id nor lastUserTurns is provided', async () => {
     const runtime = createRuntime();
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-
-    const httpRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats'));
-    expect(httpRes._status).toBe(200);
-    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
-    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
-    expect(httpMessages.map((m) => m.text)).toEqual(['Question 2', 'Answer 2']);
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'user', turn_id: 'turn-1', text: 'Question 1' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'assistant', turn_id: 'turn-1', text: 'Answer 1' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'user', turn_id: 'turn-2', text: 'Question 2' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'assistant', turn_id: 'turn-2', text: 'Answer 2' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
 
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -956,17 +1022,22 @@ process.exit(1);
 
   it('returns the full chat when all-turns=true', async () => {
     const runtime = createRuntime();
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 1', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'user', text: 'Question 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/cards/card-1/chats', { role: 'assistant', text: 'Answer 2', files: [] }), makeResponse(), new URL('http://example.test/api/board/cards/card-1/chats'));
-
-    const httpRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats?all-turns=true'));
-    expect(httpRes._status).toBe(200);
-    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
-    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
-    expect(httpMessages.map((m) => m.text)).toEqual(['Question 1', 'Answer 1', 'Question 2', 'Answer 2']);
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'user', turn_id: 'turn-1', text: 'Question 1' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'assistant', turn_id: 'turn-1', text: 'Answer 1' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'user', turn_id: 'turn-2', text: 'Question 2' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: { board_id: 'mcp-test-board', card_id: 'card-1', role: 'assistant', turn_id: 'turn-2', text: 'Answer 2' },
+    }), makeResponse(), new URL('http://example.test/api/board/mcp-controlplane'));
 
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -979,7 +1050,7 @@ process.exit(1);
     expect(mcpMessages.map((m) => m.text)).toEqual(['Question 1', 'Answer 1', 'Question 2', 'Answer 2']);
   });
 
-  it('supports tail-turns-before-id in both HTTP and MCP read surfaces', async () => {
+  it('supports tail-turns-before-id in the MCP read surface', async () => {
     const runtime = createRuntime();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
       tool: 'stage-ai-response-and-any-attachments',
@@ -993,14 +1064,6 @@ process.exit(1);
       tool: 'stage-ai-response-and-any-attachments',
       args: { card_id: 'card-1', turn_id: 'turn-c', text: 'Message C' },
     }), makeResponse(), new URL('http://example.test/api/board/mcp'));
-
-    const httpRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1/chats'), httpRes, new URL('http://example.test/api/board/cards/card-1/chats?tail-turns=1&tail-turns-before-id=turn-c'));
-    expect(httpRes._status).toBe(200);
-    const httpBody = parseJsonBody(httpRes) as Record<string, unknown>;
-    const httpMessages = httpBody.messages as Array<Record<string, unknown>>;
-    expect(httpMessages.length).toBe(1);
-    expect(httpMessages.map((m) => m.text)).toEqual(['Message B']);
 
     const mcpRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -1198,8 +1261,15 @@ process.exit(1);
     });
 
     const cardRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/cards/card-1'), cardRes, new URL('http://example.test/api/board/cards/card-1'));
-    expect(cardRes._status).toBe(404);
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'manage.read-card',
+      args: { card_id: 'card-1' },
+    }), cardRes, new URL('http://example.test/api/board/mcp'));
+    expect(cardRes._status).toBe(200);
+    expect(parseJsonBody(cardRes)).toEqual({
+      status: 'success',
+      data: [],
+    });
   });
 
   it('routes preflight.validate-candidate-card-definition through /mcp using a supplied nonCoreAdapter', async () => {
@@ -1471,7 +1541,7 @@ process.exit(1);
           expect.objectContaining({
             id: 'card-1',
             card_data: expect.objectContaining({ title: 'Admin Card One' }),
-            meta: expect.objectContaining({ __visible_controlplane_only: true }),
+            __private: expect.objectContaining({ visible_controlplane_only: true }),
           }),
         ],
       },

@@ -35,7 +35,7 @@ export function getCardMetaKey(args: Record<string, unknown>): string {
   const valid = segments.length >= 2
     && segments[0] === 'chat'
     && segments.every((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment));
-  if (!valid) throw Object.assign(new Error('MCP tool only supports card meta keys under chat.*'), { statusCode: 400 });
+  if (!valid) throw Object.assign(new Error('MCP tool only supports card private keys under chat.*'), { statusCode: 400 });
   return key;
 }
 
@@ -43,7 +43,7 @@ export function readCardMetaValue(
   card: Record<string, unknown>,
   key: string,
 ): { exists: boolean; value: unknown } {
-  let target: unknown = card.meta;
+  let target: unknown = card.__private;
   for (const segment of key.split('.')) {
     if (!target || typeof target !== 'object' || Array.isArray(target) || !Object.prototype.hasOwnProperty.call(target, segment)) {
       return { exists: false, value: null };

@@ -76,9 +76,9 @@ export function createControlplaneToolHandlers(deps: ControlplaneToolHandlersDep
     const { cardId } = requireCardArgs(args);
     const key = getCardMetaKey(args);
     if (!Object.prototype.hasOwnProperty.call(args, 'value')) throw Object.assign(new Error('MCP tool requires value'), { statusCode: 400 });
-    if (key.split('.').includes('__visible_controlplane_only')) {
-      // Allow the key through only if the value matches the card's current __visible_controlplane_only flag
-      // (idempotent round-trip: client read the full meta, re-submits values, flag value unchanged).
+    if (key.split('.').includes('visible_controlplane_only')) {
+      // Allow the key through only if the value matches the card's current visible_controlplane_only flag
+      // (idempotent round-trip: client read the full private state, re-submits values, flag value unchanged).
       const existing = await expectControlplaneSuccessAsync<{ cards?: unknown[] }>(
         getMcpCardStoreFacade().get({ params: { id: cardId } }),
         'cardStore.get',
@@ -86,14 +86,14 @@ export function createControlplaneToolHandlers(deps: ControlplaneToolHandlersDep
       const card = Array.isArray(existing.cards) && existing.cards.length > 0 && typeof existing.cards[0] === 'object' && !Array.isArray(existing.cards[0])
         ? existing.cards[0] as Record<string, unknown>
         : null;
-      const currentFlag = card ? readCardMetaValue(card, '__visible_controlplane_only').value : undefined;
+      const currentFlag = card ? readCardMetaValue(card, 'visible_controlplane_only').value : undefined;
       if (args.value !== currentFlag) {
-        throw Object.assign(new Error('MCP tool cannot change the reserved meta flag __visible_controlplane_only'), { statusCode: 403 });
+        throw Object.assign(new Error('MCP tool cannot change the reserved private flag visible_controlplane_only'), { statusCode: 403 });
       }
       return { status: 'success' as const, data: { boardId, cardId, key } };
     }
     expectControlplaneSuccess(await getMcpCardStoreFacade().patch({
-      params: { id: cardId, path: `meta.${key}` },
+      params: { id: cardId, path: `__private.${key}` },
       body: { value: args.value },
     }), 'cardStore.patch');
     return { status: 'success' as const, data: { boardId, cardId, key } };
