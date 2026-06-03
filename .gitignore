@@ -7,9 +7,6 @@ node_modules/
 /cli/
 /browser/
 
-# Generated examples (built from public-examples/ by npm run build:public-examples)
-/examples/
-
 # IDE
 .idea/
 .vscode/

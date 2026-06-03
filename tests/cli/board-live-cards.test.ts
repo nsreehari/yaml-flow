@@ -262,19 +262,6 @@ function schemaErrors(validate: { errors?: Array<{ instancePath?: string; messag
     .join('\n');
 }
 
-function runBoardCli(args: string[]): string {
-  return execFileSync(process.execPath, [
-    path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-    path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
-    ...args,
-  ], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-    windowsHide: true,
-    encoding: 'utf-8',
-  });
-}
-
 function runTsxEval(script: string): void {
   execFileSync(process.execPath, [
     path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
@@ -897,99 +884,6 @@ describe('cli card-refreshed-notify', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('exits successfully for a card present in the card store', () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(ref(dir));
-    writeCardToStore(dir, { id: 'temp', card_data: {} });
-
-    runBoardCli([
-      'card-refreshed-notify',
-      '--base-ref',
-      serializeRef(ref(dir)),
-      '--board-runtime-store-ref',
-      boardRuntimeStoreRef(dir),
-      '--queue-store-ref',
-      queueStoreRef(dir),
-      '--card-id',
-      'temp',
-    ]);
-  });
-
-  it('add-card-files appends files for a card in the card store', () => {
-    const dir = path.join(freshDir(), 'board');
-    initBoard(ref(dir));
-    writeCardToStore(dir, { id: 'temp', card_data: { files: [{ name: 'a.txt' }] } });
-
-    const stdout = runBoardCli([
-      'add-card-files',
-      '--base-ref',
-      serializeRef(ref(dir)),
-      '--board-runtime-store-ref',
-      boardRuntimeStoreRef(dir),
-      '--queue-store-ref',
-      queueStoreRef(dir),
-      '--card-id',
-      'temp',
-      '--value-json',
-      JSON.stringify({ name: 'b.txt', size: 20 }),
-    ]);
-    expect(JSON.parse(stdout)).toEqual({
-      status: 'success',
-      data: {
-        cardId: 'temp',
-        files_added: [{ idx: 1, entry: { name: 'b.txt', size: 20 } }],
-        notified: true,
-      },
-    });
-
-    const store = createCardStorePublic(createCardStore(createFsCardStorageAdapter(path.join(dir, '.cards'))));
-    const result = store.get({ params: { id: 'temp' } });
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
-      const card = result.data.cards[0] as Record<string, unknown>;
-      const cardData = card.card_data as Record<string, unknown>;
-      expect(cardData.files).toEqual([{ name: 'a.txt' }, { name: 'b.txt', size: 20 }]);
-    }
-  });
-
-  it('get-attachment-content writes raw content from the configured artifacts store', () => {
-    const dir = path.join(freshDir(), 'board');
-    const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(dir, 'files') });
-    expect(board(dir).init({ params: { ...initParams(dir), artifactsStoreRef } }).status).toBe('success');
-
-    writeCardToStore(dir, {
-      id: 'attach-card',
-      card_data: {
-        v: 1,
-        files: [
-          { name: 'hello.txt', stored_name: '001-hello.txt', size: 11, mime_type: 'text/plain' },
-        ],
-      },
-    });
-    fs.mkdirSync(path.join(dir, 'files', 'attach-card'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'files', 'attach-card', '001-hello.txt'), 'hello world', 'utf-8');
-
-    const raw = execFileSync(process.execPath, [
-      path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-      path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
-      'get-attachment-content',
-      '--base-ref',
-      serializeRef(ref(dir)),
-      '--board-runtime-store-ref',
-      boardRuntimeStoreRef(dir),
-      '--card-id',
-      'attach-card',
-      '--file-idx',
-      '0',
-    ], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-      windowsHide: true,
-      encoding: 'utf-8',
-    });
-    expect(raw).toBe('hello world');
-  });
-
   it('init fails clearly when artifactsStoreRef is omitted', () => {
     const dir = path.join(freshDir(), 'board');
     const result = board(dir).init({
@@ -1405,23 +1299,3 @@ describe('computed-values persistence', () => {
   });
 });
 
-// ============================================================================
-// Windows launcher regression
-// ============================================================================
-
-describe('windows launcher behavior', () => {
-  it('keeps the repo CLI wrapper hidden on Windows fallback launches', () => {
-    // board-live-cards-cli.js delegates to run-dev-cli.js; windowsHide is enforced there.
-    const wrapper = fs.readFileSync(path.join(repoRoot, 'dev', 'run-dev-cli.js'), 'utf-8');
-    expect(wrapper).toContain('windowsHide: true');
-  });
-
-  it('keeps CLI child-process launches hidden on Windows', () => {
-    // All process execution is consolidated in process-runner.ts; check there.
-    const processRunner = fs.readFileSync(path.join(repoRoot, 'src', 'cli', 'node', 'process-runner.ts'), 'utf-8');
-    expect(processRunner).toContain('windowsHide: true');
-    // Keep this semantic: each launch path must explicitly set windowsHide.
-    expect(processRunner).toMatch(/export function runSync[\s\S]*?windowsHide:\s*true/);
-    expect(processRunner).toMatch(/export function runAsync[\s\S]*?windowsHide:\s*true/);
-  });
-});

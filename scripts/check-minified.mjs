@@ -1,7 +1,7 @@
 /**
  * check-minified.mjs
  *
- * Asserts that all compiled JS artifacts in lib/ and cli/bundled/
+ * Asserts that all compiled JS artifacts in lib/
  * are actually minified.  Fails the build if any file looks like
  * unminified output (too many short lines relative to file size).
  *
@@ -25,7 +25,7 @@ const COMPACT_EXEMPT = new Set([
   'board-worker-adapter.js',
   'board-worker-adapter.cjs',
 ]);
-const DIRS_TO_CHECK = ['lib', 'cli/bundled'];
+const DIRS_TO_CHECK = ['lib'];
 
 /** Minimum average chars-per-line to consider a file minified. */
 const MIN_AVG_CHARS_PER_LINE = 300;

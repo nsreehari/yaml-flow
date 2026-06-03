@@ -2,7 +2,7 @@
 /**
  * portfolio-t4.js — T4 rapid-fire test only.
  *
- * Public-examples variant. Runs T0 init, then fires 5 portfolio-form upserts
+ * Examples variant. Runs T0 init, then fires 5 portfolio-form upserts
  * back-to-back and waits for convergence.
  */
 

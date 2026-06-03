@@ -24,7 +24,7 @@ function run(cmd: string, args: string[], timeoutMs = 120_000) {
 describe('e2e: server-http-test.js', () => {
   it('demo board HTTP smoke checks pass', () => {
     const r = run(process.execPath, [
-      path.join('public-examples', 'board', 'test', 'server-http-test.js'),
+      path.join('examples', 'board', 'test', 'server-http-test.js'),
       '--skip-t3a',  // copilot-dependent; never block the gate
     ]);
 

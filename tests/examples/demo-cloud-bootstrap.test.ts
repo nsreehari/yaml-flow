@@ -24,7 +24,7 @@ function run(cmd: string, args: string[], timeoutMs = 120_000) {
 describe('demo cloud bootstrap', () => {
   it('default cloud-mode bootstrap reaches completed board-status', () => {
     const r = run(process.execPath, [
-      path.join('public-examples', 'board', 'test', 'server-http-test.js'),
+      path.join('examples', 'board', 'test', 'server-http-test.js'),
     ]);
 
     if (r.error) throw r.error;
