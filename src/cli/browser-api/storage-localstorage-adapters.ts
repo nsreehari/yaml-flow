@@ -135,6 +135,14 @@ export function createLocalStorageBlobStorage(prefix: string): BlobStorage {
       }
       return { key: k, size };
     },
+
+    renameKey(from: string, to: string): boolean {
+      const raw = globalThis.localStorage.getItem(key(from));
+      if (raw === null) return false;
+      globalThis.localStorage.setItem(key(to), raw);
+      globalThis.localStorage.removeItem(key(from));
+      return true;
+    },
   };
 }
 
@@ -298,6 +306,15 @@ export function createLocalStorageScratchStorage(prefix: string): ScratchStorage
     keyRef(id: string) {
       return { kind: 'local-storage-scratch', value: id, extra: { prefix } };
     },
+
+    renameKey(from: string, to: string): boolean {
+      const raw = globalThis.localStorage.getItem(entryKey(from));
+      if (raw === null) return false;
+      writeEntry(to, raw);
+      try { globalThis.localStorage.removeItem(entryKey(from)); } catch { /* best-effort */ }
+      try { globalThis.localStorage.removeItem(timestampKey(from)); } catch { /* best-effort */ }
+      return true;
+    },
     config: {
       get(k: string): unknown { return readConfigBag()[k] ?? null; },
       set(k: string, v: unknown): void {
@@ -444,6 +461,7 @@ export function createLocalStorageArchiveFactory(prefix: string): import('../com
         } : undefined,
         listKeys: (pfx?: string) => inner.listKeys(pfx),
         stat: inner.stat ? (key: string) => inner.stat!(key) : undefined,
+        renameKey: (from: string, to: string) => inner.renameKey(from, to),
       };
     },
 

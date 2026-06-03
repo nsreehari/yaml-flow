@@ -159,6 +159,15 @@ export function createFsBlobStorage(rootDir: string): BlobStorage {
     keyRef(key: string): KindValueRef {
       return { kind: 'fs-path', value: resolve(key) };
     },
+
+    renameKey(from: string, to: string): boolean {
+      const src = resolve(from);
+      if (!fs.existsSync(src)) return false;
+      const dst = resolve(to);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      renameSync(src, dst);
+      return true;
+    },
   };
 }
 
@@ -214,6 +223,13 @@ export function createFsAbsolutePathBlobStorage(): BlobStorage {
 
     // Keys are absolute paths — prefix-based listing is not meaningful for this adapter.
     listKeys(_prefix?: string): string[] { return []; },
+
+    renameKey(from: string, to: string): boolean {
+      if (!fs.existsSync(from)) return false;
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      renameSync(from, to);
+      return true;
+    },
   };
 }
 
@@ -615,6 +631,13 @@ export function createFsScratchStorage(scratchDir: string): ScratchStorage {
       return { kind: 'fs-path', value: key };
     },
 
+    renameKey(from: string, to: string): boolean {
+      if (!fs.existsSync(from)) return false;
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      renameSync(from, to);
+      return true;
+    },
+
     config: {
       get(k: string): unknown {
         return readConfigBag()[k] ?? null;
@@ -754,6 +777,7 @@ export function createFsArchiveFactory(archiveDir: string): import('../common/st
         } : undefined,
         listKeys: (prefix?: string) => inner.listKeys(prefix),
         stat: inner.stat ? (key: string) => inner.stat!(key) : undefined,
+        renameKey: (from: string, to: string) => inner.renameKey(from, to),
       };
     },
 

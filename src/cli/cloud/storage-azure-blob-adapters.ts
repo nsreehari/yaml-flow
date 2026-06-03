@@ -96,5 +96,21 @@ export function createAzureBlobStorage(
     keyRef(key: string): KindValueRef {
       return options.keyRef?.(key) ?? { kind: 'azure-blob-key', value: key };
     },
+
+    async renameKey(from: string, to: string): Promise<boolean> {
+      const fromBlob = containerClient.getBlobClient(from);
+      if (!(await fromBlob.exists())) return false;
+      const [bytes, props] = await Promise.all([
+        fromBlob.downloadToBuffer(),
+        fromBlob.getProperties(),
+      ]);
+      await containerClient.getBlockBlobClient(to).upload(bytes, bytes.byteLength, {
+        blobHTTPHeaders: {
+          blobContentType: props.contentType ?? options.defaultContentType ?? 'application/octet-stream',
+        },
+      });
+      await fromBlob.deleteIfExists();
+      return true;
+    },
   };
 }

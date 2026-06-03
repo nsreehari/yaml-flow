@@ -105,6 +105,18 @@ describe('firebase-storage createFirebaseStorageBlobStore', () => {
     expect(typeof ref.value).toBe('string');
     expect(ref.value).toContain('boards/b1/blobs/notes/');
   });
+
+  it('renameKey moves blob content and returns false when the source is missing', async () => {
+    const { storage } = makeFakeFirebaseStorage();
+    const store = createFirebaseStorageBlobStore(storage, 'boards/b1/blobs/notes');
+
+    await store.write('staged/hello.txt', 'hi there');
+
+    expect(await store.renameKey('staged/hello.txt', 'live/hello.txt')).toBe(true);
+    expect(await store.read('staged/hello.txt')).toBeNull();
+    expect(await store.read('live/hello.txt')).toBe('hi there');
+    expect(await store.renameKey('staged/missing.txt', 'live/missing.txt')).toBe(false);
+  });
 });
 
 describe('firebase-storage wrapWithFirebaseStorageBlobs', () => {

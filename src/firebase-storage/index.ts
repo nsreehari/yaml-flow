@@ -9,7 +9,7 @@
  * yaml-flow while letting any consumer reuse the same Storage adapter wiring.
  */
 
-import type { KindValueRef } from '../cli/common/storage-interface.js';
+import { parseRef, type KindValueRef } from '../cli/common/storage-interface.js';
 import type {
   AsyncBlobStorage,
   AsyncScratchStorage,
@@ -215,6 +215,24 @@ export function createFirebaseStorageBlobStore(
         value: joinStoragePath(basePath, encodeStorageKeySegment(key)),
       };
     },
+
+    async renameKey(from: string, to: string): Promise<boolean> {
+      const fromRef = objectRefForKey(from);
+      let bytes: Uint8Array;
+      let metadata: FirebaseStorageMetadataLike;
+      try {
+        metadata = await fromRef.getMetadata();
+        bytes = await readObjectBytes(fromRef);
+      } catch (error) {
+        if (isObjectNotFound(error)) return false;
+        throw error;
+      }
+      await objectRefForKey(to).put(bytes, {
+        contentType: metadata.contentType ?? 'application/octet-stream',
+      });
+      try { await fromRef.delete(); } catch { /* best-effort */ }
+      return true;
+    },
   } as FirebaseStorageBlobStore;
 }
 
@@ -277,6 +295,13 @@ export function wrapWithFirebaseStorageBlobs<T extends Record<string, any>>(
     ...boardAdapter,
     blobStorage(namespace: string) {
       return createFirebaseStorageBlobStore(storage, joinStoragePath(blobRootPath, namespace || 'root'));
+    },
+    blobStorageForRef(ref: string) {
+      const parsed = parseRef(ref);
+      if (parsed.kind === 'firebase-storage') {
+        return createFirebaseStorageBlobStore(storage, parsed.value);
+      }
+      return boardAdapter.blobStorageForRef(ref);
     },
     scratchStorage() {
       return createFirebaseStorageScratchStore(storage, scratchRootPath);

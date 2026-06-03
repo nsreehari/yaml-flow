@@ -21,6 +21,7 @@ describe('localstorage-storage createLocalStorageBoardRuntimeBundle', () => {
     expect(parseRef(refs.archiveStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:archive' });
     expect(parseRef(refs.chatStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:chat' });
     expect(parseRef(refs.artifactsStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:files' });
+    expect(parseRef(refs.fetchedSourcesStoreRef!)).toEqual({ kind: 'local-storage', value: 'boards:board-A:sources' });
   });
 
   it('bundle returns { refs, boardAdapter } with the documented contract surface', () => {
@@ -60,6 +61,18 @@ describe('localstorage-storage createLocalStorageBoardRuntimeBundle', () => {
 
     expect(await blob.exists('greeting.txt')).toBe(true);
     expect((await blob.listKeys('greeting')).sort()).toContain('greeting.txt');
+  });
+
+  it('blobStorage renameKey moves content and returns false when the source is missing', async () => {
+    const { boardAdapter } = createLocalStorageBoardRuntimeBundle('board-rename');
+    const blob = boardAdapter.blobStorage('artifacts');
+
+    await blob.write('staged/hello.txt', 'hi there');
+
+    expect(await blob.renameKey('staged/hello.txt', 'live/hello.txt')).toBe(true);
+    expect(await blob.read('staged/hello.txt')).toBeNull();
+    expect(await blob.read('live/hello.txt')).toBe('hi there');
+    expect(await blob.renameKey('staged/missing.txt', 'live/missing.txt')).toBe(false);
   });
 
   it('journalStorage append/readAfter respects cursor semantics', async () => {

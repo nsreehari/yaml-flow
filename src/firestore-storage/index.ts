@@ -23,6 +23,7 @@ import type {
 } from '../cli/cloud/storage-async-interface.js';
 import { createHostedAsyncBoardPlatformAdapter } from '../cli/cloud/index.js';
 import { computeStableJsonHashBrowser } from '../cli/browser-api/storage-localstorage-adapters.js';
+import { createAsyncChatStorage } from '../cli/common/chat-storage-lib.js';
 
 export interface FirestoreDocumentSnapshotLike {
   readonly exists: boolean;
@@ -84,6 +85,7 @@ export interface FirestoreBoardRefs {
   archiveStoreRef: string;
   chatStoreRef: string;
   artifactsStoreRef: string;
+  fetchedSourcesStoreRef: string;
 }
 
 function ok<T>(data: T): CommandResult<T> {
@@ -102,6 +104,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function safeChatCardKey(cardId: string): string {
+  return String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 export interface FirestoreNonCoreExecutorRequest {
@@ -528,6 +534,7 @@ export function createFirestoreBoardRefs(boardId: string): FirestoreBoardRefs {
     archiveStoreRef: serializeFirestoreRef(`boards/${boardId}/archive`),
     chatStoreRef: serializeFirestoreRef(`boards/${boardId}/chat`),
     artifactsStoreRef: serializeFirestoreRef(`boards/${boardId}/files`),
+    fetchedSourcesStoreRef: serializeFirestoreRef(`boards/${boardId}/sources`),
   };
 }
 
@@ -641,6 +648,15 @@ export function createFirestoreBlobStorage(col: FirestoreCollectionLike): AsyncB
           ? data.content.length
           : 0;
       return { key, size, contentType: String(data.contentType ?? 'application/octet-stream') };
+    },
+
+    async renameKey(from: string, to: string): Promise<boolean> {
+      const snap = await col.doc(encodeDocId(from)).get();
+      if (!snap.exists) return false;
+      const data = snap.data() ?? {};
+      await col.doc(encodeDocId(to)).set({ ...data, k: to });
+      await col.doc(encodeDocId(from)).delete();
+      return true;
     },
   };
 }
@@ -927,6 +943,16 @@ export function createFirestoreBoardAdapter(
     },
     blobStorage(namespace) {
       return createFirestoreBlobStorage(boardCollection(db, boardId, `blobs-${namespace || 'root'}`));
+    },
+    blobStorageForRef(ref) {
+      return createFirestoreBlobStorage(db.collection(requireCollectionPath(ref, `boards/${boardId}/blobs-root`)));
+    },
+    chatStorageForRef(ref) {
+      const root = requireCollectionPath(ref, `boards/${boardId}/chat`);
+      return createAsyncChatStorage(
+        (cardId) => createFirestoreJournalStorage(db.collection(`${root}-journal-${safeChatCardKey(cardId)}`)),
+        createFirestoreKvStorage(db.collection(`${root}-kv`)),
+      );
     },
     scratchStorage() {
       return createFirestoreScratchStorage(boardCollection(db, boardId, 'scratch'));

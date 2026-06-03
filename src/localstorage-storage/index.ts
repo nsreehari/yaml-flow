@@ -25,6 +25,7 @@ import {
   createLocalStorageKvStorage,
   createLocalStorageScratchStorage,
 } from '../cli/browser-api/storage-localstorage-adapters.js';
+import { createAsyncChatStorage } from '../cli/common/chat-storage-lib.js';
 
 export interface LocalStorageBoardRefs {
   baseRef: KindValueRef;
@@ -34,6 +35,7 @@ export interface LocalStorageBoardRefs {
   archiveStoreRef: string;
   chatStoreRef: string;
   artifactsStoreRef: string;
+  fetchedSourcesStoreRef: string;
 }
 
 export interface LocalStorageBoardAdapterOptions {
@@ -211,6 +213,13 @@ function wrapBlobStorage(prefix: string): AsyncBlobStorage {
     async stat(key) {
       return storage.stat?.(key) ?? null;
     },
+    async renameKey(from: string, to: string): Promise<boolean> {
+      const content = await storage.read(from);
+      if (content == null) return false;
+      storage.write(to, content);
+      storage.remove(from);
+      return true;
+    },
   };
 }
 
@@ -249,6 +258,13 @@ function wrapScratchStorage(prefix: string): AsyncScratchStorage {
     },
     keyRef(key) {
       return storage.keyRef(key);
+    },
+    async renameKey(from: string, to: string): Promise<boolean> {
+      const content = storage.read(from);
+      if (content == null) return false;
+      storage.write(to, content);
+      storage.remove(from);
+      return true;
     },
     config: {
       async get(key) {
@@ -348,6 +364,13 @@ function wrapArchiveFactory(prefix: string): AsyncArchiveFactory {
         async stat(key) {
           return blob.stat?.(key) ?? null;
         },
+        async renameKey(from, to) {
+          const content = blob.read(from);
+          if (content == null) return false;
+          blob.write(to, content);
+          blob.remove(from);
+          return true;
+        },
       };
     },
     async listStreams(keyPrefix) {
@@ -371,6 +394,10 @@ function localPrefix(namespace: string): string {
   return String(namespace || '').trim();
 }
 
+function safeChatCardKey(cardId: string): string {
+  return String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 export function makeLocalStorageRef(path: string): KindValueRef {
   return { kind: 'local-storage', value: localPrefix(path) };
 }
@@ -389,6 +416,7 @@ export function createLocalStorageBoardRefs(boardId: string): LocalStorageBoardR
     archiveStoreRef: serializeLocalStorageRef(`${root}:archive`),
     chatStoreRef: serializeLocalStorageRef(`${root}:chat`),
     artifactsStoreRef: serializeLocalStorageRef(`${root}:files`),
+    fetchedSourcesStoreRef: serializeLocalStorageRef(`${root}:sources`),
   };
 }
 
@@ -421,6 +449,16 @@ export function createLocalStorageBoardAdapter(
     },
     blobStorage(namespace) {
       return wrapBlobStorage(namespace ? `${refs.baseRef.value}:${namespace}` : refs.baseRef.value);
+    },
+    blobStorageForRef(ref) {
+      return wrapBlobStorage(requirePrefixFromRef(ref, refs.baseRef.value));
+    },
+    chatStorageForRef(ref) {
+      const prefix = requirePrefixFromRef(ref, `${refs.baseRef.value}:chat`);
+      return createAsyncChatStorage(
+        (cardId) => wrapJournalStorage(`${prefix}:journal:${safeChatCardKey(cardId)}`),
+        wrapKvStorage(prefix),
+      );
     },
     scratchStorage() {
       return wrapScratchStorage(`${refs.baseRef.value}:scratch`);

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { createFirestoreBoardRefs, createFirestoreBoardRuntimeBundle, makeFirestoreRef } from '../src/firestore-storage/index.js';
+import {
+  createFirestoreBlobStorage,
+  createFirestoreBoardRefs,
+  createFirestoreBoardRuntimeBundle,
+  makeFirestoreRef,
+} from '../src/firestore-storage/index.js';
 import { parseRef } from '../src/cli/common/storage-interface.js';
 
 function makeFakeFirestore() {
@@ -44,6 +49,47 @@ function makeFakeFirestore() {
   return db;
 }
 
+function makeFakeBlobCollection() {
+  const rows = new Map<string, Record<string, unknown>>();
+  return {
+    path: 'boards/test/blobs',
+    firestore: { collection: () => { throw new Error('not used'); }, runTransaction: async () => { throw new Error('not used'); } },
+    doc(id = 'doc') {
+      return {
+        id,
+        path: `boards/test/blobs/${id}`,
+        firestore: this.firestore,
+        async get() {
+          const row = rows.get(id);
+          return {
+            exists: row != null,
+            id,
+            data: () => row,
+          };
+        },
+        async set(data: Record<string, unknown>) {
+          rows.set(id, { ...data });
+        },
+        async update(data: Record<string, unknown>) {
+          rows.set(id, { ...(rows.get(id) ?? {}), ...data });
+        },
+        async delete() {
+          rows.delete(id);
+        },
+        collection(name: string) {
+          throw new Error(`not used: ${name}`);
+        },
+      };
+    },
+    async get() {
+      return { docs: [] };
+    },
+    where() { return this; },
+    orderBy() { return this; },
+    limit() { return this; },
+  } as any;
+}
+
 describe('firestore-storage createFirestoreBoardRefs', () => {
   it('returns the full mandatory BoardRefs shape', () => {
     const refs = createFirestoreBoardRefs('board-A');
@@ -55,6 +101,7 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
     expect(parseRef(refs.archiveStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/archive' });
     expect(parseRef(refs.chatStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/chat' });
     expect(parseRef(refs.artifactsStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/files' });
+    expect(parseRef(refs.fetchedSourcesStoreRef!)).toEqual({ kind: 'firestore', value: 'boards/board-A/sources' });
   });
 
   it('lets the host override selected refs on the runtime bundle', () => {
@@ -69,6 +116,18 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
     expect(parseRef(bundle.refs.chatStoreRef)).toEqual({ kind: 'firestore', value: 'external/chat' });
     expect(parseRef(bundle.refs.artifactsStoreRef)).toEqual({ kind: 'firestore', value: 'external/files' });
     expect(parseRef(bundle.refs.cardStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/cards' });
+  });
+
+  it('createFirestoreBlobStorage renameKey moves content and returns false when the source is missing', async () => {
+    const col = makeFakeBlobCollection();
+    const blob = createFirestoreBlobStorage(col);
+
+    await blob.write('staged/hello.txt', 'hi there');
+
+    expect(await blob.renameKey('staged/hello.txt', 'live/hello.txt')).toBe(true);
+    expect(await blob.read('staged/hello.txt')).toBeNull();
+    expect(await blob.read('live/hello.txt')).toBe('hi there');
+    expect(await blob.renameKey('staged/missing.txt', 'live/missing.txt')).toBe(false);
   });
 
   it('exposes a non-core preflight surface for hosted runtimes', async () => {

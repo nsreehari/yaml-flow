@@ -437,6 +437,18 @@ describe('cloud storage adapters', () => {
     expect(await blob.keyRef?.('cards/a.json')).toEqual({ kind: 'azure-blob', value: 'cards/a.json' });
   });
 
+  it('renameKey moves Azure blob content and returns false when the source is missing', async () => {
+    const container = new FakeAzureBlobContainer();
+    const blob = createAzureBlobStorage(container);
+
+    await blob.write('staged/hello.txt', 'hi there');
+
+    expect(await blob.renameKey('staged/hello.txt', 'live/hello.txt')).toBe(true);
+    expect(await blob.read('staged/hello.txt')).toBeNull();
+    expect(await blob.read('live/hello.txt')).toBe('hi there');
+    expect(await blob.renameKey('staged/missing.txt', 'live/missing.txt')).toBe(false);
+  });
+
   it('maps Azure queue-like clients to async queue semantics', async () => {
     const active = new FakeAzureQueueClient();
     const dead = new FakeAzureQueueClient();

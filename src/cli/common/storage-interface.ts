@@ -75,6 +75,14 @@ export interface BlobStorage {
    *   Other backends: backend-specific ref
    */
   keyRef?(key: string): KindValueRef;
+
+  /**
+   * Atomically move content from `from` to `to`, replacing any existing value at `to`.
+   * Returns true on success, false if `from` does not exist.
+   * If the underlying adapter does not support a first-class rename operation,
+   * implement a simple fallback: read `from`, write `to`, then delete `from`.
+   */
+  renameKey(from: string, to: string): boolean;
 }
 
 // ============================================================================
