@@ -676,11 +676,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   async function setChatProcessing(cardId: string, active: boolean): Promise<void> {
     await requireChatStorageForCard(cardId).setProcessing(cardId, active);
+    await sseHub.broadcastCardChats(cardId, true);
   }
 
   const chatStorePublic = createChatStorePublic({
     append(cardId, role, text, files, turn) {
-      return requireChatStorageForCard(cardId).append(cardId, role, text, files, turn);
+      return Promise.resolve(requireChatStorageForCard(cardId).append(cardId, role, text, files, turn))
+        .then(async (entryId) => {
+          await sseHub.broadcastCardChats(cardId, true);
+          return entryId;
+        });
     },
     readAll(cardId) {
       return requireChatStorageForCard(cardId).readAll(cardId);
@@ -692,7 +697,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       return requireChatStorageForCard(cardId).clear(cardId);
     },
     setProcessing(cardId, active) {
-      return requireChatStorageForCard(cardId).setProcessing(cardId, active);
+      return Promise.resolve(requireChatStorageForCard(cardId).setProcessing(cardId, active))
+        .then(async () => {
+          await sseHub.broadcastCardChats(cardId, true);
+        });
     },
     isProcessing(cardId) {
       return requireChatStorageForCard(cardId).isProcessing(cardId);
@@ -832,7 +840,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   /** Append a chat message; returns the new entry id (used as cursor). */
   async function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>, turn = ''): Promise<string> {
     const msg = typeof text === 'string' ? text.trim() : '';
-    return await requireChatStorageForCard(cardId).append(cardId, role || 'system', msg, files, turn);
+    const entryId = await requireChatStorageForCard(cardId).append(cardId, role || 'system', msg, files, turn);
+    await sseHub.broadcastCardChats(cardId, true);
+    return entryId;
   }
 
   async function readChatRecords(cardId: string): Promise<Array<Record<string, unknown>>> {
