@@ -36,6 +36,8 @@ export interface AsyncJournalStorage {
 
 export interface AsyncQueueStorage {
   enqueue<T>(body: T): Promise<QueueMessage<T>>;
+  /** See QueueStorage.enqueueMany. */
+  enqueueMany<T>(bodies: T[]): Promise<QueueMessage<T>[]>;
   /** See QueueStorage.enqueueIfAbsent. Optional on adapters that cannot cheaply dedup. */
   enqueueIfAbsent?<T>(body: T, dedupKey: string): Promise<QueueMessage<T> | null>;
   lease<T>(opts?: { max?: number; visibilityMs?: number }): Promise<QueueLeasedMessage<T>[]>;

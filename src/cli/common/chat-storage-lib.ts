@@ -8,6 +8,9 @@
  */
 
 import type { JournalEntry, JournalStorage, KVStorage } from './storage-interface.js';
+import type { AsyncJournalStorage, AsyncKVStorage } from '../cloud/storage-async-interface.js';
+
+type Awaitable<T> = T | Promise<T>;
 
 // ============================================================================
 // Public types
@@ -37,29 +40,29 @@ export interface ChatStorage {
   // ── History (journal) ────────────────────────────────────────────────────
 
   /** Append a message; returns the new entry id (usable as a cursor). */
-  append(cardId: string, role: string, text: string, files?: unknown[], turn?: string): string;
+  append(cardId: string, role: string, text: string, files?: unknown[], turn?: string): Awaitable<string>;
 
   /** Read all messages in insertion order. */
-  readAll(cardId: string): ChatRecord[];
+  readAll(cardId: string): Awaitable<ChatRecord[]>;
 
   /**
    * Read messages appended after cursor.
    * Pass null to read from the beginning.
    */
-  readAfter(cardId: string, cursor: string | null): ChatReadAfterResult;
+  readAfter(cardId: string, cursor: string | null): Awaitable<ChatReadAfterResult>;
 
   /** Remove all messages for this card. */
-  clear(cardId: string): void;
+  clear(cardId: string): Awaitable<void>;
 
   // ── State (KV) ───────────────────────────────────────────────────────────
 
-  setProcessing(cardId: string, active: boolean): void;
-  isProcessing(cardId: string): boolean;
+  setProcessing(cardId: string, active: boolean): Awaitable<void>;
+  isProcessing(cardId: string): Awaitable<boolean>;
 
   // ── Config (KV) ──────────────────────────────────────────────────────────
 
-  getConfig(cardId: string): ChatConfig;
-  setConfig(cardId: string, patch: Partial<ChatConfig>): void;
+  getConfig(cardId: string): Awaitable<ChatConfig>;
+  setConfig(cardId: string, patch: Partial<ChatConfig>): Awaitable<void>;
 }
 
 // ============================================================================
@@ -138,6 +141,61 @@ export function createChatStorage(
     setConfig(cardId, patch) {
       const existing = (kv.read(configKey(cardId)) as ChatConfig | null) ?? {};
       kv.write(configKey(cardId), { ...existing, ...patch });
+    },
+  };
+}
+
+export function createAsyncChatStorage(
+  journalFactory: (cardId: string) => AsyncJournalStorage,
+  kv: AsyncKVStorage,
+): ChatStorage {
+  const processingKey = (cardId: string) => `chats/${safeCardKey(cardId)}/processing`;
+  const configKey = (cardId: string) => `chats/${safeCardKey(cardId)}/config`;
+
+  return {
+    async append(cardId, role, text, files = [], turn = '') {
+      const entry = await journalFactory(cardId).append({
+        role,
+        text,
+        files,
+        turn,
+        updated_at: new Date().toISOString(),
+      });
+      return entry.id;
+    },
+
+    async readAll(cardId) {
+      return (await journalFactory(cardId).readAll()).map(toRecord);
+    },
+
+    async readAfter(cardId, cursor) {
+      const result = await journalFactory(cardId).readAfter(cursor);
+      return {
+        records: result.entries.map(toRecord),
+        cursor: result.newCursor,
+      };
+    },
+
+    async clear(cardId) {
+      await journalFactory(cardId).clear?.();
+    },
+
+    async setProcessing(cardId, active) {
+      if (active) await kv.write(processingKey(cardId), true);
+      else await kv.delete(processingKey(cardId));
+    },
+
+    async isProcessing(cardId) {
+      return await kv.read(processingKey(cardId)) === true;
+    },
+
+    async getConfig(cardId) {
+      return (await kv.read(configKey(cardId)) as ChatConfig | null) ?? {};
+    },
+
+    async setConfig(cardId, patch) {
+      const existing = (await kv.read(configKey(cardId)) as ChatConfig | null) ?? {};
+      await kv.write(configKey(cardId), { ...existing, ...patch });
     },
   };
 }

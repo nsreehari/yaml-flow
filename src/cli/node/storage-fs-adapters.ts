@@ -353,6 +353,10 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
       return queueRecordToMessage(record);
     },
 
+    enqueueMany<T>(bodies: T[]): QueueMessage<T>[] {
+      return bodies.map((body) => this.enqueue(body));
+    },
+
     enqueueIfAbsent<T>(body: T, dedupKey: string): QueueMessage<T> | null {
       reviveExpiredLeases();
       for (const dir of [activeDir, leasedDir, stagedDir]) {

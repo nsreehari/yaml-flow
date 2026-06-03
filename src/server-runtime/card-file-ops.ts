@@ -29,7 +29,7 @@ export interface CardFileOpsDeps {
   /** Apply a local-only update to a card; same shape as updateCardLocalOnly. */
   updateCardLocalOnly: (cardId: string, updateFn: (card: Record<string, unknown>) => Record<string, unknown> | void) => Promise<void>;
   /** Append a chat record (used for in-chat upload announcements). */
-  writeChatRecord: (cardId: string, role: string, text: string, files: unknown[], turnId: string) => unknown;
+  writeChatRecord: (cardId: string, role: string, text: string, files: unknown[], turnId: string) => unknown | Promise<unknown>;
 }
 
 export interface CardFileOps {
@@ -86,9 +86,11 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
     const serial = String(existingNames.length + 1).padStart(3, '0');
     const storedName = `${serial}-${displayName}`.slice(-(MAX_STORED_FILE_NAME_LEN + 4));
 
-    if (stores.files) {
-      await stores.files.putBytes(`${sid}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
+    if (!stores.files) {
+      throw Object.assign(new Error(`artifactsStoreRef is not configured for card uploads: ${cardId}`), { statusCode: 500 });
     }
+
+    await stores.files.putBytes(`${sid}/${storedName}`, new Uint8Array(buffer), contentType || 'application/octet-stream');
 
     return {
       name: displayName,
@@ -133,7 +135,7 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
 
     if (inChat && opts?.suppressChatRecordWrite !== true) {
       const idxSuffix = typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? ` #${uploadedFileIndex}` : '';
-      writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, [], opts?.turnId ?? '');
+      await writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, [], opts?.turnId ?? '');
     }
 
     return {

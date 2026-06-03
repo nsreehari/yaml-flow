@@ -56,11 +56,20 @@ export function createInProcessBoardCallbackTransport(handlerKey: string): Board
   });
 }
 
-export function createLocalNodeBoardCallbackTransport(notifyChannel?: string): BoardCallbackTransport {
+export function createLocalNodeBoardCallbackTransport(opts?: string | {
+  notifyChannel?: string;
+  boardRuntimeStoreRef?: string;
+  queueStoreRef?: string;
+}): BoardCallbackTransport {
+  const options = typeof opts === 'string' ? { notifyChannel: opts } : (opts ?? {});
+  const extra: Record<string, unknown> = {};
+  if (options.notifyChannel) extra.notifyChannel = options.notifyChannel;
+  if (options.boardRuntimeStoreRef) extra.boardRuntimeStoreRef = options.boardRuntimeStoreRef;
+  if (options.queueStoreRef) extra.queueStoreRef = options.queueStoreRef;
   return createStaticExecutionRefCallbackTransport({
     meta: 'board-live-cards',
     howToRun: 'local-node',
     whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'board-live-cards-cli.js' }),
-    ...(notifyChannel ? { extra: { notifyChannel } } : {}),
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 }

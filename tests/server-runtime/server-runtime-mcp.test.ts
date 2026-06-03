@@ -4,8 +4,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { createSingleBoardServerRuntime } from '../../src/server-runtime/index.js';
-import type { RuntimeRequest, RuntimeResponse, SingleBoardRuntimeOptions } from '../../src/server-runtime/types.js';
+import type { RuntimeRequest, RuntimeResponse, SingleBoardRuntime, SingleBoardRuntimeOptions } from '../../src/server-runtime/types.js';
+import type { BoardWorkerRequest } from '../../src/cli/common/board-worker-store.js';
+import { createBoardWorkerStore } from '../../src/cli/common/board-worker-store.js';
 import { createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
+import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
+import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
 
 function makeRequest(method: string, url: string, body?: unknown): RuntimeRequest {
@@ -68,8 +72,14 @@ function parseJsonBody(res: { _body: string }): unknown {
   return JSON.parse(res._body);
 }
 
-async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: Record<string, unknown>): Promise<void> }, boardAdapter: { chatAgentStore(): { leaseRequests(opts?: { max?: number; visibilityMs?: number }): Array<{ messageId: string; leaseToken: string; request: Record<string, unknown> }>; ackRequest(messageId: string, leaseToken: string): boolean; }; }): Promise<void> {
-  const workerStore = boardAdapter.chatAgentStore();
+function parseSsePayload(res: { _body: string }): Record<string, unknown> {
+  const jsonStr = res._body.split('data: ')[1]?.split('\n')[0];
+  if (!jsonStr) throw new Error(`Missing SSE data frame: ${res._body}`);
+  return JSON.parse(jsonStr) as Record<string, unknown>;
+}
+
+async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: BoardWorkerRequest): Promise<void> | void }, boardAdapter: { queueStorageForRef(ref: string, lane: string): unknown }, queueStoreRef: string): Promise<void> {
+  const workerStore = createBoardWorkerStore(boardAdapter.queueStorageForRef(queueStoreRef, 'chat-agent') as never);
   while (true) {
     const leases = workerStore.leaseRequests({ max: 20, visibilityMs: 60_000 });
     if (!leases.length) break;
@@ -78,6 +88,39 @@ async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request
       workerStore.ackRequest(lease.messageId, lease.leaseToken);
     }
   }
+}
+
+function preloadCard(boardAdapter: ReturnType<typeof createFsBoardPlatformAdapter>, cardStoreRef: string, filesDir: string): void {
+  const preloadKv = boardAdapter.kvStorageForRef(cardStoreRef);
+  const preloadStore = createCardStorePublic(createCardStore({
+    readIndex: () => preloadKv.read('_index'),
+    writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+    readCard: (id: string) => preloadKv.read(id),
+    writeCard: (id: string, card: unknown) => {
+      preloadKv.write(id, card);
+      return id;
+    },
+    removeCard: (id: string) => preloadKv.delete(id),
+    cardExists: (id: string) => preloadKv.read(id) !== null,
+    defaultCardKey: (id: string) => id,
+  } as any));
+
+  fs.mkdirSync(path.join(filesDir, 'card-1'), { recursive: true });
+  fs.writeFileSync(path.join(filesDir, 'card-1', 'hello.txt'), 'hello', 'utf8');
+  const seedResult = preloadStore.set({
+    body: {
+      id: 'card-1',
+      card_data: {
+        title: 'Card One',
+        files: [{ name: 'hello.txt', stored_name: 'hello.txt', mime_type: 'text/plain', size: 5, uploaded_at: '2026-05-28T00:00:00.000Z' }],
+      },
+    },
+  });
+  expect(seedResult.status).toBe('success');
+}
+
+async function drainProcessAccumulated(runtime: SingleBoardRuntime): Promise<{ status: string }> {
+  return (runtime as SingleBoardRuntime & { __drainProcessAccumulatedLane(): Promise<{ status: string }> }).__drainProcessAccumulatedLane();
 }
 
 describe('server runtime MCP endpoint', () => {
@@ -90,16 +133,34 @@ describe('server runtime MCP endpoint', () => {
     }
   });
 
-  function createRuntime(opts: { withNonCore?: boolean; chatHandlerFlow?: unknown; chatFlowRunner?: SingleBoardRuntimeOptions['chatFlowRunner'] } = {}) {
+  function createRuntime(opts: {
+    withNonCore?: boolean;
+    chatHandlerFlow?: unknown;
+    chatFlowRunner?: SingleBoardRuntimeOptions['chatFlowRunner'];
+    onChannelSubscribed?: SingleBoardRuntimeOptions['onChannelSubscribed'];
+    onChannelUnsubscribed?: SingleBoardRuntimeOptions['onChannelUnsubscribed'];
+  } = {}) {
     testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-mcp-'));
     const boardDir = path.join(testRoot, 'board');
+    const boardRuntimeDir = path.join(testRoot, '.board-runtime');
+    const queueStoreDir = path.join(testRoot, '.board-queue');
     const cardStoreDir = path.join(testRoot, 'card-store');
     const outputsDir = path.join(testRoot, 'outputs');
     const filesDir = path.join(testRoot, 'files');
+    const chatDir = path.join(testRoot, 'chat');
+    const scratchDir = path.join(testRoot, 'scratch');
+    const archiveDir = path.join(testRoot, 'archive');
+    const sourcesDir = path.join(testRoot, 'sources');
     fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(boardRuntimeDir, { recursive: true });
+    fs.mkdirSync(queueStoreDir, { recursive: true });
     fs.mkdirSync(cardStoreDir, { recursive: true });
     fs.mkdirSync(outputsDir, { recursive: true });
     fs.mkdirSync(filesDir, { recursive: true });
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.mkdirSync(scratchDir, { recursive: true });
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.mkdirSync(sourcesDir, { recursive: true });
 
     let executorPath = '';
     if (opts.withNonCore) {
@@ -152,22 +213,26 @@ process.exit(1);
 
     const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
     const boardAdapter = createFsBoardPlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} });
-    const artifactsAdapter = createFsBoardPlatformAdapter(parseRef(serializeRef({ kind: 'fs-path', value: filesDir })), testRoot, { suppressSpawn: true, onWarn: () => {} });
     const nonCoreAdapter = opts.withNonCore
-      ? createFsBoardNonCorePlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} })
+      ? createFsBoardNonCorePlatformAdapter(baseRef, testRoot, { onWarn: () => {} })
       : undefined;
+    const cardStoreRef = serializeRef({ kind: 'fs-path', value: cardStoreDir });
     const runtimeOptions: SingleBoardRuntimeOptions = {
       apiBasePath: '/api/board',
       boardId: 'mcp-test-board',
       boards: [{
         label: 'base',
         boardAdapter,
-        artifactsAdapter,
         ...(nonCoreAdapter ? { nonCoreAdapter } : {}),
         baseRef,
-        cardStoreRef: serializeRef({ kind: 'fs-path', value: cardStoreDir }),
+        boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: boardRuntimeDir }),
+        queueStoreRef: serializeRef({ kind: 'fs-path', value: queueStoreDir }),
+        cardStoreRef,
         outputsStoreRef: serializeRef({ kind: 'fs-path', value: outputsDir }),
+        chatStoreRef: serializeRef({ kind: 'fs-path', value: chatDir }),
         artifactsStoreRef: serializeRef({ kind: 'fs-path', value: filesDir }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: sourcesDir }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: scratchDir }),
         ...(opts.chatHandlerFlow !== undefined ? { chatHandlerFlow: opts.chatHandlerFlow } : {}),
         ...(executorPath ? {
           taskExecutorRef: {
@@ -181,36 +246,39 @@ process.exit(1);
         async describe() { return null; },
       },
       ...(opts.chatFlowRunner ? { chatFlowRunner: opts.chatFlowRunner } : {}),
+      ...(opts.onChannelSubscribed ? { onChannelSubscribed: opts.onChannelSubscribed } : {}),
+      ...(opts.onChannelUnsubscribed ? { onChannelUnsubscribed: opts.onChannelUnsubscribed } : {}),
       logger: { info() {}, warn() {}, error() {} },
       serverUrl: 'http://example.test',
     };
 
     const runtime = createSingleBoardServerRuntime(runtimeOptions);
-    fs.mkdirSync(path.join(filesDir, 'card-1'), { recursive: true });
-    fs.writeFileSync(path.join(filesDir, 'card-1', 'hello.txt'), 'hello', 'utf8');
-    const seedResult = runtime.cardStore.set({
-      body: {
-        id: 'card-1',
-        card_data: {
-          title: 'Card One',
-          files: [{ name: 'hello.txt', stored_name: 'hello.txt', mime_type: 'text/plain', size: 5, uploaded_at: '2026-05-28T00:00:00.000Z' }],
-        },
-      },
-    });
-    expect(seedResult.status).toBe('success');
+    preloadCard(boardAdapter, cardStoreRef, filesDir);
     return runtime;
   }
 
   function createRuntimeHarness(opts: { withNonCore?: boolean; chatHandlerFlow?: unknown; chatFlowRunner?: SingleBoardRuntimeOptions['chatFlowRunner'] } = {}) {
     testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-mcp-'));
     const boardDir = path.join(testRoot, 'board');
+    const boardRuntimeDir = path.join(testRoot, '.board-runtime');
+    const queueStoreDir = path.join(testRoot, '.board-queue');
     const cardStoreDir = path.join(testRoot, 'card-store');
     const outputsDir = path.join(testRoot, 'outputs');
     const filesDir = path.join(testRoot, 'files');
+    const chatDir = path.join(testRoot, 'chat');
+    const scratchDir = path.join(testRoot, 'scratch');
+    const archiveDir = path.join(testRoot, 'archive');
+    const sourcesDir = path.join(testRoot, 'sources');
     fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(boardRuntimeDir, { recursive: true });
+    fs.mkdirSync(queueStoreDir, { recursive: true });
     fs.mkdirSync(cardStoreDir, { recursive: true });
     fs.mkdirSync(outputsDir, { recursive: true });
     fs.mkdirSync(filesDir, { recursive: true });
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.mkdirSync(scratchDir, { recursive: true });
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.mkdirSync(sourcesDir, { recursive: true });
 
     let executorPath = '';
     if (opts.withNonCore) {
@@ -263,22 +331,26 @@ process.exit(1);
 
     const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
     const boardAdapter = createFsBoardPlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} });
-    const artifactsAdapter = createFsBoardPlatformAdapter(parseRef(serializeRef({ kind: 'fs-path', value: filesDir })), testRoot, { suppressSpawn: true, onWarn: () => {} });
     const nonCoreAdapter = opts.withNonCore
-      ? createFsBoardNonCorePlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} })
+      ? createFsBoardNonCorePlatformAdapter(baseRef, testRoot, { onWarn: () => {} })
       : undefined;
+    const cardStoreRef = serializeRef({ kind: 'fs-path', value: cardStoreDir });
     const runtimeOptions: SingleBoardRuntimeOptions = {
       apiBasePath: '/api/board',
       boardId: 'mcp-test-board',
       boards: [{
         label: 'base',
         boardAdapter,
-        artifactsAdapter,
         ...(nonCoreAdapter ? { nonCoreAdapter } : {}),
         baseRef,
-        cardStoreRef: serializeRef({ kind: 'fs-path', value: cardStoreDir }),
+        boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: boardRuntimeDir }),
+        queueStoreRef: serializeRef({ kind: 'fs-path', value: queueStoreDir }),
+        cardStoreRef,
         outputsStoreRef: serializeRef({ kind: 'fs-path', value: outputsDir }),
+        chatStoreRef: serializeRef({ kind: 'fs-path', value: chatDir }),
         artifactsStoreRef: serializeRef({ kind: 'fs-path', value: filesDir }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: sourcesDir }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: scratchDir }),
         ...(opts.chatHandlerFlow !== undefined ? { chatHandlerFlow: opts.chatHandlerFlow } : {}),
         ...(executorPath ? {
           taskExecutorRef: {
@@ -297,19 +369,8 @@ process.exit(1);
     };
 
     const runtime = createSingleBoardServerRuntime(runtimeOptions);
-    fs.mkdirSync(path.join(filesDir, 'card-1'), { recursive: true });
-    fs.writeFileSync(path.join(filesDir, 'card-1', 'hello.txt'), 'hello', 'utf8');
-    const seedResult = runtime.cardStore.set({
-      body: {
-        id: 'card-1',
-        card_data: {
-          title: 'Card One',
-          files: [{ name: 'hello.txt', stored_name: 'hello.txt', mime_type: 'text/plain', size: 5, uploaded_at: '2026-05-28T00:00:00.000Z' }],
-        },
-      },
-    });
-    expect(seedResult.status).toBe('success');
-    return { runtime, boardAdapter };
+    preloadCard(boardAdapter, cardStoreRef, filesDir);
+    return { runtime, boardAdapter, queueStoreRef: serializeRef({ kind: 'fs-path', value: queueStoreDir }), cardStoreRef, filesDir };
   }
 
   it('routes manage.read-card through /mcp and returns the wrapper array shape', async () => {
@@ -399,7 +460,7 @@ process.exit(1);
     }), upsertRes, new URL('http://example.test/api/board/mcp'));
     expect(upsertRes._status).toBe(200);
     expect((parseJsonBody(upsertRes) as Record<string, unknown>).status).toBe('success');
-    expect((await runtime.processAccumulatedEvents()).status).toBe('success');
+    expect((await drainProcessAccumulated(runtime)).status).toBe('success');
 
     const directCardRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
@@ -494,7 +555,7 @@ process.exit(1);
 
   it('POST /cards/:id/actions chat-send propagates turn-id to the user message and flow args', async () => {
     const observed: Array<Record<string, unknown>> = [];
-    const { runtime, boardAdapter } = createRuntimeHarness({
+    const { runtime, boardAdapter, queueStoreRef } = createRuntimeHarness({
       chatHandlerFlow: { id: 'test-flow' },
       chatFlowRunner: {
         async run(_flow, args) {
@@ -516,7 +577,7 @@ process.exit(1);
     const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/actions'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
-    await drainQueuedChatRequests(runtime, boardAdapter);
+    await drainQueuedChatRequests(runtime, boardAdapter, queueStoreRef);
 
     const chatsRes = makeResponse();
     await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
@@ -720,9 +781,9 @@ process.exit(1);
     });
 
     const initStartedRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/init-board'), initStartedRes, new URL('http://example.test/api/board/init-board'));
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/sse?one-shot'), initStartedRes, new URL('http://example.test/api/board/sse?one-shot'));
     expect(initStartedRes._status).toBe(200);
-    const initStartedBody = parseJsonBody(initStartedRes) as Record<string, unknown>;
+    const initStartedBody = parseSsePayload(initStartedRes);
     expect(((initStartedBody.cardChatsByCardId as Record<string, unknown>)['card-1'] as Record<string, unknown>).processing).toBe(true);
 
     const doneRes = makeResponse();
@@ -748,11 +809,121 @@ process.exit(1);
     });
 
     const initDoneRes = makeResponse();
-    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/init-board'), initDoneRes, new URL('http://example.test/api/board/init-board'));
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/sse?one-shot'), initDoneRes, new URL('http://example.test/api/board/sse?one-shot'));
     expect(initDoneRes._status).toBe(200);
-    const initDoneBody = parseJsonBody(initDoneRes) as Record<string, unknown>;
+    const initDoneBody = parseSsePayload(initDoneRes);
     const chatsByCardId = (initDoneBody.cardChatsByCardId as Record<string, unknown>) ?? {};
     expect((chatsByCardId['card-1'] as Record<string, unknown> | undefined)?.processing ?? false).toBe(false);
+  });
+
+  it('routes sse.subscribe-chat and sse.unsubscribe-chat through /mcp-controlplane', async () => {
+    const runtime = createRuntime();
+    const clientId = 'mcp-sse-chat-client';
+
+    const sseRes = makeResponse();
+    const sseHandled = await runtime.handleRuntimeApi(
+      makeRequest('GET', `/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+      sseRes,
+      new URL(`http://example.test/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+    );
+    expect(sseHandled).toBe(true);
+    expect(sseRes._status).toBe(200);
+    expect(parseSsePayload(sseRes)).toHaveProperty('cardDefinitions');
+
+    const subscribeRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'sse.subscribe-chat',
+      args: { board_id: 'mcp-test-board', client_id: clientId, card_id: 'card-1' },
+    }), subscribeRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(subscribeRes._status).toBe(200);
+    expect(parseJsonBody(subscribeRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', clientId, subscribed: true },
+    });
+
+    const unsubscribeRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'sse.unsubscribe-chat',
+      args: { board_id: 'mcp-test-board', client_id: clientId, card_id: 'card-1' },
+    }), unsubscribeRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(unsubscribeRes._status).toBe(200);
+    expect(parseJsonBody(unsubscribeRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', cardId: 'card-1', clientId, subscribed: false },
+    });
+  });
+
+  it('routes sse.watch-channel and sse.unwatch-channel through /mcp-controlplane', async () => {
+    const subscribed: Array<{ clientId: string; channelName: string; params: { cardId?: string } }> = [];
+    const unsubscribed: Array<{ clientId: string; channelName: string; params: { cardId?: string } }> = [];
+    const runtime = createRuntime({
+      onChannelSubscribed(clientId, channelName, params) {
+        subscribed.push({ clientId, channelName, params });
+      },
+      onChannelUnsubscribed(clientId, channelName, params) {
+        unsubscribed.push({ clientId, channelName, params });
+      },
+    });
+    const clientId = 'mcp-sse-watch-client';
+
+    await runtime.handleRuntimeApi(
+      makeRequest('GET', `/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+      makeResponse(),
+      new URL(`http://example.test/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+    );
+
+    const boardWatchRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'sse.watch-channel',
+      args: { board_id: 'mcp-test-board', client_id: clientId, channel_name: 'watchparty' },
+    }), boardWatchRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(boardWatchRes._status).toBe(200);
+    expect(parseJsonBody(boardWatchRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', clientId, channelName: 'watchparty', subscribed: true },
+    });
+
+    const cardWatchRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'sse.watch-channel',
+      args: { board_id: 'mcp-test-board', client_id: clientId, channel_name: 'watchparty', card_id: 'card-1' },
+    }), cardWatchRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(cardWatchRes._status).toBe(200);
+    expect(parseJsonBody(cardWatchRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', clientId, channelName: 'watchparty', cardId: 'card-1', subscribed: true },
+    });
+
+    const cardUnwatchRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'sse.unwatch-channel',
+      args: { board_id: 'mcp-test-board', client_id: clientId, channel_name: 'watchparty', card_id: 'card-1' },
+    }), cardUnwatchRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(cardUnwatchRes._status).toBe(200);
+    expect(parseJsonBody(cardUnwatchRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', clientId, channelName: 'watchparty', cardId: 'card-1', subscribed: false },
+    });
+
+    const boardUnwatchRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'sse.unwatch-channel',
+      args: { board_id: 'mcp-test-board', client_id: clientId, channel_name: 'watchparty' },
+    }), boardUnwatchRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(boardUnwatchRes._status).toBe(200);
+    expect(parseJsonBody(boardUnwatchRes)).toEqual({
+      status: 'success',
+      data: { boardId: 'mcp-test-board', clientId, channelName: 'watchparty', subscribed: false },
+    });
+
+    expect(subscribed).toEqual([
+      { clientId, channelName: 'watchparty', params: {} },
+      { clientId, channelName: 'watchparty', params: { cardId: 'card-1' } },
+    ]);
+    expect(unsubscribed).toEqual([
+      { clientId, channelName: 'watchparty', params: { cardId: 'card-1' } },
+      { clientId, channelName: 'watchparty', params: {} },
+    ]);
   });
 
   it('routes stage-ai-response-and-any-attachments through /mcp and appends an assistant chat entry with uploaded file metadata', async () => {
@@ -1187,7 +1358,7 @@ process.exit(1);
     const warmRes = makeResponse();
     await runtime.handleRuntimeApi(warmReq, warmRes, new URL('http://example.test/api/board/mcp'));
     expect(warmRes._status).toBe(200);
-    expect((await runtime.processAccumulatedEvents()).status).toBe('success');
+    expect((await drainProcessAccumulated(runtime)).status).toBe('success');
     const req = makeRequest('POST', '/api/board/mcp', { tool: 'inspect.board-runtime-status', args: {} });
     const res = makeResponse();
 
@@ -1429,9 +1600,22 @@ process.exit(1);
   });
 
   it('routes preflight.run-single-source-in-live-card through /mcp using a supplied nonCoreAdapter', async () => {
-    const runtime = createRuntime({ withNonCore: true });
-
-    const seedResult = runtime.cardStore.set({
+    const { runtime, boardAdapter, cardStoreRef, filesDir } = createRuntimeHarness({ withNonCore: true });
+    const preloadKv = boardAdapter.kvStorageForRef(cardStoreRef);
+    const preloadStore = createCardStorePublic(createCardStore({
+      readIndex: () => preloadKv.read('_index'),
+      writeIndex: (idx: unknown) => preloadKv.write('_index', idx),
+      readCard: (id: string) => preloadKv.read(id),
+      writeCard: (id: string, card: unknown) => {
+        preloadKv.write(id, card);
+        return id;
+      },
+      removeCard: (id: string) => preloadKv.delete(id),
+      cardExists: (id: string) => preloadKv.read(id) !== null,
+      defaultCardKey: (id: string) => id,
+    } as any));
+    fs.mkdirSync(path.join(filesDir, 'card-1'), { recursive: true });
+    const seedResult = preloadStore.set({
       body: {
         id: 'card-1',
         card_data: { title: 'Live Source Card' },

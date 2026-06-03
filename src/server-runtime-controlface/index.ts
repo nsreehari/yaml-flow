@@ -7,7 +7,7 @@
  *   POST /mcp-controlplane
  *   POST /mcp-webhooks
  *
- * This package intentionally does not expose /init-board, /board-status,
+ * This package intentionally does not expose /board-status,
  * /cards/*, or /sse watcher routes. Browser builds keep the full dispatcher
  * through a dedicated browser entrypoint.
  */

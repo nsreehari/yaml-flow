@@ -1,25 +1,30 @@
-import type { BoardWorkerRequest, BoardWorkerStore } from '../cli/common/board-worker-store.js';
+import { createBoardWorkerStore, type BoardWorkerRequest, type BoardWorkerStore } from '../cli/common/board-worker-store.js';
 import { createQueueLaneRegistry } from '../cli/common/queue-lane-registry.js';
 import type { QueueLaneDescriptor, QueueLaneRegistry } from '../cli/common/queue-lane-registry.js';
 import type { QueueStorage } from '../cli/common/storage-interface.js';
-import type {
-  AsyncBoardWorkerStore,
-} from '../cli/cloud/board-platform-adapter-async.js';
+import { createAsyncBoardWorkerStore, type AsyncBoardWorkerStore } from '../cli/cloud/board-platform-adapter-async.js';
 import type { AsyncQueueStorage } from '../cli/cloud/storage-async-interface.js';
 import type {
+  Awaitable,
   BoardRuntimePlatformAdapter,
+  CommandResult,
   HostedBoardQueueLaneTuning,
   QueueLaneRuntimeTuning,
   RuntimeLogger,
-  SingleBoardRuntime,
 } from './types.js';
+import { isAsyncBoardPlatformAdapter } from './internal-helpers.js';
 
 type BoardWorkerStoreLike = BoardWorkerStore | AsyncBoardWorkerStore;
 type QueueStorageLike = QueueStorage | AsyncQueueStorage;
 
 export interface HostedBoardQueueLaneRegistryOptions {
   boardId: string;
-  runtime: Pick<SingleBoardRuntime, 'processAccumulatedLane' | 'handleChatAgentRequest' | 'queueLaneTuning'>;
+  queueStoreRef: string;
+  runtime: {
+    __drainProcessAccumulatedLane(): Awaitable<CommandResult>;
+    handleChatAgentRequest(request: BoardWorkerRequest): Awaitable<void>;
+    queueLaneTuning: HostedBoardQueueLaneTuning;
+  };
   boardAdapter: BoardRuntimePlatformAdapter;
   logger?: RuntimeLogger;
   executeTaskExecutorRequest?: (args: Record<string, unknown>, request: BoardWorkerRequest) => Promise<void>;
@@ -94,16 +99,18 @@ export function createHostedBoardQueueLaneRegistry(opts: HostedBoardQueueLaneReg
   const logger = opts.logger ?? { info() {}, warn() {}, error() {} };
   const boardAdapter = opts.boardAdapter;
   const queueLaneTuning: HostedBoardQueueLaneTuning = opts.runtime.queueLaneTuning ?? {};
-  const processQueue = boardAdapter.processAccumulatedStore();
-  const chatStore = boardAdapter.chatAgentStore();
+  const processQueue = boardAdapter.queueStorageForRef(opts.queueStoreRef, 'process-accumulated');
+  const chatStore = isAsyncBoardPlatformAdapter(boardAdapter)
+    ? createAsyncBoardWorkerStore(boardAdapter.queueStorageForRef(opts.queueStoreRef, 'chat-agent'))
+    : createBoardWorkerStore(boardAdapter.queueStorageForRef(opts.queueStoreRef, 'chat-agent'));
   const lanes: QueueLaneDescriptor[] = [];
   lanes.push(applyLaneTuning(createQueueStorageLane(
       'process-accumulated',
       processQueue,
       async () => {
-        const result = await opts.runtime.processAccumulatedLane();
+        const result = await opts.runtime.__drainProcessAccumulatedLane();
         if (result.status !== 'success') {
-          throw new Error(result.error || `processAccumulatedLane returned ${result.status}`);
+          throw new Error(result.error || `__drainProcessAccumulatedLane returned ${result.status}`);
         }
       },
       (error, attempt) => {
@@ -127,7 +134,9 @@ export function createHostedBoardQueueLaneRegistry(opts: HostedBoardQueueLaneReg
     ), queueLaneTuning.chatAgent) as QueueLaneDescriptor);
 
   if (opts.executeTaskExecutorRequest) {
-    const boardWorkerStore = boardAdapter.boardWorkerStore();
+    const boardWorkerStore = isAsyncBoardPlatformAdapter(boardAdapter)
+      ? createAsyncBoardWorkerStore(boardAdapter.queueStorageForRef(opts.queueStoreRef, 'task-executor'))
+      : createBoardWorkerStore(boardAdapter.queueStorageForRef(opts.queueStoreRef, 'task-executor'));
     lanes.push(applyLaneTuning(createBoardWorkerStoreLane(
       'task-executor',
       boardWorkerStore,

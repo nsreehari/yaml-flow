@@ -95,10 +95,11 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
     const refs = createFirestoreBoardRefs('board-A');
 
     expect(refs.baseRef).toEqual(makeFirestoreRef('boards/board-A'));
+    expect(parseRef(refs.boardRuntimeStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/runtime-board' });
     expect(parseRef(refs.cardStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/cards' });
     expect(parseRef(refs.outputsStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/runtime-out' });
+    expect(parseRef(refs.queueStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/runtime' });
     expect(parseRef(refs.scratchStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/scratch' });
-    expect(parseRef(refs.archiveStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/archive' });
     expect(parseRef(refs.chatStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/chat' });
     expect(parseRef(refs.artifactsStoreRef)).toEqual({ kind: 'firestore', value: 'boards/board-A/files' });
     expect(parseRef(refs.fetchedSourcesStoreRef!)).toEqual({ kind: 'firestore', value: 'boards/board-A/sources' });

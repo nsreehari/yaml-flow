@@ -21,10 +21,10 @@ function makeStore() {
 }
 
 describe('chat-store public API command dispatch', () => {
-  it('runs a single command envelope through the public API', () => {
+  it('runs a single command envelope through the public API', async () => {
     const store = makeStore();
 
-    const append = store.run({
+    const append = await store.run({
       command: 'append',
       cardId: 'card-1',
       role: 'assistant',
@@ -34,7 +34,7 @@ describe('chat-store public API command dispatch', () => {
 
     expect(append).toEqual({ status: 'success', data: { id: expect.any(String) } });
 
-    const read = store.run({ command: 'read-all', cardId: 'card-1' });
+    const read = await store.run({ command: 'read-all', cardId: 'card-1' });
     expect(read).toEqual({
       status: 'success',
       data: {
@@ -48,7 +48,7 @@ describe('chat-store public API command dispatch', () => {
     });
   });
 
-  it('returns the suffix starting at the Nth-last user message through the public API', () => {
+  it('returns the suffix starting at the Nth-last user message through the public API', async () => {
     const store = makeStore();
 
     store.append({ params: { cardId: 'card-last' }, body: { role: 'system', text: 'setup', files: [] } });
@@ -58,7 +58,7 @@ describe('chat-store public API command dispatch', () => {
     store.append({ params: { cardId: 'card-last' }, body: { role: 'assistant', text: 'second reply', files: [] } });
     store.append({ params: { cardId: 'card-last' }, body: { role: 'tool', text: 'tool output', files: [] } });
 
-    const read = store.run({ command: 'read-all', cardId: 'card-last', lastUserTurns: 1 });
+    const read = await store.run({ command: 'read-all', cardId: 'card-last', lastUserTurns: 1 });
     expect(read).toEqual({
       status: 'success',
       data: {
@@ -71,10 +71,10 @@ describe('chat-store public API command dispatch', () => {
     });
   });
 
-  it('runs a batch envelope with a shared cardId through the public API', () => {
+  it('runs a batch envelope with a shared cardId through the public API', async () => {
     const store = makeStore();
 
-    const batch = store.runBatch({
+    const batch = await store.runBatch({
       cardId: 'card-2',
       commands: [
         { command: 'append', role: 'assistant', text: 'public batch', files: [] },
@@ -92,13 +92,13 @@ describe('chat-store public API command dispatch', () => {
       },
     });
 
-    expect(store.run({ command: 'is-processing', cardId: 'card-2' })).toEqual({
+    expect(await store.run({ command: 'is-processing', cardId: 'card-2' })).toEqual({
       status: 'success',
       data: { active: false },
     });
   });
 
-  it('supports turn-aware read filtering and turn-tail slicing', () => {
+  it('supports turn-aware read filtering and turn-tail slicing', async () => {
     const store = makeStore();
 
     store.append({ params: { cardId: 'card-turns' }, body: { role: 'user', text: 'A1', files: [], turn: 'turn-a' } });
@@ -107,7 +107,7 @@ describe('chat-store public API command dispatch', () => {
     store.append({ params: { cardId: 'card-turns' }, body: { role: 'assistant', text: 'B2', files: [], turn: 'turn-b' } });
     store.append({ params: { cardId: 'card-turns' }, body: { role: 'user', text: 'C1', files: [], turn: 'turn-c' } });
 
-    const turnRead = store.run({ command: 'read-all', cardId: 'card-turns', turnId: 'turn-b' });
+    const turnRead = await store.run({ command: 'read-all', cardId: 'card-turns', turnId: 'turn-b' });
     expect(turnRead).toEqual({
       status: 'success',
       data: {
@@ -118,7 +118,7 @@ describe('chat-store public API command dispatch', () => {
       },
     });
 
-    const tailRead = store.run({ command: 'read-all', cardId: 'card-turns', tailTurns: 1 });
+    const tailRead = await store.run({ command: 'read-all', cardId: 'card-turns', tailTurns: 1 });
     expect(tailRead).toEqual({
       status: 'success',
       data: {
@@ -128,7 +128,7 @@ describe('chat-store public API command dispatch', () => {
       },
     });
 
-    const beforeAnchorRead = store.run({
+    const beforeAnchorRead = await store.run({
       command: 'read-all',
       cardId: 'card-turns',
       tailTurns: 1,

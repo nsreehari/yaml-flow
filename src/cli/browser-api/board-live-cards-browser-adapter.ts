@@ -14,7 +14,6 @@
 import type { KindValueRef, AtomicRelayLock, JournalEntry, JournalStorage, QueueStorage } from '../common/storage-interface.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { BoardPlatformAdapter } from '../common/board-live-cards-public.js';
-import { createBoardWorkerStore } from '../common/board-worker-store.js';
 import { createChatStorage } from '../common/chat-storage-lib.js';
 import type { ChatStorage } from '../common/chat-storage-lib.js';
 import {
@@ -96,6 +95,13 @@ export function createLocalStorageChatStorage(namespace: string): ChatStorage {
   return createChatStorage(
     (cardId: string) => createLocalStorageJournalStorage(`${namespace}:chat:journal:${safeChatCardKey(cardId)}`),
     createLocalStorageKvStorage(`${namespace}:chat`),
+  );
+}
+
+function createLocalStorageChatStorageForRef(namespace: string): ChatStorage {
+  return createChatStorage(
+    (cardId: string) => createLocalStorageJournalStorage(`${namespace}:journal:${safeChatCardKey(cardId)}`),
+    createLocalStorageKvStorage(namespace),
   );
 }
 
@@ -216,6 +222,13 @@ export function createBrowserBoardPlatformAdapter(
       reason?: string;
       dedupKey?: string;
     }>();
+    const stagedQueueItems = new Map<string, {
+      id: string;
+      body: unknown;
+      enqueuedAt: string;
+      attempt: number;
+      dedupKey?: string;
+    }>();
     const deadQueueItems = new Map<string, {
       id: string;
       body: unknown;
@@ -235,8 +248,14 @@ export function createBrowserBoardPlatformAdapter(
         queueItems.set(item.id, item);
         return item;
       },
+      enqueueMany(bodies) {
+        return bodies.map((body) => this.enqueue(body));
+      },
       enqueueIfAbsent(body, dedupKey) {
         for (const existing of queueItems.values()) {
+          if (existing.dedupKey === dedupKey) return null;
+        }
+        for (const existing of stagedQueueItems.values()) {
           if (existing.dedupKey === dedupKey) return null;
         }
         const item = {
@@ -248,6 +267,48 @@ export function createBrowserBoardPlatformAdapter(
         };
         queueItems.set(item.id, item);
         return { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+      },
+      stage(body, opts) {
+        const dedupKey = opts?.dedupKey;
+        if (dedupKey) {
+          for (const existing of queueItems.values()) {
+            if (existing.dedupKey === dedupKey) return null;
+          }
+          for (const existing of stagedQueueItems.values()) {
+            if (existing.dedupKey === dedupKey) return null;
+          }
+        }
+        const item = {
+          id: globalThis.crypto.randomUUID(),
+          body,
+          enqueuedAt: new Date().toISOString(),
+          attempt: 0,
+          ...(dedupKey ? { dedupKey } : {}),
+        };
+        stagedQueueItems.set(item.id, item);
+        return { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+      },
+      commitStaged(messageId) {
+        const item = stagedQueueItems.get(messageId);
+        if (!item) return false;
+        stagedQueueItems.delete(messageId);
+        queueItems.set(messageId, {
+          ...item,
+          enqueuedAt: new Date().toISOString(),
+          attempt: 0,
+        });
+        return true;
+      },
+      discardStaged(messageId, reason) {
+        const item = stagedQueueItems.get(messageId);
+        if (!item) return false;
+        stagedQueueItems.delete(messageId);
+        deadQueueItems.set(messageId, { ...item, reason });
+        return true;
+      },
+      peekStaged<T>() {
+        return Array.from(stagedQueueItems.values())
+          .map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
       },
       lease<T>(opts?: { max?: number; visibilityMs?: number }) {
         const max = Math.max(1, Math.floor(opts?.max ?? 1));
@@ -306,11 +367,7 @@ export function createBrowserBoardPlatformAdapter(
     };
   }
 
-  const taskQueueStorage = createInMemoryQueueStorage();
-  const chatQueueStorage = createInMemoryQueueStorage();
-  const processAccumulatedQueueStorage = createInMemoryQueueStorage();
-  const boardWorkerStore = createBoardWorkerStore(taskQueueStorage);
-  const chatAgentStore = createBoardWorkerStore(chatQueueStorage);
+  const queueLaneStores = new Map<string, QueueStorage>();
 
   return {
     kvStorage: (ns: string) =>
@@ -318,6 +375,17 @@ export function createBrowserBoardPlatformAdapter(
 
     blobStorage: (ns: string) =>
       createLocalStorageBlobStorage(ns ? `${namespace}:${ns}` : namespace),
+    blobStorageForRef: (ref: string) => createLocalStorageBlobStorage(parseRef(ref).value),
+    chatStorageForRef: (ref: string) => createLocalStorageChatStorageForRef(parseRef(ref).value),
+    queueStorageForRef: (ref: string, lane: string) => {
+      const key = `${parseRef(ref).value}:queue:${lane}`;
+      let queue = queueLaneStores.get(key);
+      if (!queue) {
+        queue = createInMemoryQueueStorage();
+        queueLaneStores.set(key, queue);
+      }
+      return queue;
+    },
 
     scratchStorage: () => createLocalStorageScratchStorage(`${namespace}:scratch`),
     scratchStorageForRef: (ref: string) => createLocalStorageScratchStorage(parseRef(ref).value),
@@ -327,12 +395,8 @@ export function createBrowserBoardPlatformAdapter(
 
     journalAdapter: () =>
       createLocalStorageJournalStorageAdapter(`${namespace}:journal`),
-
-    boardWorkerStore: () => boardWorkerStore,
-
-    chatAgentStore: () => chatAgentStore,
-
-    processAccumulatedStore: () => processAccumulatedQueueStorage,
+    journalAdapterForRef: (ref: string) =>
+      createLocalStorageJournalStorageAdapter(`${parseRef(ref).value}:journal`),
 
     lock,
 

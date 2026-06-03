@@ -132,6 +132,9 @@ function createMemoryQueueStorage(): QueueStorage {
       active.set(item.id, item);
       return item;
     },
+    enqueueMany<T>(bodies: T[]) {
+      return bodies.map((body) => this.enqueue(body));
+    },
     enqueueIfAbsent<T>(body: T, dedupKey: string) {
       for (const existing of active.values()) {
         if (existing.dedupKey === dedupKey) return null;
@@ -320,7 +323,6 @@ function buildRuntime(adapter: ReturnType<typeof createTestAdapter>) {
   const artifactsStoreRef = serializeRef({ kind: 'mem', value: 'files' });
   const fetchedSourcesStoreRef = serializeRef({ kind: 'mem', value: 'sources' });
   const scratchStoreRef = serializeRef({ kind: 'mem', value: 'scratch' });
-  const archiveStoreRef = serializeRef({ kind: 'mem', value: 'archive' });
 
   const preloadKv = adapter.kvStorageForRef(cardStoreRef);
   const preloadStore = createCardStorePublic(createCardStore({
@@ -357,7 +359,6 @@ function buildRuntime(adapter: ReturnType<typeof createTestAdapter>) {
       artifactsStoreRef,
       fetchedSourcesStoreRef,
       scratchStoreRef,
-      archiveStoreRef,
     }],
     invocationAdapter,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -400,6 +401,13 @@ function syntheticResponse(): { res: RuntimeResponse; body: () => unknown } {
   return { res, body: () => { try { return JSON.parse(chunks.join('')); } catch { return chunks.join(''); } } };
 }
 
+function parseSsePayload(raw: unknown): Record<string, unknown> {
+  const text = String(raw || '');
+  const jsonStr = text.split('data: ')[1]?.split('\n')[0];
+  if (!jsonStr) throw new Error(`Missing SSE data frame: ${text}`);
+  return JSON.parse(jsonStr) as Record<string, unknown>;
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -408,16 +416,16 @@ describe('bootstrap notification catch-up', () => {
 
   // ── 1. appendNotification handles notification-batch ───────────────────
 
-  it('appendNotification: GET /init-board returns a populated runtime payload', async () => {
+  it('appendNotification: GET /sse?one-shot returns a populated runtime payload', async () => {
     const adapter = createTestAdapter();
     const runtime = buildRuntime(adapter);
 
     // First init — runtime should return hydrated payload.
-    const req1 = syntheticRequest('GET', '/api/board/init-board');
+    const req1 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn1 = syntheticResponse();
-    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/sse?one-shot'));
 
-    const payload = syn1.body() as Record<string, unknown>;
+    const payload = parseSsePayload(syn1.body());
     const cardDefinitions = payload.cardDefinitions as Array<Record<string, unknown>>;
     expect(Array.isArray(cardDefinitions)).toBe(true);
     expect(cardDefinitions.length).toBeGreaterThan(0);
@@ -425,45 +433,45 @@ describe('bootstrap notification catch-up', () => {
 
   // ── 2. No task-restart on subsequent bootstrap calls ──────────────────
 
-  it('second /init-board remains idempotent and keeps card count stable', async () => {
+  it('second /sse?one-shot remains idempotent and keeps card count stable', async () => {
     const adapter = createTestAdapter();
     const runtime = buildRuntime(adapter);
 
     // First init
-    const req1 = syntheticRequest('GET', '/api/board/init-board');
+    const req1 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn1 = syntheticResponse();
-    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/sse?one-shot'));
 
-    const payload1 = syn1.body() as Record<string, unknown>;
+    const payload1 = parseSsePayload(syn1.body());
     const cards1 = Array.isArray(payload1.cardDefinitions) ? payload1.cardDefinitions.length : 0;
 
     // Second init (simulates page refresh)
-    const req2 = syntheticRequest('GET', '/api/board/init-board');
+    const req2 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn2 = syntheticResponse();
-    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/sse?one-shot'));
 
-    const payload2 = syn2.body() as Record<string, unknown>;
+    const payload2 = parseSsePayload(syn2.body());
     const cards2 = Array.isArray(payload2.cardDefinitions) ? payload2.cardDefinitions.length : 0;
     expect(cards2).toBe(cards1);
   });
 
   // ── 3. Catch-up batch contains status + computed_values ───────────────
 
-  it('second /init-board payload includes status summary and computed runtime data', async () => {
+  it('second /sse?one-shot payload includes status summary and computed runtime data', async () => {
     const adapter = createTestAdapter();
     const runtime = buildRuntime(adapter);
 
     // First bootstrap — populates output store
-    const req1 = syntheticRequest('GET', '/api/board/init-board');
+    const req1 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn1 = syntheticResponse();
-    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/sse?one-shot'));
 
     // Second init (page refresh simulation)
-    const req2 = syntheticRequest('GET', '/api/board/init-board');
+    const req2 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn2 = syntheticResponse();
-    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/sse?one-shot'));
 
-    const payload = syn2.body() as Record<string, unknown>;
+    const payload = parseSsePayload(syn2.body());
     const summary = payload.statusSnapshot as Record<string, unknown>;
     const runtimeById = payload.cardRuntimeById as Record<string, Record<string, unknown>>;
     expect(summary && typeof summary === 'object').toBe(true);
@@ -473,19 +481,19 @@ describe('bootstrap notification catch-up', () => {
 
   // ── 4. buildPublishedRuntimePayload populated after second bootstrap ──
 
-  it('getState() returns non-empty cardRuntimeById after second /init-board', async () => {
+  it('getState() returns non-empty cardRuntimeById after second /sse?one-shot', async () => {
     const adapter = createTestAdapter();
     const runtime = buildRuntime(adapter);
 
     // First bootstrap
-    const req1 = syntheticRequest('GET', '/api/board/init-board');
+    const req1 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn1 = syntheticResponse();
-    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/sse?one-shot'));
 
     // Second bootstrap
-    const req2 = syntheticRequest('GET', '/api/board/init-board');
+    const req2 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn2 = syntheticResponse();
-    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/sse?one-shot'));
 
     const payload = await runtime.buildPublishedRuntimePayload() as Record<string, unknown>;
     expect(payload).toHaveProperty('cardDefinitions');
@@ -500,9 +508,9 @@ describe('bootstrap notification catch-up', () => {
     const runtime = buildRuntime(adapter);
 
     // First bootstrap — source card runs and publishes its provides token
-    const req1 = syntheticRequest('GET', '/api/board/init-board');
+    const req1 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn1 = syntheticResponse();
-    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req1, syn1.res, new URL('http://localhost/api/board/sse?one-shot'));
 
     const firstPayload = runtime.buildPublishedRuntimePayload() as Record<string, unknown>;
     const firstDobs = firstPayload.dataObjectsByToken as Record<string, unknown> | undefined;
@@ -512,9 +520,9 @@ describe('bootstrap notification catch-up', () => {
     const batchesAfterFirst = adapter.publishedBatches.length;
 
     // Second bootstrap
-    const req2 = syntheticRequest('GET', '/api/board/init-board');
+    const req2 = syntheticRequest('GET', '/api/board/sse?one-shot');
     const syn2 = syntheticResponse();
-    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/init-board'));
+    await runtime.handleRuntimeApi(req2, syn2.res, new URL('http://localhost/api/board/sse?one-shot'));
 
     const catchUpNotifications: BoardChangeNotification[] = [];
     for (let i = batchesAfterFirst; i < adapter.publishedBatches.length; i++) {

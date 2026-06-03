@@ -19,7 +19,7 @@
  * The `command` field selects the operation when using stdin-only mode.
  */
 
-import { createFsBoardChatStorage } from './fs-board-adapter.js';
+import { createFsChatStorageForRefRoot } from './fs-board-adapter.js';
 import { resolvePath } from './process-runner.js';
 import {
   createChatStorePublic,
@@ -85,7 +85,7 @@ const HELP = [
 ].join('\n');
 
 function createStorePublic(storeRef: string) {
-  return createChatStorePublic(createFsBoardChatStorage(parseRef(storeRef).value));
+  return createChatStorePublic(createFsChatStorageForRefRoot(parseRef(storeRef).value));
 }
 
 export async function cli(argv: string[]): Promise<void> {
@@ -111,11 +111,11 @@ export async function cli(argv: string[]): Promise<void> {
     }
     const storePublic = createStorePublic(storeRef);
     if (Array.isArray(envelope.commands)) {
-      printResult(storePublic.runBatch(toBatchEnvelope(envelope)));
+      printResult(await storePublic.runBatch(toBatchEnvelope(envelope)));
       return;
     }
 
-    printResult(storePublic.run(toCommandEnvelope(envelope)));
+    printResult(await storePublic.run(toCommandEnvelope(envelope)));
     return;
   }
 
@@ -138,7 +138,7 @@ export async function cli(argv: string[]): Promise<void> {
     const turn = optFlag(rest, '--turn-id') ?? optFlag(rest, '--turn') ?? '';
     const files = filesJson ? (JSON.parse(filesJson) as unknown[]) : [];
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store append --store-ref <ref> --card-id <id> --role <role> --text <text>');
-    printResult(storePublic.append({ params: { cardId: cid }, body: { role, text, files, turn } }));
+    printResult(await storePublic.append({ params: { cardId: cid }, body: { role, text, files, turn } }));
     return;
   }
 
@@ -159,20 +159,20 @@ export async function cli(argv: string[]): Promise<void> {
     if (turnId !== undefined) body.turnId = turnId;
     if (tailTurnsBeforeId !== undefined) body.tailTurnsBeforeId = tailTurnsBeforeId;
     if (allTurnsRaw !== undefined) body.allTurns = allTurnsRaw === 'true';
-    printResult(storePublic.readAll({ params: { cardId: cid }, body: Object.keys(body).length > 0 ? body : undefined }));
+    printResult(await storePublic.readAll({ params: { cardId: cid }, body: Object.keys(body).length > 0 ? body : undefined }));
     return;
   }
 
   if (cmd === 'read-after') {
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store read-after --store-ref <ref> --card-id <id>');
     const cursor = optFlag(rest, '--cursor') ?? null;
-    printResult(storePublic.readAfter({ params: { cardId: cid }, body: { cursor } }));
+    printResult(await storePublic.readAfter({ params: { cardId: cid }, body: { cursor } }));
     return;
   }
 
   if (cmd === 'clear') {
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store clear --store-ref <ref> --card-id <id>');
-    printResult(storePublic.clear({ params: { cardId: cid } }));
+    printResult(await storePublic.clear({ params: { cardId: cid } }));
     return;
   }
 
@@ -183,19 +183,19 @@ export async function cli(argv: string[]): Promise<void> {
       console.error('chat-store set-processing: --active must be "true" or "false"');
       process.exit(1);
     }
-    printResult(storePublic.setProcessing({ params: { cardId: cid }, body: { active: activeStr === 'true' } }));
+    printResult(await storePublic.setProcessing({ params: { cardId: cid }, body: { active: activeStr === 'true' } }));
     return;
   }
 
   if (cmd === 'is-processing') {
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store is-processing --store-ref <ref> --card-id <id>');
-    printResult(storePublic.isProcessing({ params: { cardId: cid } }));
+    printResult(await storePublic.isProcessing({ params: { cardId: cid } }));
     return;
   }
 
   if (cmd === 'get-config') {
     const cid = cardId ?? requireFlag(rest, '--card-id', 'chat-store get-config --store-ref <ref> --card-id <id>');
-    printResult(storePublic.getConfig({ params: { cardId: cid } }));
+    printResult(await storePublic.getConfig({ params: { cardId: cid } }));
     return;
   }
 
@@ -210,7 +210,7 @@ export async function cli(argv: string[]): Promise<void> {
         try { Object.assign(patch, JSON.parse(extra) as Record<string, unknown>); } catch { /* ignore */ }
       }
     }
-    printResult(storePublic.setConfig({ params: { cardId: cid }, body: patch }));
+    printResult(await storePublic.setConfig({ params: { cardId: cid }, body: patch }));
     return;
   }
 

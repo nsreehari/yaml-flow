@@ -28,7 +28,12 @@ export interface RoutesSse {
     params: { cardId?: string },
     subscribed: boolean,
   ) => void;
-  handleSse: (req: RuntimeRequest, res: RuntimeResponse, clientId: string) => Promise<void>;
+  handleSse: (
+    req: RuntimeRequest,
+    res: RuntimeResponse,
+    clientId?: string,
+    opts?: { oneShot?: boolean },
+  ) => Promise<void>;
 }
 
 export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
@@ -67,8 +72,14 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
     });
   }
 
-  async function handleSse(req: RuntimeRequest, res: RuntimeResponse, clientId: string): Promise<void> {
-    const existing = sseHub.get(clientId);
+  async function handleSse(
+    req: RuntimeRequest,
+    res: RuntimeResponse,
+    clientId?: string,
+    opts?: { oneShot?: boolean },
+  ): Promise<void> {
+    const oneShot = opts?.oneShot === true;
+    const existing = !oneShot && clientId ? sseHub.get(clientId) : null;
     const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
     res.writeHead(200, {
       ...corsHeaders,
@@ -77,13 +88,23 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
       'Connection': 'keep-alive',
     });
     sseHub.flushTransport(res);
-    sseHub.register(clientId, res, subscribedChatCardIds);
 
     // On reconnect, Last-Event-ID tells us the client's last received id.
     // We always send the current full snapshot (replay = latest state).
     const payload = await buildPublishedRuntimePayload();
     const frame = sseHub.buildFrame(payload);
     res.write(frame);
+
+    if (oneShot) {
+      res.end();
+      return;
+    }
+
+    if (!clientId) {
+      throw new Error('clientId is required for streaming SSE');
+    }
+
+    sseHub.register(clientId, res, subscribedChatCardIds);
     try { onSseClientConnected?.(clientId, (customPayload: unknown) => { sseHub.writeFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
 
     const keepAlive = setInterval(() => {

@@ -55,8 +55,15 @@ const runtime = createSingleBoardServerRuntime({
       label: `Board — ${BOARD_ID}`,
       boardAdapter,
       baseRef: { kind: 'firestore', value: `boards/${BOARD_ID}` },
+      boardRuntimeStoreRef: makeRef('firestore', `boards/${BOARD_ID}/runtime-board`),
       cardStoreRef: makeRef('firestore', `boards/${BOARD_ID}/cards`),
       outputsStoreRef: makeRef('firestore', `boards/${BOARD_ID}/runtime-out`),
+      queueStoreRef: makeRef('firestore', `boards/${BOARD_ID}/runtime`),
+      fetchedSourcesStoreRef: makeRef('firestore', `boards/${BOARD_ID}/sources`),
+      chatStoreRef: makeRef('firestore', `boards/${BOARD_ID}/chat`),
+      artifactsStoreRef: makeRef('firestore', `boards/${BOARD_ID}/files`),
+      scratchStoreRef: makeRef('firestore', `boards/${BOARD_ID}/scratch`),
+      archiveStoreRef: makeRef('firestore', `boards/${BOARD_ID}/archive`),
     },
   ],
   invocationAdapter: {
@@ -80,6 +87,7 @@ const runtime = createSingleBoardServerRuntime({
 const stopRunners = startQueueLaneRunners(
   createHostedBoardQueueLaneRegistry({
     boardId: BOARD_ID,
+    queueStoreRef: makeRef('firestore', `boards/${BOARD_ID}/runtime`),
     runtime,
     boardAdapter,
     logger: {

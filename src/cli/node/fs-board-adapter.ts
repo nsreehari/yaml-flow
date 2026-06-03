@@ -112,6 +112,9 @@ export type {
 } from '../common/board-worker-store.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
+type BoardProcessAccumulatorInternal = ReturnType<typeof createBoardLiveCardsPublic> & {
+  processAccumulatedEvents(input: {}): Promise<{ status: string; error?: string }>;
+};
 export {
   buildLocalBaseSpec,
   createExecutionRefInvoker,
@@ -231,6 +234,8 @@ type FsBoardAdapterOpts = {
   suppressSpawn?: boolean;
   notifyChannel?: string;
   callbackTransport?: BoardCallbackTransport;
+  boardRuntimeStoreRef?: string;
+  queueStoreRef?: string;
 };
 type FsBoardNonCoreAdapterOpts = { onWarn?: (msg: string) => void; callbackTransport?: BoardCallbackTransport };
 
@@ -301,11 +306,8 @@ export function createFsBoardPlatformAdapter(
 ): BoardPlatformAdapter {
   const { cliDir, opts } = normalizeFsBoardAdapterArgs(cliDirOrOpts, maybeOpts);
   const dir = baseRef.value;
-  let boardWorkerStoreCache: BoardWorkerStore | undefined;
   let boardWorkerDrainInFlight: Promise<number | void> | null = null;
-  let chatAgentStoreCache: BoardWorkerStore | undefined;
-  let processAccumulatedStoreCache: ReturnType<typeof createFsQueueStorage> | undefined;
-  let processAccumulatedBoardCache: ReturnType<typeof createBoardLiveCardsPublic> | undefined;
+  let processAccumulatedBoardCache: BoardProcessAccumulatorInternal | undefined;
   let processAccumulatedDrainInFlight: Promise<number | void> | null = null;
   let resolvedCliDirCache: string | undefined;
 
@@ -316,15 +318,43 @@ export function createFsBoardPlatformAdapter(
     return resolvedCliDirCache;
   }
 
-  const callbackTransport = opts?.callbackTransport ?? createLocalNodeBoardCallbackTransport(opts?.notifyChannel);
+  function requireInternalQueueStoreRef(owner: string): string {
+    const ref = opts?.queueStoreRef;
+    if (!ref) {
+      throw new Error(`createFsBoardPlatformAdapter: ${owner} requires opts.queueStoreRef`);
+    }
+    return ref;
+  }
+
+  function requireInternalBoardRuntimeStoreRef(owner: string): string {
+    const ref = opts?.boardRuntimeStoreRef;
+    if (!ref) {
+      throw new Error(`createFsBoardPlatformAdapter: ${owner} requires opts.boardRuntimeStoreRef`);
+    }
+    return ref;
+  }
+
+  const callbackTransport = opts?.callbackTransport ?? createLocalNodeBoardCallbackTransport({
+    notifyChannel: opts?.notifyChannel,
+    boardRuntimeStoreRef: opts?.boardRuntimeStoreRef,
+    queueStoreRef: opts?.queueStoreRef,
+  });
 
   let adapter: BoardPlatformAdapter;
+
+  function queueStorageForLane(lane: string) {
+    return adapter.queueStorageForRef(requireInternalQueueStoreRef(`internal lane "${lane}"`), lane);
+  }
+
+  function boardWorkerStoreForLane(lane: string): BoardWorkerStore {
+    return createBoardWorkerStore(queueStorageForLane(lane));
+  }
 
   function scheduleInProcessBoardWorkerDrain(): void {
     if (opts?.suppressSpawn || boardWorkerDrainInFlight) return;
     const lane = createBoardWorkerQueueLane({
       id: 'task-executor',
-      workerStore: adapter.boardWorkerStore(),
+      workerStore: boardWorkerStoreForLane('task-executor'),
       handleRequest: async (_args, request) => {
         const result = await invokeExecutionRef(request.ref, request.args, {
           cliDir: getResolvedCliDir(),
@@ -343,7 +373,7 @@ export function createFsBoardPlatformAdapter(
       })
       .finally(() => {
         boardWorkerDrainInFlight = null;
-        if (adapter.boardWorkerStore().peekActive().length > 0) {
+        if (queueStorageForLane('task-executor').peekActive().length > 0) {
           scheduleInProcessBoardWorkerDrain();
         }
       });
@@ -355,6 +385,9 @@ export function createFsBoardPlatformAdapter(
 
     blobStorage: (namespace: string) =>
       namespace ? createFsBlobStorage(joinPath(dir, namespace)) : createFsBlobStorage(dir),
+    blobStorageForRef: (ref: string) => createFsBlobStorage(parseRef(ref).value),
+    chatStorageForRef: (ref: string) => createFsChatStorageForRefRoot(parseRef(ref).value),
+    queueStorageForRef: (ref: string, lane: string) => createFsQueueStorage(joinPath(parseRef(ref).value, lane)),
 
     scratchStorage: () => createFsScratchStorage(joinPath(dir, '.tmp')),
     scratchStorageForRef: (ref: string) => createFsScratchStorage(parseRef(ref).value),
@@ -363,27 +396,7 @@ export function createFsBoardPlatformAdapter(
     archiveFactoryForRef: (ref: string) => createFsArchiveFactory(parseRef(ref).value),
 
     journalAdapter: () => createFsJournalStorageAdapter(dir),
-
-    boardWorkerStore: () => {
-      if (!boardWorkerStoreCache) {
-        boardWorkerStoreCache = createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
-      }
-      return boardWorkerStoreCache;
-    },
-
-    chatAgentStore: () => {
-      if (!chatAgentStoreCache) {
-        chatAgentStoreCache = createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.chat-agent-queue')));
-      }
-      return chatAgentStoreCache;
-    },
-
-    processAccumulatedStore: () => {
-      if (!processAccumulatedStoreCache) {
-        processAccumulatedStoreCache = createFsQueueStorage(joinPath(dir, '.process-accumulated-queue'));
-      }
-      return processAccumulatedStoreCache;
-    },
+    journalAdapterForRef: (ref: string) => createFsJournalStorageAdapter(parseRef(ref).value),
 
     lock: createFsAtomicRelayLock(joinPath(dir, BOARD_LOCK_FILE)),
 
@@ -393,8 +406,7 @@ export function createFsBoardPlatformAdapter(
       const hasDirectHostedOutput = Boolean((args['output'] as Record<string, unknown> | undefined)?.['ref']);
       if (ref.howToRun === 'queue-storage') {
         try {
-          const store = boardWorkerStoreCache ?? createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
-          if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
+          const store = boardWorkerStoreForLane('task-executor');
           const boardId = typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : undefined;
           if (hasDirectHostedOutput) {
             store.enqueueRequest({ boardId, ref, args });
@@ -456,8 +468,7 @@ export function createFsBoardPlatformAdapter(
         const inRef   = serializeRef(scratch.keyRef(inFile));
         const outRef  = serializeRef(scratch.keyRef(outFile));
         const errRef  = serializeRef(scratch.keyRef(errFile));
-        const store = boardWorkerStoreCache ?? createBoardWorkerStore(createFsQueueStorage(joinPath(dir, '.board-worker-queue')));
-        if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
+        const store = boardWorkerStoreForLane('task-executor');
         const boardId = typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : undefined;
         store.enqueueRequest({ boardId, ref, args: { subcommand: 'run-source-fetch', inRef, outRef, errRef } });
         scheduleInProcessBoardWorkerDrain();
@@ -497,10 +508,12 @@ export function createFsBoardPlatformAdapter(
     requestProcessAccumulated() {
       if (opts?.suppressSpawn || processAccumulatedDrainInFlight) return;
       const adapter = this as BoardPlatformAdapter;
-      const board = processAccumulatedBoardCache ??= createBoardLiveCardsPublic(baseRef, adapter);
+      const board = processAccumulatedBoardCache ??= createBoardLiveCardsPublic(baseRef, adapter, {
+        boardRuntimeStoreRef: requireInternalBoardRuntimeStoreRef('requestProcessAccumulated'),
+      }) as BoardProcessAccumulatorInternal;
       const lane = createQueueStorageLane<{ boardRef?: string }>({
         id: 'process-accumulated',
-        queueStorage: adapter.processAccumulatedStore(),
+        queueStorage: queueStorageForLane('process-accumulated'),
         handleMessage: async () => {
           const result = await board.processAccumulatedEvents({});
           if (result.status !== 'success') {
@@ -514,7 +527,7 @@ export function createFsBoardPlatformAdapter(
         })
         .finally(() => {
           processAccumulatedDrainInFlight = null;
-          if (adapter.processAccumulatedStore().peekActive().length > 0) {
+          if (queueStorageForLane('process-accumulated').peekActive().length > 0) {
             adapter.requestProcessAccumulated?.();
           }
         });
@@ -697,6 +710,17 @@ export function createFsBoardChatStorage(
       return createFsJournalStorage(journalPath);
     },
     kv,
+  );
+}
+
+export function createFsChatStorageForRefRoot(chatStoreDir: string): ChatStorage {
+  return createChatStorage(
+    (cardId: string) => {
+      const safeId = String(cardId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fileName = `${safeId}.jsonl`;
+      return createFsJournalStorage(joinPath(chatStoreDir, 'journal', fileName));
+    },
+    createFsKvStorage(joinPath(chatStoreDir, 'kv')),
   );
 }
 

@@ -2,6 +2,7 @@ import {
   parseRef,
   serializeRef,
   type KindValueRef,
+  type QueueMessage,
 } from '../cli/common/storage-interface.js';
 import type {
   AsyncBoardPlatformAdapter,
@@ -79,10 +80,11 @@ export interface FirestoreLike {
 
 export interface FirestoreBoardRefs {
   baseRef: KindValueRef;
+  boardRuntimeStoreRef: string;
   cardStoreRef: string;
   outputsStoreRef: string;
+  queueStoreRef: string;
   scratchStoreRef: string;
-  archiveStoreRef: string;
   chatStoreRef: string;
   artifactsStoreRef: string;
   fetchedSourcesStoreRef: string;
@@ -528,10 +530,11 @@ export function serializeFirestoreRef(path: string): string {
 export function createFirestoreBoardRefs(boardId: string): FirestoreBoardRefs {
   return {
     baseRef: makeFirestoreRef(`boards/${boardId}`),
+    boardRuntimeStoreRef: serializeFirestoreRef(`boards/${boardId}/runtime-board`),
     cardStoreRef: serializeFirestoreRef(`boards/${boardId}/cards`),
     outputsStoreRef: serializeFirestoreRef(`boards/${boardId}/runtime-out`),
+    queueStoreRef: serializeFirestoreRef(`boards/${boardId}/runtime`),
     scratchStoreRef: serializeFirestoreRef(`boards/${boardId}/scratch`),
-    archiveStoreRef: serializeFirestoreRef(`boards/${boardId}/archive`),
     chatStoreRef: serializeFirestoreRef(`boards/${boardId}/chat`),
     artifactsStoreRef: serializeFirestoreRef(`boards/${boardId}/files`),
     fetchedSourcesStoreRef: serializeFirestoreRef(`boards/${boardId}/sources`),
@@ -786,6 +789,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
         body,
         enqueuedAt: nowIso,
         attempt: 0,
+        staged: false,
         visibleAfter: nowIso,
         leaseToken: null,
         leaseExpiresAt: null,
@@ -793,6 +797,11 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
         deadReason: null,
       }));
       return { id, body, enqueuedAt: nowIso, attempt: 0 };
+    },
+    async enqueueMany<T>(bodies: T[]) {
+      const queued = [] as QueueMessage<T>[];
+      for (const body of bodies) queued.push(await this.enqueue(body));
+      return queued;
     },
     async enqueueIfAbsent<T>(body: T, dedupKey: string) {
       const existing = await col.where('dedupKey', '==', dedupKey).where('dead', '==', false).limit(1).get();
@@ -805,6 +814,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
         dedupKey,
         enqueuedAt: nowIso,
         attempt: 0,
+        staged: false,
         visibleAfter: nowIso,
         leaseToken: null,
         leaseExpiresAt: null,
@@ -813,12 +823,86 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
       }));
       return { id, body, enqueuedAt: nowIso, attempt: 0 };
     },
+    async stage<T>(body: T, opts: { dedupKey?: string } = {}) {
+      if (opts.dedupKey) {
+        const existing = await col.where('dedupKey', '==', opts.dedupKey).where('dead', '==', false).limit(1).get();
+        if (existing.docs.length > 0) return null;
+      }
+      const id = lexicalId();
+      const nowIso = new Date().toISOString();
+      await col.doc(id).set(stripUndefinedDeep({
+        id,
+        body,
+        dedupKey: opts.dedupKey,
+        enqueuedAt: nowIso,
+        attempt: 0,
+        staged: true,
+        visibleAfter: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        dead: false,
+        deadReason: null,
+      }));
+      return { id, body, enqueuedAt: nowIso, attempt: 0 };
+    },
+    async commitStaged(messageId: string) {
+      try {
+        await col.firestore.runTransaction(async (tx) => {
+          const ref = col.doc(messageId);
+          const snap = await tx.get(ref);
+          if (!snap.exists) throw new Error('missing');
+          const data = snap.data() ?? {};
+          if (data.dead === true || data.staged !== true) throw new Error('not-staged');
+          tx.update(ref, {
+            staged: false,
+            enqueuedAt: new Date().toISOString(),
+            attempt: 0,
+            visibleAfter: new Date().toISOString(),
+          });
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async discardStaged(messageId: string, reason?: string) {
+      try {
+        await col.firestore.runTransaction(async (tx) => {
+          const ref = col.doc(messageId);
+          const snap = await tx.get(ref);
+          if (!snap.exists) throw new Error('missing');
+          const data = snap.data() ?? {};
+          if (data.dead === true || data.staged !== true) throw new Error('not-staged');
+          tx.update(ref, {
+            staged: false,
+            dead: true,
+            deadReason: reason ?? 'discarded',
+          });
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async peekStaged(prefix = '') {
+      const snap = await col.where('dead', '==', false).where('staged', '==', true).orderBy('enqueuedAt').get();
+      return snap.docs
+        .map((doc) => doc.data() ?? {})
+        .filter((entry) => !prefix || String(entry.id ?? '').startsWith(prefix))
+        .map((entry) => ({
+          id: String(entry.id ?? ''),
+          body: entry.body,
+          enqueuedAt: String(entry.enqueuedAt ?? ''),
+          attempt: Number(entry.attempt ?? 0),
+        }));
+    },
     async lease(options: { max?: number; visibilityMs?: number } = {}) {
       const max = Math.max(1, Number(options.max ?? 1));
       const visibilityMs = Math.max(1, Number(options.visibilityMs ?? defaultVisibilityMs));
       const nowIso = new Date().toISOString();
       const snap = await col
         .where('dead', '==', false)
+        .where('staged', '==', false)
         .where('visibleAfter', '<=', nowIso)
         .orderBy('visibleAfter')
         .limit(max * 4)
@@ -835,6 +919,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
             const data = fresh.data() ?? {};
             const txNowIso = new Date().toISOString();
             if (data.dead === true) throw new Error('dead');
+            if (data.staged === true) throw new Error('staged');
             if (typeof data.visibleAfter === 'string' && data.visibleAfter > txNowIso) throw new Error('hidden');
             if (data.leaseToken && typeof data.leaseExpiresAt === 'string' && data.leaseExpiresAt > txNowIso) throw new Error('leased');
             const leaseToken = uuidLike();
@@ -901,7 +986,7 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
       }
     },
     async peekActive(prefix = '') {
-      const snap = await col.where('dead', '==', false).orderBy('enqueuedAt').get();
+      const snap = await col.where('dead', '==', false).where('staged', '==', false).orderBy('enqueuedAt').get();
       return snap.docs
         .map((doc) => doc.data() ?? {})
         .filter((entry) => !prefix || String(entry.id ?? '').startsWith(prefix))
@@ -954,6 +1039,11 @@ export function createFirestoreBoardAdapter(
         createFirestoreKvStorage(db.collection(`${root}-kv`)),
       );
     },
+    queueStoreRef: createFirestoreBoardRefs(boardId).queueStoreRef,
+    queueStorageForRef(ref, lane) {
+      const root = requireCollectionPath(ref, `boards/${boardId}/runtime`);
+      return createFirestoreQueueStorage(db.collection(`${root}-${lane}`));
+    },
     scratchStorage() {
       return createFirestoreScratchStorage(boardCollection(db, boardId, 'scratch'));
     },
@@ -971,9 +1061,10 @@ export function createFirestoreBoardAdapter(
     journalStorage() {
       return createFirestoreJournalStorage(boardCollection(db, boardId, 'journal'));
     },
-    queueStorage: createFirestoreQueueStorage(boardCollection(db, boardId, 'worker-queue')),
-    chatAgentQueueStorage: createFirestoreQueueStorage(boardCollection(db, boardId, 'chat-queue')),
-    processAccumulatedQueueStorage: createFirestoreQueueStorage(boardCollection(db, boardId, 'process-queue')),
+    journalStorageForRef(ref) {
+      const root = requireCollectionPath(ref, `boards/${boardId}/runtime-board`);
+      return createFirestoreJournalStorage(db.collection(`${root}-journal`));
+    },
     lock: createFirestoreLock(boardCollection(db, boardId, 'locks').doc('board-lock'), {
       holderId: options.holderId,
     }),

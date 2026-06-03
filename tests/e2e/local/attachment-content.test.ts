@@ -95,6 +95,8 @@ describe('e2e: get-attachment-content round-trip', () => {
     fs.mkdirSync(artifactsDir,  { recursive: true });
 
     const boardRef        = fsRef(boardDir);
+    const boardRuntimeRef = fsRef(path.join(boardDir, '.runtime'));
+    const queueStoreRef   = fsRef(path.join(boardDir, '.queue'));
     const cardStoreRef    = fsRef(cardStoreDir);
     const outputsRef      = fsRef(outputsDir);
     const artifactsRef    = fsRef(artifactsDir);
@@ -103,9 +105,15 @@ describe('e2e: get-attachment-content round-trip', () => {
     const initResult = parseOk(boardCli, [
       'init',
       '--base-ref',       boardRef,
+      '--board-runtime-store-ref', boardRuntimeRef,
+      '--queue-store-ref', queueStoreRef,
       '--card-store-ref', cardStoreRef,
       '--outputs-store-ref', outputsRef,
+      '--fetched-sources-store-ref', fsRef(path.join(boardDir, '.sources')),
+      '--chat-store-ref', fsRef(path.join(boardDir, '.chat')),
       '--artifacts-store-ref', artifactsRef,
+      '--scratch-store-ref', fsRef(path.join(boardDir, '.scratch')),
+      '--archive-store-ref', fsRef(path.join(boardDir, '.archive')),
     ]) as { status: string };
     expect(initResult.status).toBe('success');
 
@@ -151,6 +159,7 @@ describe('e2e: get-attachment-content round-trip', () => {
     const receivedRaw = runOk(boardCli, [
       'get-attachment-content',
       '--base-ref', boardRef,
+      '--board-runtime-store-ref', boardRuntimeRef,
       '--card-id',  cardId,
       '--file-idx', '0',
     ]);

@@ -70,6 +70,12 @@ function parseJsonBody(res: { _body: string }): unknown {
   return JSON.parse(res._body);
 }
 
+function parseSsePayload(res: { _body: string }): unknown {
+  const jsonStr = res._body.split('data: ')[1]?.split('\n')[0];
+  if (!jsonStr) throw new Error(`Missing SSE data frame: ${res._body}`);
+  return JSON.parse(jsonStr);
+}
+
 describe('server-runtime-controlface surface split', () => {
   let testRoot = '';
 
@@ -83,17 +89,28 @@ describe('server-runtime-controlface surface split', () => {
   function createRuntimeOptions(overrides: Partial<SingleBoardRuntimeOptions> = {}): SingleBoardRuntimeOptions {
     testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-controlface-surface-'));
     const boardDir = path.join(testRoot, 'board');
+    const boardRuntimeDir = path.join(testRoot, '.board-runtime');
+    const queueStoreDir = path.join(testRoot, '.board-queue');
     const cardStoreDir = path.join(testRoot, 'card-store');
     const outputsDir = path.join(testRoot, 'outputs');
     const filesDir = path.join(testRoot, 'files');
+    const chatDir = path.join(testRoot, 'chat');
+    const scratchDir = path.join(testRoot, 'scratch');
+    const archiveDir = path.join(testRoot, 'archive');
+    const sourcesDir = path.join(testRoot, 'sources');
     fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(boardRuntimeDir, { recursive: true });
+    fs.mkdirSync(queueStoreDir, { recursive: true });
     fs.mkdirSync(cardStoreDir, { recursive: true });
     fs.mkdirSync(outputsDir, { recursive: true });
     fs.mkdirSync(filesDir, { recursive: true });
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.mkdirSync(scratchDir, { recursive: true });
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.mkdirSync(sourcesDir, { recursive: true });
 
     const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
     const boardAdapter = createFsBoardPlatformAdapter(baseRef, testRoot, { suppressSpawn: true, onWarn: () => {} } as any);
-    const artifactsAdapter = createFsBoardPlatformAdapter(parseRef(serializeRef({ kind: 'fs-path', value: filesDir })), testRoot, { suppressSpawn: true, onWarn: () => {} } as any);
 
     return {
       apiBasePath: '/api/board',
@@ -101,11 +118,15 @@ describe('server-runtime-controlface surface split', () => {
       boards: [{
         label: 'base',
         boardAdapter,
-        artifactsAdapter,
         baseRef,
+        boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: boardRuntimeDir }),
+        queueStoreRef: serializeRef({ kind: 'fs-path', value: queueStoreDir }),
         cardStoreRef: serializeRef({ kind: 'fs-path', value: cardStoreDir }),
         outputsStoreRef: serializeRef({ kind: 'fs-path', value: outputsDir }),
+        chatStoreRef: serializeRef({ kind: 'fs-path', value: chatDir }),
         artifactsStoreRef: serializeRef({ kind: 'fs-path', value: filesDir }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: sourcesDir }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: scratchDir }),
       }],
       invocationAdapter: {
         async invoke() { return { dispatched: true }; },
@@ -208,16 +229,15 @@ describe('server-runtime-controlface surface split', () => {
     );
     expect(boardStatusHandled).toBe(false);
 
-    // init-board IS available on the full runtime
-    const initBoardRes = makeResponse();
-    const initBoardHandled = await runtime.handleRuntimeApi(
-      makeRequest('GET', '/api/board/init-board'),
-      initBoardRes,
-      new URL('http://example.test/api/board/init-board'),
+    const oneShotRes = makeResponse();
+    const oneShotHandled = await runtime.handleRuntimeApi(
+      makeRequest('GET', '/api/board/sse?one-shot'),
+      oneShotRes,
+      new URL('http://example.test/api/board/sse?one-shot'),
     );
-    expect(initBoardHandled).toBe(true);
-    expect(initBoardRes._status).toBe(200);
-    expect(JSON.stringify(parseJsonBody(initBoardRes))).toContain('card-browser');
+    expect(oneShotHandled).toBe(true);
+    expect(oneShotRes._status).toBe(200);
+    expect(JSON.stringify(parseSsePayload(oneShotRes))).toContain('card-browser');
 
     const sseRes = makeResponse();
     const sseHandled = await runtime.handleRuntimeApi(

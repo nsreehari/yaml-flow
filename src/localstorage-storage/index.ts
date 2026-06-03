@@ -3,6 +3,7 @@ import {
   serializeRef,
   type JournalEntry as StorageJournalEntry,
   type KindValueRef,
+  type QueueMessage,
 } from '../cli/common/storage-interface.js';
 import type {
   AsyncBoardPlatformAdapter,
@@ -29,10 +30,11 @@ import { createAsyncChatStorage } from '../cli/common/chat-storage-lib.js';
 
 export interface LocalStorageBoardRefs {
   baseRef: KindValueRef;
+  boardRuntimeStoreRef: string;
   cardStoreRef: string;
   outputsStoreRef: string;
+  queueStoreRef: string;
   scratchStoreRef: string;
-  archiveStoreRef: string;
   chatStoreRef: string;
   artifactsStoreRef: string;
   fetchedSourcesStoreRef: string;
@@ -68,6 +70,13 @@ function createInMemoryAsyncQueueStorage(): AsyncQueueStorage {
     reason?: string;
     dedupKey?: string;
   }>();
+  const stagedQueueItems = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    dedupKey?: string;
+  }>();
   const deadQueueItems = new Map<string, {
     id: string;
     body: unknown;
@@ -88,8 +97,16 @@ function createInMemoryAsyncQueueStorage(): AsyncQueueStorage {
       queueItems.set(item.id, item);
       return item as { id: string; body: T; enqueuedAt: string; attempt: number };
     },
+    async enqueueMany<T>(bodies: T[]) {
+      const queued = [] as QueueMessage<T>[];
+      for (const body of bodies) queued.push(await this.enqueue(body));
+      return queued;
+    },
     async enqueueIfAbsent<T>(body: T, dedupKey: string) {
       for (const existing of queueItems.values()) {
+        if (existing.dedupKey === dedupKey) return null;
+      }
+      for (const existing of stagedQueueItems.values()) {
         if (existing.dedupKey === dedupKey) return null;
       }
       const item = {
@@ -101,6 +118,49 @@ function createInMemoryAsyncQueueStorage(): AsyncQueueStorage {
       };
       queueItems.set(item.id, item);
       return item as { id: string; body: T; enqueuedAt: string; attempt: number };
+    },
+    async stage<T>(body: T, opts?: { dedupKey?: string }) {
+      const dedupKey = opts?.dedupKey;
+      if (dedupKey) {
+        for (const existing of queueItems.values()) {
+          if (existing.dedupKey === dedupKey) return null;
+        }
+        for (const existing of stagedQueueItems.values()) {
+          if (existing.dedupKey === dedupKey) return null;
+        }
+      }
+      const item = {
+        id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        body,
+        enqueuedAt: new Date().toISOString(),
+        attempt: 0,
+        ...(dedupKey ? { dedupKey } : {}),
+      };
+      stagedQueueItems.set(item.id, item);
+      return item as { id: string; body: T; enqueuedAt: string; attempt: number };
+    },
+    async commitStaged(messageId: string) {
+      const item = stagedQueueItems.get(messageId);
+      if (!item) return false;
+      stagedQueueItems.delete(messageId);
+      queueItems.set(messageId, {
+        ...item,
+        enqueuedAt: new Date().toISOString(),
+        attempt: 0,
+      });
+      return true;
+    },
+    async discardStaged(messageId: string, reason?: string) {
+      const item = stagedQueueItems.get(messageId);
+      if (!item) return false;
+      stagedQueueItems.delete(messageId);
+      deadQueueItems.set(messageId, { ...item, reason });
+      return true;
+    },
+    async peekStaged<T>(prefix = '') {
+      return Array.from(stagedQueueItems.values())
+        .filter((item) => !prefix || item.id.startsWith(prefix))
+        .map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
     },
     async lease<T>(opts?: { max?: number; visibilityMs?: number }) {
       const max = Math.max(1, Math.floor(opts?.max ?? 1));
@@ -410,10 +470,11 @@ export function createLocalStorageBoardRefs(boardId: string): LocalStorageBoardR
   const root = `boards:${boardId}`;
   return {
     baseRef: makeLocalStorageRef(root),
+    boardRuntimeStoreRef: serializeLocalStorageRef(`${root}:runtime-board`),
     cardStoreRef: serializeLocalStorageRef(`${root}:cards`),
     outputsStoreRef: serializeLocalStorageRef(`${root}:runtime-out`),
+    queueStoreRef: serializeLocalStorageRef(`${root}:runtime`),
     scratchStoreRef: serializeLocalStorageRef(`${root}:scratch`),
-    archiveStoreRef: serializeLocalStorageRef(`${root}:archive`),
     chatStoreRef: serializeLocalStorageRef(`${root}:chat`),
     artifactsStoreRef: serializeLocalStorageRef(`${root}:files`),
     fetchedSourcesStoreRef: serializeLocalStorageRef(`${root}:sources`),
@@ -435,9 +496,7 @@ export function createLocalStorageBoardAdapter(
   options: LocalStorageBoardAdapterOptions = {},
 ): AsyncBoardPlatformAdapter {
   const refs = createLocalStorageBoardRefs(boardId);
-  const taskQueueStorage = createInMemoryAsyncQueueStorage();
-  const chatQueueStorage = createInMemoryAsyncQueueStorage();
-  const processAccumulatedQueueStorage = createInMemoryAsyncQueueStorage();
+  const queueLaneStores = new Map<string, AsyncQueueStorage>();
 
   return createHostedAsyncBoardPlatformAdapter({
     boardId,
@@ -460,6 +519,16 @@ export function createLocalStorageBoardAdapter(
         wrapKvStorage(prefix),
       );
     },
+    queueStoreRef: refs.queueStoreRef,
+    queueStorageForRef(ref, lane) {
+      const prefix = `${requirePrefixFromRef(ref, `${refs.baseRef.value}:runtime`)}:queue:${lane}`;
+      let queue = queueLaneStores.get(prefix);
+      if (!queue) {
+        queue = createInMemoryAsyncQueueStorage();
+        queueLaneStores.set(prefix, queue);
+      }
+      return queue;
+    },
     scratchStorage() {
       return wrapScratchStorage(`${refs.baseRef.value}:scratch`);
     },
@@ -475,9 +544,9 @@ export function createLocalStorageBoardAdapter(
     journalStorage() {
       return wrapJournalStorage(`${refs.baseRef.value}:journal`);
     },
-    queueStorage: taskQueueStorage,
-    chatAgentQueueStorage: chatQueueStorage,
-    processAccumulatedQueueStorage,
+    journalStorageForRef(ref) {
+      return wrapJournalStorage(`${requirePrefixFromRef(ref, `${refs.baseRef.value}:runtime-board`)}:journal`);
+    },
     lock: createInMemoryAsyncRelayLock(),
     resolveBlob: async (ref) => {
       const parsed = ref?.kind === 'local-storage' ? ref : null;

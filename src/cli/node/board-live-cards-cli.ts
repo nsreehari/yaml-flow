@@ -25,7 +25,6 @@ import {
   decodeBoardRefFromToken,
   type KindValueRef,
 } from './fs-board-adapter.js';
-import { createBoardConfigStore } from '../common/board-live-cards-lib.js';
 import { createFsBlobStorage } from './storage-fs-adapters.js';
 import { resolveModuleDir, resolvePath } from './process-runner.js';
 
@@ -47,6 +46,20 @@ function optFlag(args: string[], flag: string): string | undefined {
   return idx !== -1 ? args[idx + 1] : undefined;
 }
 
+function requireBoardRuntimeStoreRef(args: string[], usage: string): string {
+  return requireFlag(args, '--board-runtime-store-ref', usage);
+}
+
+function requireQueueStoreRef(args: string[], usage: string): string {
+  return requireFlag(args, '--queue-store-ref', usage);
+}
+
+function readSuccessfulStoreRef(result: { status: string; data?: { storeRef?: string | null } }): string | undefined {
+  return result.status === 'success' && typeof result.data?.storeRef === 'string'
+    ? result.data.storeRef
+    : undefined;
+}
+
 function printResult(result: unknown): void {
   console.log(JSON.stringify(result, null, 2));
 }
@@ -64,14 +77,29 @@ function safeAttachmentCardKey(cardId: string): string {
   return String(cardId || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'unknown-card';
 }
 
-function readAttachmentBytes(baseRef: KindValueRef | undefined, notifyChannel: string | undefined, cardId: string, fileIdxRaw?: string): Uint8Array {
+function readAttachmentBytes(
+  baseRef: KindValueRef | undefined,
+  boardRuntimeStoreRef: string,
+  notifyChannel: string | undefined,
+  cardId: string,
+  fileIdxRaw?: string,
+): Uint8Array {
   if (!baseRef) throw new Error('get-attachment-content requires --base-ref <ref>');
 
-  const adapter = createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn, notifyChannel });
-  const cfg = createBoardConfigStore(adapter.kvStorage('config'));
-  const cardStoreRef = cfg.readCardStoreRef();
+  const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, {
+    onWarn: console.warn,
+    notifyChannel,
+    boardRuntimeStoreRef,
+  }), { boardRuntimeStoreRef });
+  const cardStoreRef = readSuccessfulStoreRef(board.getCardStoreRef({}));
   if (!cardStoreRef) throw new Error(`Board at ${baseRef.value} has no card store configured`);
 
+  const artifactsStoreRef = readSuccessfulStoreRef(board.getArtifactsStoreRef({}));
+  if (!artifactsStoreRef) {
+    throw new Error(`Board at ${baseRef.value} has no artifacts store configured`);
+  }
+
+  const adapter = createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn, notifyChannel, boardRuntimeStoreRef });
   const card = adapter.kvStorageForRef(cardStoreRef).read(cardId) as { card_data?: unknown } | null;
   if (!card) throw new Error(`Card "${cardId}" not found in board at ${baseRef.value}`);
 
@@ -97,10 +125,6 @@ function readAttachmentBytes(baseRef: KindValueRef | undefined, notifyChannel: s
   }
 
   const key = `${safeAttachmentCardKey(cardId)}/${storedName}`;
-  const artifactsStoreRef = cfg.readArtifactsStoreRef();
-  if (!artifactsStoreRef) {
-    throw new Error(`Board at ${baseRef.value} has no artifacts store configured`);
-  }
   const readBytes = createFsBlobStorage(parseRef(artifactsStoreRef).value).readBytes;
   if (!readBytes) throw new Error('configured artifacts store does not support byte reads');
   const bytes = readBytes(key);
@@ -128,22 +152,38 @@ export async function cli(argv: string[]): Promise<void> {
 
   // ── Source callbacks — token has `br` field; no --base-ref needed ────────
   if (cmd === 'source-data-fetched') {
-    const token = requireFlag(rest, '--token', 'source-data-fetched --token <token> --ref <sourcefile>');
-    const ref   = requireFlag(rest, '--ref',   'source-data-fetched --token <token> --ref <sourcefile>');
+    const usage = 'source-data-fetched --token <token> --ref <sourcefile> --board-runtime-store-ref <b64-ref> --queue-store-ref <b64-ref>';
+    const token = requireFlag(rest, '--token', usage);
+    const ref = requireFlag(rest, '--ref', usage);
+    const boardRuntimeStoreRef = requireBoardRuntimeStoreRef(rest, usage);
+    const queueStoreRef = requireQueueStoreRef(rest, usage);
     const brStr = decodeBoardRefFromToken(token);
     if (!brStr) throw new Error('source-data-fetched: could not decode board ref from token — is this a valid source token?');
     const br2 = parseRef(brStr);
-    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn, notifyChannel }));
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, {
+      onWarn: console.warn,
+      notifyChannel,
+      boardRuntimeStoreRef,
+      queueStoreRef,
+    }), { boardRuntimeStoreRef });
     printResult(board.sourceDataFetched({ params: { token, ref } }));
     return;
   }
 
   if (cmd === 'source-data-fetch-failure') {
-    const token = requireFlag(rest, '--token', 'source-data-fetch-failure --token <token> [--reason <message>]');
+    const usage = 'source-data-fetch-failure --token <token> --board-runtime-store-ref <b64-ref> --queue-store-ref <b64-ref> [--reason <message>]';
+    const token = requireFlag(rest, '--token', usage);
+    const boardRuntimeStoreRef = requireBoardRuntimeStoreRef(rest, usage);
+    const queueStoreRef = requireQueueStoreRef(rest, usage);
     const brStr = decodeBoardRefFromToken(token);
     if (!brStr) throw new Error('source-data-fetch-failure: could not decode board ref from token — is this a valid source token?');
     const br2 = parseRef(brStr);
-    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, { onWarn: console.warn, notifyChannel }));
+    const board = createBoardLiveCardsPublic(br2, createFsBoardPlatformAdapter(br2, __dirname, {
+      onWarn: console.warn,
+      notifyChannel,
+      boardRuntimeStoreRef,
+      queueStoreRef,
+    }), { boardRuntimeStoreRef });
     const params: Record<string, string> = { token };
     const reason = optFlag(rest, '--reason');
     if (reason) params['reason'] = reason;
@@ -154,7 +194,8 @@ export async function cli(argv: string[]): Promise<void> {
   // ── validate-card-preflight — card JSON arrives via stdin, optional --base-ref ─────
   if (cmd === 'validate-card-preflight') {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
-    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const boardRuntimeStoreRef = baseRef ? requireBoardRuntimeStoreRef(rest, 'validate-card-preflight --base-ref <ref> --board-runtime-store-ref <b64-ref>') : undefined;
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }), boardRuntimeStoreRef ? { boardRuntimeStoreRef } : undefined);
     const body = await readStdinBody();
     printResult(await nonCore.validateCardPreflight({ body }));
     return;
@@ -165,7 +206,8 @@ export async function cli(argv: string[]): Promise<void> {
     const idxRaw  = requireFlag(rest, '--source-idx', 'probe-source-preflight --source-idx <n>');
     const outRef  = optFlag(rest, '--out-ref');
     const tmpRef  = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
-    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const boardRuntimeStoreRef = baseRef ? requireBoardRuntimeStoreRef(rest, 'probe-source-preflight --base-ref <ref> --board-runtime-store-ref <b64-ref> --source-idx <n>') : undefined;
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }), boardRuntimeStoreRef ? { boardRuntimeStoreRef } : undefined);
     const body    = await readStdinBody();
     const params: Record<string, string | number | boolean> = { sourceIdx: parseInt(idxRaw, 10) };
     if (outRef) params['outRef'] = outRef;
@@ -178,7 +220,8 @@ export async function cli(argv: string[]): Promise<void> {
     const idxRaw  = requireFlag(rest, '--source-idx', 'run-source-preflight --source-idx <n>');
     const outRef  = optFlag(rest, '--out-ref');
     const tmpRef  = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
-    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const boardRuntimeStoreRef = baseRef ? requireBoardRuntimeStoreRef(rest, 'run-source-preflight --base-ref <ref> --board-runtime-store-ref <b64-ref> --source-idx <n>') : undefined;
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }), boardRuntimeStoreRef ? { boardRuntimeStoreRef } : undefined);
     const body    = await readStdinBody();
     const params: Record<string, string | number | boolean> = { sourceIdx: parseInt(idxRaw, 10) };
     if (outRef) params['outRef'] = outRef;
@@ -189,7 +232,8 @@ export async function cli(argv: string[]): Promise<void> {
   // ── eval-card-compute — card + mock data arrive via stdin, no board state needed ────
   if (cmd === 'eval-card-compute') {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
-    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const boardRuntimeStoreRef = baseRef ? requireBoardRuntimeStoreRef(rest, 'eval-card-compute --base-ref <ref> --board-runtime-store-ref <b64-ref>') : undefined;
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }), boardRuntimeStoreRef ? { boardRuntimeStoreRef } : undefined);
     const body = await readStdinBody();
     printResult(nonCore.evalCardCompute({ body }));
     return;
@@ -198,7 +242,8 @@ export async function cli(argv: string[]): Promise<void> {
   // ── simulate-card-cycle — full pipeline simulation with mocks via stdin ────
   if (cmd === 'simulate-card-cycle') {
     const tmpRef = baseRef ?? { kind: 'fs-path' as const, value: resolvePath('.') };
-    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }));
+    const boardRuntimeStoreRef = baseRef ? requireBoardRuntimeStoreRef(rest, 'simulate-card-cycle --base-ref <ref> --board-runtime-store-ref <b64-ref>') : undefined;
+    const nonCore = createBoardLiveCardsNonCorePublic(tmpRef, createFsBoardNonCorePlatformAdapter(tmpRef, __dirname, { onWarn: console.warn }), boardRuntimeStoreRef ? { boardRuntimeStoreRef } : undefined);
     const body = await readStdinBody();
     printResult(await nonCore.simulateCardCycle({ body }));
     return;
@@ -207,46 +252,60 @@ export async function cli(argv: string[]): Promise<void> {
   // ── All remaining commands require --base-ref ─────────────────────────────
   if (!baseRef) throw new Error(`--base-ref is required for command "${cmd ?? '(none)'}"`);
 
-  const board   = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, { onWarn: console.warn, notifyChannel }));
-  const nonCore = () => createBoardLiveCardsNonCorePublic(baseRef, createFsBoardNonCorePlatformAdapter(baseRef, __dirname, { onWarn: console.warn }));
+  const boardRuntimeStoreRef = requireBoardRuntimeStoreRef(rest, `${cmd ?? '(none)'} --base-ref <ref> --board-runtime-store-ref <b64-ref> ...`);
+  const readBoard = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, {
+    onWarn: console.warn,
+    notifyChannel,
+    boardRuntimeStoreRef,
+  }), { boardRuntimeStoreRef });
+  const writeBoard = () => createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, __dirname, {
+    onWarn: console.warn,
+    notifyChannel,
+    boardRuntimeStoreRef,
+    queueStoreRef: requireQueueStoreRef(rest, `${cmd ?? '(none)'} --base-ref <ref> --board-runtime-store-ref <b64-ref> --queue-store-ref <b64-ref> ...`),
+  }), { boardRuntimeStoreRef });
+  const nonCore = () => createBoardLiveCardsNonCorePublic(baseRef, createFsBoardNonCorePlatformAdapter(baseRef, __dirname, { onWarn: console.warn }), { boardRuntimeStoreRef });
 
   switch (cmd) {
     case 'init': {
-      const cardStoreRef = requireFlag(rest, '--card-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
-      const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', 'init --base-ref <ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref>');
-      const scratchStoreRef = optFlag(rest, '--scratch-store-ref');
-      const archiveStoreRef = optFlag(rest, '--archive-store-ref');
-      const artifactsStoreRef = optFlag(rest, '--artifacts-store-ref');
+      const usage = 'init --base-ref <ref> --board-runtime-store-ref <b64-ref> --queue-store-ref <b64-ref> --card-store-ref <b64-ref> --outputs-store-ref <b64-ref> --fetched-sources-store-ref <b64-ref> --chat-store-ref <b64-ref> --artifacts-store-ref <b64-ref> --scratch-store-ref <b64-ref>';
+      const cardStoreRef = requireFlag(rest, '--card-store-ref', usage);
+      const outputsStoreRef = requireFlag(rest, '--outputs-store-ref', usage);
+      const fetchedSourcesStoreRef = requireFlag(rest, '--fetched-sources-store-ref', usage);
+      const chatStoreRef = requireFlag(rest, '--chat-store-ref', usage);
+      const scratchStoreRef = requireFlag(rest, '--scratch-store-ref', usage);
+      const artifactsStoreRef = requireFlag(rest, '--artifacts-store-ref', usage);
+      const queueStoreRef = requireQueueStoreRef(rest, usage);
       const body = await readStdinBody();
-      printResult(board().init({ params: { cardStoreRef, outputsStoreRef, ...(scratchStoreRef ? { scratchStoreRef } : {}), ...(archiveStoreRef ? { archiveStoreRef } : {}), ...(artifactsStoreRef ? { artifactsStoreRef } : {}) }, body }));
+      printResult(writeBoard().init({ params: { boardRuntimeStoreRef, queueStoreRef, cardStoreRef, outputsStoreRef, fetchedSourcesStoreRef, chatStoreRef, scratchStoreRef, artifactsStoreRef }, body }));
       return;
     }
     case 'status': {
-      printResult(board().status({}));
+      printResult(readBoard().status({}));
       return;
     }
     case 'get-card-store-ref': {
-      printResult(board().getCardStoreRef({}));
+      printResult(readBoard().getCardStoreRef({}));
       return;
     }
     case 'get-outputs-store-ref': {
-      printResult(board().getOutputsStoreRef({}));
+      printResult(readBoard().getOutputsStoreRef({}));
       return;
     }
     case 'get-scratch-store-ref': {
-      printResult(board().getScratchStoreRef({}));
-      return;
-    }
-    case 'get-archive-store-ref': {
-      printResult(board().getArchiveStoreRef({}));
+      printResult(readBoard().getScratchStoreRef({}));
       return;
     }
     case 'get-chat-store-ref': {
-      printResult(board().getChatStoreRef({}));
+      printResult(readBoard().getChatStoreRef({}));
       return;
     }
     case 'get-artifacts-store-ref': {
-      printResult(board().getArtifactsStoreRef({}));
+      printResult(readBoard().getArtifactsStoreRef({}));
+      return;
+    }
+    case 'get-fetched-sources-store-ref': {
+      printResult(readBoard().getFetchedSourcesStoreRef({}));
       return;
     }
     case 'get-outputs': {
@@ -254,24 +313,24 @@ export async function cli(argv: string[]): Promise<void> {
       const all = rest.includes('--all');
       if (type === 'data-object') {
         if (all) {
-          printResult(board().getAllOutputsDataObjects({}));
+          printResult(readBoard().getAllOutputsDataObjects({}));
         } else {
           const key = requireFlag(rest, '--key', 'get-outputs --type data-object --base-ref <ref> --key <datakey>');
-          printResult(board().getOutputsDataObject({ params: { key } }));
+          printResult(readBoard().getOutputsDataObject({ params: { key } }));
         }
       } else if (type === 'computed-values') {
         if (all) {
-          printResult(board().getAllOutputsComputedValues({}));
+          printResult(readBoard().getAllOutputsComputedValues({}));
         } else {
           const key = requireFlag(rest, '--key', 'get-outputs --type computed-values --base-ref <ref> --key <card-id>');
-          printResult(board().getOutputsComputedValues({ params: { key } }));
+          printResult(readBoard().getOutputsComputedValues({ params: { key } }));
         }
       } else if (type === 'fetched_sources') {
         if (all) {
-          printResult(board().getAllOutputsFetchedSources({}));
+          printResult(readBoard().getAllOutputsFetchedSources({}));
         } else {
           const key = requireFlag(rest, '--key', 'get-outputs --type fetched_sources --base-ref <ref> --key <card-id>');
-          printResult(board().getOutputsFetchedSources({ params: { key } }));
+          printResult(readBoard().getOutputsFetchedSources({ params: { key } }));
         }
       } else {
         throw new Error(`get-outputs: unknown --type "${type}", expected data-object | computed-values | fetched_sources`);
@@ -280,34 +339,30 @@ export async function cli(argv: string[]): Promise<void> {
     }
     case 'remove-card': {
       const id = requireFlag(rest, '--id', 'remove-card --base-ref <ref> --id <card-id>');
-      printResult(board().removeCard({ params: { id } }));
+      printResult(writeBoard().removeCard({ params: { id } }));
       return;
     }
     case 'add-card-files': {
       const cardId = requireFlag(rest, '--card-id', 'add-card-files --base-ref <ref> --card-id <card-id> [--value-json <json>]');
       const valueJson = optFlag(rest, '--value-json');
       const body = valueJson ? JSON.parse(valueJson) as unknown : await readStdinBody();
-      printResult(board().addCardFiles({ params: { cardId }, body }));
+      printResult(writeBoard().addCardFiles({ params: { cardId }, body }));
       return;
     }
     case 'get-attachment-content': {
-      const cardId = requireFlag(rest, '--card-id', 'get-attachment-content --base-ref <ref> --card-id <card-id> [--file-idx <n>]');
+      const cardId = requireFlag(rest, '--card-id', 'get-attachment-content --base-ref <ref> --board-runtime-store-ref <b64-ref> --card-id <card-id> [--file-idx <n>]');
       const fileIdx = optFlag(rest, '--file-idx');
-      process.stdout.write(Buffer.from(readAttachmentBytes(baseRef, notifyChannel, cardId, fileIdx)));
+      process.stdout.write(Buffer.from(readAttachmentBytes(baseRef, boardRuntimeStoreRef, notifyChannel, cardId, fileIdx)));
       return;
     }
     case 'card-refreshed-notify': {
       const cardId = requireFlag(rest, '--card-id', 'card-refreshed-notify --base-ref <ref> --card-id <card-id>');
-      printResult(board().cardRefreshedNotify({ params: { cardId } }));
+      printResult(writeBoard().cardRefreshedNotify({ params: { cardId } }));
       return;
     }
     case 'retrigger': {
       const id = requireFlag(rest, '--id', 'retrigger --base-ref <ref> --id <card-id>');
-      printResult(board().retrigger({ params: { id } }));
-      return;
-    }
-    case 'process-accumulated-events': {
-      printResult(await board().processAccumulatedEvents({}));
+      printResult(writeBoard().retrigger({ params: { id } }));
       return;
     }
     case 'upsert-card': {
@@ -319,7 +374,7 @@ export async function cli(argv: string[]): Promise<void> {
       if (cardId)  params['cardId']  = cardId;
       if (all)     params['all']     = true;
       if (restart) params['restart'] = true;
-      printResult(board().upsertCard({ params }));
+      printResult(writeBoard().upsertCard({ params }));
       return;
     }
     case 'task-failed': {
@@ -327,14 +382,14 @@ export async function cli(argv: string[]): Promise<void> {
       const params: Record<string, string> = { token };
       const error = optFlag(rest, '--error');
       if (error) params['error'] = error;
-      printResult(board().taskFailed({ params }));
+      printResult(writeBoard().taskFailed({ params }));
       return;
     }
     case 'task-progress': {
       const token  = requireFlag(rest, '--token', 'task-progress --base-ref <ref> --token <token> [--update <json>]');
       const updateRaw = optFlag(rest, '--update');
       const update = updateRaw ? JSON.parse(updateRaw) as Record<string, unknown> : {};
-      printResult(board().taskProgress({ params: { token }, body: { update } }));
+      printResult(writeBoard().taskProgress({ params: { token }, body: { update } }));
       return;
     }
     case 'describe-task-executor-capabilities': {

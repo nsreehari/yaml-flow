@@ -38,10 +38,20 @@ const _TMP_BASE       = path.join(os.tmpdir(), 'experiment-js');
 const CARDSTORE_DIR   = path.join(_TMP_BASE, 'cardstore');
 const BOARDRUNTIME_DIR = path.join(_TMP_BASE, 'boardruntime');
 const OUTPUTS_DIR     = path.join(_TMP_BASE, 'outputs');
+const CHAT_DIR        = path.join(_TMP_BASE, 'chat');
+const FILES_DIR       = path.join(_TMP_BASE, 'files');
+const SOURCES_DIR     = path.join(_TMP_BASE, 'sources');
+const SCRATCH_DIR     = path.join(_TMP_BASE, 'scratch');
+const ARCHIVE_DIR     = path.join(_TMP_BASE, 'archive');
 
 const CARDSTORE_REF    = serializeRef({ kind: 'fs-path', value: CARDSTORE_DIR });
 const BOARDRUNTIME_REF = serializeRef({ kind: 'fs-path', value: BOARDRUNTIME_DIR });
 const OUTPUTS_REF      = serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR });
+const CHAT_REF         = serializeRef({ kind: 'fs-path', value: CHAT_DIR });
+const FILES_REF        = serializeRef({ kind: 'fs-path', value: FILES_DIR });
+const SOURCES_REF      = serializeRef({ kind: 'fs-path', value: SOURCES_DIR });
+const SCRATCH_REF      = serializeRef({ kind: 'fs-path', value: SCRATCH_DIR });
+const ARCHIVE_REF      = serializeRef({ kind: 'fs-path', value: ARCHIVE_DIR });
 const NOTIFY_CHANNEL   = 'yaml-flow-board-notify-portfolio-tracker-public';
 
 // ── Card definitions ───────────────────────────────────────────────────────────
@@ -399,7 +409,7 @@ const pipeConsumer = await startPipeConsumer(NOTIFY_CHANNEL);
 console.log('\n=== T0b: Init board ===');
 checkResult(
   makeBoard().init({
-    params: { cardStoreRef: CARDSTORE_REF, outputsStoreRef: OUTPUTS_REF },
+    params: { cardStoreRef: CARDSTORE_REF, outputsStoreRef: OUTPUTS_REF, chatStoreRef: CHAT_REF, artifactsStoreRef: FILES_REF, fetchedSourcesStoreRef: SOURCES_REF, scratchStoreRef: SCRATCH_REF, archiveStoreRef: ARCHIVE_REF },
     body: {
       'task-executor-ref': {
         meta: 'task-executor',

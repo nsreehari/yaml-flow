@@ -43,8 +43,8 @@ export interface RuntimePayloadDeps {
   /** Live reference to the runtime's board-contexts array (read on each call). */
   boardContexts: ReadonlyArray<RuntimePayloadBoardContext>;
   readCardDefinitions: () => Promise<Array<Record<string, unknown>>>;
-  readChatRecords: (cardId: string) => Array<Record<string, unknown>>;
-  getChatProcessing: (cardId: string) => boolean;
+  readChatRecords: (cardId: string) => Promise<Array<Record<string, unknown>>>;
+  getChatProcessing: (cardId: string) => Promise<boolean>;
 }
 
 export interface RuntimePayloadModule {
@@ -177,8 +177,8 @@ export function createRuntimePayloadModule(deps: RuntimePayloadDeps): RuntimePay
       if (!cardDef?.id) continue;
       const id = cardDef.id as string;
       try {
-        const records = readChatRecords(id);
-        const processing = getChatProcessing(id);
+        const records = await readChatRecords(id);
+        const processing = await getChatProcessing(id);
         if (records.length > 0 || processing) {
           cardChatsByCardId[id] = {
             messages: records.map((r) => ({

@@ -134,6 +134,9 @@ export interface McpControlplaneRegistryDeps {
   /** Resolves the (lazy) per-board MCP facade for admin tool dispatch. */
   getMcpFacade: () => Pick<McpFacadeForRegistry, 'listRuntimeCards' | 'adminReadCard' | 'adminUpsertCard' | 'manageAddChatAttachment' | 'manageAddChatEntryAndAnyAttachments' | 'managePatchCard' | 'manageRemoveCard' | 'manageUpsertCard'>;
   controlplane: {
+    subscribeChat: (args: Record<string, unknown>) => unknown;
+    unsubscribeChat: (args: Record<string, unknown>) => unknown;
+    watchChannel: (args: Record<string, unknown>, subscribed: boolean) => unknown;
     getChatProcessing: (args: Record<string, unknown>) => unknown;
     setChatProcessing: (args: Record<string, unknown>, active: boolean) => unknown;
     getCardMeta: (args: Record<string, unknown>) => unknown;
@@ -175,6 +178,10 @@ export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryD
       requireBoardId(args, 'list-runtime-cards');
       return getMcpFacade().listRuntimeCards();
     },
+    'sse.subscribe-chat': (args) => controlplane.subscribeChat(args),
+    'sse.unsubscribe-chat': (args) => controlplane.unsubscribeChat(args),
+    'sse.watch-channel': (args) => controlplane.watchChannel(args, true),
+    'sse.unwatch-channel': (args) => controlplane.watchChannel(args, false),
     'getstate.is-chat-processing': (args) => controlplane.getChatProcessing(args),
     'setstate.chat-processing-started': (args) => controlplane.setChatProcessing(args, true),
     'setstate.chat-processing-done': (args) => controlplane.setChatProcessing(args, false),

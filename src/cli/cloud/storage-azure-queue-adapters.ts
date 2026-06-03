@@ -94,6 +94,7 @@ export function createAzureQueueStorage(
   options: AzureQueueStorageOptions = {},
 ): AsyncQueueStorage {
   const now = options.now ?? (() => new Date());
+  const staged = new Map<string, { body: unknown; enqueuedAt: string; attempt: number; dedupKey?: string }>();
 
   return {
     async enqueue<T>(body: T): Promise<QueueMessage<T>> {
@@ -104,6 +105,45 @@ export function createAzureQueueStorage(
         enqueuedAt: toIso(response.insertionTime, now),
         attempt: 0,
       };
+    },
+
+    async enqueueMany<T>(bodies: T[]): Promise<QueueMessage<T>[]> {
+      const queued = [] as QueueMessage<T>[];
+      for (const body of bodies) queued.push(await this.enqueue(body));
+      return queued;
+    },
+
+    async stage<T>(body: T, opts?: { dedupKey?: string }): Promise<QueueMessage<T> | null> {
+      const dedupKey = opts?.dedupKey;
+      if (dedupKey) {
+        for (const existing of staged.values()) {
+          if (existing.dedupKey === dedupKey) return null;
+        }
+      }
+      const id = `staged:${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)}`;
+      const message = { body, enqueuedAt: now().toISOString(), attempt: 0, ...(dedupKey ? { dedupKey } : {}) };
+      staged.set(id, message);
+      return { id, body, enqueuedAt: message.enqueuedAt, attempt: 0 };
+    },
+
+    async commitStaged(messageId: string): Promise<boolean> {
+      const message = staged.get(messageId);
+      if (!message) return false;
+      staged.delete(messageId);
+      await queueClient.sendMessage(encodeBody(message.body));
+      return true;
+    },
+
+    async discardStaged(messageId: string): Promise<boolean> {
+      if (!staged.has(messageId)) return false;
+      staged.delete(messageId);
+      return true;
+    },
+
+    async peekStaged<T>(prefix = ''): Promise<QueueMessage<T>[]> {
+      return Array.from(staged.entries())
+        .filter(([id]) => !prefix || id.startsWith(prefix))
+        .map(([id, message]) => ({ id, body: message.body as T, enqueuedAt: message.enqueuedAt, attempt: message.attempt }));
     },
 
     async lease<T>(opts?: { max?: number; visibilityMs?: number }): Promise<QueueLeasedMessage<T>[]> {

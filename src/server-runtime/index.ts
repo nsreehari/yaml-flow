@@ -25,20 +25,19 @@ import {
 import type { CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
 import { createAsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
 import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
+import { createAsyncBoardWorkerStore } from '../cli/cloud/board-platform-adapter-async.js';
 import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
 import type { AsyncCardAdminStore } from '../cli/cloud/board-live-cards-storage-async.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
 import { createCardStore } from '../cli/common/board-live-cards-lib.js';
+import { createBoardWorkerStore, type BoardWorkerRequest } from '../cli/common/board-worker-store.js';
 
 import {
   createArtifactsStore,
   createCardFileMetadataStore,
 } from '../cli/common/artifacts-store-lib.js';
 
-import {
-  createInMemoryChatStorage,
-} from '../cli/common/chat-storage-lib.js';
 import type { ChatStorage } from '../cli/common/chat-storage-lib.js';
 import { createChatStorePublic } from '../cli/common/chat-store-lib-public.js';
 
@@ -56,7 +55,6 @@ import type {
   InvocationAdapter,
   NotificationTransport,
 } from './types.js';
-import type { BoardWorkerRequest } from '../cli/common/board-worker-store.js';
 import {
   type NotificationState,
   makeNotificationState,
@@ -124,6 +122,7 @@ const CHAT_HANDLER_FLOW_QUEUE_TARGET = 'chat-handler-flow-queue';
 type Awaitable<T> = T | Promise<T>;
 
 type BoardStatusObjectInternal = import('../cli/common/board-live-cards-lib.js').BoardStatusObject;
+type BoardProcessAccumulatorInternal = { processAccumulatedEvents(input: CommandInput): Promise<CommandResult> };
 
 /** Awaitable mirror of the BoardLiveCardsPublic methods the runtime needs. */
 interface BoardOpsAwaitable {
@@ -164,14 +163,17 @@ interface BoardContext {
   boardOps: BoardOpsAwaitable;
   /** Awaitable wrapper around `cardStore` for runtime-internal call sites. */
   cardStoreOps: CardStoreOpsAwaitable;
-  readonly filesArtifacts: RuntimeFilesArtifactsStore | null;
+  readonly filesArtifacts: RuntimeFilesArtifactsStore;
+  readonly chatStorage: ChatStorage;
   boardAdapter: BoardRuntimePlatformAdapter;
+  boardRuntimeStoreRef: string;
   cardStoreRef: string;
   outputsStoreRef: string;
-  artifactsStoreRef?: string;
-  chatStoreRef?: string;
-  scratchStoreRef?: string;
-  archiveStoreRef?: string;
+  artifactsStoreRef: string;
+  fetchedSourcesStoreRef: string;
+  queueStoreRef: string;
+  chatStoreRef: string;
+  scratchStoreRef: string;
   notifyRef?: import('./types.js').KindValueRef;
   taskExecutorRef?: import('./types.js').ExecutionRef;
   chatHandlerRef?: import('./types.js').ExecutionRef;
@@ -195,8 +197,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const logger: RuntimeLogger = options.logger || { info: console.log, warn: console.warn, error: console.error };
   const invocationAdapter = options.invocationAdapter;
   const chatFlowRunner = options.chatFlowRunner || null;
-  const chatStorage: ChatStorage = options.chatStorage ?? createInMemoryChatStorage();
-  const chatStorePublic = createChatStorePublic(chatStorage);
   const notificationTransport = options.notificationTransport || null;
   const serverUrl = options.serverUrl || null;
   const executionExtra = options.executionExtra || {};
@@ -208,8 +208,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // SSE hub: owns the client registry, broadcast helpers, and chat-subscription scanner.
   // Constructed lazily-bound to readChatRecords (defined further down in the closure).
   const sseHub = createSseHub({
-    chatStorage,
     readChatRecords: (cardId: string) => readChatRecords(cardId),
+    getChatProcessing: (cardId: string) => getChatProcessing(cardId),
+    readChatAfter: async (cardId: string, cursor: string | null) => {
+      const result = await readChatAfter(cardId, cursor);
+      return {
+        records: result.records as unknown as Array<Record<string, unknown>>,
+        cursor: result.cursor,
+      };
+    },
     onSseClientDisconnected,
   });
 
@@ -308,11 +315,27 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
 
     const board = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
-      ? createAsyncBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter)
-      : createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter);
+      ? createAsyncBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter, {
+        boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
+        scratchStoreRef: cfg.scratchStoreRef,
+        taskExecutorRef: cfg.taskExecutorRef,
+        chatHandlerFlow: cfg.chatHandlerFlow,
+      })
+      : createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter, {
+        boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
+        scratchStoreRef: cfg.scratchStoreRef,
+        taskExecutorRef: cfg.taskExecutorRef,
+        chatHandlerFlow: cfg.chatHandlerFlow,
+      });
     const nonCoreAdapter = cfg.nonCoreAdapter
       ?? (!isAsyncBoardPlatformAdapter(cfg.boardAdapter) && isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
-    const nonCore = cfg.nonCore ?? (nonCoreAdapter ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter) : null);
+    const nonCore = cfg.nonCore ?? (nonCoreAdapter
+      ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter, {
+        boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
+        taskExecutorRef: cfg.taskExecutorRef,
+      })
+      : null);
+    const chatStorage = cfg.boardAdapter.chatStorageForRef(cfg.chatStoreRef);
     let publicCardStore: SingleBoardRuntime['cardStore'];
     const cardStoreOps = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
       ? (() => {
@@ -342,25 +365,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         publicCardStore = syncStore;
         return createSyncCardStoreOps(syncStore);
       })();
-    const artAdapter = cfg.artifactsAdapter || cfg.boardAdapter;
-    const callerFilesArtifactsStore = cfg.filesArtifactsStore ?? null;
-    let _filesArtifacts: RuntimeFilesArtifactsStore | null = callerFilesArtifactsStore
-      ? {
-        putBytes(key, content, contentType) { callerFilesArtifactsStore.putBytes(key, content, contentType); },
-        getBytes(key) { return callerFilesArtifactsStore.getBytes(key); },
-        listKeys(prefix) { return callerFilesArtifactsStore.list(prefix).map((entry) => entry.key); },
-      }
-      : null;
-    if (!_filesArtifacts && !isAsyncBoardPlatformAdapter(artAdapter)) {
-      const filesBlob = cfg.artifactsAdapter ? artAdapter.blobStorage('') : artAdapter.blobStorage('files');
+    let _filesArtifacts: RuntimeFilesArtifactsStore;
+    if (!isAsyncBoardPlatformAdapter(cfg.boardAdapter)) {
+      const filesBlob = cfg.boardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
       const filesStore = createArtifactsStore(filesBlob);
       _filesArtifacts = {
         putBytes(key, content, contentType) { filesStore.putBytes(key, content, contentType); },
         getBytes(key) { return filesStore.getBytes(key); },
         listKeys(prefix) { return filesStore.list(prefix).map((entry) => entry.key); },
       };
-    } else if (!_filesArtifacts && isAsyncBoardPlatformAdapter(artAdapter)) {
-      const filesBlob = cfg.artifactsAdapter ? artAdapter.blobStorage('') : artAdapter.blobStorage('files');
+    } else {
+      const filesBlob = cfg.boardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
       _filesArtifacts = {
         async putBytes(key, content) {
           if (filesBlob.writeBytes) {
@@ -412,13 +427,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       boardOps,
       cardStoreOps,
       get filesArtifacts() { return _filesArtifacts; },
+      get chatStorage() { return chatStorage; },
       boardAdapter: cfg.boardAdapter,
+      boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,
       artifactsStoreRef: cfg.artifactsStoreRef,
+      fetchedSourcesStoreRef: cfg.fetchedSourcesStoreRef,
+      queueStoreRef: cfg.queueStoreRef,
       chatStoreRef: cfg.chatStoreRef,
       scratchStoreRef: cfg.scratchStoreRef,
-      archiveStoreRef: cfg.archiveStoreRef,
       notifyRef: cfg.notifyRef,
       taskExecutorRef: cfg.taskExecutorRef,
       chatHandlerRef: cfg.chatHandlerRef,
@@ -435,6 +453,17 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const cardOwnerIndex = new Map<string, number>();
 
   function ownerIndex(cardId: string): number { return cardOwnerIndex.get(cardId) ?? 0; }
+
+  function requireQueueStoreRef(ctx: BoardContext): string { return ctx.queueStoreRef; }
+
+  function queueWorkerStoreForLane(ctx: BoardContext, lane: string) {
+    if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
+      const queue = ctx.boardAdapter.queueStorageForRef(requireQueueStoreRef(ctx), lane);
+      return createAsyncBoardWorkerStore(queue);
+    }
+    const queue = ctx.boardAdapter.queueStorageForRef(requireQueueStoreRef(ctx), lane);
+    return createBoardWorkerStore(queue);
+  }
 
   function isBoardNonCorePlatformAdapter(adapter: import('./types.js').BoardPlatformAdapter): adapter is import('./types.js').BoardNonCorePlatformAdapter {
     const maybe = adapter as import('./types.js').BoardNonCorePlatformAdapter;
@@ -484,19 +513,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (ctx.initialized) return;
 
     const params: Record<string, string> = {
+      boardRuntimeStoreRef: ctx.boardRuntimeStoreRef,
       cardStoreRef: ctx.cardStoreRef,
       outputsStoreRef: ctx.outputsStoreRef,
+      fetchedSourcesStoreRef: ctx.fetchedSourcesStoreRef,
+      artifactsStoreRef: ctx.artifactsStoreRef,
+      queueStoreRef: ctx.queueStoreRef,
+      chatStoreRef: ctx.chatStoreRef,
+      scratchStoreRef: ctx.scratchStoreRef,
     };
-    if (ctx.artifactsStoreRef) params.artifactsStoreRef = ctx.artifactsStoreRef;
-    if (ctx.chatStoreRef) params.chatStoreRef = ctx.chatStoreRef;
-    if (ctx.scratchStoreRef) params.scratchStoreRef = ctx.scratchStoreRef;
-    if (ctx.archiveStoreRef) params.archiveStoreRef = ctx.archiveStoreRef;
-    const body: Record<string, unknown> = {};
-    if (ctx.taskExecutorRef) body['task-executor-ref'] = ctx.taskExecutorRef;
-    if (ctx.chatHandlerFlow !== undefined) body['chat-handler-flow'] = ctx.chatHandlerFlow;
-    if (ctx.inferenceAdapterRef) body['inference-adapter-ref'] = ctx.inferenceAdapterRef;
-
-    const initResult = await ctx.boardOps.init({ params, body });
+    const initResult = await ctx.boardOps.init({ params, body: {} });
     if (initResult.status !== 'success') {
       throw Object.assign(
         new Error((initResult as any).error || `init failed for ${ctx.label}`),
@@ -586,15 +612,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   async function processAccumulatedLaneInternal(skipInit = false): Promise<CommandResult> {
     if (!skipInit) await initBoardAndSetup();
     for (const ctx of boardContexts) {
-      const result = await ctx.board.processAccumulatedEvents({});
+      const result = await (ctx.board as unknown as BoardProcessAccumulatorInternal).processAccumulatedEvents({});
       if (result.status !== 'success') return result;
     }
     return { status: 'success' };
-  }
-
-  async function processAccumulatedEventsInternal(): Promise<CommandResult> {
-    await initBoardAndSetup();
-      return processAccumulatedLaneInternal(true);
   }
 
   // ── Card reads ───────────────────────────────────────────────────────────
@@ -632,6 +653,57 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return boardContexts[0] ?? null;
   }
 
+  function chatContextForCard(cardId: string): BoardContext | null {
+    return cardContextForCard(cardId) ?? primaryContext();
+  }
+
+  function requireChatStorageForCard(cardId: string): ChatStorage {
+    const ctx = chatContextForCard(cardId);
+    if (!ctx) {
+      throw Object.assign(new Error(`Board context is unavailable for chat operations: ${cardId}`), { statusCode: 404 });
+    }
+    return ctx.chatStorage;
+  }
+
+  async function readChatAfter(cardId: string, cursor: string | null) {
+    return await requireChatStorageForCard(cardId).readAfter(cardId, cursor);
+  }
+
+  async function getChatProcessing(cardId: string): Promise<boolean> {
+    return await requireChatStorageForCard(cardId).isProcessing(cardId);
+  }
+
+  async function setChatProcessing(cardId: string, active: boolean): Promise<void> {
+    await requireChatStorageForCard(cardId).setProcessing(cardId, active);
+  }
+
+  const chatStorePublic = createChatStorePublic({
+    append(cardId, role, text, files, turn) {
+      return requireChatStorageForCard(cardId).append(cardId, role, text, files, turn);
+    },
+    readAll(cardId) {
+      return requireChatStorageForCard(cardId).readAll(cardId);
+    },
+    readAfter(cardId, cursor) {
+      return requireChatStorageForCard(cardId).readAfter(cardId, cursor);
+    },
+    clear(cardId) {
+      return requireChatStorageForCard(cardId).clear(cardId);
+    },
+    setProcessing(cardId, active) {
+      return requireChatStorageForCard(cardId).setProcessing(cardId, active);
+    },
+    isProcessing(cardId) {
+      return requireChatStorageForCard(cardId).isProcessing(cardId);
+    },
+    getConfig(cardId) {
+      return requireChatStorageForCard(cardId).getConfig(cardId);
+    },
+    setConfig(cardId, patch) {
+      return requireChatStorageForCard(cardId).setConfig(cardId, patch);
+    },
+  });
+
   // MCP facade wiring lives in ./mcp-facade.ts. The factory takes narrow
   // callbacks for every closure-owned helper the facade reaches into;
   // returned methods are re-bound to local names so existing call sites
@@ -658,6 +730,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const createMcpFacade = mcpFacadeModule.createMcpFacade;
   const controlplaneToolHandlers = createControlplaneToolHandlers({
     boardId,
+    bootstrapBoard: () => bootstrapBoard(),
+    sseHub,
+    onChannelSubscribed,
+    onChannelUnsubscribed,
     getMcpFacade: () => createMcpFacade(),
     getMcpCardStoreFacade: () => mcpCardStoreFacade(),
   });
@@ -688,7 +764,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     boardContexts,
     readCardDefinitions: () => readCardDefinitions(),
     readChatRecords: (cardId) => readChatRecords(cardId),
-    getChatProcessing: (cardId) => createMcpFacade().getChatProcessing({ cardId }).active,
+    getChatProcessing: (cardId) => getChatProcessing(cardId),
   });
 
   const readStatusSnapshot = runtimePayloadModule.readStatusSnapshot;
@@ -747,19 +823,19 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat & file operations ───────────────────────────────────────────────
 
-  function clearChatRecords(cardId: string): void {
-    chatStorage.clear(cardId);
-    try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
+  async function clearChatRecords(cardId: string): Promise<void> {
+    await requireChatStorageForCard(cardId).clear(cardId);
+    try { await setChatProcessing(cardId, false); } catch {}
   }
 
   /** Append a chat message; returns the new entry id (used as cursor). */
-  function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>, turn = ''): string {
+  async function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>, turn = ''): Promise<string> {
     const msg = typeof text === 'string' ? text.trim() : '';
-    return chatStorage.append(cardId, role || 'system', msg, files, turn);
+    return await requireChatStorageForCard(cardId).append(cardId, role || 'system', msg, files, turn);
   }
 
-  function readChatRecords(cardId: string): Array<Record<string, unknown>> {
-    return chatStorage.readAll(cardId) as unknown as Array<Record<string, unknown>>;
+  async function readChatRecords(cardId: string): Promise<Array<Record<string, unknown>>> {
+    return await requireChatStorageForCard(cardId).readAll(cardId) as unknown as Array<Record<string, unknown>>;
   }
 
   // File operations live in ./card-file-ops.ts. The factory takes narrow
@@ -803,7 +879,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const { ctx, handlerFlow, handlerRef } = target;
 
     if (!processingAlreadySet) {
-      try { createMcpFacade().setChatProcessing({ cardId, active: true }); } catch {}
+      try { await setChatProcessing(cardId, true); } catch {}
     }
 
     const args: Record<string, unknown> = {
@@ -825,13 +901,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
     try {
       if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
-        await ctx.boardAdapter.chatAgentStore().enqueueRequest({
+        await queueWorkerStoreForLane(ctx, 'chat-agent').enqueueRequest({
           boardId,
           ref: executionRef,
           args: handlerFlow != null ? { ...args, __chatHandlerFlow: handlerFlow } : args,
         });
       } else {
-        ctx.boardAdapter.chatAgentStore().enqueueRequest({
+        queueWorkerStoreForLane(ctx, 'chat-agent').enqueueRequest({
           boardId,
           ref: executionRef,
           args: handlerFlow != null ? { ...args, __chatHandlerFlow: handlerFlow } : args,
@@ -839,7 +915,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       }
       await Promise.resolve(ctx.boardAdapter.requestProcessAccumulated?.());
     } catch (err) {
-      try { createMcpFacade().setChatProcessing({ cardId, active: false }); } catch {}
+      try { await setChatProcessing(cardId, false); } catch {}
       logger.warn(`[chat-handler] queue failed for card "${cardId}": ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -882,7 +958,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const result = await dispatchQueuedChatHandler(ctx, request.ref, request.args);
     if (result.dispatched) return;
     if (cardId) {
-      try { chatStorage.setProcessing(cardId, false); } catch {}
+      try { await setChatProcessing(cardId, false); } catch {}
     }
     throw new Error(result.error || `chat-agent dispatch failed for card "${cardId || 'unknown'}"`);
   }
@@ -890,62 +966,53 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // ── Card actions ─────────────────────────────────────────────────────────
 
   async function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): Promise<void> {
-    const persistCard = actionType === 'chat-send' ? updateCardLocalOnly : updateCard;
-    let chatHandlerResult: { cardId: string; lastEntryId: string; processingAlreadySet: boolean } | undefined;
+    if (actionType === 'chat-send') {
+      const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
+      const turnId = payload && typeof payload['turn-id'] === 'string'
+        ? payload['turn-id']
+        : payload && typeof payload.turnId === 'string'
+          ? payload.turnId
+          : payload && typeof payload.turn === 'string'
+            ? payload.turn
+            : '';
+      const files: Array<Record<string, unknown>> = [];
+      if (Array.isArray(payload?.files)) {
+        for (const f of payload.files as unknown[]) {
+          if (!f) continue;
+          if (typeof f === 'string') { files.push({ name: f }); continue; }
+          if (typeof f === 'object') {
+            const fo = f as Record<string, unknown>;
+            if (typeof fo.name === 'string') files.push({ name: fo.name, size: fo.size, mime_type: fo.mime_type, uploaded_at: fo.uploaded_at, stored_name: fo.stored_name, chat: fo.chat === true });
+          }
+        }
+      }
 
+      if (text || files.length > 0) {
+        const batchResult = await chatStorePublic.runBatch({
+          cardId,
+          commands: [
+            { command: 'append', role: 'user', text, files, turn: turnId },
+            { command: 'set-processing', active: true },
+          ],
+        });
+        if (batchResult.status !== 'success') {
+          throw new Error(batchResult.error);
+        }
+        const appendId = (batchResult.data.results[0]?.data as { id?: unknown } | undefined)?.id;
+        if (typeof appendId !== 'string' || !appendId) {
+          throw new Error(`chat-send did not return an append id for card ${cardId}`);
+        }
+        try { void sseHub.broadcastCardChats(cardId); } catch { /* best-effort */ }
+        void queueChatHandler(cardId, appendId, true, turnId);
+      }
+      return;
+    }
+
+    const persistCard = updateCard;
     await persistCard(cardId, (card) => {
       const now = new Date().toISOString();
       const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
       card.card_data = cardData;
-
-      if (actionType === 'chat-send') {
-        const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
-        const turnId = payload && typeof payload['turn-id'] === 'string'
-          ? payload['turn-id']
-          : payload && typeof payload.turnId === 'string'
-            ? payload.turnId
-            : payload && typeof payload.turn === 'string'
-              ? payload.turn
-              : '';
-        const files: Array<Record<string, unknown>> = [];
-        if (Array.isArray(payload?.files)) {
-          for (const f of payload.files as unknown[]) {
-            if (!f) continue;
-            if (typeof f === 'string') { files.push({ name: f }); continue; }
-            if (typeof f === 'object') {
-              const fo = f as Record<string, unknown>;
-              if (typeof fo.name === 'string') files.push({ name: fo.name, size: fo.size, mime_type: fo.mime_type, uploaded_at: fo.uploaded_at, stored_name: fo.stored_name, chat: fo.chat === true });
-            }
-          }
-        }
-
-        if (text || files.length > 0) {
-          const batchResult = chatStorePublic.runBatch({
-            cardId,
-            commands: [
-              { command: 'append', role: 'user', text, files, turn: turnId },
-              { command: 'set-processing', active: true },
-            ],
-          });
-          if (batchResult.status !== 'success') {
-            throw new Error(batchResult.error);
-          }
-          const appendId = (batchResult.data.results[0]?.data as { id?: unknown } | undefined)?.id;
-          if (typeof appendId !== 'string' || !appendId) {
-            throw new Error(`chat-send did not return an append id for card ${cardId}`);
-          }
-          const entryId = appendId;
-          const processingAlreadySet = true;
-
-          chatHandlerResult = { cardId, lastEntryId: entryId, processingAlreadySet, turnId } as typeof chatHandlerResult & { turnId: string };
-          // Immediately broadcast processing=true to subscribed SSE clients.
-          // The scan loop runs every ~1s; for fast (sub-second) flows the
-          // processing flag is already cleared by the time the loop fires,
-          // so clients would never see the processing-started transition.
-          try { sseHub.broadcastCardChats(cardId); } catch { /* best-effort */ }
-        }
-        return card;
-      }
 
       if (actionType === 'file-upload') {
         const files = cardFileMetadataStoreInstance().normalizeIncoming(payload?.files, now);
@@ -962,10 +1029,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
       return card;
     });
-
-    if (chatHandlerResult) {
-      void queueChatHandler(chatHandlerResult.cardId, chatHandlerResult.lastEntryId, chatHandlerResult.processingAlreadySet, (chatHandlerResult as { turnId?: string }).turnId ?? '');
-    }
   }
 
   // ── HTTP helpers ─────────────────────────────────────────────────────────
@@ -1145,8 +1208,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     get queueLaneTuning() { return queueLaneTuning; },
     handleRuntimeApi: handleAllRoutes,
     buildPublishedRuntimePayload,
-    processAccumulatedEvents: processAccumulatedEventsInternal,
-    processAccumulatedLane: processAccumulatedLaneInternal,
+    __drainProcessAccumulatedLane: processAccumulatedLaneInternal,
     handleChatAgentRequest: handleChatAgentRequestInternal,
     clearChatRecords,
     reportSourceFetched(token: string, ref: string) {
@@ -1161,7 +1223,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         set() { return Promise.resolve({ status: 'fail', error: 'no board context' }); },
       };
     },
-  };
+  } as SingleBoardRuntime & { __drainProcessAccumulatedLane(): Awaitable<CommandResult> };
 }
 
 // ============================================================================

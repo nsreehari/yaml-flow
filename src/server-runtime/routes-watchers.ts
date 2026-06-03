@@ -67,13 +67,15 @@ export function createRoutesWatchers(deps: RoutesWatchersDeps): RoutesWatchers {
     try {
       // ── GET /sse ────────────────────────────────────────────────────────
       if (method === 'GET' && p === `${apiBasePath}/sse`) {
+        const oneShot = url.searchParams.has('one-shot');
         await initBoardAndSetup();
         const clientId = String(url.searchParams.get('clientId') || '').trim();
-        if (!clientId) {
+        if (!oneShot && !clientId) {
           json(res, 400, { error: 'clientId query param is required for SSE' });
           return true;
         }
-        await handleSse(req, res, clientId);
+        await handleSse(req, res, clientId || undefined, { oneShot });
+        if (oneShot) return true;
         for (let i = 0; i < boardContexts.length; i++) {
           await publishPersistedStateSnapshot(boardContexts[i]);
           await upsertCardsFromSource(boardContexts[i], i);
@@ -90,7 +92,7 @@ export function createRoutesWatchers(deps: RoutesWatchersDeps): RoutesWatchers {
         const body = await readJsonBody(req);
         const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
         if (!clientId) { json(res, 400, { error: 'clientId is required' }); return true; }
-        if (!(sseHub as SseHub).subscribeChat(clientId, cardId)) {
+        if (!await (sseHub as SseHub).subscribeChat(clientId, cardId)) {
           json(res, 404, { error: `SSE client not connected: ${clientId}` });
           return true;
         }

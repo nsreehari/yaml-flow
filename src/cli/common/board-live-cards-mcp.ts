@@ -255,8 +255,8 @@ export interface BoardLiveCardsMcp {
   manageRemoveCard(args: { cardId: string }): Promise<unknown>;
   adminReadCard(args: { cardId: string }): Promise<LiveCard[]>;
   adminUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
-  getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean };
-  setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean };
+  getChatProcessing(args: { cardId: string }): Promise<{ cardId: string; active: boolean }>;
+  setChatProcessing(args: { cardId: string; active: boolean }): Promise<{ cardId: string; active: boolean }>;
   webhookProcessAccumulated(): Promise<CommandResult<{ runtime_result: unknown }>>;
   webhookSourceFetchDone(args: { token: string; ref: string }): Promise<CommandResult<{ token: string; ref: string; runtime_result: unknown }>>;
   webhookSourceFetchFailed(args: { token: string; reason: string }): Promise<CommandResult<{ token: string; reason: string; runtime_result: unknown }>>;
@@ -669,7 +669,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const readInput = Object.keys(readBody).length > 0
       ? { params: { cardId }, body: readBody }
       : { params: { cardId } };
-    const recordsResult = expectSuccess(chatStore.readAll(readInput), 'chatStore.readAll');
+    const recordsResult = expectSuccess(await chatStore.readAll(readInput), 'chatStore.readAll');
     const card = ensureRecord(await readOneCard(cardStore, cardId));
     const attachments = ensureArray(ensureRecord(card.card_data).files)
       .map((file, idx) => ({ idx, stored_name: ensureRecord(file).stored_name }))
@@ -955,7 +955,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       });
     }));
 
-    uploadedFiles.forEach((uploadResult, index) => {
+    for (const [index, uploadResult] of uploadedFiles.entries()) {
       const file = ensureRecord(uploadResult.file);
       const mergedIndex = typeof uploadResult.file_idx === 'number' && Number.isInteger(uploadResult.file_idx) && uploadResult.file_idx >= 0
         ? uploadResult.file_idx
@@ -963,11 +963,11 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       const systemText = args.role === 'assistant'
         ? `AI generated: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`
         : `file uploaded: ${String(file.name || '')} as ${String(file.stored_name || '')} #${mergedIndex}`;
-      expectSuccess(chatStore.append({
+      expectSuccess(await chatStore.append({
         params: { cardId: args.cardId },
         body: { role: 'system', text: systemText, files: [], turn: args.turn },
       }), 'chatStore.append(system attachment message)');
-    });
+    }
 
     return uploadedFiles.map((uploadResult) => uploadResult.file);
   }
@@ -1009,7 +1009,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     if (!role) throw new Error('manageAddChatEntryAndAnyAttachments requires role');
 
     if (role === 'assistant' && turn) {
-      const existingRecords = expectSuccess(chatStore.readAll({
+      const existingRecords = expectSuccess(await chatStore.readAll({
         params: { cardId },
         body: { turnId: turn },
       }), 'chatStore.readAll(existing turn messages)');
@@ -1034,7 +1034,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
     const uploadedFileRecords = await uploadChatAttachments({ cardId, role, turn, files: args.files });
 
-    const appendResult = expectSuccess(chatStore.append({
+    const appendResult = expectSuccess(await chatStore.append({
       params: { cardId },
       body: { role, text, files: uploadedFileRecords, turn },
     }), 'chatStore.append');
@@ -1258,18 +1258,18 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  function getChatProcessing(args: { cardId: string }): { cardId: string; active: boolean } {
+  async function getChatProcessing(args: { cardId: string }): Promise<{ cardId: string; active: boolean }> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('getChatProcessing requires cardId');
-    const data = expectSuccessData(chatStore.isProcessing({ params: { cardId } }), 'chatStore.isProcessing');
+    const data = expectSuccessData(await chatStore.isProcessing({ params: { cardId } }), 'chatStore.isProcessing');
     return { cardId, active: Boolean((data as { active?: unknown }).active) };
   }
 
-  function setChatProcessing(args: { cardId: string; active: boolean }): { cardId: string; active: boolean } {
+  async function setChatProcessing(args: { cardId: string; active: boolean }): Promise<{ cardId: string; active: boolean }> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('setChatProcessing requires cardId');
     if (typeof args.active !== 'boolean') throw new Error('setChatProcessing requires boolean active');
-    expectSuccess(chatStore.setProcessing({ params: { cardId }, body: { active: args.active } }), 'chatStore.setProcessing');
+    expectSuccess(await chatStore.setProcessing({ params: { cardId }, body: { active: args.active } }), 'chatStore.setProcessing');
     return { cardId, active: args.active };
   }
 

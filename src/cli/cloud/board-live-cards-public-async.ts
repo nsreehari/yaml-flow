@@ -65,12 +65,13 @@ import type { AsyncCardAdminStore } from './board-live-cards-storage-async.js';
 export interface AsyncBoardLiveCardsPublic {
   init(input: CommandInput): Promise<CommandResult>;
   status(input: CommandInput): Promise<CommandResult<BoardStatusObject>>;
+  getBoardRuntimeStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
   getCardStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string }>>;
   getOutputsStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string }>>;
   getScratchStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
-  getArchiveStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
   getChatStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
   getArtifactsStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
+  getFetchedSourcesStoreRef(input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>>;
   getConfig(input: CommandInput): Promise<CommandResult<{ value: unknown }>>;
   getOutputsDataObject(input: CommandInput): Promise<CommandResult>;
   getAllOutputsDataObjects(input: CommandInput): Promise<CommandResult<Record<string, unknown>>>;
@@ -82,12 +83,19 @@ export interface AsyncBoardLiveCardsPublic {
   cardRefreshedNotify(input: CommandInput): Promise<CommandResult>;
   removeCard(input: CommandInput): Promise<CommandResult>;
   retrigger(input: CommandInput): Promise<CommandResult>;
-  upsertCard(input: CommandInput): Promise<CommandResult>;
   processAccumulatedEvents(input: CommandInput): Promise<CommandResult>;
+  upsertCard(input: CommandInput): Promise<CommandResult>;
   taskFailed(input: CommandInput): Promise<CommandResult>;
   taskProgress(input: CommandInput): Promise<CommandResult>;
   sourceDataFetched(input: CommandInput): Promise<CommandResult>;
   sourceDataFetchFailure(input: CommandInput): Promise<CommandResult>;
+}
+
+export interface AsyncBoardLiveCardsPublicOptions {
+  boardRuntimeStoreRef?: string;
+  scratchStoreRef?: string;
+  taskExecutorRef?: ExecutionRef;
+  chatHandlerFlow?: unknown;
 }
 
 interface AsyncPublishedOutputsStore {
@@ -392,12 +400,22 @@ function createAsyncCardHandlerFn(
 export function createAsyncBoardLiveCardsPublic(
   baseRef: KindValueRef,
   adapter: AsyncBoardPlatformAdapter,
+  options: AsyncBoardLiveCardsPublicOptions = {},
 ): AsyncBoardLiveCardsPublic {
   assertBoardCallbackTransport(adapter.callbackTransport, 'createAsyncBoardLiveCardsPublic');
   const callbackTransport = adapter.callbackTransport;
   const warn = adapter.warn ?? (() => undefined);
   const boardPath = serializeRef(baseRef);
   let drainInFlight: Promise<CommandResult> | null = null;
+  let runtimeStoreRef = options.boardRuntimeStoreRef;
+  let scratchStoreRef = options.scratchStoreRef;
+  const hostedTaskExecutorRef = options.taskExecutorRef;
+  const hostedChatHandlerFlow = options.chatHandlerFlow;
+
+  function requireBoardRuntimeStoreRef(): string {
+    if (!runtimeStoreRef) throw new Error(`Board at ${baseRef.value} has no board runtime store configured. Pass boardRuntimeStoreRef at construction or init.`);
+    return runtimeStoreRef;
+  }
 
   function flushBoardChangeNotifications(notifications: BoardChangeNotification[]): Promise<void> | undefined {
     if (notifications.length === 0) return undefined;
@@ -411,11 +429,10 @@ export function createAsyncBoardLiveCardsPublic(
     }
   }
 
-  const configStore = (): AsyncBoardConfigStore => createAsyncBoardConfigStore(adapter.kvStorage('config'));
-  const snapshotKv = (): AsyncKVStorage => adapter.kvStorage('state-snapshot');
+  const configStore = (): AsyncBoardConfigStore => createAsyncBoardConfigStore(adapter.kvStorageForRef(requireBoardRuntimeStoreRef()));
   const boardScopeId = baseRef.value;
   const stateSnapshotStore = () => createStateSnapshotStoreFromAdapter(
-    createStateSnapshotAdapterFromKV(() => snapshotKv(), adapter.hashFn),
+    createStateSnapshotAdapterFromKV(() => adapter.kvStorageForRef(requireBoardRuntimeStoreRef()), adapter.hashFn),
     'v1',
   );
   const outputStore = async (): Promise<AsyncPublishedOutputsStore> => {
@@ -451,31 +468,48 @@ export function createAsyncBoardLiveCardsPublic(
     }
   }
 
-  const journalStore = () => createAsyncJournalStoreFromStorage<GraphEvent>(adapter.journalStorage());
+  const journalStore = () => createAsyncJournalStoreFromStorage<GraphEvent>(adapter.journalStorageForRef(requireBoardRuntimeStoreRef()));
+
+  async function resolveTaskExecutorRef(): Promise<ExecutionRef | undefined> {
+    return hostedTaskExecutorRef ?? await configStore().readTaskExecutorRef();
+  }
 
   async function appendJournalEvent(event: GraphEvent): Promise<void> {
     await journalStore().appendEvent(event);
   }
 
-  function createFetchedSourcesStoreForRuntime(): AsyncFetchedSourcesStore {
-    return createAsyncFetchedSourcesStore(adapter.blobStorage('sources'), (ref) => adapter.resolveBlob(ref));
+  async function fetchedSourcesStoreRef(): Promise<string> {
+    const ref = await configStore().readFetchedSourcesStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no fetched sources store configured. Run: init --fetched-sources-store-ref <b64-ref>`);
+    return ref;
+  }
+
+  async function fetchedSourcesBlobStore(): Promise<AsyncBlobStorage> {
+    return adapter.blobStorageForRef(await fetchedSourcesStoreRef());
+  }
+
+  async function createFetchedSourcesStoreForRuntime(): Promise<AsyncFetchedSourcesStore> {
+    return createAsyncFetchedSourcesStore(await fetchedSourcesBlobStore(), (ref) => adapter.resolveBlob(ref));
   }
 
   async function toSourceRef(blobKey: string): Promise<string> {
-    const ref = await Promise.resolve(adapter.blobStorage('sources').keyRef?.(blobKey));
-    return ref ? serializeRef(ref) : blobKey;
+    const keyRef = (await fetchedSourcesBlobStore()).keyRef?.(blobKey);
+    if (!keyRef) throw new Error('configured fetched-sources store does not support keyRef');
+    const ref = await Promise.resolve(keyRef);
+    return serializeRef(ref);
   }
 
   async function drainCycle(): Promise<void> {
-    const executionRequestStore = createAsyncExecutionRequestStore(adapter.kvStorage('execution-requests'), async (entry, error) => {
+    const executionRequestStore = createAsyncExecutionRequestStore(adapter.kvStorageForRef(requireBoardRuntimeStoreRef()), async (entry, error) => {
       const payload = entry.payload as Record<string, unknown>;
       const enriched = (payload.enrichedCard ?? {}) as Record<string, unknown>;
       const taskName = (enriched.id ?? payload.cardId ?? 'unknown') as string;
       await appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
     });
 
-    const realCardRuntimeStore = createAsyncCardRuntimeStore(adapter.kvStorage('card-runtime'));
-    const realFetchedSourcesStore = createFetchedSourcesStoreForRuntime();
+    const realCardRuntimeStore = createAsyncCardRuntimeStore(adapter.kvStorageForRef(requireBoardRuntimeStoreRef()));
+    const fetchedSourcesBlob = await fetchedSourcesBlobStore();
+    const realFetchedSourcesStore = await createFetchedSourcesStoreForRuntime();
     const resolvedCardStore = await cardStore();
     const resolvedOutputStore = await outputStore();
 
@@ -493,6 +527,7 @@ export function createAsyncBoardLiveCardsPublic(
       },
       async writeRuntime(cardId: string, state: CardRuntimeSnapshot): Promise<void> {
         runtimeOverlay.set(cardId, state);
+        runtimeByCardId[cardId] = state;
       },
     };
 
@@ -506,10 +541,9 @@ export function createAsyncBoardLiveCardsPublic(
       },
       async commitSourceData(cardId: string, outputFile: string, deliveryToken: string): Promise<boolean> {
         const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
-        const blob = adapter.blobStorage('sources');
-        let content = await blob.read(stagedKey);
+        let content = await fetchedSourcesBlob.read(stagedKey);
         if (content == null) {
-          const stagedRef = await blob.keyRef?.(stagedKey);
+          const stagedRef = await Promise.resolve(fetchedSourcesBlob.keyRef?.(stagedKey));
           if (stagedRef) content = await adapter.resolveBlob(stagedRef);
         }
         if (content == null) return false;
@@ -534,6 +568,7 @@ export function createAsyncBoardLiveCardsPublic(
 
     const envelope = await loadEnvelope();
     const live = restore(envelope.graph);
+    const runtimeByCardId: Record<string, CardRuntimeSnapshot> = { ...envelope.runtimeByCardId };
     const { events: undrained, newCursor } = await journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
     let tx: GraphEvent[] = undrained;
 
@@ -559,6 +594,7 @@ export function createAsyncBoardLiveCardsPublic(
       onNodeRemoved: (cardId) => {
         refreshedCards.delete(cardId);
         runtimeOverlay.delete(cardId);
+        delete runtimeByCardId[cardId];
         removedCards.add(cardId);
       },
     });
@@ -579,7 +615,7 @@ export function createAsyncBoardLiveCardsPublic(
     const finalLive = rg.getState();
     await rg.dispose({ wait: true });
 
-    await commitEnvelope({ lastDrainedJournalId: newCursor, graph: snapshot(finalLive) }, (await stateSnapshotStore().readSnapshot(boardScopeId)).version);
+    await commitEnvelope({ lastDrainedJournalId: newCursor, graph: snapshot(finalLive), runtimeByCardId }, (await stateSnapshotStore().readSnapshot(boardScopeId)).version);
 
     for (const { cardId, values } of computedWrites) await resolvedOutputStore.writeComputedValues(cardId, values);
     for (const data of dataWrites) await resolvedOutputStore.writeDataObjects(data);
@@ -599,7 +635,7 @@ export function createAsyncBoardLiveCardsPublic(
     notifications.push({ kind: 'status', status: statusObj } satisfies OutputStoreEvent);
     await flushBoardChangeNotifications(notifications);
 
-    const executorRef = await configStore().readTaskExecutorRef();
+    const executorRef = await resolveTaskExecutorRef();
     if (!executorRef) return;
     const useDirectHostedWorkerRequest = adapter.supportsDirectSourceOutput?.(executorRef) === true;
     await executionRequestStore.dispatchEntriesForJournalId(newCursor, async (entry) => {
@@ -610,13 +646,57 @@ export function createAsyncBoardLiveCardsPublic(
       const payload = entry.payload as { enrichedCard: Record<string, unknown>; callbackToken: string; rqt: string };
       const cardId = (payload.enrichedCard?.id as string | undefined) ?? 'unknown';
       const sourceDefs = (payload.enrichedCard?.source_defs ?? []) as Array<{ bindTo: string; outputFile?: string; [key: string]: unknown }>;
+
+      if (executorRef.howToRun === 'queue-storage' && useDirectHostedWorkerRequest) {
+        try {
+          const queueStoreRef = await configStore().readQueueStoreRef();
+          if (!queueStoreRef) throw new Error(`Board at ${baseRef.value} has no queue store configured. Run: init --queue-store-ref <b64-ref>`);
+          const queue = adapter.queueStorageForRef(queueStoreRef, 'task-executor');
+          const boardId = typeof executorRef.extra?.boardId === 'string' ? executorRef.extra.boardId : undefined;
+          const requests: Array<{ boardId?: string; ref: typeof executorRef; args: Record<string, unknown> }> = [];
+          for (const src of sourceDefs) {
+            if (!src.outputFile) continue;
+            const deliveryToken = adapter.genId();
+            const stagedKey = `${cardId}/.staged/${deliveryToken}/${src.outputFile}`;
+            const stagedRef = await Promise.resolve(fetchedSourcesBlob.keyRef?.(stagedKey));
+            if (!stagedRef) continue;
+            const directOutput = { ref: serializeRef(stagedRef), deliveryToken, outputFile: src.outputFile, cardId };
+            const sourceToken = encodeSourceToken({
+              cbk: payload.callbackToken,
+              rg: baseRef.value,
+              br: serializeRef(baseRef),
+              cid: cardId,
+              b: src.bindTo,
+              d: src.outputFile,
+              cs: undefined,
+              rqt: payload.rqt,
+              dt: directOutput.deliveryToken,
+            });
+            requests.push({
+              ...(boardId ? { boardId } : {}),
+              ref: executorRef,
+              args: {
+                source_def: src,
+                base_ref: serializeRef(baseRef),
+                callback: callbackTransport.createCallback(sourceToken),
+                output: directOutput,
+              },
+            });
+          }
+          if (requests.length > 0) await queue.enqueueMany(requests);
+        } catch (error) {
+          await appendJournalEvent({ type: 'task-failed', taskName: cardId, error: error instanceof Error ? error.message : String(error), timestamp: nowIso() });
+        }
+        return;
+      }
+
       for (const src of sourceDefs) {
         if (!src.outputFile) continue;
         let directOutput: { ref: string; deliveryToken: string; outputFile: string; cardId: string } | undefined;
         if (useDirectHostedWorkerRequest) {
           const deliveryToken = adapter.genId();
           const stagedKey = `${cardId}/.staged/${deliveryToken}/${src.outputFile}`;
-          const stagedRef = await Promise.resolve(adapter.blobStorage('sources').keyRef?.(stagedKey));
+          const stagedRef = await Promise.resolve(fetchedSourcesBlob.keyRef?.(stagedKey));
           if (stagedRef) {
             directOutput = { ref: serializeRef(stagedRef), deliveryToken, outputFile: src.outputFile, cardId };
           }
@@ -670,7 +750,9 @@ export function createAsyncBoardLiveCardsPublic(
   }
 
   async function requestQueuedProcessAccumulated(): Promise<void> {
-    const queue = adapter.processAccumulatedStore();
+    const ref = await configStore().readQueueStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no queue store configured. Run: init --queue-store-ref <b64-ref>`);
+    const queue = adapter.queueStorageForRef(ref, 'process-accumulated');
     if (queue.enqueueIfAbsent) {
       await queue.enqueueIfAbsent({ boardRef: serializeRef(baseRef) }, `process-accumulated:${serializeRef(baseRef)}`);
     } else {
@@ -680,7 +762,9 @@ export function createAsyncBoardLiveCardsPublic(
   }
 
   async function clearQueuedProcessAccumulatedWakeups(): Promise<void> {
-    const queue = adapter.processAccumulatedStore();
+    const ref = await configStore().readQueueStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no queue store configured. Run: init --queue-store-ref <b64-ref>`);
+    const queue = adapter.queueStorageForRef(ref, 'process-accumulated');
     while (true) {
       const leased = await queue.lease<{ boardRef?: string }>({ max: 64, visibilityMs: 1_000 });
       if (leased.length <= 0) return;
@@ -700,25 +784,31 @@ export function createAsyncBoardLiveCardsPublic(
       try {
         const storeRef = input.params?.['cardStoreRef'] as string | undefined;
         if (!storeRef) return fail('init requires params.cardStoreRef');
+        runtimeStoreRef = input.params?.['boardRuntimeStoreRef'] as string | undefined;
+        if (!runtimeStoreRef) return fail('init requires params.boardRuntimeStoreRef');
         const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
         if (!outputsStoreRef) return fail('init requires params.outputsStoreRef');
+        const queueStoreRefValue = input.params?.['queueStoreRef'] as string | undefined;
+        if (!queueStoreRefValue) return fail('init requires params.queueStoreRef');
+        const fetchedSourcesStoreRef = input.params?.['fetchedSourcesStoreRef'] as string | undefined;
+        if (!fetchedSourcesStoreRef) return fail('init requires params.fetchedSourcesStoreRef');
+        scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
+        if (!scratchStoreRef) return fail('init requires params.scratchStoreRef');
+        const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
+        if (!chatStoreRef) return fail('init requires params.chatStoreRef');
+        const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;
+        if (!artifactsStoreRef) return fail('init requires params.artifactsStoreRef');
         if (!await boardExists()) {
-          await commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(createLiveGraph(EMPTY_CONFIG)) }, null);
+          await commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(createLiveGraph(EMPTY_CONFIG)), runtimeByCardId: {} }, null);
         }
         const cfg = configStore();
+        await cfg.writeBoardRuntimeStoreRef(runtimeStoreRef);
         await cfg.writeCardStoreRef(storeRef);
         await cfg.writeOutputsStoreRef(outputsStoreRef);
-        const scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
-        const archiveStoreRef = input.params?.['archiveStoreRef'] as string | undefined;
-        const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
-        const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;
-        if (scratchStoreRef) await cfg.writeScratchStoreRef(scratchStoreRef);
-        if (archiveStoreRef) await cfg.writeArchiveStoreRef(archiveStoreRef);
-        if (chatStoreRef) await cfg.writeChatStoreRef(chatStoreRef);
-        if (artifactsStoreRef) await cfg.writeArtifactsStoreRef(artifactsStoreRef);
-        const body = (input.body ?? {}) as Record<string, unknown>;
-        if (body['task-executor-ref']) await cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
-        if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) await cfg.writeChatHandlerFlow(body['chat-handler-flow']);
+        await cfg.writeQueueStoreRef(queueStoreRefValue);
+        await cfg.writeFetchedSourcesStoreRef(fetchedSourcesStoreRef);
+        await cfg.writeChatStoreRef(chatStoreRef);
+        await cfg.writeArtifactsStoreRef(artifactsStoreRef);
         await (await outputStore()).writeStatusSnapshot(buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph)));
         return ok();
       } catch (error) {
@@ -750,6 +840,14 @@ export function createAsyncBoardLiveCardsPublic(
       }
     },
 
+    async getBoardRuntimeStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
+      try {
+        return ok({ storeRef: runtimeStoreRef ?? null }) as CommandResult<{ storeRef: string | null }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string | null }>;
+      }
+    },
+
     async getOutputsStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string }>> {
       try {
         const storeRef = await configStore().readOutputsStoreRef();
@@ -762,15 +860,7 @@ export function createAsyncBoardLiveCardsPublic(
 
     async getScratchStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
       try {
-        return ok({ storeRef: await configStore().readScratchStoreRef() }) as CommandResult<{ storeRef: string | null }>;
-      } catch (error) {
-        return err(error) as CommandResult<{ storeRef: string | null }>;
-      }
-    },
-
-    async getArchiveStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
-      try {
-        return ok({ storeRef: await configStore().readArchiveStoreRef() }) as CommandResult<{ storeRef: string | null }>;
+        return ok({ storeRef: scratchStoreRef ?? null }) as CommandResult<{ storeRef: string | null }>;
       } catch (error) {
         return err(error) as CommandResult<{ storeRef: string | null }>;
       }
@@ -792,6 +882,14 @@ export function createAsyncBoardLiveCardsPublic(
       }
     },
 
+    async getFetchedSourcesStoreRef(_input: CommandInput): Promise<CommandResult<{ storeRef: string | null }>> {
+      try {
+        return ok({ storeRef: await configStore().readFetchedSourcesStoreRef() }) as CommandResult<{ storeRef: string | null }>;
+      } catch (error) {
+        return err(error) as CommandResult<{ storeRef: string | null }>;
+      }
+    },
+
     async getConfig(input: CommandInput): Promise<CommandResult<{ value: unknown }>> {
       try {
         const key = input.params?.['key'] as string | undefined;
@@ -799,14 +897,15 @@ export function createAsyncBoardLiveCardsPublic(
         const cfg = configStore();
         let value: unknown;
         switch (key) {
-          case 'task-executor': value = await cfg.readTaskExecutorRef() ?? null; break;
-          case 'chat-handler-flow': value = await cfg.readChatHandlerFlow() ?? null; break;
+          case 'task-executor': value = hostedTaskExecutorRef ?? null; break;
+          case 'chat-handler-flow': value = hostedChatHandlerFlow ?? null; break;
+          case 'board-runtime-store-ref': value = await cfg.readBoardRuntimeStoreRef(); break;
           case 'card-store-ref': value = await cfg.readCardStoreRef(); break;
           case 'outputs-store-ref': value = await cfg.readOutputsStoreRef(); break;
-          case 'scratch-store-ref': value = await cfg.readScratchStoreRef(); break;
-          case 'archive-store-ref': value = await cfg.readArchiveStoreRef(); break;
+          case 'scratch-store-ref': value = scratchStoreRef ?? null; break;
           case 'chat-store-ref': value = await cfg.readChatStoreRef(); break;
           case 'artifacts-store-ref': value = await cfg.readArtifactsStoreRef(); break;
+          case 'fetched-sources-store-ref': value = await cfg.readFetchedSourcesStoreRef(); break;
           default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
         }
         return ok({ value }) as CommandResult<{ value: unknown }>;
@@ -855,7 +954,7 @@ export function createAsyncBoardLiveCardsPublic(
       try {
         const key = input.params?.['key'] as string | undefined;
         if (!key) return fail('getOutputsFetchedSources requires params.key') as CommandResult<Record<string, string>>;
-        const files = await createFetchedSourcesStoreForRuntime().listSources(key);
+        const files = await (await createFetchedSourcesStoreForRuntime()).listSources(key);
         const result: Record<string, string> = {};
         for (const outputFile of files) result[outputFile] = await toSourceRef(`${key}/${outputFile}`);
         return ok(result) as CommandResult<Record<string, string>>;
@@ -866,8 +965,8 @@ export function createAsyncBoardLiveCardsPublic(
 
     async getAllOutputsFetchedSources(_input: CommandInput): Promise<CommandResult<Record<string, Record<string, string>>>> {
       try {
-        const store = createFetchedSourcesStoreForRuntime();
-        const blobKeys = await adapter.blobStorage('sources').listKeys();
+        const store = await createFetchedSourcesStoreForRuntime();
+        const blobKeys = await (await fetchedSourcesBlobStore()).listKeys();
         const cardIds = new Set<string>();
         for (const key of blobKeys) {
           const slash = key.indexOf('/');
@@ -1049,7 +1148,7 @@ export function createAsyncBoardLiveCardsPublic(
         if (!ref) return fail('sourceDataFetched requires params.ref');
         const payload = decodeSourceToken(token);
         if (!payload) return fail('Invalid source token');
-        const fetchedSourcesStore = createFetchedSourcesStoreForRuntime();
+        const fetchedSourcesStore = await createFetchedSourcesStoreForRuntime();
         const deliveryToken = payload.dt || adapter.genId();
         if (!payload.dt) await fetchedSourcesStore.ingestSourceDataStaged(payload.cid, payload.d, parseRef(ref), deliveryToken);
         const decoded = decodeCallbackToken(payload.cbk);

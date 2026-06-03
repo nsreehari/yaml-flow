@@ -425,18 +425,22 @@ export interface BoardConfigStore {
   writeTaskExecutorRef(ref: ExecutionRef): void;
   readChatHandlerFlow(): unknown;
   writeChatHandlerFlow(flow: unknown): void;
+  readBoardRuntimeStoreRef(): string | null;
+  writeBoardRuntimeStoreRef(ref: string): void;
   readCardStoreRef(): string | null;
   writeCardStoreRef(ref: string): void;
   readOutputsStoreRef(): string | null;
   writeOutputsStoreRef(ref: string): void;
+  readQueueStoreRef(): string | null;
+  writeQueueStoreRef(ref: string): void;
   readScratchStoreRef(): string | null;
   writeScratchStoreRef(ref: string): void;
-  readArchiveStoreRef(): string | null;
-  writeArchiveStoreRef(ref: string): void;
   readChatStoreRef(): string | null;
   writeChatStoreRef(ref: string): void;
   readArtifactsStoreRef(): string | null;
   writeArtifactsStoreRef(ref: string): void;
+  readFetchedSourcesStoreRef(): string | null;
+  writeFetchedSourcesStoreRef(ref: string): void;
 }
 
 export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
@@ -465,6 +469,14 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
       kv.write('chat-handler-flow', flow);
     },
 
+    readBoardRuntimeStoreRef(): string | null {
+      return readKey('board-runtime-store-ref');
+    },
+
+    writeBoardRuntimeStoreRef(ref: string): void {
+      kv.write('board-runtime-store-ref', ref);
+    },
+
     readCardStoreRef(): string | null {
       return readKey('card-store-ref');
     },
@@ -481,20 +493,20 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
       kv.write('outputs-store-ref', ref);
     },
 
+    readQueueStoreRef(): string | null {
+      return readKey('queue-store-ref');
+    },
+
+    writeQueueStoreRef(ref: string): void {
+      kv.write('queue-store-ref', ref);
+    },
+
     readScratchStoreRef(): string | null {
       return readKey('scratch-store-ref');
     },
 
     writeScratchStoreRef(ref: string): void {
       kv.write('scratch-store-ref', ref);
-    },
-
-    readArchiveStoreRef(): string | null {
-      return readKey('archive-store-ref');
-    },
-
-    writeArchiveStoreRef(ref: string): void {
-      kv.write('archive-store-ref', ref);
     },
 
     readChatStoreRef(): string | null {
@@ -511,6 +523,14 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 
     writeArtifactsStoreRef(ref: string): void {
       kv.write('artifacts-store-ref', ref);
+    },
+
+    readFetchedSourcesStoreRef(): string | null {
+      return readKey('fetched-sources-store-ref');
+    },
+
+    writeFetchedSourcesStoreRef(ref: string): void {
+      kv.write('fetched-sources-store-ref', ref);
     },
   };
 }
@@ -1080,24 +1100,31 @@ export const EMPTY_CONFIG: GraphConfig = { settings: { completion: 'manual', ref
 export interface BoardEnvelope {
   lastDrainedJournalId: string;
   graph: LiveGraphSnapshot;
+  runtimeByCardId: Record<string, CardRuntimeSnapshot>;
 }
 
 export function boardEnvelopeToSnapshotEntries(envelope: BoardEnvelope): Record<string, unknown> {
   return {
     [BOARD_GRAPH_KEY]: envelope.graph,
     [BOARD_LAST_JOURNAL_PROCESSED_ID_KEY]: envelope.lastDrainedJournalId,
+    board: {
+      runtimeByCardId: envelope.runtimeByCardId,
+    },
   };
 }
 
 export function snapshotEntriesToBoardEnvelope(entries: Record<string, unknown>): BoardEnvelope {
   const graph = entries[BOARD_GRAPH_KEY] as LiveGraphSnapshot | undefined;
   const lastDrainedJournalId = entries[BOARD_LAST_JOURNAL_PROCESSED_ID_KEY] as string | undefined;
+  const board = entries['board'] as Record<string, unknown> | undefined;
+  const runtimeByCardId = board?.['runtimeByCardId'] as Record<string, CardRuntimeSnapshot> | undefined;
   if (!graph || typeof graph !== 'object') {
     throw new Error(`State snapshot is missing required key: ${BOARD_GRAPH_KEY}`);
   }
   return {
     graph,
     lastDrainedJournalId: typeof lastDrainedJournalId === 'string' ? lastDrainedJournalId : '',
+    runtimeByCardId: runtimeByCardId && typeof runtimeByCardId === 'object' ? runtimeByCardId : {},
   };
 }
 

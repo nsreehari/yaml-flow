@@ -47,6 +47,9 @@ function createMemoryQueueStorage(): QueueStorage {
       active.set(item.id, item);
       return item;
     },
+    enqueueMany<T>(bodies: T[]) {
+      return bodies.map((body) => this.enqueue(body));
+    },
     lease<T>(opts?: { max?: number; visibilityMs?: number }) {
       const max = Math.max(1, Math.floor(opts?.max ?? 1));
       const visibilityMs = Math.max(1, Math.floor(opts?.visibilityMs ?? 60_000));
@@ -205,6 +208,12 @@ class MemoryAsyncQueueStorage implements AsyncQueueStorage {
     const item = { id: `aq-${Math.random().toString(36).slice(2)}`, body, enqueuedAt: new Date().toISOString(), attempt: 0 };
     this.active.set(item.id, item);
     return item;
+  }
+
+  async enqueueMany<T>(bodies: T[]) {
+    const queued = [] as QueueMessage<T>[];
+    for (const body of bodies) queued.push(await this.enqueue(body));
+    return queued;
   }
 
   async lease<T>(opts?: { max?: number; visibilityMs?: number }) {

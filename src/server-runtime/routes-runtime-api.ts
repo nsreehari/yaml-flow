@@ -63,12 +63,6 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
     const p = url.pathname;
 
     try {
-      if (method === 'GET' && p === `${apiBasePath}/init-board`) {
-        await initBoardAndSetup();
-        json(res, 200, await buildPublishedRuntimePayload());
-        return true;
-      }
-
       if (method === 'POST' && p === `${apiBasePath}/mcp-controlplane`) {
         await bootstrapBoard();
         const body = await readJsonBody(req);

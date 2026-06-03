@@ -15,31 +15,53 @@ import {
   BOARD_GRAPH_KEY,
   createCardStore,
 } from '../../src/cli/common/board-live-cards-lib.js';
+import { createStateSnapshotAdapter } from '../../src/cli/common/board-live-cards-storage.js';
 import type { BoardLiveCard } from '../../src/cli/common/board-live-cards-lib.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
-import { createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
+import { computeStableJsonHash, createFsCardStorageAdapter, createFsKvStorage } from '../../src/cli/node/storage-fs-adapters.js';
 import { restore } from '../../src/continuous-event-graph/index.js';
-import { serializeRef } from '../../src/cli/common/storage-interface.js';
+import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
 
 
 
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
+const boardRuntimeStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.runtime-board') });
+const queueStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.queue') });
 const cardStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.cards') });
 const outputsStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.output') });
+const chatStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.chat') });
+const artifactsStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.files') });
+const fetchedSourcesStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.sources') });
+const scratchStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.scratch') });
+const archiveStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.archive') });
+const initParams = (boardDir: string) => ({
+  boardRuntimeStoreRef: boardRuntimeStoreRef(boardDir),
+  queueStoreRef: queueStoreRef(boardDir),
+  cardStoreRef: cardStoreRef(boardDir),
+  outputsStoreRef: outputsStoreRef(boardDir),
+  chatStoreRef: chatStoreRef(boardDir),
+  artifactsStoreRef: artifactsStoreRef(boardDir),
+  fetchedSourcesStoreRef: fetchedSourcesStoreRef(boardDir),
+  scratchStoreRef: scratchStoreRef(boardDir),
+  archiveStoreRef: archiveStoreRef(boardDir),
+});
 const ticks = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const cliDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
 
 function board(dir: string) {
   const br = ref(dir);
-  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {}, suppressSpawn: true }));
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, cliDir, { onWarn: () => {}, suppressSpawn: true }), {
+    boardRuntimeStoreRef: boardRuntimeStoreRef(dir),
+  });
 }
 
-const snapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
+const snapshotStore = createStateSnapshotStore(createStateSnapshotAdapter((scopeId) => createFsKvStorage(scopeId), computeStableJsonHash));
 
 function loadBoard(baseRef: { kind: string; value: string }) {
-  const snap = snapshotStore.readSnapshot(baseRef.value);
-  if (!snap.values[BOARD_GRAPH_KEY]) throw new Error(`Missing board state at: ${baseRef.value}`);
+  const runtimePath = parseRef(boardRuntimeStoreRef(baseRef.value)).value;
+  const snap = snapshotStore.readSnapshot(runtimePath);
+  if (!snap.values[BOARD_GRAPH_KEY]) throw new Error(`Missing board state at: ${runtimePath}`);
   return restore(snapshotEntriesToBoardEnvelope(snap.values).graph);
 }
 
@@ -85,7 +107,7 @@ describe('board-live-cards CLI persistence', () => {
   it('writes provided token payloads to .output/data-objects/', async () => {
     const dir = path.join(freshDir(), 'board');
     const liveBoard = board(dir);
-    liveBoard.init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    liveBoard.init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'orders-source',
@@ -121,7 +143,7 @@ describe('board-live-cards CLI persistence', () => {
   it('writes computed_values snapshots to .output/cards/<cardId>/computed_values.json', async () => {
     const dir = path.join(freshDir(), 'board');
     const liveBoard = board(dir);
-    liveBoard.init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    liveBoard.init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'totals-card',

@@ -100,11 +100,16 @@ describe('board-worker queue transport', () => {
     });
 
     try {
-      const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), { suppressSpawn: true, callbackTransport });
+      const queueStoreRef = serializeRef({ kind: 'fs-path', value: path.join(root, 'queue-root') });
+      const adapter = createFsBoardPlatformAdapter(baseRef, process.cwd(), {
+        suppressSpawn: true,
+        callbackTransport,
+        queueStoreRef,
+      });
       const stopRunner = startQueueLaneRunners(createQueueLaneRegistry([
         createBoardWorkerQueueLane({
           id: 'task-executor',
-          workerStore: adapter.boardWorkerStore(),
+          workerStore: createBoardWorkerStore(adapter.queueStorageForRef(queueStoreRef, 'task-executor')),
           handleRequest: async (args, request) => {
             executedBoardIds.push(String(request.boardId || ''));
             expect(args.source_def).toEqual({ bindTo: 'prices' });
@@ -144,7 +149,7 @@ describe('board-worker queue transport', () => {
           outcome: 'success',
           ref: serializeRef({ kind: 'fs-path', value: path.join(root, 'sources', 'card-1', '.staged', 'delivery-1', 'prices.json') }),
         });
-        expect(adapter.boardWorkerStore().peekActive()).toHaveLength(0);
+        expect(createBoardWorkerStore(adapter.queueStorageForRef(queueStoreRef, 'task-executor')).peekActive()).toHaveLength(0);
       } finally {
         stopRunner();
       }

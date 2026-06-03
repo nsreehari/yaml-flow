@@ -250,10 +250,10 @@ function applyFrame(payload) {
 
   let sseWorker = null;
   try {
-    // ── Step 1: init-board ──────────────────────────────────────────────────────
-    console.log('\n=== Step 1: init-board ===');
-    const initRes = await httpGet(`${BASE}/init-board`);
-    assert(initRes.status === 200, `init-board returned ${initRes.status}`);
+    // ── Step 1: /sse?one-shot bootstrap ────────────────────────────────────────
+    console.log('\n=== Step 1: /sse?one-shot bootstrap ===');
+    const initRes = await httpGet(`${BASE}/sse?one-shot`);
+    assert(initRes.status === 200, `sse one-shot returned ${initRes.status}`);
     console.log('[step1] ok');
 
     // ── Step 2: Start SSE consumer worker ───────────────────────────────────────

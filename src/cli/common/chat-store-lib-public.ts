@@ -26,6 +26,8 @@
 import type { CommandInput, CommandResult } from './board-live-cards-public.js';
 import type { ChatConfig, ChatRecord, ChatReadAfterResult, ChatStorage } from './chat-storage-lib.js';
 
+type Awaitable<T> = T | Promise<T>;
+
 export type ChatStoreCommandName =
   | 'append'
   | 'read-all'
@@ -74,66 +76,66 @@ export interface ChatStorePublic {
    * body.text: string
    * body.files?: unknown[]
    */
-  append(input: CommandInput): CommandResult<{ id: string }>;
+  append(input: CommandInput): Awaitable<CommandResult<{ id: string }>>;
 
   /**
     * Read all messages for a card in insertion order.
    * params.cardId: string
     * body.lastUserTurns?: positive integer
    */
-  readAll(input: CommandInput): CommandResult<{ records: ChatRecord[] }>;
+  readAll(input: CommandInput): Awaitable<CommandResult<{ records: ChatRecord[] }>>;
 
   /**
    * Read messages appended after a cursor.
    * params.cardId: string
    * params.cursor?: string | null  (omit or null to read from the beginning)
    */
-  readAfter(input: CommandInput): CommandResult<ChatReadAfterResult>;
+  readAfter(input: CommandInput): Awaitable<CommandResult<ChatReadAfterResult>>;
 
   /**
    * Remove all messages for a card.
    * params.cardId: string
    */
-  clear(input: CommandInput): CommandResult<{ ok: true }>;
+  clear(input: CommandInput): Awaitable<CommandResult<{ ok: true }>>;
 
   /**
    * Set or clear the processing flag for a card.
    * params.cardId: string
    * body.active: boolean
    */
-  setProcessing(input: CommandInput): CommandResult<{ ok: true }>;
+  setProcessing(input: CommandInput): Awaitable<CommandResult<{ ok: true }>>;
 
   /**
    * Check whether a card is currently processing.
    * params.cardId: string
    */
-  isProcessing(input: CommandInput): CommandResult<{ active: boolean }>;
+  isProcessing(input: CommandInput): Awaitable<CommandResult<{ active: boolean }>>;
 
   /**
    * Read the chat config for a card.
    * params.cardId: string
    */
-  getConfig(input: CommandInput): CommandResult<{ config: ChatConfig }>;
+  getConfig(input: CommandInput): Awaitable<CommandResult<{ config: ChatConfig }>>;
 
   /**
    * Patch (merge) the chat config for a card.
    * params.cardId: string
    * body: Partial<ChatConfig>  e.g. { systemPrompt: '...' }
    */
-  setConfig(input: CommandInput): CommandResult<{ ok: true }>;
+  setConfig(input: CommandInput): Awaitable<CommandResult<{ ok: true }>>;
 
   /**
    * Run a single command envelope against this store instance.
    * The store is already bound to a backing adapter, so boardDir is not part
    * of the public contract here.
    */
-  run(envelope: ChatStoreCommandEnvelope, label?: string): CommandResult<unknown>;
+  run(envelope: ChatStoreCommandEnvelope, label?: string): Awaitable<CommandResult<unknown>>;
 
   /**
    * Run a sequence of command envelopes with optional top-level cardId default.
    * Stops on first non-success result and returns that failure/error.
    */
-  runBatch(envelope: ChatStoreCommandBatchEnvelope): CommandResult<ChatStoreBatchResult>;
+  runBatch(envelope: ChatStoreCommandBatchEnvelope): Awaitable<CommandResult<ChatStoreBatchResult>>;
 }
 
 // ============================================================================
@@ -189,19 +191,19 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
     return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>;
   }
 
-  function run(envelope: ChatStoreCommandEnvelope, label = 'command envelope'): CommandResult<unknown> {
+  async function run(envelope: ChatStoreCommandEnvelope, label = 'command envelope'): Promise<CommandResult<unknown>> {
     const cardId = typeof envelope.cardId === 'string' ? envelope.cardId : undefined;
     if (!envelope.command) return fail(`chat-store: ${label} missing "command"`);
     if (!cardId) return fail(`chat-store: ${label} missing "cardId"`);
 
     if (envelope.command === 'append') {
-      return api.append({
+      return await api.append({
         params: { cardId },
         body: { role: envelope.role, text: envelope.text, files: envelope.files, turn: envelope.turn },
       });
     }
     if (envelope.command === 'read-all') {
-      return api.readAll({
+      return await api.readAll({
         params: { cardId },
         body: {
           lastUserTurns: envelope.lastUserTurns,
@@ -213,29 +215,29 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
       });
     }
     if (envelope.command === 'read-after') {
-      return api.readAfter({ params: { cardId }, body: { cursor: envelope.cursor ?? null } });
+      return await api.readAfter({ params: { cardId }, body: { cursor: envelope.cursor ?? null } });
     }
     if (envelope.command === 'clear') {
-      return api.clear({ params: { cardId } });
+      return await api.clear({ params: { cardId } });
     }
     if (envelope.command === 'set-processing') {
-      return api.setProcessing({ params: { cardId }, body: { active: envelope.active } });
+      return await api.setProcessing({ params: { cardId }, body: { active: envelope.active } });
     }
     if (envelope.command === 'is-processing') {
-      return api.isProcessing({ params: { cardId } });
+      return await api.isProcessing({ params: { cardId } });
     }
     if (envelope.command === 'get-config') {
-      return api.getConfig({ params: { cardId } });
+      return await api.getConfig({ params: { cardId } });
     }
     if (envelope.command === 'set-config') {
       const { command: _c, cardId: _i, ...patch } = envelope;
-      return api.setConfig({ params: { cardId }, body: patch });
+      return await api.setConfig({ params: { cardId }, body: patch });
     }
 
     return fail(`chat-store: unknown command "${String(envelope.command)}"`);
   }
 
-  function runBatch(envelope: ChatStoreCommandBatchEnvelope): CommandResult<ChatStoreBatchResult> {
+  async function runBatch(envelope: ChatStoreCommandBatchEnvelope): Promise<CommandResult<ChatStoreBatchResult>> {
     if (!Array.isArray(envelope.commands) || envelope.commands.length === 0) {
       return fail('chat-store: command envelope must include a non-empty "commands" array');
     }
@@ -250,7 +252,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         cardId: envelope.cardId,
         ...item,
       };
-      const result = run(merged, `command envelope entry ${index}`);
+      const result = await run(merged, `command envelope entry ${index}`);
       if (result.status !== 'success') return result as CommandResult<ChatStoreBatchResult>;
       results.push({ index, command: String(merged.command), data: result.data });
     }
@@ -259,7 +261,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
   }
 
   const api: ChatStorePublic = {
-    append(input: CommandInput): CommandResult<{ id: string }> {
+    async append(input: CommandInput): Promise<CommandResult<{ id: string }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('append requires params.cardId');
@@ -269,12 +271,12 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         const files = Array.isArray(body.files) ? body.files : [];
         const turn = typeof body.turn === 'string' ? body.turn : '';
         if (!role) return fail('append requires body.role');
-        const id = store.append(cardId, role, text, files, turn);
+        const id = await store.append(cardId, role, text, files, turn);
         return ok({ id });
       } catch (e) { return oops(e); }
     },
 
-    readAll(input: CommandInput): CommandResult<{ records: ChatRecord[] }> {
+    async readAll(input: CommandInput): Promise<CommandResult<{ records: ChatRecord[] }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('readAll requires params.cardId');
@@ -291,7 +293,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
           return fail('readAll requires body.tailTurns (positive integer)');
         }
 
-        const records = store.readAll(cardId);
+        const records = await store.readAll(cardId);
         let visible = records.filter((record) => !turnId || String(record.turn || '') === turnId);
 
         if (tailTurnsBeforeId) {
@@ -326,59 +328,59 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
       } catch (e) { return oops(e); }
     },
 
-    readAfter(input: CommandInput): CommandResult<ChatReadAfterResult> {
+    async readAfter(input: CommandInput): Promise<CommandResult<ChatReadAfterResult>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('readAfter requires params.cardId');
         // cursor can be null (read from start) — read from body to avoid params type constraints
         const body = (input.body ?? {}) as Record<string, unknown>;
         const cursor = (body.cursor as string | null | undefined) ?? null;
-        return ok(store.readAfter(cardId, cursor));
+        return ok(await store.readAfter(cardId, cursor));
       } catch (e) { return oops(e); }
     },
 
-    clear(input: CommandInput): CommandResult<{ ok: true }> {
+    async clear(input: CommandInput): Promise<CommandResult<{ ok: true }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('clear requires params.cardId');
-        store.clear(cardId);
+        await store.clear(cardId);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },
 
-    setProcessing(input: CommandInput): CommandResult<{ ok: true }> {
+    async setProcessing(input: CommandInput): Promise<CommandResult<{ ok: true }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('setProcessing requires params.cardId');
         const body = (input.body ?? {}) as Record<string, unknown>;
         if (typeof body.active !== 'boolean') return fail('setProcessing requires body.active (boolean)');
-        store.setProcessing(cardId, body.active);
+        await store.setProcessing(cardId, body.active);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },
 
-    isProcessing(input: CommandInput): CommandResult<{ active: boolean }> {
+    async isProcessing(input: CommandInput): Promise<CommandResult<{ active: boolean }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('isProcessing requires params.cardId');
-        return ok({ active: store.isProcessing(cardId) });
+        return ok({ active: await store.isProcessing(cardId) });
       } catch (e) { return oops(e); }
     },
 
-    getConfig(input: CommandInput): CommandResult<{ config: ChatConfig }> {
+    async getConfig(input: CommandInput): Promise<CommandResult<{ config: ChatConfig }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('getConfig requires params.cardId');
-        return ok({ config: store.getConfig(cardId) });
+        return ok({ config: await store.getConfig(cardId) });
       } catch (e) { return oops(e); }
     },
 
-    setConfig(input: CommandInput): CommandResult<{ ok: true }> {
+    async setConfig(input: CommandInput): Promise<CommandResult<{ ok: true }>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('setConfig requires params.cardId');
         const patch = (input.body ?? {}) as Partial<ChatConfig>;
-        store.setConfig(cardId, patch);
+        await store.setConfig(cardId, patch);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },

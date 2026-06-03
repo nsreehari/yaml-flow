@@ -4,6 +4,7 @@ import type { ExecutionRef } from '../common/execution-interface.js';
 import { parseExecutionRef, serializeExecutionRef } from '../common/execution-interface.js';
 import { parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
+import type { ChatStorage } from '../common/chat-storage-lib.js';
 import type {
   AsyncArchiveFactory,
   AsyncAtomicRelayLock,
@@ -50,32 +51,37 @@ export interface AsyncBoardConfigStore {
   writeTaskExecutorRef(ref: ExecutionRef): Promise<void>;
   readChatHandlerFlow(): Promise<unknown>;
   writeChatHandlerFlow(flow: unknown): Promise<void>;
+  readBoardRuntimeStoreRef(): Promise<string | null>;
+  writeBoardRuntimeStoreRef(ref: string): Promise<void>;
   readCardStoreRef(): Promise<string | null>;
   writeCardStoreRef(ref: string): Promise<void>;
   readOutputsStoreRef(): Promise<string | null>;
   writeOutputsStoreRef(ref: string): Promise<void>;
+  readQueueStoreRef(): Promise<string | null>;
+  writeQueueStoreRef(ref: string): Promise<void>;
   readScratchStoreRef(): Promise<string | null>;
   writeScratchStoreRef(ref: string): Promise<void>;
-  readArchiveStoreRef(): Promise<string | null>;
-  writeArchiveStoreRef(ref: string): Promise<void>;
   readChatStoreRef(): Promise<string | null>;
   writeChatStoreRef(ref: string): Promise<void>;
   readArtifactsStoreRef(): Promise<string | null>;
   writeArtifactsStoreRef(ref: string): Promise<void>;
+  readFetchedSourcesStoreRef(): Promise<string | null>;
+  writeFetchedSourcesStoreRef(ref: string): Promise<void>;
 }
 
 export interface AsyncBoardPlatformAdapter {
   kvStorage(namespace: string): AsyncKVStorage;
   kvStorageForRef(ref: string): AsyncKVStorage;
   blobStorage(namespace: string): AsyncBlobStorage;
+  blobStorageForRef(ref: string): AsyncBlobStorage;
+  chatStorageForRef(ref: string): ChatStorage;
+  queueStorageForRef(ref: string, lane: string): AsyncQueueStorage;
   scratchStorage(): AsyncScratchStorage;
   scratchStorageForRef(ref: string): AsyncScratchStorage;
   archiveFactory(): AsyncArchiveFactory;
   archiveFactoryForRef(ref: string): AsyncArchiveFactory;
   journalStorage(): AsyncJournalStorage;
-  boardWorkerStore(): AsyncBoardWorkerStore;
-  chatAgentStore(): AsyncBoardWorkerStore;
-  processAccumulatedStore(): AsyncQueueStorage;
+  journalStorageForRef(ref: string): AsyncJournalStorage;
   lock: AsyncAtomicRelayLock;
   callbackTransport?: BoardCallbackTransport;
   dispatchExecution(ref: ExecutionRef, args: Record<string, unknown>): Promise<{ dispatched: boolean; error?: string }>;
@@ -103,17 +109,16 @@ export interface HostedAsyncBoardPlatformAdapterOptions {
   kvStorage(namespace: string): AsyncKVStorage;
   kvStorageForRef(ref: string): AsyncKVStorage;
   blobStorage(namespace: string): AsyncBlobStorage;
+  blobStorageForRef(ref: string): AsyncBlobStorage;
+  chatStorageForRef(ref: string): ChatStorage;
+  queueStoreRef?: string;
+  queueStorageForRef(ref: string, lane: string): AsyncQueueStorage;
   scratchStorage(): AsyncScratchStorage;
   scratchStorageForRef(ref: string): AsyncScratchStorage;
   archiveFactory(): AsyncArchiveFactory;
   archiveFactoryForRef(ref: string): AsyncArchiveFactory;
   journalStorage(): AsyncJournalStorage;
-  queueStorage?: AsyncQueueStorage;
-  boardWorkerStore?: AsyncBoardWorkerStore;
-  chatAgentQueueStorage?: AsyncQueueStorage;
-  chatAgentStore?: AsyncBoardWorkerStore;
-  processAccumulatedQueueStorage?: AsyncQueueStorage;
-  processAccumulatedStore?: AsyncQueueStorage;
+  journalStorageForRef(ref: string): AsyncJournalStorage;
   lock: AsyncAtomicRelayLock;
   callbackTransport?: BoardCallbackTransport;
   fetch?: HostedFetchLike;
@@ -200,6 +205,12 @@ export function createAsyncBoardConfigStore(kv: AsyncKVStorage): AsyncBoardConfi
     writeChatHandlerFlow(flow: unknown): Promise<void> {
       return kv.write('chat-handler-flow', flow);
     },
+    readBoardRuntimeStoreRef(): Promise<string | null> {
+      return readKey('board-runtime-store-ref');
+    },
+    writeBoardRuntimeStoreRef(ref: string): Promise<void> {
+      return kv.write('board-runtime-store-ref', ref);
+    },
     readCardStoreRef(): Promise<string | null> {
       return readKey('card-store-ref');
     },
@@ -212,17 +223,17 @@ export function createAsyncBoardConfigStore(kv: AsyncKVStorage): AsyncBoardConfi
     writeOutputsStoreRef(ref: string): Promise<void> {
       return kv.write('outputs-store-ref', ref);
     },
+    readQueueStoreRef(): Promise<string | null> {
+      return readKey('queue-store-ref');
+    },
+    writeQueueStoreRef(ref: string): Promise<void> {
+      return kv.write('queue-store-ref', ref);
+    },
     readScratchStoreRef(): Promise<string | null> {
       return readKey('scratch-store-ref');
     },
     writeScratchStoreRef(ref: string): Promise<void> {
       return kv.write('scratch-store-ref', ref);
-    },
-    readArchiveStoreRef(): Promise<string | null> {
-      return readKey('archive-store-ref');
-    },
-    writeArchiveStoreRef(ref: string): Promise<void> {
-      return kv.write('archive-store-ref', ref);
     },
     readChatStoreRef(): Promise<string | null> {
       return readKey('chat-store-ref');
@@ -236,15 +247,18 @@ export function createAsyncBoardConfigStore(kv: AsyncKVStorage): AsyncBoardConfi
     writeArtifactsStoreRef(ref: string): Promise<void> {
       return kv.write('artifacts-store-ref', ref);
     },
+    readFetchedSourcesStoreRef(): Promise<string | null> {
+      return readKey('fetched-sources-store-ref');
+    },
+    writeFetchedSourcesStoreRef(ref: string): Promise<void> {
+      return kv.write('fetched-sources-store-ref', ref);
+    },
   };
 }
 
 export function createHostedAsyncBoardPlatformAdapter(
   options: HostedAsyncBoardPlatformAdapterOptions,
 ): AsyncBoardPlatformAdapter {
-  let boardWorkerStoreCache: AsyncBoardWorkerStore | undefined;
-  let chatAgentStoreCache: AsyncBoardWorkerStore | undefined;
-  let processAccumulatedStoreCache: AsyncQueueStorage | undefined;
   let currentCallbackTransport = options.callbackTransport;
 
   const resolveBlob = options.resolveBlob ?? (async (ref: KindValueRef): Promise<string> => {
@@ -258,9 +272,10 @@ export function createHostedAsyncBoardPlatformAdapter(
     args: Record<string, unknown>,
   ): Promise<{ dispatched: boolean; error?: string }> {
     if (ref.howToRun === 'queue-storage') {
-      const store = options.boardWorkerStore ?? boardWorkerStoreCache ?? (options.queueStorage ? createAsyncBoardWorkerStore(options.queueStorage) : undefined);
-      if (!store) return { dispatched: false, error: 'queue-storage dispatch requires queueStorage or boardWorkerStore' };
-      if (!boardWorkerStoreCache) boardWorkerStoreCache = store;
+      if (!options.queueStoreRef) {
+        return { dispatched: false, error: 'queue-storage dispatch requires queueStoreRef' };
+      }
+      const store = createAsyncBoardWorkerStore(options.queueStorageForRef(options.queueStoreRef, 'task-executor'));
       await store.enqueueRequest({
         boardId: typeof ref.extra?.boardId === 'string' ? ref.extra.boardId : options.boardId,
         ref,
@@ -291,40 +306,15 @@ export function createHostedAsyncBoardPlatformAdapter(
     kvStorage: options.kvStorage,
     kvStorageForRef: options.kvStorageForRef,
     blobStorage: options.blobStorage,
+    blobStorageForRef: options.blobStorageForRef,
+    chatStorageForRef: options.chatStorageForRef,
+    queueStorageForRef: options.queueStorageForRef,
     scratchStorage: options.scratchStorage,
     scratchStorageForRef: options.scratchStorageForRef,
     archiveFactory: options.archiveFactory,
     archiveFactoryForRef: options.archiveFactoryForRef,
     journalStorage: options.journalStorage,
-    boardWorkerStore: () => {
-      if (!boardWorkerStoreCache) {
-        if (options.boardWorkerStore) boardWorkerStoreCache = options.boardWorkerStore;
-        else if (options.queueStorage) boardWorkerStoreCache = createAsyncBoardWorkerStore(options.queueStorage);
-        else throw new Error('Hosted async board adapter requires queueStorage or boardWorkerStore');
-      }
-      return boardWorkerStoreCache;
-    },
-    chatAgentStore: () => {
-      if (!chatAgentStoreCache) {
-        if (options.chatAgentStore) chatAgentStoreCache = options.chatAgentStore;
-        else if (options.chatAgentQueueStorage) chatAgentStoreCache = createAsyncBoardWorkerStore(options.chatAgentQueueStorage);
-        else if (options.boardWorkerStore) chatAgentStoreCache = options.boardWorkerStore;
-        else if (options.queueStorage) chatAgentStoreCache = createAsyncBoardWorkerStore(options.queueStorage);
-        else throw new Error('Hosted async board adapter requires chatAgentStore, chatAgentQueueStorage, queueStorage, or boardWorkerStore');
-      }
-      return chatAgentStoreCache;
-    },
-    processAccumulatedStore: () => {
-      if (!processAccumulatedStoreCache) {
-        processAccumulatedStoreCache = options.processAccumulatedStore
-          ?? options.processAccumulatedQueueStorage
-          ?? options.queueStorage;
-      }
-      if (!processAccumulatedStoreCache) {
-        throw new Error('Hosted async board adapter requires processAccumulatedStore, processAccumulatedQueueStorage, or queueStorage');
-      }
-      return processAccumulatedStoreCache;
-    },
+    journalStorageForRef: options.journalStorageForRef,
     lock: options.lock,
     get callbackTransport() {
       return currentCallbackTransport;

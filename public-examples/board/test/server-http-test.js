@@ -6,7 +6,7 @@
  * Targets the 'live' board with --cards-pattern cardT* to load only the 3
  * test cards (cardT-portfolio, cardT-market-prices, cardT-portfolio-value).
  *
- * T0: init-board → SSE initial payload → wait for all cards to complete
+ * T0: /sse?one-shot bootstrap → SSE initial payload → wait for all cards to complete
  * T1: PATCH holdings (+1 row) → verify recomputation (holdings +1, positions +1)
  *
  * Usage:
@@ -507,7 +507,7 @@ let chatSseClient = null;
 let chatSseClientId = '';
 
 try {
-  // ── T0: init-board, SSE connect, wait for initial completion ──
+  // ── T0: one-shot bootstrap, SSE connect, wait for initial completion ──
 
   // Register the 'live' board via POST (v8 runtime requires explicit registration)
   const regRes = await httpJson('POST', `http://127.0.0.1:${PORT}/api/boards`, { id: BOARD_ID, label: 'Live' });
@@ -515,10 +515,10 @@ try {
     `POST /api/boards returned ${regRes.status}: ${JSON.stringify(regRes.data)}`);
   console.log(`[setup] board '${BOARD_ID}' registered (${regRes.status})`);
 
-  console.log('\n=== T0 Step 1: init-board ===');
-  const initRes = await httpGet(`${BASE}/init-board`);
-  assert(initRes.status === 200, `init-board returned ${initRes.status}`);
-  console.log('[T0.1] init-board ok');
+  console.log('\n=== T0 Step 1: /sse?one-shot bootstrap ===');
+  const initRes = await httpGet(`${BASE}/sse?one-shot`);
+  assert(initRes.status === 200, `sse one-shot returned ${initRes.status}`);
+  console.log('[T0.1] sse one-shot ok');
 
   console.log('\n=== T0 Step 2: start SSE worker ===');
   const sseClientId = `server-http-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

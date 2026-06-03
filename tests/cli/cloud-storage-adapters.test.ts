@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createAsyncBoardConfigStore,
   createAsyncBoardLiveCardsPublic,
+  createAsyncBoardWorkerStore,
   createAsyncCardStorageAdapter,
   createAsyncJsonStorage,
   createAsyncStateSnapshotAdapter,
@@ -454,16 +455,20 @@ describe('cloud storage adapters', () => {
     const dead = new FakeAzureQueueClient();
     const queue = createAzureQueueStorage(active, { deadLetterQueueClient: dead, now: () => new Date('2026-05-31T12:00:00.000Z') });
 
+    const batch = await queue.enqueueMany([{ job: 'pre-A' }, { job: 'pre-B' }]);
     const queued = await queue.enqueue({ job: 'A' });
-    const [leased] = await queue.lease<{ job: string }>({ max: 1, visibilityMs: 15000 });
-    const nacked = await queue.nack(leased.id, leased.leaseToken, { dead: true, reason: 'boom' });
+    const leasedBatch = await queue.lease<{ job: string }>({ max: 3, visibilityMs: 15000 });
+    const leased = leasedBatch.find((message) => message.body.job === 'A');
+    expect(leased).toBeDefined();
+    const nacked = await queue.nack(leased!.id, leased!.leaseToken, { dead: true, reason: 'boom' });
     const deadRows = await queue.peekDeadLetter<{ messageId?: string }>();
     const queued2 = await queue.enqueue({ job: 'B' });
     const [leased2] = await queue.lease<{ job: string }>({ max: 1 });
     const acked = await queue.ack(leased2.id, leased2.leaseToken);
 
+    expect(batch).toHaveLength(2);
     expect(queued.id).toBeTruthy();
-    expect(leased.body).toEqual({ job: 'A' });
+    expect(batch.map((message) => message.body)).toEqual([{ job: 'pre-A' }, { job: 'pre-B' }]);
     expect(nacked).toBe(true);
     expect(deadRows[0].reason).toBe('boom');
     expect(queued2.id).toBeTruthy();
@@ -511,15 +516,28 @@ describe('cloud storage adapters', () => {
     await rootBlob.write('root-file.json', '{"ok":true}');
     const adapter = createHostedAsyncBoardPlatformAdapter({
       boardId: 'board-1',
+      queueStoreRef: 'queue-store-ref',
       kvStorage: (_namespace) => boardKv,
       kvStorageForRef: (_ref) => refKv,
       blobStorage: (namespace) => (namespace === 'sources' ? sourcesBlob : rootBlob),
+      blobStorageForRef: (_ref) => rootBlob,
+      chatStorageForRef: (_ref) => ({
+        append: async () => 'chat-1',
+        readAll: async () => [],
+        readAfter: async () => ({ records: [], cursor: null }),
+        clear: async () => {},
+        setProcessing: async () => {},
+        isProcessing: async () => false,
+        getConfig: async () => ({}),
+        setConfig: async () => {},
+      }),
+      queueStorageForRef: (_ref, _lane) => queue,
       scratchStorage: () => scratch,
       scratchStorageForRef: (_ref) => scratch,
       archiveFactory: () => archive,
       archiveFactoryForRef: (_ref) => archive,
       journalStorage: () => archive.stream('board-journal'),
-      queueStorage: queue,
+      journalStorageForRef: (_ref) => archive.stream('board-journal'),
       lock: createImmediateAsyncLock(),
       callbackTransport: createHttpBoardCallbackTransport('https://example.test/board'),
       fetch: fetchImpl,
@@ -540,7 +558,8 @@ describe('cloud storage adapters', () => {
     };
 
     expect((await adapter.dispatchExecution(queueRef, { op: 'queue' })).dispatched).toBe(true);
-    expect((await adapter.boardWorkerStore().peekActive())).toHaveLength(1);
+    const workerStore = createAsyncBoardWorkerStore(adapter.queueStorageForRef('queue-store-ref', 'task-executor'));
+    expect((await workerStore.peekActive())).toHaveLength(1);
     expect((await adapter.dispatchExecution(httpRef, { op: 'http' })).dispatched).toBe(true);
     expect(fetchCalls).toEqual([{ url: 'https://example.test/task', body: JSON.stringify({ op: 'http' }) }]);
     expect(await adapter.resolveBlob({ kind: 'azure-blob-key', value: 'root-file.json' })).toBe('{"ok":true}');
@@ -562,15 +581,28 @@ describe('cloud storage adapters', () => {
 
     const adapter = createHostedAsyncBoardPlatformAdapter({
       boardId: 'board-async',
+      queueStoreRef: 'queue-store-ref',
       kvStorage: (_namespace) => boardKv,
       kvStorageForRef: (ref) => ref === 'card-store-ref' ? cardKv : outputKv,
       blobStorage: (namespace) => namespace === 'sources' ? sourcesBlob : rootBlob,
+      blobStorageForRef: (ref) => ref === 'sources-store-ref' ? sourcesBlob : rootBlob,
+      chatStorageForRef: (_ref) => ({
+        append: async () => 'chat-1',
+        readAll: async () => [],
+        readAfter: async () => ({ records: [], cursor: null }),
+        clear: async () => {},
+        setProcessing: async () => {},
+        isProcessing: async () => false,
+        getConfig: async () => ({}),
+        setConfig: async () => {},
+      }),
+      queueStorageForRef: (_ref, _lane) => queue,
       scratchStorage: () => scratch,
       scratchStorageForRef: () => scratch,
       archiveFactory: () => archive,
       archiveFactoryForRef: () => archive,
       journalStorage: () => archive.stream('board-journal'),
-      queueStorage: queue,
+      journalStorageForRef: (_ref) => archive.stream('board-journal'),
       lock: createImmediateAsyncLock(),
       callbackTransport: createHttpBoardCallbackTransport('https://example.test/board'),
       hashFn: (value) => JSON.stringify(value),
@@ -591,28 +623,31 @@ describe('cloud storage adapters', () => {
       provides: [{ bindTo: 'payload', ref: '_sourcesData.payload' }],
     });
 
-    const board = createAsyncBoardLiveCardsPublic({ kind: 'cloud-board', value: 'board-async' }, adapter);
+    const taskExecutorRef = {
+      meta: 'task-executor',
+      howToRun: 'queue-storage' as const,
+      whatToRun: serializeRef({ kind: 'queue', value: 'worker-queue' }),
+    };
+    const chatHandlerFlow = { kind: 'chat-flow', version: 1 };
+    const board = createAsyncBoardLiveCardsPublic({ kind: 'cloud-board', value: 'board-async' }, adapter, {
+      taskExecutorRef,
+      chatHandlerFlow,
+    });
     expect(await board.init({
       params: {
+        boardRuntimeStoreRef: 'runtime-store-ref',
         cardStoreRef: 'card-store-ref',
         outputsStoreRef: 'outputs-store-ref',
+        queueStoreRef: 'queue-store-ref',
+        fetchedSourcesStoreRef: 'sources-store-ref',
         scratchStoreRef: 'scratch-store-ref',
-        archiveStoreRef: 'archive-store-ref',
         chatStoreRef: 'chat-store-ref',
         artifactsStoreRef: 'artifacts-store-ref',
       },
-      body: {
-        'task-executor-ref': {
-          meta: 'task-executor',
-          howToRun: 'queue-storage',
-          whatToRun: serializeRef({ kind: 'queue', value: 'worker-queue' }),
-        },
-        'chat-handler-flow': { kind: 'chat-flow', version: 1 },
-      },
+      body: {},
     })).toEqual({ status: 'success' });
 
     expect(await board.getScratchStoreRef({})).toEqual({ status: 'success', data: { storeRef: 'scratch-store-ref' } });
-    expect(await board.getArchiveStoreRef({})).toEqual({ status: 'success', data: { storeRef: 'archive-store-ref' } });
     expect(await board.getChatStoreRef({})).toEqual({ status: 'success', data: { storeRef: 'chat-store-ref' } });
     expect(await board.getArtifactsStoreRef({})).toEqual({ status: 'success', data: { storeRef: 'artifacts-store-ref' } });
     expect(await board.getConfig({ params: { key: 'task-executor' } })).toEqual({
@@ -633,7 +668,8 @@ describe('cloud storage adapters', () => {
     expect(await board.upsertCard({ params: { cardId: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
 
-    const queued = await adapter.boardWorkerStore().peekActive();
+    const workerStore = createAsyncBoardWorkerStore(adapter.queueStorageForRef('queue-store-ref', 'task-executor'));
+    const queued = await workerStore.peekActive();
     expect(queued).toHaveLength(1);
     expect(queued[0].request.args.source_def).toMatchObject({ bindTo: 'payload', outputFile: 'payload.json' });
 
@@ -705,7 +741,8 @@ describe('cloud storage adapters', () => {
 
     expect(await board.retrigger({ params: { id: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
-    expect((await adapter.boardWorkerStore().peekActive())).toHaveLength(1);
+    const retriggerWorkerStore = createAsyncBoardWorkerStore(adapter.queueStorageForRef('queue-store-ref', 'task-executor'));
+    expect((await retriggerWorkerStore.peekActive())).toHaveLength(1);
 
     expect(await board.removeCard({ params: { id: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');

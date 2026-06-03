@@ -26,6 +26,7 @@ import {
   createFsBoardNonCorePlatformAdapter,
   createInProcessBoardCallbackTransport,
   createFsBoardChatStorage,
+  createInMemoryChatStorage,
   createNodeSpawnInvocationAdapter,
   createArtifactsStore,
   evaluateArgsMassaging,
@@ -34,7 +35,6 @@ import {
   registerInProcessExecutionHandler,
   startQueueLaneRunners,
   serializeRef,
-  serializeExecutionRef,
 } from 'yaml-flow/board-live-cards-node';
 import { registerInProcessBoardWorkerCallback } from 'yaml-flow/board-worker-adapter';
 import {
@@ -504,6 +504,24 @@ class MemoryAsyncBlobStorage {
     this.byteValues.delete(key);
   }
 
+  async renameKey(from, to) {
+    if (this.byteValues.has(from)) {
+      this.byteValues.set(to, this.byteValues.get(from));
+      this.byteValues.delete(from);
+      this.textValues.delete(to);
+      this.textValues.delete(from);
+      return true;
+    }
+    if (this.textValues.has(from)) {
+      this.textValues.set(to, this.textValues.get(from));
+      this.textValues.delete(from);
+      this.byteValues.delete(to);
+      this.byteValues.delete(from);
+      return true;
+    }
+    return false;
+  }
+
   async exists(key) {
     return this.textValues.has(key) || this.byteValues.has(key);
   }
@@ -735,6 +753,10 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
   const kvNamespaces = new Map();
   const kvRefs = new Map();
   const blobNamespaces = new Map();
+  const blobRefs = new Map();
+  const chatRefs = new Map();
+  const queueRefs = new Map();
+  const journalRefs = new Map();
   const blobKindToNamespace = new Map([
     ['cloud-blob-key', ''],
     ['cloud-source-key', 'sources'],
@@ -772,11 +794,51 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
     }
     return blobNamespaces.get(key);
   };
+  const getBlobRef = (ref) => {
+    const key = String(ref || '');
+    if (!blobRefs.has(key)) {
+      let kind = 'cloud-blob-key';
+      try {
+        kind = parseRef(key).kind;
+      } catch {
+        if (key.endsWith(':sources')) kind = 'cloud-source-key';
+        else if (key.endsWith(':archive')) kind = 'cloud-archive-key';
+        else if (key.endsWith(':scratch')) kind = 'cloud-scratch-key';
+      }
+      const keyRefFactory = kind === 'cloud-source-key' && stagedSourcesDir
+        ? (blobKey) => ({ kind: 'fs-path', value: path.join(stagedSourcesDir, ...String(blobKey).split('/')) })
+        : null;
+      blobRefs.set(key, new MemoryAsyncBlobStorage(kind, keyRefFactory));
+    }
+    return blobRefs.get(key);
+  };
+  const getChatRef = (ref) => {
+    const key = String(ref || '');
+    if (!chatRefs.has(key)) chatRefs.set(key, createInMemoryChatStorage());
+    return chatRefs.get(key);
+  };
+  const getQueueRef = (ref, lane) => {
+    const key = `${String(ref || '')}::${String(lane || '')}`;
+    if (!queueRefs.has(key)) {
+      if (lane === 'task-executor') queueRefs.set(key, boardWorkerQueueStorage);
+      else if (lane === 'chat-agent') queueRefs.set(key, chatAgentQueueStorage);
+      else if (lane === 'process-accumulated') queueRefs.set(key, processAccumulatedQueueStorage);
+      else queueRefs.set(key, new MemoryAsyncQueueStorage());
+    }
+    return queueRefs.get(key);
+  };
+  const getJournalRef = (ref) => {
+    const key = String(ref || '');
+    if (!journalRefs.has(key)) journalRefs.set(key, archiveFactory.stream(`board-journal-${stableHash(key)}`));
+    return journalRefs.get(key);
+  };
+  const queueStoreRef = serializeRef({ kind: 'cloud-queue-ref', value: `${boardId}:runtime` });
 
   const bundle = {
     getKvNamespace,
     getKvRef,
     getBlobNamespace,
+    getChatRef,
     adapter: null,
     notifyChannel,
   };
@@ -786,14 +848,16 @@ function getCloudBoardBundle(boardId, notifyChannel, boardDir = null) {
     kvStorage: (namespace) => getKvNamespace(namespace),
     kvStorageForRef: (ref) => getKvRef(ref),
     blobStorage: (namespace) => getBlobNamespace(namespace),
+    blobStorageForRef: (ref) => getBlobRef(ref),
+    chatStorageForRef: (ref) => getChatRef(ref),
+    queueStorageForRef: (ref, lane) => getQueueRef(ref, lane),
     scratchStorage: () => scratchStore,
     scratchStorageForRef: () => scratchStore,
     archiveFactory: () => archiveFactory,
     archiveFactoryForRef: () => archiveFactory,
     journalStorage: () => journalStorage,
-    queueStorage: boardWorkerQueueStorage,
-    chatAgentQueueStorage,
-    processAccumulatedQueueStorage,
+    journalStorageForRef: (ref) => getJournalRef(ref),
+    queueStoreRef,
     lock: createImmediateAsyncLock(),
     callbackTransport: undefined,
     resolveBlob: async (ref) => {
@@ -851,8 +915,10 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   const runtimeCardStoreDir = path.join(runtimeCardsDir, 'store');
   fs.mkdirSync(runtimeCardStoreDir, { recursive: true });
   const runtimeOutDir = path.join(path.dirname(boardDir), 'runtime-out');
+  const fetchedSourcesDir = path.join(path.dirname(boardDir), 'sources');
   const scratchDir = path.join(runtimeOutDir, '.tmp');
   const archiveDir = path.join(runtimeOutDir, 'archive');
+  fs.mkdirSync(fetchedSourcesDir, { recursive: true });
   fs.mkdirSync(scratchDir, { recursive: true });
   fs.mkdirSync(archiveDir, { recursive: true });
 
@@ -866,6 +932,7 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   if (runtimeMode === 'cloud') {
     const cloudBundle = getCloudBoardBundle(boardId, notifyChannel, boardDir);
     cloudBundle.adapter.callbackTransport = callbackTransport;
+    const boardRuntimeStoreRef = serializeRef({ kind: 'cloud-kv-ref', value: `${boardId}:runtime-board` });
     const cloudNonCoreAdapter = createFsBoardNonCorePlatformAdapter(
       parseRef(serializeRef({ kind: 'fs-path', value: boardDir })),
       {
@@ -873,6 +940,13 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
         ...(callbackTransport ? { callbackTransport } : {}),
       },
     );
+    const cloudKvStorageForRef = cloudNonCoreAdapter.kvStorageForRef.bind(cloudNonCoreAdapter);
+    cloudNonCoreAdapter.kvStorageForRef = (ref) => {
+      try {
+        if (parseRef(ref).kind === 'cloud-kv-ref') return cloudBundle.getKvRef(ref);
+      } catch {}
+      return cloudKvStorageForRef(ref);
+    };
     const cloudHostedTaskExecutorRef = makeHostedBoardWorkerRef(boardId, taskExecPath, boardWorkerTransport, executionExtra);
     const cloudLocalSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
     if (cloudLocalSyncTaskExecutorRef) {
@@ -883,25 +957,20 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
       };
     }
     cloudNonCoreAdapter.requestProcessAccumulated = () => {};
-    try {
-      const seedTeRef = cloudLocalSyncTaskExecutorRef ?? cloudHostedTaskExecutorRef;
-      if (seedTeRef) {
-        cloudNonCoreAdapter.kvStorage('config').write('task-executor', serializeExecutionRef(seedTeRef));
-      }
-    } catch (e) {
-      logger.warn(`[cloud:${boardId}] failed to seed non-core task-executor config: ${e?.message || e}`);
-    }
     return {
       label,
       boardAdapter: cloudBundle.adapter,
       nonCoreAdapter: cloudNonCoreAdapter,
-      artifactsAdapter: cloudBundle.adapter,
       baseRef: { kind: 'cloud-board', value: `board:${boardId}` },
-      cardStoreRef: `cloud:${boardId}:cards`,
-      outputsStoreRef: `cloud:${boardId}:runtime-out`,
-      artifactsStoreRef: `cloud:${boardId}:artifacts`,
-      scratchStoreRef: `cloud:${boardId}:scratch`,
-      archiveStoreRef: `cloud:${boardId}:archive`,
+      boardRuntimeStoreRef,
+      cardStoreRef: serializeRef({ kind: 'cloud-kv-ref', value: `${boardId}:cards` }),
+      outputsStoreRef: serializeRef({ kind: 'cloud-blob-key', value: `${boardId}:runtime-out` }),
+      queueStoreRef: serializeRef({ kind: 'cloud-queue-ref', value: `${boardId}:runtime` }),
+      fetchedSourcesStoreRef: serializeRef({ kind: 'cloud-source-key', value: `${boardId}:sources` }),
+      chatStoreRef: serializeRef({ kind: 'cloud-chat-ref', value: `${boardId}:chat` }),
+      artifactsStoreRef: serializeRef({ kind: 'cloud-blob-key', value: `${boardId}:artifacts` }),
+      scratchStoreRef: serializeRef({ kind: 'cloud-scratch-key', value: `${boardId}:scratch` }),
+      archiveStoreRef: serializeRef({ kind: 'cloud-archive-key', value: `${boardId}:archive` }),
       notifyRef: { kind: 'in-memory-notify', value: notifyChannel },
       taskExecutorRef: cloudHostedTaskExecutorRef,
       chatHandlerFlow,
@@ -910,8 +979,18 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   }
 
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: boardDir }));
+  const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardsDir });
+  const cardStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardStoreDir });
+  const fetchedSourcesStoreRef = serializeRef({ kind: 'fs-path', value: fetchedSourcesDir });
+  const boardRuntimeStoreRef = serializeRef({ kind: 'fs-path', value: path.join(runtimeOutDir, '.board-runtime') });
+  const queueStoreRef = serializeRef({ kind: 'fs-path', value: path.join(runtimeOutDir, '.runtime') });
+  const scratchStoreRef = serializeRef({ kind: 'fs-path', value: scratchDir });
+  const archiveStoreRef = serializeRef({ kind: 'fs-path', value: archiveDir });
+  const chatStoreRef = serializeRef({ kind: 'fs-path', value: boardDir });
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, {
     notifyChannel,
+    boardRuntimeStoreRef,
+    queueStoreRef,
     ...(callbackTransport ? { callbackTransport } : {}),
   });
   const nonCoreAdapter = createFsBoardNonCorePlatformAdapter(baseRef, {
@@ -929,21 +1008,17 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
   boardAdapter.requestProcessAccumulated = () => {};
   nonCoreAdapter.requestProcessAccumulated = () => {};
 
-  const artifactsRef = parseRef(serializeRef({ kind: 'fs-path', value: runtimeCardsDir }));
-  const artifactsAdapter = createFsBoardPlatformAdapter(artifactsRef, { suppressSpawn: true });
-  const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardsDir });
-  const cardStoreRef = serializeRef({ kind: 'fs-path', value: runtimeCardStoreDir });
-  const scratchStoreRef = serializeRef({ kind: 'fs-path', value: scratchDir });
-  const archiveStoreRef = serializeRef({ kind: 'fs-path', value: archiveDir });
-
   return {
     label,
     boardAdapter,
     nonCoreAdapter,
-    artifactsAdapter,
     baseRef,
+    boardRuntimeStoreRef,
     cardStoreRef,
     outputsStoreRef: serializeRef({ kind: 'fs-path', value: runtimeOutDir }),
+    queueStoreRef,
+    fetchedSourcesStoreRef,
+    chatStoreRef,
     artifactsStoreRef,
     scratchStoreRef,
     archiveStoreRef,
@@ -1083,13 +1158,14 @@ const runtime = createMultiBoardServerRuntime({
       }
     }
 
-    const chatStorage = createFsBoardChatStorage(boardDir);
+    const chatStorage = runtimeMode === 'cloud'
+      ? getCloudBoardBundle(boardId, baseCfg.notifyRef.value, boardDir).getChatRef(baseCfg.chatStoreRef)
+      : createFsBoardChatStorage(boardDir);
     hostedBoardChatStorages.set(boardId, chatStorage);
 
     const singleBoardRuntime = createSingleBoardServerRuntime({
       apiBasePath: `${apiBasePath}/${boardId}`,
       boardId,
-      chatStorage,
       boards,
       invocationAdapter,
       chatFlowRunner: flowRunner,
@@ -1136,6 +1212,7 @@ const runtime = createMultiBoardServerRuntime({
     }
     const stopQueueRunner = startQueueLaneRunners(createHostedBoardQueueLaneRegistry({
       boardId,
+      queueStoreRef: baseCfg.queueStoreRef,
       runtime: singleBoardRuntime,
       boardAdapter: baseCfg.boardAdapter,
       logger,
@@ -1293,7 +1370,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('[board-server] endpoints:');
   console.log(`  GET  ${apiBasePath}                          <- list boards`);
   console.log(`  POST ${apiBasePath}  {id, label?}            <- register board`);
-  console.log(`  GET  ${apiBasePath}/:boardId/init-board`);
+  console.log(`  GET  ${apiBasePath}/:boardId/sse?one-shot`);
   console.log(`  GET  ${apiBasePath}/:boardId/sse`);
   console.log(`  GET  ${apiBasePath}/:boardId/board-status`);
   console.log(`  GET  ${apiBasePath}/:boardId/cards/:id`);

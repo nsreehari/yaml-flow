@@ -368,7 +368,7 @@ console.log(session.getClientId());
         document.getElementById('boardTitle').textContent = bid + ' (Server Runtime)';
         document.getElementById('boardDesc').textContent = '';
 
-        // SSE-first bootstrap: init-board initializes the board server-side,
+        // SSE-first bootstrap: /sse?one-shot initializes the board server-side,
         // then /sse sends the full payload as the first frame. No separate
         // demo-setup step needed — the server runs it automatically at init time.
         await runtimeClient.bootstrapBoard({

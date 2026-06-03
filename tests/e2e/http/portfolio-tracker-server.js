@@ -12,7 +12,7 @@
  *   node portfolio-tracker-server.js [--port 7800] [--reset]
  *
  * Endpoints (all under /api/board):
- *   GET  /api/board/init-board
+ *   GET  /api/board/sse?one-shot
  *   GET  /api/board/sse
  *   GET  /api/board/board-status
  *   PATCH /api/board/cards/:id
@@ -51,13 +51,18 @@ const SETUP_DIR = path.join(os.tmpdir(), `portfolio-tracker-server-${setupSuffix
 const RUNTIME_DIR = path.join(SETUP_DIR, 'runtime');
 const CARDS_DIR = path.join(SETUP_DIR, 'cards');
 const OUTPUTS_DIR = path.join(SETUP_DIR, 'outputs');
+const CHAT_DIR = path.join(SETUP_DIR, 'chat');
+const FILES_DIR = path.join(SETUP_DIR, 'files');
+const SOURCES_DIR = path.join(SETUP_DIR, 'sources');
+const SCRATCH_DIR = path.join(SETUP_DIR, 'scratch');
+const ARCHIVE_DIR = path.join(SETUP_DIR, 'archive');
 const FETCH_PRICES_JS = path.join(__dirname, '..', 'local', 'portfolio-tracker-fetch-prices.js');
 
 if (RESET && fs.existsSync(SETUP_DIR)) {
   fs.rmSync(SETUP_DIR, { recursive: true, force: true });
   console.log(`[portfolio-tracker-server] reset: wiped ${SETUP_DIR}`);
 }
-for (const d of [RUNTIME_DIR, CARDS_DIR, OUTPUTS_DIR]) {
+for (const d of [RUNTIME_DIR, CARDS_DIR, OUTPUTS_DIR, CHAT_DIR, FILES_DIR, SOURCES_DIR, SCRATCH_DIR, ARCHIVE_DIR]) {
   fs.mkdirSync(d, { recursive: true });
 }
 
@@ -219,13 +224,23 @@ function createNamedPipeNotificationTransport() {
 
 // ── Board adapter ──────────────────────────────────────────────────────────────
 const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: RUNTIME_DIR }));
-const boardAdapter = createFsBoardPlatformAdapter(baseRef, { notifyChannel: NOTIFY_CHANNEL });
+const cardStoreRef = serializeRef({ kind: 'fs-path', value: path.join(CARDS_DIR, 'cards') });
+const boardRuntimeStoreRef = serializeRef({ kind: 'fs-path', value: RUNTIME_DIR });
+const outputsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(OUTPUTS_DIR, '.outputs') });
+const chatStoreRef = serializeRef({ kind: 'fs-path', value: CHAT_DIR });
+const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: FILES_DIR });
+const fetchedSourcesStoreRef = serializeRef({ kind: 'fs-path', value: SOURCES_DIR });
+const queueStoreRef = serializeRef({ kind: 'fs-path', value: path.join(OUTPUTS_DIR, '.runtime') });
+const scratchStoreRef = serializeRef({ kind: 'fs-path', value: SCRATCH_DIR });
+const archiveStoreRef = serializeRef({ kind: 'fs-path', value: ARCHIVE_DIR });
+const notifyRef = { kind: 'named-pipe', value: namedPipePath(NOTIFY_CHANNEL) };
+const boardAdapter = createFsBoardPlatformAdapter(baseRef, {
+  notifyChannel: NOTIFY_CHANNEL,
+  boardRuntimeStoreRef,
+  queueStoreRef,
+});
 // In the server context the drain loop is driven in-process.
 boardAdapter.requestProcessAccumulated = () => {};
-
-const cardStoreRef = serializeRef({ kind: 'fs-path', value: path.join(CARDS_DIR, 'cards') });
-const outputsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(OUTPUTS_DIR, '.outputs') });
-const notifyRef = { kind: 'named-pipe', value: namedPipePath(NOTIFY_CHANNEL) };
 const taskExecutorRef = {
   howToRun: 'local-node',
   whatToRun: serializeRef({ kind: 'fs-path', value: FETCH_PRICES_JS }),
@@ -240,8 +255,15 @@ const runtime = createSingleBoardServerRuntime({
     label: 'portfolio-tracker',
     boardAdapter,
     baseRef,
+    boardRuntimeStoreRef,
     cardStoreRef,
     outputsStoreRef,
+    chatStoreRef,
+    artifactsStoreRef,
+    fetchedSourcesStoreRef,
+    queueStoreRef,
+    scratchStoreRef,
+    archiveStoreRef,
     notifyRef,
     taskExecutorRef,
   }],
@@ -253,6 +275,7 @@ const runtime = createSingleBoardServerRuntime({
 
 const stopQueueLanes = startQueueLaneRunners(createHostedBoardQueueLaneRegistry({
   boardId: 'portfolio-tracker',
+  queueStoreRef,
   runtime,
   boardAdapter,
   logger: { info: console.log, warn: console.warn, error: console.error },
@@ -300,7 +323,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[portfolio-tracker-server] listening on http://127.0.0.1:${PORT}`);
   console.log(`[portfolio-tracker-server] runtime dir: ${RUNTIME_DIR}`);
   console.log(`[portfolio-tracker-server] endpoints:`);
-  console.log(`  GET  /api/board/init-board`);
+  console.log(`  GET  /api/board/sse?one-shot`);
   console.log(`  GET  /api/board/sse`);
   console.log(`  GET  /api/board/board-status`);
   console.log(`  PATCH /api/board/cards/:id`);

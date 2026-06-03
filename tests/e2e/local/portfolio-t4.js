@@ -32,11 +32,23 @@ const FETCH_PRICES_JS = path.join(__dirname, 'portfolio-tracker-fetch-prices.js'
 const _TMP_BASE        = path.join(os.tmpdir(), `experiment-js-t4-${process.pid}`);
 const CARDSTORE_DIR    = path.join(_TMP_BASE, 'cardstore');
 const BOARDRUNTIME_DIR = path.join(_TMP_BASE, 'boardruntime');
+const QUEUE_DIR        = path.join(_TMP_BASE, 'queue');
 const OUTPUTS_DIR      = path.join(_TMP_BASE, 'outputs');
+const CHAT_DIR         = path.join(_TMP_BASE, 'chat');
+const FILES_DIR        = path.join(_TMP_BASE, 'files');
+const SOURCES_DIR      = path.join(_TMP_BASE, 'sources');
+const SCRATCH_DIR      = path.join(_TMP_BASE, 'scratch');
+const ARCHIVE_DIR      = path.join(_TMP_BASE, 'archive');
 
 const CARDSTORE_REF    = serializeRef({ kind: 'fs-path', value: CARDSTORE_DIR });
 const BOARDRUNTIME_REF = serializeRef({ kind: 'fs-path', value: BOARDRUNTIME_DIR });
+const QUEUE_REF        = serializeRef({ kind: 'fs-path', value: QUEUE_DIR });
 const OUTPUTS_REF      = serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR });
+const CHAT_REF         = serializeRef({ kind: 'fs-path', value: CHAT_DIR });
+const FILES_REF        = serializeRef({ kind: 'fs-path', value: FILES_DIR });
+const SOURCES_REF      = serializeRef({ kind: 'fs-path', value: SOURCES_DIR });
+const SCRATCH_REF      = serializeRef({ kind: 'fs-path', value: SCRATCH_DIR });
+const ARCHIVE_REF      = serializeRef({ kind: 'fs-path', value: ARCHIVE_DIR });
 
 // ── Card definitions ───────────────────────────────────────────────────────────
 const CARD_PORTFOLIO_FORM = {
@@ -98,12 +110,18 @@ function readJson(filePath) {
 
 function makeBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, { onWarn: console.warn }));
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, {
+    onWarn: console.warn,
+    boardRuntimeStoreRef: BOARDRUNTIME_REF,
+    queueStoreRef: QUEUE_REF,
+  }), { boardRuntimeStoreRef: BOARDRUNTIME_REF });
 }
 
 function makeNonCoreBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, { onWarn: console.warn }));
+  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, { onWarn: console.warn }), {
+    boardRuntimeStoreRef: BOARDRUNTIME_REF,
+  });
 }
 
 function makeCardStore() {
@@ -154,12 +172,12 @@ const T = () => Date.now();
 // ── T0 — Init ─────────────────────────────────────────────────────────────────
 console.log('\n=== T0: Init ===');
 if (fs.existsSync(_TMP_BASE)) fs.rmSync(_TMP_BASE, { recursive: true, force: true });
-for (const d of [CARDSTORE_DIR, BOARDRUNTIME_DIR, OUTPUTS_DIR]) fs.mkdirSync(d, { recursive: true });
+for (const d of [CARDSTORE_DIR, BOARDRUNTIME_DIR, QUEUE_DIR, OUTPUTS_DIR, CHAT_DIR, FILES_DIR, SOURCES_DIR, SCRATCH_DIR, ARCHIVE_DIR]) fs.mkdirSync(d, { recursive: true });
 console.log(`  runtime base: ${_TMP_BASE}`);
 
 checkResult(
   makeBoard().init({
-    params: { cardStoreRef: CARDSTORE_REF, outputsStoreRef: OUTPUTS_REF },
+    params: { cardStoreRef: CARDSTORE_REF, boardRuntimeStoreRef: BOARDRUNTIME_REF, queueStoreRef: QUEUE_REF, outputsStoreRef: OUTPUTS_REF, chatStoreRef: CHAT_REF, artifactsStoreRef: FILES_REF, fetchedSourcesStoreRef: SOURCES_REF, scratchStoreRef: SCRATCH_REF, archiveStoreRef: ARCHIVE_REF },
     body: { 'task-executor-ref': { meta: 'task-executor', howToRun: 'local-node', whatToRun: serializeRef({ kind: 'fs-path', value: FETCH_PRICES_JS }) } },
   }),
   'init'

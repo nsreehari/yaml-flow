@@ -45,7 +45,6 @@ export type { BoardState, CardModel, DeriveBoardStateOptions };
 // ============================================================================
 
 export interface BoardPaths {
-  initBoard: string;
   stream: string;
   patchCard: (id: string) => string;
   retriggerCard: (id: string) => string;
@@ -71,7 +70,7 @@ export interface BoardRuntimeClientOptions {
 
 export interface BootstrapBoardParams {
   boardId?: string;
-  /** Optional path passed to init-board for server-side executor resolution. */
+  /** Legacy bootstrap hint. Ignored when using /sse?one-shot. */
   taskExecutorPath?: string;
   mode?: string;
   rootElement: HTMLElement;
@@ -150,8 +149,8 @@ export interface DerivedBoardRuntime {
 /**
  * Build the standard BoardPaths for a yaml-flow server runtime board.
  *
- * Covers only the paths owned by the server runtime (SSE, patch, action, files, chats,
- * init-board). Demo-server-specific endpoints (demo-setup, board registry
+ * Covers only the paths owned by the server runtime (SSE, patch, action, files, chats).
+ * Demo-server-specific endpoints (demo-setup, board registry
  * CRUD) are not included — add those in the consumer if needed.
  *
  * @example
@@ -166,7 +165,6 @@ export function defaultBoardPaths(boardId: string, apiBase = '/api/boards'): Boa
   const b = encodeURIComponent(boardId || 'default');
   const base = `${base_}/${b}`;
   return {
-    initBoard: `${base}/init-board`,
     stream:    `${base}/sse`,
     patchCard:       (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
     retriggerCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/retrigger`,
@@ -182,7 +180,6 @@ export function defaultBoardPaths(boardId: string, apiBase = '/api/boards'): Boa
 export function singleBoardPaths(apiBase = '/api/board'): BoardPaths {
   const base = apiBase.replace(/\/$/, '');
   return {
-    initBoard: `${base}/init-board`,
     stream:    `${base}/sse`,
     patchCard:       (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
     retriggerCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/retrigger`,
@@ -215,7 +212,7 @@ export function buildFileUrlBase(opts: {
   const origin = opts.getServerOrigin();
   if (!origin || !opts.boardId) return null;
   const paths = opts.boardPaths(opts.boardId);
-  return `${origin}${paths.initBoard.replace(/\/init-board$/, '')}`;
+  return `${origin}${paths.stream.replace(/\/sse(?:\?.*)?$/, '')}`;
 }
 
 /**
@@ -620,12 +617,9 @@ export function createBoardRuntimeSession(options: BoardRuntimeClientOptions): B
     }
 
     if (params.skipInitBoard !== true) {
-      const taskExecutorPath = typeof params.taskExecutorPath === 'string' ? params.taskExecutorPath.trim() : '';
-      const initBoardPath = taskExecutorPath
-        ? `${paths.initBoard}?taskExecutorPath=${encodeURIComponent(taskExecutorPath)}`
-        : paths.initBoard;
-      const initBoardRes = await fetchServer(initBoardPath);
-      if (!initBoardRes.ok) throw new Error(`Server init-board failed (${initBoardRes.status}).`);
+      const bootstrapPath = `${paths.stream}${paths.stream.includes('?') ? '&' : '?'}one-shot`;
+      const bootstrapRes = await fetchServer(bootstrapPath);
+      if (!bootstrapRes.ok) throw new Error(`Server one-shot SSE bootstrap failed (${bootstrapRes.status}).`);
     }
 
     const origin = getServerOrigin();
@@ -854,7 +848,7 @@ export function createDerivedBoardRuntime(options: DerivedBoardRuntimeOptions): 
 }
 
 export interface BoardRuntimeClient {
-  /** Bootstrap the board: init-board → bootstrap-cards → LiveCard.Board + SSE. */
+  /** Bootstrap the board: /sse?one-shot → LiveCard.Board + SSE. */
   bootstrapBoard(params: BootstrapBoardParams): Promise<unknown>;
   /** Tear down SSE and release references. */
   dispose(): void;

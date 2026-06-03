@@ -34,9 +34,13 @@ function runBoardWorkerCallbackLocalNode(
   const scriptPath = parseWhatToRun(via.whatToRun);
   const { cmd, args } = resolveLocalNodeInvocation(scriptPath);
   const notifyChannel = notifyChannelFromVia(via);
+  const boardRuntimeStoreRef = boardRuntimeStoreRefFromVia(via);
+  const queueStoreRef = queueStoreRefFromVia(via);
   const result = spawnSync(cmd, [
     ...args,
     ...callbackArgs,
+    ...(boardRuntimeStoreRef ? ['--board-runtime-store-ref', boardRuntimeStoreRef] : []),
+    ...(queueStoreRef ? ['--queue-store-ref', queueStoreRef] : []),
     ...(notifyChannel ? ['--notify-channel', notifyChannel] : []),
   ], { encoding: 'utf-8', windowsHide: true });
   if (result.status !== 0) {
@@ -64,6 +68,16 @@ function parseWhatToRun(whatToRun: string): string {
 
 function notifyChannelFromVia(via: LocalNodeExecutionRef): string | undefined {
   const candidate = via.extra?.['notifyChannel'];
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+}
+
+function boardRuntimeStoreRefFromVia(via: LocalNodeExecutionRef): string | undefined {
+  const candidate = via.extra?.['boardRuntimeStoreRef'];
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+}
+
+function queueStoreRefFromVia(via: LocalNodeExecutionRef): string | undefined {
+  const candidate = via.extra?.['queueStoreRef'];
   return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
 }
 

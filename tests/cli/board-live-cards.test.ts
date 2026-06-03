@@ -23,9 +23,10 @@ import {
   liveCardToTaskConfig,
   createCardStore,
 } from '../../src/cli/common/board-live-cards-lib.js';
+import { createStateSnapshotAdapter } from '../../src/cli/common/board-live-cards-storage.js';
 import type { BoardLiveCard, BoardEnvelope, CardInventoryEntry } from '../../src/cli/common/board-live-cards-lib.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
-import { createFsJournalStorageAdapter, createFsStateSnapshotStorageAdapter, createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
+import { computeStableJsonHash, createFsJournalStorageAdapter, createFsCardStorageAdapter, createFsKvStorage } from '../../src/cli/node/storage-fs-adapters.js';
 import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
 import type { KindValueRef } from '../../src/cli/common/storage-interface.js';
 import { createReactiveGraph, restore, createLiveGraph, snapshot } from '../../src/continuous-event-graph/index.js';
@@ -40,27 +41,57 @@ import type { GraphConfig, GraphEvent } from '../../src/event-graph/types.js';
 
 interface JournalEntry { id: string; event: GraphEvent; }
 
-const snapshotStore = createStateSnapshotStore(createFsStateSnapshotStorageAdapter());
+const snapshotStore = createStateSnapshotStore(createStateSnapshotAdapter((scopeId) => createFsKvStorage(scopeId), computeStableJsonHash));
 
 function initBoard(baseRef: KindValueRef): 'created' | 'exists' {
   if (baseRef.kind !== 'fs-path') throw new Error(`initBoard: unsupported kind "${baseRef.kind}"`);
   const dir = baseRef.value;
-  const snap = snapshotStore.readSnapshot(dir);
+  const runtimePath = parseRef(boardRuntimeStoreRef(dir)).value;
+  const snap = snapshotStore.readSnapshot(runtimePath);
   if (snap.values[BOARD_GRAPH_KEY]) return 'exists';
   // Guard: non-empty dir without valid board
   if (fs.existsSync(dir)) {
     const entries = fs.readdirSync(dir);
     if (entries.length > 0) throw new Error(`Directory "${dir}" is not empty and has no valid board`);
   }
-  const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, testDir, { suppressSpawn: true }));
-  const result = board.init({ params: { cardStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.cards') }), outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.output') }) } });
+  const board = createBoardLiveCardsPublic(baseRef, createFsBoardPlatformAdapter(baseRef, testDir, {
+    suppressSpawn: true,
+    boardRuntimeStoreRef: boardRuntimeStoreRef(dir),
+    queueStoreRef: queueStoreRef(dir),
+  }), { boardRuntimeStoreRef: boardRuntimeStoreRef(dir) });
+  const result = board.init({ params: {
+    boardRuntimeStoreRef: boardRuntimeStoreRef(dir),
+    queueStoreRef: queueStoreRef(dir),
+    cardStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.cards') }),
+    outputsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.output') }),
+    chatStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.chat') }),
+    artifactsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.files') }),
+    fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.sources') }),
+    scratchStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.scratch') }),
+    archiveStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.archive') }),
+  } });
   if (result.status !== 'success') throw new Error(`initBoard failed: ${JSON.stringify(result)}`);
   return 'created';
 }
 
+function initParams(dir: string) {
+  return {
+    boardRuntimeStoreRef: boardRuntimeStoreRef(dir),
+    queueStoreRef: queueStoreRef(dir),
+    cardStoreRef: cardStoreRef(dir),
+    outputsStoreRef: outputsStoreRef(dir),
+    chatStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.chat') }),
+    artifactsStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.files') }),
+    fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.sources') }),
+    scratchStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.scratch') }),
+    archiveStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.archive') }),
+  };
+}
+
 function loadBoardEnvelope(baseRef: KindValueRef): BoardEnvelope {
-  const snap = snapshotStore.readSnapshot(baseRef.value);
-  if (!snap.values[BOARD_GRAPH_KEY]) throw new Error(`Missing board state at: ${baseRef.value}`);
+  const runtimePath = parseRef(boardRuntimeStoreRef(baseRef.value)).value;
+  const snap = snapshotStore.readSnapshot(runtimePath);
+  if (!snap.values[BOARD_GRAPH_KEY]) throw new Error(`Missing board state at: ${runtimePath}`);
   return snapshotEntriesToBoardEnvelope(snap.values);
 }
 
@@ -71,9 +102,10 @@ function loadBoard(baseRef: KindValueRef) {
 function saveBoard(baseRef: KindValueRef, rg: ReactiveGraph, journalOrCursor: BoardJournal | string): void {
   const newCursor = typeof journalOrCursor === 'string' ? journalOrCursor : journalOrCursor.lastDrainedJournalId;
   const snap = rg.snapshot();
-  const envelope: BoardEnvelope = { lastDrainedJournalId: newCursor, graph: snap };
-  const current = snapshotStore.readSnapshot(baseRef.value);
-  const result = snapshotStore.commitSnapshot(baseRef.value, {
+  const envelope: BoardEnvelope = { lastDrainedJournalId: newCursor, graph: snap, runtimeByCardId: {} };
+  const runtimePath = parseRef(boardRuntimeStoreRef(baseRef.value)).value;
+  const current = snapshotStore.readSnapshot(runtimePath);
+  const result = snapshotStore.commitSnapshot(runtimePath, {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION_V1,
     expectedVersion: current.version,
     commitId: randomUUID(),
@@ -149,13 +181,19 @@ function lookupCardPath(baseRef: KindValueRef, cardId: string): string | null {
 const ref = (d: string) => ({ kind: 'fs-path' as const, value: d });
 
 /** Serialized card store ref — always at <boardDir>/.cards */
+const boardRuntimeStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.runtime') });
+const queueStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.queue') });
 const cardStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.cards') });
 const outputsStoreRef = (boardDir: string) => serializeRef({ kind: 'fs-path', value: path.join(boardDir, '.output') });
 
 /** Create a BoardLiveCardsPublic instance for a given dir. */
 function board(dir: string) {
   const br = ref(dir);
-  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, testDir, { onWarn: () => {} }));
+  return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, testDir, {
+    onWarn: () => {},
+    boardRuntimeStoreRef: boardRuntimeStoreRef(dir),
+    queueStoreRef: queueStoreRef(dir),
+  }), { boardRuntimeStoreRef: boardRuntimeStoreRef(dir) });
 }
 
 
@@ -369,7 +407,7 @@ describe('board-live-cards CLI', () => {
 
   it('cli init --base-ref <ref> creates an empty board', async () => {
     const dir = path.join(freshDir(), 'myboard');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const live = loadBoard(ref(dir));
     expect(Object.keys(live.config.tasks)).toHaveLength(0);
@@ -377,7 +415,7 @@ describe('board-live-cards CLI', () => {
 
   it('cli init --base-ref <ref> writes status snapshot to .output/', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const statusFile = path.join(dir, '.output', 'status.json');
     expect(fs.existsSync(statusFile)).toBe(true);
@@ -400,8 +438,8 @@ describe('board-live-cards CLI', () => {
   it('cli init --base-ref <ref> twice is idempotent', async () => {
     const dir = path.join(freshDir(), 'myboard');
 
-    const result1 = board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
-    const result2 = board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    const result1 = board(dir).init({ params: initParams(dir) });
+    const result2 = board(dir).init({ params: initParams(dir) });
 
     expect(result1.status).toBe('success');
     expect(result2.status).toBe('success');
@@ -429,7 +467,7 @@ describe('board-live-cards CLI', () => {
 
   it('publishes computed values under the configured output cards directory', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'totals',
@@ -812,8 +850,10 @@ describe('cli remove-card', () => {
       "  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rmcard-test-')), 'board');",
       "  const br = ref(dir);",
       "  try {",
-      "    const board = pub.createBoardLiveCardsPublic(br, fsAdapter.createFsBoardPlatformAdapter(br, testDir, { onWarn: () => {} }));",
-      "    board.init({ params: { cardStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.cards') }), outputsStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.output') }) } });",
+      "    const runtimeStoreRef = storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.runtime') });",
+      "    const queueStoreRef = storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.queue') });",
+      "    const board = pub.createBoardLiveCardsPublic(br, fsAdapter.createFsBoardPlatformAdapter(br, testDir, { onWarn: () => {}, boardRuntimeStoreRef: runtimeStoreRef, queueStoreRef }), { boardRuntimeStoreRef: runtimeStoreRef });",
+      "    board.init({ params: { boardRuntimeStoreRef: runtimeStoreRef, queueStoreRef, cardStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.cards') }), outputsStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.output') }), chatStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.chat') }), artifactsStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.files') }), fetchedSourcesStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.sources') }), scratchStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.scratch') }), archiveStoreRef: storageIfc.serializeRef({ kind: 'fs-path', value: path.join(dir, '.archive') }) } });",
       "    cardStorePub.createCardStorePublic(lib.createCardStore(storage.createFsCardStorageAdapter(path.join(dir, '.cards')))).set({ body: { id: 'temp', card_data: {} } });",
       "    board.upsertCard({ params: { cardId: 'temp' } });",
       "    const statusPath = path.join(dir, '.output', 'status.json');",
@@ -824,7 +864,7 @@ describe('cli remove-card', () => {
       "      await sleep(250);",
       "    }",
       "    if (!sawTemp) throw new Error('pre-remove status never showed temp');",
-      "    cp.execFileSync(process.execPath, [path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'), 'remove-card', '--base-ref', storageIfc.serializeRef(br), '--id', 'temp'], { cwd: repoRoot, stdio: 'pipe', windowsHide: true });",
+      "    cp.execFileSync(process.execPath, [path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'), 'remove-card', '--base-ref', storageIfc.serializeRef(br), '--board-runtime-store-ref', runtimeStoreRef, '--queue-store-ref', queueStoreRef, '--id', 'temp'], { cwd: repoRoot, stdio: 'pipe', windowsHide: true });",
       "    for (let i = 0; i < 40; i++) {",
       "      const statusText = fs.existsSync(statusPath) ? fs.readFileSync(statusPath, 'utf8') : 'missing';",
       "      if (statusText.indexOf('\\\"temp\\\"') === -1) return;",
@@ -866,6 +906,10 @@ describe('cli card-refreshed-notify', () => {
       'card-refreshed-notify',
       '--base-ref',
       serializeRef(ref(dir)),
+      '--board-runtime-store-ref',
+      boardRuntimeStoreRef(dir),
+      '--queue-store-ref',
+      queueStoreRef(dir),
       '--card-id',
       'temp',
     ]);
@@ -880,6 +924,10 @@ describe('cli card-refreshed-notify', () => {
       'add-card-files',
       '--base-ref',
       serializeRef(ref(dir)),
+      '--board-runtime-store-ref',
+      boardRuntimeStoreRef(dir),
+      '--queue-store-ref',
+      queueStoreRef(dir),
       '--card-id',
       'temp',
       '--value-json',
@@ -907,7 +955,7 @@ describe('cli card-refreshed-notify', () => {
   it('get-attachment-content writes raw content from the configured artifacts store', () => {
     const dir = path.join(freshDir(), 'board');
     const artifactsStoreRef = serializeRef({ kind: 'fs-path', value: path.join(dir, 'files') });
-    expect(board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir), artifactsStoreRef } }).status).toBe('success');
+    expect(board(dir).init({ params: { ...initParams(dir), artifactsStoreRef } }).status).toBe('success');
 
     writeCardToStore(dir, {
       id: 'attach-card',
@@ -927,6 +975,8 @@ describe('cli card-refreshed-notify', () => {
       'get-attachment-content',
       '--base-ref',
       serializeRef(ref(dir)),
+      '--board-runtime-store-ref',
+      boardRuntimeStoreRef(dir),
       '--card-id',
       'attach-card',
       '--file-idx',
@@ -940,36 +990,24 @@ describe('cli card-refreshed-notify', () => {
     expect(raw).toBe('hello world');
   });
 
-  it('get-attachment-content fails with a clear error when no artifacts store is configured', () => {
+  it('init fails clearly when artifactsStoreRef is omitted', () => {
     const dir = path.join(freshDir(), 'board');
-    expect(board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } }).status).toBe('success');
-
-    writeCardToStore(dir, {
-      id: 'attach-card',
-      card_data: {
-        v: 1,
-        files: [
-          { name: 'hello.txt', stored_name: '001-hello.txt', size: 11, mime_type: 'text/plain' },
-        ],
+    const result = board(dir).init({
+      params: {
+        boardRuntimeStoreRef: boardRuntimeStoreRef(dir),
+        queueStoreRef: queueStoreRef(dir),
+        cardStoreRef: cardStoreRef(dir),
+        outputsStoreRef: outputsStoreRef(dir),
+        chatStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.chat') }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.sources') }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.scratch') }),
+        archiveStoreRef: serializeRef({ kind: 'fs-path', value: path.join(dir, '.archive') }),
       },
     });
-
-    expect(() => execFileSync(process.execPath, [
-      path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-      path.join(repoRoot, 'src', 'cli', 'node', 'board-live-cards-cli.ts'),
-      'get-attachment-content',
-      '--base-ref',
-      serializeRef(ref(dir)),
-      '--card-id',
-      'attach-card',
-      '--file-idx',
-      '0',
-    ], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-      windowsHide: true,
-      encoding: 'utf-8',
-    })).toThrow(/no artifacts store configured/i);
+    expect(result.status).toBe('fail');
+    if (result.status === 'fail') {
+      expect(result.error).toMatch(/artifactsStoreRef/i);
+    }
   });
 });
 
@@ -1090,7 +1128,7 @@ describe('data-objects persistence', () => {
 
   it('writes token data objects from provides to .output/data-objects/', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'source-data',
@@ -1131,7 +1169,7 @@ describe('data-objects persistence', () => {
 
   it('data objects persist across multiple card updates', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     // First card — provides 'prices'
     const pricesCard: BoardLiveCard = {
@@ -1186,7 +1224,7 @@ describe('data-objects persistence', () => {
 
   it('handles token names with path separators as subdirectories', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'special-tokens',
@@ -1232,7 +1270,7 @@ describe('computed-values persistence', () => {
 
   it('publishes computed values to .output/cards/<cardId>/computed_values.json', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'sales-metrics',
@@ -1268,7 +1306,7 @@ describe('computed-values persistence', () => {
 
   it('updates computed values when card_data changes', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'counter',
@@ -1307,7 +1345,7 @@ describe('computed-values persistence', () => {
 
   it('persists computed values with complex nested structures', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'data-analysis',
@@ -1343,7 +1381,7 @@ describe('computed-values persistence', () => {
 
   it('stores computed values as a plain values map (no schema_version/card_id wrapper)', async () => {
     const dir = path.join(freshDir(), 'board');
-    board(dir).init({ params: { cardStoreRef: cardStoreRef(dir), outputsStoreRef: outputsStoreRef(dir) } });
+    board(dir).init({ params: initParams(dir) });
 
     const card: BoardLiveCard = {
       id: 'full-artifact',

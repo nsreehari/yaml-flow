@@ -15,10 +15,11 @@ describe('localstorage-storage createLocalStorageBoardRuntimeBundle', () => {
     const refs = createLocalStorageBoardRefs('board-A');
     expect(refs.baseRef).toEqual({ kind: 'local-storage', value: 'boards:board-A' });
 
+    expect(parseRef(refs.boardRuntimeStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:runtime-board' });
     expect(parseRef(refs.cardStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:cards' });
     expect(parseRef(refs.outputsStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:runtime-out' });
+    expect(parseRef(refs.queueStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:runtime' });
     expect(parseRef(refs.scratchStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:scratch' });
-    expect(parseRef(refs.archiveStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:archive' });
     expect(parseRef(refs.chatStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:chat' });
     expect(parseRef(refs.artifactsStoreRef)).toEqual({ kind: 'local-storage', value: 'boards:board-A:files' });
     expect(parseRef(refs.fetchedSourcesStoreRef!)).toEqual({ kind: 'local-storage', value: 'boards:board-A:sources' });

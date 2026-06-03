@@ -23,13 +23,14 @@ import type {
   RuntimeResponse,
   CardSourceAdapter,
 } from '../../src/server-runtime/types.js';
+import type { BoardWorkerRequest } from '../../src/cli/common/board-worker-store.js';
+import { createBoardWorkerStore } from '../../src/cli/common/board-worker-store.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 
 // ── Import FS adapters (Node-specific) ─────────────────────────────────────
-import { createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
+import { createFsBoardChatStorage, createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
 import { serializeRef, parseRef } from '../../src/cli/common/storage-interface.js';
-import { createInMemoryChatStorage } from '../../src/cli/common/chat-storage-lib.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SOURCE_CARDS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cards');
@@ -37,17 +38,34 @@ const SOURCE_CARDS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)),
 const TEST_PORT = 7900 + Math.floor(Math.random() * 100);
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-flow-srt-'));
 const BOARD_DIR = path.join(TEST_ROOT, 'runtime');
+const BOARD_RUNTIME_DIR = path.join(TEST_ROOT, '.board-runtime');
+const QUEUE_STORE_DIR = path.join(TEST_ROOT, '.board-queue');
 const CARD_STORE_DIR = path.join(TEST_ROOT, 'card-store');
 const OUTPUTS_DIR = path.join(TEST_ROOT, 'outputs');
+const CHAT_STORE_DIR = path.join(TEST_ROOT, 'chat');
+const ARTIFACTS_DIR = path.join(TEST_ROOT, 'files');
+const FETCHED_SOURCES_DIR = path.join(TEST_ROOT, 'sources');
+const SCRATCH_DIR = path.join(TEST_ROOT, 'scratch');
+const ARCHIVE_DIR = path.join(TEST_ROOT, 'archive');
 const API_BASE = `http://127.0.0.1:${TEST_PORT}/api/board`;
 
 let server: http.Server | null = null;
-const testChatStorage = createInMemoryChatStorage();
+const testChatStorage = createFsBoardChatStorage(CHAT_STORE_DIR);
 const sseConnected: string[] = [];
 const sseDisconnected: string[] = [];
 const sseWriters = new Map<string, (payload: unknown) => void>();
 const channelSubscribed: Array<{ clientId: string; channelName: string; params: { cardId?: string } }> = [];
 const channelUnsubscribed: Array<{ clientId: string; channelName: string; params: { cardId?: string } }> = [];
+
+async function fetchOneShotPayload(url: string): Promise<Record<string, unknown>> {
+  const res = await fetch(url);
+  expect(res.ok).toBe(true);
+  expect(res.headers.get('content-type')).toBe('text/event-stream');
+  const text = await res.text();
+  const jsonStr = text.split('data: ')[1]?.split('\n')[0];
+  expect(jsonStr).toBeTruthy();
+  return JSON.parse(jsonStr!) as Record<string, unknown>;
+}
 
 async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
   const started = Date.now();
@@ -59,8 +77,8 @@ async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
-async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: Record<string, unknown>): Promise<void> }, boardAdapter: { chatAgentStore(): { leaseRequests(opts?: { max?: number; visibilityMs?: number }): Array<{ messageId: string; leaseToken: string; request: Record<string, unknown>; attempt: number }>; ackRequest(messageId: string, leaseToken: string): boolean; nackRequest(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean; }; }): Promise<void> {
-  const workerStore = boardAdapter.chatAgentStore();
+async function drainQueuedChatRequests(runtime: { handleChatAgentRequest(request: BoardWorkerRequest): Promise<void> | void }, boardAdapter: { queueStorageForRef(ref: string, lane: string): unknown }, queueStoreRef: string): Promise<void> {
+  const workerStore = createBoardWorkerStore(boardAdapter.queueStorageForRef(queueStoreRef, 'chat-agent') as never);
   const leases = workerStore.leaseRequests({ max: 20, visibilityMs: 60_000 });
   for (const lease of leases) {
     try {
@@ -93,8 +111,12 @@ function createFsCardSource(cardsDir: string): CardSourceAdapter {
 beforeAll(async () => {
   // Create directories
   fs.mkdirSync(BOARD_DIR, { recursive: true });
+  fs.mkdirSync(BOARD_RUNTIME_DIR, { recursive: true });
+  fs.mkdirSync(QUEUE_STORE_DIR, { recursive: true });
   fs.mkdirSync(CARD_STORE_DIR, { recursive: true });
   fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
+  fs.mkdirSync(SCRATCH_DIR, { recursive: true });
+  fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
 
   // Copy card files to a test-local dir
   const testCardsDir = path.join(TEST_ROOT, 'cards');
@@ -157,14 +179,19 @@ process.exit(1);
   const runtimeOptions: SingleBoardRuntimeOptions = {
     apiBasePath: '/api/board',
     boardId: 'test-board',
-    chatStorage: testChatStorage,
     boards: [{
       label: 'base',
       boardAdapter,
       nonCoreAdapter,
       baseRef,
+      boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: BOARD_RUNTIME_DIR }),
+      queueStoreRef: serializeRef({ kind: 'fs-path', value: QUEUE_STORE_DIR }),
       cardStoreRef: serializeRef({ kind: 'fs-path', value: CARD_STORE_DIR }),
       outputsStoreRef: serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR }),
+      chatStoreRef: serializeRef({ kind: 'fs-path', value: CHAT_STORE_DIR }),
+      artifactsStoreRef: serializeRef({ kind: 'fs-path', value: ARTIFACTS_DIR }),
+      fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: FETCHED_SOURCES_DIR }),
+      scratchStoreRef: serializeRef({ kind: 'fs-path', value: SCRATCH_DIR }),
       cardSource: createFsCardSource(testCardsDir),
       taskExecutorRef: {
         howToRun: 'local-node',
@@ -257,18 +284,14 @@ afterAll(async () => {
 // ============================================================================
 
 describe('platform-free server runtime (Node host)', () => {
-  it('GET /api/board/init-board returns runtime payload', async () => {
-    const res = await fetch(`${API_BASE}/init-board`);
-    expect(res.ok).toBe(true);
-    const data = await res.json() as Record<string, unknown>;
+  it('GET /api/board/sse?one-shot returns runtime payload', async () => {
+    const data = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     expect(data).toHaveProperty('cardDefinitions');
     expect(data).toHaveProperty('statusSnapshot');
   });
 
-  it('GET /api/board/init-board includes card definitions with expected IDs', async () => {
-    const res = await fetch(`${API_BASE}/init-board`);
-    expect(res.ok).toBe(true);
-    const data = await res.json() as Record<string, unknown>;
+  it('GET /api/board/sse?one-shot includes card definitions with expected IDs', async () => {
+    const data = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     expect(data).toHaveProperty('cardDefinitions');
     const cards = data.cardDefinitions as Array<Record<string, unknown>>;
     expect(cards.length).toBeGreaterThan(0);
@@ -278,10 +301,8 @@ describe('platform-free server runtime (Node host)', () => {
     expect(ids).toContain('card-my-identity');
   });
 
-  it('GET /api/board/init-board includes runtime status snapshot', async () => {
-    const res = await fetch(`${API_BASE}/init-board`);
-    expect(res.ok).toBe(true);
-    const data = await res.json() as Record<string, unknown>;
+  it('GET /api/board/sse?one-shot includes runtime status snapshot', async () => {
+    const data = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     expect(data).toHaveProperty('cardDefinitions');
     expect(data).toHaveProperty('statusSnapshot');
   });
@@ -323,8 +344,7 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   it('POST /api/board/cards/:id/retrigger triggers a forced refresh', async () => {
-    const initRes = await fetch(`${API_BASE}/init-board`);
-    const initData = await initRes.json() as Record<string, unknown>;
+    const initData = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
 
@@ -395,8 +415,7 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   it('POST /api/board/cards/:id/actions returns an error when chat-send has no handler', async () => {
-    const initRes = await fetch(`${API_BASE}/init-board`);
-    const initData = await initRes.json() as Record<string, unknown>;
+    const initData = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
 
@@ -424,8 +443,7 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   it('manage.upload-card-file uploads a non-chat file', async () => {
-    const initRes = await fetch(`${API_BASE}/init-board`);
-    const initData = await initRes.json() as Record<string, unknown>;
+    const initData = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     const cardDefs = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cardDefs[0].id as string;
 
@@ -478,6 +496,22 @@ describe('platform-free server runtime (Node host)', () => {
     expect(sseData).toHaveProperty('cardDefinitions');
 
     controller.abort();
+  });
+
+  it('GET /api/board/sse?one-shot returns a single SSE snapshot without requiring clientId', async () => {
+    const res = await fetch(`${API_BASE}/sse?one-shot`);
+    expect(res.ok).toBe(true);
+    expect(res.headers.get('content-type')).toBe('text/event-stream');
+
+    const text = await res.text();
+    expect(text).toContain('data: ');
+
+    const matches = text.match(/^id: \d+\n/gm) ?? [];
+    expect(matches).toHaveLength(1);
+
+    const jsonStr = text.split('data: ')[1]?.split('\n')[0];
+    const sseData = JSON.parse(jsonStr!);
+    expect(sseData).toHaveProperty('cardDefinitions');
   });
 
   it('returns 404 for unknown routes', async () => {
@@ -562,8 +596,7 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   it('supports board-scoped and card-scoped watch-channel subscribe/unsubscribe hooks', async () => {
-    const initRes = await fetch(`${API_BASE}/init-board`);
-    const initData = await initRes.json() as Record<string, unknown>;
+    const initData = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
     const clientId = 'test-watch-channel';
@@ -640,6 +673,8 @@ describe('platform-free server runtime (Node host)', () => {
     const isolatedBoardDir = path.join(isolatedRoot, 'runtime');
     const isolatedCardStoreDir = path.join(isolatedRoot, 'card-store');
     const isolatedOutputsDir = path.join(isolatedRoot, 'outputs');
+    const isolatedArtifactsDir = path.join(isolatedRoot, 'files');
+    const isolatedFetchedSourcesDir = path.join(isolatedRoot, 'sources');
     fs.mkdirSync(isolatedBoardDir, { recursive: true });
     fs.mkdirSync(isolatedCardStoreDir, { recursive: true });
     fs.mkdirSync(isolatedOutputsDir, { recursive: true });
@@ -675,18 +710,29 @@ describe('platform-free server runtime (Node host)', () => {
       expect(setResult.status).toBe('success');
     }
 
-    const isolatedChatStorage = createInMemoryChatStorage();
+    const isolatedChatStoreDir = path.join(isolatedRoot, 'chat');
+    const isolatedChatStoreRef = serializeRef({ kind: 'fs-path', value: isolatedChatStoreDir });
+    const isolatedBoardRuntimeDir = path.join(isolatedRoot, '.board-runtime');
+    const isolatedQueueStoreDir = path.join(isolatedRoot, '.board-queue');
+    fs.mkdirSync(isolatedBoardRuntimeDir, { recursive: true });
+    fs.mkdirSync(isolatedQueueStoreDir, { recursive: true });
+    const isolatedChatStorage = boardAdapter.chatStorageForRef(isolatedChatStoreRef);
     let flowRuns = 0;
     const runtime = createSingleBoardServerRuntime({
       apiBasePath: '/api/board',
       boardId: 'dispatch-fail-board',
-      chatStorage: isolatedChatStorage,
       boards: [{
         label: 'base',
         boardAdapter,
         baseRef,
+        boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: isolatedBoardRuntimeDir }),
+        queueStoreRef: serializeRef({ kind: 'fs-path', value: isolatedQueueStoreDir }),
         cardStoreRef,
         outputsStoreRef,
+        chatStoreRef: isolatedChatStoreRef,
+        artifactsStoreRef: serializeRef({ kind: 'fs-path', value: isolatedArtifactsDir }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: isolatedFetchedSourcesDir }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: path.join(isolatedRoot, 'scratch') }),
         chatHandlerFlow: { steps: [{ id: 'append-chat', type: 'noop' }], transitions: [] },
       }],
       chatFlowRunner: {
@@ -721,7 +767,7 @@ describe('platform-free server runtime (Node host)', () => {
     expect(chatRes.ok).toBe(true);
     expect(flowRuns).toBe(0);
 
-    await drainQueuedChatRequests(runtime, boardAdapter);
+    await drainQueuedChatRequests(runtime, boardAdapter, serializeRef({ kind: 'fs-path', value: isolatedQueueStoreDir }));
     expect(flowRuns).toBe(1);
     expect(isolatedChatStorage.isProcessing(cardId)).toBe(false);
 
@@ -734,6 +780,8 @@ describe('platform-free server runtime (Node host)', () => {
     const isolatedBoardDir = path.join(isolatedRoot, 'runtime');
     const isolatedCardStoreDir = path.join(isolatedRoot, 'card-store');
     const isolatedOutputsDir = path.join(isolatedRoot, 'outputs');
+    const isolatedArtifactsDir = path.join(isolatedRoot, 'files');
+    const isolatedFetchedSourcesDir = path.join(isolatedRoot, 'sources');
     fs.mkdirSync(isolatedBoardDir, { recursive: true });
     fs.mkdirSync(isolatedCardStoreDir, { recursive: true });
     fs.mkdirSync(isolatedOutputsDir, { recursive: true });
@@ -769,6 +817,11 @@ describe('platform-free server runtime (Node host)', () => {
       expect(setResult.status).toBe('success');
     }
 
+    const isolatedChatStoreRef = serializeRef({ kind: 'fs-path', value: path.join(isolatedRoot, 'chat') });
+    const isolatedBoardRuntimeDir = path.join(isolatedRoot, '.board-runtime');
+    const isolatedQueueStoreDir = path.join(isolatedRoot, '.board-queue');
+    fs.mkdirSync(isolatedBoardRuntimeDir, { recursive: true });
+    fs.mkdirSync(isolatedQueueStoreDir, { recursive: true });
     let flowRuns = 0;
     const runtime = createSingleBoardServerRuntime({
       apiBasePath: '/api/board',
@@ -777,8 +830,14 @@ describe('platform-free server runtime (Node host)', () => {
         label: 'base',
         boardAdapter,
         baseRef,
+        boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: isolatedBoardRuntimeDir }),
+        queueStoreRef: serializeRef({ kind: 'fs-path', value: isolatedQueueStoreDir }),
         cardStoreRef,
         outputsStoreRef,
+        chatStoreRef: isolatedChatStoreRef,
+        artifactsStoreRef: serializeRef({ kind: 'fs-path', value: isolatedArtifactsDir }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: isolatedFetchedSourcesDir }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: path.join(isolatedRoot, 'scratch') }),
         chatHandlerFlow: { steps: [{ id: 'append-chat', type: 'noop' }], transitions: [] },
       }],
       chatFlowRunner: {
@@ -810,7 +869,7 @@ describe('platform-free server runtime (Node host)', () => {
     });
     expect(chatRes.ok).toBe(true);
     expect(flowRuns).toBe(0);
-    await drainQueuedChatRequests(runtime, boardAdapter);
+    await drainQueuedChatRequests(runtime, boardAdapter, serializeRef({ kind: 'fs-path', value: isolatedQueueStoreDir }));
     expect(flowRuns).toBe(1);
 
     await new Promise<void>((resolve) => server2.close(() => resolve()));
@@ -822,6 +881,8 @@ describe('platform-free server runtime (Node host)', () => {
     const isolatedBoardDir = path.join(isolatedRoot, 'runtime');
     const isolatedCardStoreDir = path.join(isolatedRoot, 'card-store');
     const isolatedOutputsDir = path.join(isolatedRoot, 'outputs');
+    const isolatedArtifactsDir = path.join(isolatedRoot, 'files');
+    const isolatedFetchedSourcesDir = path.join(isolatedRoot, 'sources');
     fs.mkdirSync(isolatedBoardDir, { recursive: true });
     fs.mkdirSync(isolatedCardStoreDir, { recursive: true });
     fs.mkdirSync(isolatedOutputsDir, { recursive: true });
@@ -857,17 +918,28 @@ describe('platform-free server runtime (Node host)', () => {
       expect(setResult.status).toBe('success');
     }
 
-    const isolatedChatStorage = createInMemoryChatStorage();
+    const isolatedChatStoreDir = path.join(isolatedRoot, 'chat');
+    const isolatedChatStoreRef = serializeRef({ kind: 'fs-path', value: isolatedChatStoreDir });
+    const isolatedBoardRuntimeDir = path.join(isolatedRoot, '.board-runtime');
+    const isolatedQueueStoreDir = path.join(isolatedRoot, '.board-queue');
+    fs.mkdirSync(isolatedBoardRuntimeDir, { recursive: true });
+    fs.mkdirSync(isolatedQueueStoreDir, { recursive: true });
+    const isolatedChatStorage = boardAdapter.chatStorageForRef(isolatedChatStoreRef);
     const runtime = createSingleBoardServerRuntime({
       apiBasePath: '/api/board',
       boardId: 'upload-chat-board',
-      chatStorage: isolatedChatStorage,
       boards: [{
         label: 'base',
         boardAdapter,
         baseRef,
+        boardRuntimeStoreRef: serializeRef({ kind: 'fs-path', value: isolatedBoardRuntimeDir }),
+        queueStoreRef: serializeRef({ kind: 'fs-path', value: isolatedQueueStoreDir }),
         cardStoreRef,
         outputsStoreRef,
+        chatStoreRef: isolatedChatStoreRef,
+        artifactsStoreRef: serializeRef({ kind: 'fs-path', value: isolatedArtifactsDir }),
+        fetchedSourcesStoreRef: serializeRef({ kind: 'fs-path', value: isolatedFetchedSourcesDir }),
+        scratchStoreRef: serializeRef({ kind: 'fs-path', value: path.join(isolatedRoot, 'scratch') }),
         chatHandlerFlow: { steps: [{ id: 'append-chat', type: 'noop' }], transitions: [] },
       }],
       chatFlowRunner: {
@@ -956,7 +1028,7 @@ describe('platform-free server runtime (Node host)', () => {
     const beforeDrainMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
     expect(beforeDrainMessages.map((message) => message.role)).toEqual(['user']);
 
-    await drainQueuedChatRequests(runtime, boardAdapter);
+    await drainQueuedChatRequests(runtime, boardAdapter, serializeRef({ kind: 'fs-path', value: isolatedQueueStoreDir }));
 
     const newMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
     expect(newMessages.map((message) => message.role)).toEqual(['user', 'system', 'assistant']);

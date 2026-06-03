@@ -136,26 +136,20 @@ export interface BoardContextConfig {
   boardAdapter: BoardRuntimePlatformAdapter;
   nonCore?: BoardRuntimeNonCorePublic;
   nonCoreAdapter?: BoardNonCorePlatformAdapter;
-  /** Optional separate adapter for file/chat blob storage (defaults to boardAdapter) */
-  artifactsAdapter?: BoardRuntimePlatformAdapter;
-  /** Optional explicit blob root ref for persisted card/file attachments. */
-  artifactsStoreRef?: string;
-  /**
-   * Optional caller-supplied file artifacts store. When provided, this is used
-   * verbatim and the runtime does NOT consult artifactsAdapter.blobStorage('files').
-   * Use this to give the embedder full control over the on-disk layout (e.g.
-   * via createFsBoardFileArtifactsStore(baseDir, { filesSubdir: '' })).
-   */
-  filesArtifactsStore?: import('../cli/common/artifacts-store-lib.js').ArtifactsStore;
+  boardRuntimeStoreRef: string;
+  /** Explicit ref for externally backed runtime storage (journal + internal queue lanes). */
+  queueStoreRef: string;
+  /** Explicit blob root ref for persisted card/file attachments. */
+  artifactsStoreRef: string;
+  /** Explicit ref for fetched source payloads. */
+  fetchedSourcesStoreRef: string;
   baseRef: KindValueRef;
   cardStoreRef: string;
   outputsStoreRef: string;
-  /** Optional ref pointing persisted card chat storage at a different backend. */
-  chatStoreRef?: string;
-  /** Optional ref pointing scratch storage at a different backend than the board runtime. */
-  scratchStoreRef?: string;
-  /** Optional ref pointing archive storage at a different backend than the board runtime. */
-  archiveStoreRef?: string;
+  /** Explicit ref pointing persisted card chat storage at a different backend. */
+  chatStoreRef: string;
+  /** Explicit ref pointing scratch storage at a different backend than the board runtime. */
+  scratchStoreRef: string;
   /** Notification endpoint ref — e.g. ::named-pipe::<path> or ::firestore-watch::<path> */
   notifyRef?: KindValueRef;
   taskExecutorRef?: ExecutionRef;
@@ -179,8 +173,6 @@ export interface SingleBoardRuntimeOptions {
 
   invocationAdapter: InvocationAdapter;
   chatFlowRunner?: ChatHandlerFlowRunner;
-  /** Chat storage backend. Defaults to an in-memory store when omitted. */
-  chatStorage?: ChatStorage;
   notificationTransport?: NotificationTransport;
   logger?: RuntimeLogger;
   serverUrl?: string;
@@ -224,10 +216,8 @@ export interface SingleBoardRuntime {
   readonly queueLaneTuning: HostedBoardQueueLaneTuning;
   handleRuntimeApi(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean>;
   buildPublishedRuntimePayload(): Awaitable<unknown>;
-  processAccumulatedEvents(): Awaitable<CommandResult>;
-  processAccumulatedLane(): Awaitable<CommandResult>;
   handleChatAgentRequest(request: BoardWorkerRequest): Awaitable<void>;
-  clearChatRecords(cardId: string): void;
+  clearChatRecords(cardId: string): Awaitable<void>;
   /** Report that a source fetch completed. Token is the source callback token; ref is the blob ref (b64:<base64url(json)>). */
   reportSourceFetched(token: string, ref: string): Awaitable<CommandResult>;
   /** Report that a source fetch failed. Token is the source callback token. */

@@ -37,11 +37,23 @@ const FETCH_PRICES_JS = path.join(__dirname, 'portfolio-tracker-fetch-prices.js'
 const _TMP_BASE       = path.join(os.tmpdir(), `experiment-js-${process.pid}`);
 const CARDSTORE_DIR   = path.join(_TMP_BASE, 'cardstore');
 const BOARDRUNTIME_DIR = path.join(_TMP_BASE, 'boardruntime');
+const QUEUE_DIR       = path.join(_TMP_BASE, 'queue');
 const OUTPUTS_DIR     = path.join(_TMP_BASE, 'outputs');
+const CHAT_DIR        = path.join(_TMP_BASE, 'chat');
+const FILES_DIR       = path.join(_TMP_BASE, 'files');
+const SOURCES_DIR     = path.join(_TMP_BASE, 'sources');
+const SCRATCH_DIR     = path.join(_TMP_BASE, 'scratch');
+const ARCHIVE_DIR     = path.join(_TMP_BASE, 'archive');
 
 const CARDSTORE_REF    = serializeRef({ kind: 'fs-path', value: CARDSTORE_DIR });
 const BOARDRUNTIME_REF = serializeRef({ kind: 'fs-path', value: BOARDRUNTIME_DIR });
+const QUEUE_REF        = serializeRef({ kind: 'fs-path', value: QUEUE_DIR });
 const OUTPUTS_REF      = serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR });
+const CHAT_REF         = serializeRef({ kind: 'fs-path', value: CHAT_DIR });
+const FILES_REF        = serializeRef({ kind: 'fs-path', value: FILES_DIR });
+const SOURCES_REF      = serializeRef({ kind: 'fs-path', value: SOURCES_DIR });
+const SCRATCH_REF      = serializeRef({ kind: 'fs-path', value: SCRATCH_DIR });
+const ARCHIVE_REF      = serializeRef({ kind: 'fs-path', value: ARCHIVE_DIR });
 const notifySuffix     = Math.floor(Math.random() * 10000);
 const NOTIFY_CHANNEL   = `yaml-flow-board-notify-portfolio-tracker-public-${notifySuffix}`;
 
@@ -135,12 +147,16 @@ function makeBoard() {
   return createBoardLiveCardsPublic(br, createFsBoardPlatformAdapter(br, {
     onWarn: console.warn,
     notifyChannel: NOTIFY_CHANNEL,
-  }));
+    boardRuntimeStoreRef: BOARDRUNTIME_REF,
+    queueStoreRef: QUEUE_REF,
+  }), { boardRuntimeStoreRef: BOARDRUNTIME_REF });
 }
 
 function makeNonCoreBoard() {
   const br = parseRef(BOARDRUNTIME_REF);
-  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, { onWarn: console.warn }));
+  return createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, { onWarn: console.warn }), {
+    boardRuntimeStoreRef: BOARDRUNTIME_REF,
+  });
 }
 
 function makeCardStore() {
@@ -389,7 +405,7 @@ if (fs.existsSync(_TMP_BASE)) {
   fs.rmSync(_TMP_BASE, { recursive: true, force: true });
   console.log(`  cleaned: ${_TMP_BASE} (including .tmp, .card-runtime, journal)`);
 }
-for (const d of [CARDSTORE_DIR, BOARDRUNTIME_DIR, OUTPUTS_DIR]) {
+for (const d of [CARDSTORE_DIR, BOARDRUNTIME_DIR, QUEUE_DIR, OUTPUTS_DIR, CHAT_DIR, FILES_DIR, SOURCES_DIR, SCRATCH_DIR, ARCHIVE_DIR]) {
   fs.mkdirSync(d, { recursive: true });
   console.log(`  created: ${d}`);
 }
@@ -400,7 +416,7 @@ const pipeConsumer = await startPipeConsumer(NOTIFY_CHANNEL);
 console.log('\n=== T0b: Init board ===');
 checkResult(
   makeBoard().init({
-    params: { cardStoreRef: CARDSTORE_REF, outputsStoreRef: OUTPUTS_REF },
+    params: { cardStoreRef: CARDSTORE_REF, boardRuntimeStoreRef: BOARDRUNTIME_REF, queueStoreRef: QUEUE_REF, outputsStoreRef: OUTPUTS_REF, chatStoreRef: CHAT_REF, artifactsStoreRef: FILES_REF, fetchedSourcesStoreRef: SOURCES_REF, scratchStoreRef: SCRATCH_REF, archiveStoreRef: ARCHIVE_REF },
     body: {
       'task-executor-ref': {
         meta: 'task-executor',

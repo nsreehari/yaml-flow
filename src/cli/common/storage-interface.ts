@@ -218,6 +218,11 @@ export interface QueueDeadLetterMessage<T = unknown> extends QueueMessage<T> {
 export interface QueueStorage {
   enqueue<T>(body: T): QueueMessage<T>;
   /**
+   * Enqueue multiple messages. Adapters may implement this as a native batch
+   * write or as a simple loop over `enqueue`.
+   */
+  enqueueMany<T>(bodies: T[]): QueueMessage<T>[];
+  /**
    * Enqueue only if no active or leased message with the same dedupKey exists.
    * Returns the new message, or null if a pending message with that key is
    * already present. Dedup is released on ack or on dead-letter; nack-retry

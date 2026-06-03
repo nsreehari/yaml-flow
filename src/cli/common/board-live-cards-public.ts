@@ -27,15 +27,14 @@
  * ─────────────────────────────────────────────────────────────────────────────
  *
  *   const board = createBoardLiveCardsPublic(baseRef, adapter);
- *   const result = await board.processAccumulatedEvents();
  *   const status = board.status();
  */
 
 import type { KVStorage, BlobStorage, KindValueRef, AtomicRelayLock, ScratchStorage, ArchiveFactory, QueueStorage } from './storage-interface.js';
 import { withRelayLock, serializeRef, parseRef } from './storage-interface.js';
+import type { ChatStorage } from './chat-storage-lib.js';
 import type { BoardCallbackTransport } from './board-callback-transport.js';
 import { assertBoardCallbackTransport } from './board-callback-transport.js';
-import type { BoardWorkerStore } from './board-worker-store.js';
 import type { ExecutionRef } from './execution-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
 import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
@@ -45,8 +44,6 @@ import type { ComputeNode } from '../../card-compute/index.js';
 import {
   createCardStore,
   createJournalStore,
-  createExecutionRequestStore,
-  createCardRuntimeStore,
   createFetchedSourcesStore,
   createPublishedOutputsStore,
   createBoardConfigStore,
@@ -67,6 +64,7 @@ import type {
   StateSnapshotReadView,
   CardUpsertIndexEntry,
   ExecutionRequestEntry,
+  ExecutionRequestStore,
   BoardEnvelope,
   SourceTokenPayload,
   BoardStatusObject,
@@ -151,10 +149,11 @@ export interface BoardPlatformAdapter {
   /**
    * Blob storage factory — scoped by namespace.
    * Namespaces used by the public layer:
-   *   'sources' — fetched source data files (keyed by cardId/outputFile)
    *   ''        — root-scoped blob access (for resolving arbitrary KindValueRef blobs)
    */
   blobStorage(namespace: string): BlobStorage;
+  blobStorageForRef(ref: string): BlobStorage;
+  chatStorageForRef(ref: string): ChatStorage;
 
   /**
    * Ephemeral scratch store for transient I/O staging (probe in/out/err,
@@ -180,25 +179,13 @@ export interface BoardPlatformAdapter {
    * One journal per board — no namespace parameter needed.
    */
   journalAdapter(): JournalStorageAdapter;
+  journalAdapterForRef(ref: string): JournalStorageAdapter;
 
   /**
-   * Semantic board-worker queue for hosted task execution.
-   * Implementations may back this with QueueStorage, Service Bus, Pub/Sub, etc.
+   * Queue storage lane resolved from an explicit queue store ref.
+   * The adapter chooses the backend from the ref; lane chooses the internal queue.
    */
-  boardWorkerStore(): BoardWorkerStore;
-
-  /**
-   * Semantic queue for chat-agent dispatch requests.
-   * Kept separate from task execution so chat work can be drained independently.
-   */
-  chatAgentStore(): BoardWorkerStore;
-
-  /**
-   * Queue of board wake-up requests for processAccumulatedEvents scheduling.
-   * Implementations should use enqueueIfAbsent when they want single-pending
-   * drain semantics.
-   */
-  processAccumulatedStore(): QueueStorage;
+  queueStorageForRef(ref: string, lane: string): QueueStorage;
 
   /**
    * AtomicRelayLock — non-blocking try-acquire with relay-on-busy semantics.
@@ -286,14 +273,15 @@ export interface BoardLiveCardsPublic {
   init(input: CommandInput): CommandResult;
   // no params needed
   status(input: CommandInput): CommandResult<BoardStatusObject>;
+  getBoardRuntimeStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
   // no params needed
   getCardStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getOutputsStoreRef(input: CommandInput): CommandResult<{ storeRef: string }>;
   getScratchStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
-  getArchiveStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
   getChatStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
   getArtifactsStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
-  // params: key — one of: 'task-executor', 'chat-handler-flow', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref', 'archive-store-ref', 'chat-store-ref', 'artifacts-store-ref'
+  getFetchedSourcesStoreRef(input: CommandInput): CommandResult<{ storeRef: string | null }>;
+  // params: key — one of: 'task-executor', 'chat-handler-flow', 'board-runtime-store-ref', 'card-store-ref', 'outputs-store-ref', 'scratch-store-ref', 'chat-store-ref', 'artifacts-store-ref', 'fetched-sources-store-ref'
   getConfig(input: CommandInput): CommandResult<{ value: unknown }>;
   // params: key
   getOutputsDataObject(input: CommandInput): CommandResult;
@@ -315,7 +303,6 @@ export interface BoardLiveCardsPublic {
   cardRefreshedNotify(input: CommandInput): CommandResult;
   // params: id
   retrigger(input: CommandInput): CommandResult;
-  // no params needed
   processAccumulatedEvents(input: CommandInput): Promise<CommandResult>;
 
   // Card management — params: cardId, restart?
@@ -381,18 +368,61 @@ function decodeSourceToken(token: string): HostedSourceTokenPayload | null {
 
 function nowIso(): string { return new Date().toISOString(); }
 
+function createInMemoryExecutionRequestStore(
+  onDispatchFailed: (entry: ExecutionRequestEntry, error: string) => void,
+): ExecutionRequestStore {
+  const entriesByJournalId = new Map<string, ExecutionRequestEntry[]>();
+  return {
+    appendEntries(journalId: string, entries: ExecutionRequestEntry[]): void {
+      if (!journalId || entries.length === 0) return;
+      const existing = entriesByJournalId.get(journalId) ?? [];
+      entriesByJournalId.set(journalId, [...existing, ...entries]);
+    },
+    dispatchEntriesForJournalId(journalId: string, processorFn: (entry: ExecutionRequestEntry) => void): void {
+      if (!journalId) return;
+      const pendingEntries = entriesByJournalId.get(journalId);
+      if (!pendingEntries || pendingEntries.length === 0) return;
+      for (const entry of pendingEntries) {
+        try {
+          processorFn(entry);
+        } catch (error) {
+          try { onDispatchFailed(entry, error instanceof Error ? error.message : String(error)); } catch { /* best-effort */ }
+        }
+      }
+      entriesByJournalId.delete(journalId);
+    },
+  };
+}
+
 // ============================================================================
 // createBoardLiveCardsPublic — factory
 // ============================================================================
 
+export interface BoardLiveCardsPublicOptions {
+  boardRuntimeStoreRef?: string;
+  scratchStoreRef?: string;
+  taskExecutorRef?: ExecutionRef;
+  chatHandlerFlow?: unknown;
+}
+
 export function createBoardLiveCardsPublic(
   baseRef: KindValueRef,
   adapter: BoardPlatformAdapter,
+  options: BoardLiveCardsPublicOptions = {},
 ): BoardLiveCardsPublic {
   assertBoardCallbackTransport(adapter.callbackTransport, 'createBoardLiveCardsPublic');
   const callbackTransport = adapter.callbackTransport;
   const warn = adapter.onWarn ?? (() => { /* no-op */ });
   const boardPath = serializeRef(baseRef);
+  let runtimeStoreRef = options.boardRuntimeStoreRef;
+  let scratchStoreRef = options.scratchStoreRef;
+  const hostedTaskExecutorRef = options.taskExecutorRef;
+  const hostedChatHandlerFlow = options.chatHandlerFlow;
+
+  function requireBoardRuntimeStoreRef(): string {
+    if (!runtimeStoreRef) throw new Error(`Board at ${baseRef.value} has no board runtime store configured. Pass boardRuntimeStoreRef at construction or init.`);
+    return runtimeStoreRef;
+  }
 
   function flushBoardChangeNotifications(notifications: BoardChangeNotification[]): void {
     if (notifications.length === 0) return;
@@ -433,7 +463,7 @@ export function createBoardLiveCardsPublic(
   // adapter.kvStorage('state-snapshot'), which closes over baseRef's directory.
   const snapshotAdapterImpl: StateSnapshotStorageAdapter = {
     readValues(_scopeId: string): StateSnapshotReadView {
-      const kv = adapter.kvStorage('state-snapshot');
+      const kv = adapter.kvStorageForRef(requireBoardRuntimeStoreRef());
       const keys = kv.listKeys().sort();
       if (keys.length === 0) return { version: null, values: {} };
       const values: Record<string, unknown> = {};
@@ -441,7 +471,7 @@ export function createBoardLiveCardsPublic(
       return { version: adapter.hashFn(values), values };
     },
     writeValues(_scopeId: string, nextValues: Record<string, unknown>, deletedKeys: string[]): string {
-      const kv = adapter.kvStorage('state-snapshot');
+      const kv = adapter.kvStorageForRef(requireBoardRuntimeStoreRef());
       for (const key of deletedKeys) kv.delete(key);
       for (const [key, value] of Object.entries(nextValues)) kv.write(key, value);
       return adapter.hashFn(nextValues);
@@ -449,19 +479,19 @@ export function createBoardLiveCardsPublic(
   };
 
   // Store factory helpers — no long-lived singletons, created per call
-  const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
+  const configStore = () => createBoardConfigStore(adapter.kvStorageForRef(requireBoardRuntimeStoreRef()));
   const snapshotStore = () => createStateSnapshotStore(snapshotAdapterImpl);
-  const journalStore = () => createJournalStore(adapter.journalAdapter());
+  const journalStore = () => createJournalStore(adapter.journalAdapterForRef(requireBoardRuntimeStoreRef()));
   const cardStore = () => createCardStore(makeCardAdapter(), warn);
   const outputStore = () => {
     const ref = configStore().readOutputsStoreRef();
     if (!ref) throw new Error(`Board at ${baseRef.value} has no outputs store configured. Run: init --outputs-store-ref <b64-ref>`);
     return createPublishedOutputsStore(adapter.kvStorageForRef(ref));
   };
-  const archive = () => {
-    const ref = configStore().readArchiveStoreRef();
-    return ref ? adapter.archiveFactoryForRef(ref) : adapter.archiveFactory();
-  };
+
+  function resolveTaskExecutorRef(): ExecutionRef | undefined {
+    return hostedTaskExecutorRef ?? configStore().readTaskExecutorRef();
+  }
 
   function boardExists(): boolean {
     return !!snapshotStore().readSnapshot(baseRef.value).values[BOARD_GRAPH_KEY];
@@ -501,25 +531,28 @@ export function createBoardLiveCardsPublic(
       appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
     };
 
-    const executionRequestStore = createExecutionRequestStore(
-      adapter.kvStorage('execution-requests'),
-      onDispatchFailed,
-    );
+    const executionRequestStore = createInMemoryExecutionRequestStore(onDispatchFailed);
 
-    const realCardRuntimeStore = createCardRuntimeStore(adapter.kvStorage('card-runtime'));
+    const envelope = loadEnvelope();
+    const live = restore(envelope.graph);
+    const { events: undrained, newCursor } = journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
+
+    const fetchedSourcesBlob = fetchedSourcesBlobStore();
     const realFetchedSourcesStore = createFetchedSourcesStore(
-      adapter.blobStorage('sources'),
+      fetchedSourcesBlob,
       (ref) => adapter.resolveBlob(ref),
     );
 
     // RX: in-memory overlay for card runtime writes — reads check overlay first
+    const runtimeByCardId = { ...envelope.runtimeByCardId };
     const RX = new Map<string, CardRuntimeSnapshot>();
     const overlayCardRuntimeStore: CardRuntimeStore = {
       readRuntime(cardId) {
-        return RX.get(cardId) ?? realCardRuntimeStore.readRuntime(cardId);
+        return RX.get(cardId) ?? runtimeByCardId[cardId] ?? { _sources: {} };
       },
       writeRuntime(cardId, state) {
         RX.set(cardId, state);
+        runtimeByCardId[cardId] = state;
       },
     };
 
@@ -538,10 +571,9 @@ export function createBoardLiveCardsPublic(
       commitSourceData(cardId, outputFile, deliveryToken) {
         // Read staged content into overlay so readSourceData sees it immediately
         const stagedKey = `${cardId}/.staged/${deliveryToken}/${outputFile}`;
-        const blob = adapter.blobStorage('sources');
-        let content = blob.read(stagedKey);
+        let content = fetchedSourcesBlob.read(stagedKey);
         if (content == null) {
-          const stagedRef = blob.keyRef?.(stagedKey);
+          const stagedRef = fetchedSourcesBlob.keyRef?.(stagedKey);
           if (stagedRef) content = adapter.resolveBlob(stagedRef);
         }
         if (content == null) return false;
@@ -575,10 +607,6 @@ export function createBoardLiveCardsPublic(
       executionRequestStore,
     };
 
-    const envelope = loadEnvelope();
-    const live = restore(envelope.graph);
-    const { events: undrained, newCursor } = journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
-
     let TX: GraphEvent[] = [];
     const CX: { cardId: string; values: Record<string, unknown> }[] = [];
     const DX: Record<string, unknown>[] = [];
@@ -588,11 +616,9 @@ export function createBoardLiveCardsPublic(
 
     const taskCompletedFn = (taskName: string, data: Record<string, unknown>): void => {
       TX.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
-      try { archive().stream('exec-history').append({ taskName, status: 'completed', completedAt: nowIso() }); } catch { /* best-effort */ }
     };
     const taskFailedFn = (taskName: string, error: string): void => {
       appendJournalEvent({ type: 'task-failed', taskName, error, timestamp: nowIso() });
-      try { archive().stream('exec-history').append({ taskName, status: 'failed', error, completedAt: nowIso() }); } catch { /* best-effort */ }
     };
     const writeComputedValuesFn = (cardId: string, values: Record<string, unknown>): void => {
       CX.push({ cardId, values });
@@ -610,6 +636,7 @@ export function createBoardLiveCardsPublic(
       onNodeRemoved: (cardId) => {
         NX.delete(cardId);
         RX.delete(cardId);
+        delete runtimeByCardId[cardId];
         RemX.add(cardId);
       },
     });
@@ -633,14 +660,11 @@ export function createBoardLiveCardsPublic(
     await rg.dispose({ wait: true });
 
     const currentVersion = snapshotStore().readSnapshot(baseRef.value).version;
-    commitEnvelope({ lastDrainedJournalId: newCursor, graph: snapshot(finalLive) }, currentVersion);
+    commitEnvelope({ lastDrainedJournalId: newCursor, graph: snapshot(finalLive), runtimeByCardId }, currentVersion);
 
     // Flush deferred output writes after board state is saved
     for (const { cardId, values } of CX) cardHandlerAdapters.outputStore.writeComputedValues(cardId, values);
     for (const data of DX) cardHandlerAdapters.outputStore.writeDataObjects(data);
-
-    // Flush RX: card runtime overlay → real store
-    for (const [cardId, state] of RX) realCardRuntimeStore.writeRuntime(cardId, state);
 
     // Flush SX: deferred source commits → real store
     for (const { cardId, outputFile, deliveryToken } of SX) realFetchedSourcesStore.commitSourceData(cardId, outputFile, deliveryToken);
@@ -666,7 +690,7 @@ export function createBoardLiveCardsPublic(
     if (statusObj !== undefined) batch.push({ kind: 'status', status: statusObj });
     flushBoardChangeNotifications(batch);
 
-    const executorRef = configStore().readTaskExecutorRef()
+    const executorRef = resolveTaskExecutorRef()
       ?? { howToRun: 'built-in' as const, whatToRun: serializeRef({ kind: 'built-in', value: 'source-cli-task-executor' }) };
     const useDirectHostedWorkerRequest = adapter.supportsDirectSourceOutput?.(executorRef) === true;
 
@@ -679,13 +703,53 @@ export function createBoardLiveCardsPublic(
       const cardId = (p.enrichedCard?.id as string | undefined) ?? 'unknown';
       const sourceDefs = (p.enrichedCard?.source_defs ?? []) as Array<{ bindTo: string; outputFile?: string; [k: string]: unknown }>;
 
+      if (executorRef.howToRun === 'queue-storage' && useDirectHostedWorkerRequest) {
+        try {
+          const queue = adapter.queueStorageForRef(queueStoreRef(), 'task-executor');
+          const boardId = typeof executorRef.extra?.boardId === 'string' ? executorRef.extra.boardId : undefined;
+          const requests: Array<{ boardId?: string; ref: typeof executorRef; args: Record<string, unknown> }> = [];
+          for (const src of sourceDefs) {
+            if (!src.outputFile) { warn(`[dispatch] source "${src.bindTo}" has no outputFile — skipping`); continue; }
+            const deliveryToken = adapter.genId();
+            const stagedKey = `${cardId}/.staged/${deliveryToken}/${src.outputFile}`;
+            const stagedRef = fetchedSourcesBlob.keyRef?.(stagedKey);
+            if (!stagedRef) continue;
+            const directOutput = {
+              ref: serializeRef(stagedRef),
+              deliveryToken,
+              outputFile: src.outputFile,
+              cardId,
+            };
+            const sourceToken = encodeSourceToken({
+              cbk: p.callbackToken, rg: baseRef.value, br: serializeRef(baseRef),
+              cid: cardId, b: src.bindTo, d: src.outputFile, cs: undefined, rqt: p.rqt,
+              dt: directOutput.deliveryToken,
+            });
+            requests.push({
+              ...(boardId ? { boardId } : {}),
+              ref: executorRef,
+              args: {
+                source_def: src,
+                base_ref: serializeRef(baseRef),
+                callback: callbackTransport.createCallback(sourceToken),
+                output: directOutput,
+              },
+            });
+          }
+          if (requests.length > 0) queue.enqueueMany(requests);
+        } catch (e) {
+          taskFailedFn(cardId, e instanceof Error ? e.message : String(e));
+        }
+        return;
+      }
+
       for (const src of sourceDefs) {
         if (!src.outputFile) { warn(`[dispatch] source "${src.bindTo}" has no outputFile — skipping`); continue; }
         let directOutput: { ref: string; deliveryToken: string; outputFile: string; cardId: string } | undefined;
         if (useDirectHostedWorkerRequest) {
           const deliveryToken = adapter.genId();
           const stagedKey = `${cardId}/.staged/${deliveryToken}/${src.outputFile}`;
-          const stagedRef = adapter.blobStorage('sources').keyRef?.(stagedKey);
+          const stagedRef = fetchedSourcesBlob.keyRef?.(stagedKey);
           if (stagedRef) {
             directOutput = {
               ref: serializeRef(stagedRef),
@@ -693,8 +757,6 @@ export function createBoardLiveCardsPublic(
               outputFile: src.outputFile,
               cardId,
             };
-          } else {
-            warn('[dispatch] hosted board-worker requested but sources BlobStorage cannot produce portable refs; falling back to scratch protocol');
           }
         }
         const sourceToken = encodeSourceToken({
@@ -713,8 +775,14 @@ export function createBoardLiveCardsPublic(
 
   // ── Public methods ──────────────────────────────────────────────────────────
 
+  function queueStoreRef(): string {
+    const ref = configStore().readQueueStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no queue store configured. Run: init --queue-store-ref <b64-ref>`);
+    return ref;
+  }
+
   function requestQueuedProcessAccumulated(): void {
-    const queue = adapter.processAccumulatedStore();
+    const queue = adapter.queueStorageForRef(queueStoreRef(), 'process-accumulated');
     if (queue.enqueueIfAbsent) {
       queue.enqueueIfAbsent({ boardRef: serializeRef(baseRef) }, `process-accumulated:${serializeRef(baseRef)}`);
     } else {
@@ -724,7 +792,7 @@ export function createBoardLiveCardsPublic(
   }
 
   function clearQueuedProcessAccumulatedWakeups(): void {
-    const queue = adapter.processAccumulatedStore();
+    const queue = adapter.queueStorageForRef(queueStoreRef(), 'process-accumulated');
     while (true) {
       const leased = queue.lease<{ boardRef?: string }>({ max: 64, visibilityMs: 1_000 });
       if (leased.length <= 0) return;
@@ -765,26 +833,32 @@ export function createBoardLiveCardsPublic(
       // cardStoreRef is required — create a card store with card-store-cli first
       const storeRef = input.params?.['cardStoreRef'] as string | undefined;
       if (!storeRef) return fail('init requires params.cardStoreRef — create a card store with card-store-cli and pass its ref here');
+      runtimeStoreRef = input.params?.['boardRuntimeStoreRef'] as string | undefined;
+      if (!runtimeStoreRef) return fail('init requires params.boardRuntimeStoreRef — pass the board runtime store ref here');
       if (!boardExists()) {
         const live = createLiveGraph(EMPTY_CONFIG);
-        commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(live) }, null);
+        commitEnvelope({ lastDrainedJournalId: '', graph: snapshot(live), runtimeByCardId: {} }, null);
       }
       const outputsStoreRef = input.params?.['outputsStoreRef'] as string | undefined;
       if (!outputsStoreRef) return fail('init requires params.outputsStoreRef — pass the outputs store ref here');
-      const scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
-      const archiveStoreRef = input.params?.['archiveStoreRef'] as string | undefined;
+      const queueStoreRefValue = input.params?.['queueStoreRef'] as string | undefined;
+      if (!queueStoreRefValue) return fail('init requires params.queueStoreRef — pass the queue store ref here');
+      const fetchedSourcesStoreRef = input.params?.['fetchedSourcesStoreRef'] as string | undefined;
+      if (!fetchedSourcesStoreRef) return fail('init requires params.fetchedSourcesStoreRef — pass the fetched sources store ref here');
+      scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
+      if (!scratchStoreRef) return fail('init requires params.scratchStoreRef — pass the scratch store ref here');
       const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
+      if (!chatStoreRef) return fail('init requires params.chatStoreRef — pass the chat store ref here');
       const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;
+      if (!artifactsStoreRef) return fail('init requires params.artifactsStoreRef — pass the artifacts store ref here');
       const cfg = configStore();
+      cfg.writeBoardRuntimeStoreRef(runtimeStoreRef);
       cfg.writeCardStoreRef(storeRef);
       cfg.writeOutputsStoreRef(outputsStoreRef);
-      if (scratchStoreRef) cfg.writeScratchStoreRef(scratchStoreRef);
-      if (archiveStoreRef) cfg.writeArchiveStoreRef(archiveStoreRef);
-      if (chatStoreRef) cfg.writeChatStoreRef(chatStoreRef);
-      if (artifactsStoreRef) cfg.writeArtifactsStoreRef(artifactsStoreRef);
-      const body = (input.body ?? {}) as Record<string, unknown>;
-      if (body['task-executor-ref']) cfg.writeTaskExecutorRef(body['task-executor-ref'] as ExecutionRef);
-      if (Object.prototype.hasOwnProperty.call(body, 'chat-handler-flow')) cfg.writeChatHandlerFlow(body['chat-handler-flow']);
+      cfg.writeQueueStoreRef(queueStoreRefValue);
+      cfg.writeFetchedSourcesStoreRef(fetchedSourcesStoreRef);
+      cfg.writeChatStoreRef(chatStoreRef);
+      cfg.writeArtifactsStoreRef(artifactsStoreRef);
       try { outputStore().writeStatusSnapshot(buildBoardStatusObject(boardPath, restore(loadEnvelope().graph))); } catch { /* best-effort */ }
       return ok();
     } catch (e) { return err(e); }
@@ -857,6 +931,16 @@ export function createBoardLiveCardsPublic(
     return drain();
   }
 
+  function fetchedSourcesStoreRef(): string {
+    const ref = configStore().readFetchedSourcesStoreRef();
+    if (!ref) throw new Error(`Board at ${baseRef.value} has no fetched sources store configured. Run: init --fetched-sources-store-ref <b64-ref>`);
+    return ref;
+  }
+
+  function fetchedSourcesBlobStore(): BlobStorage {
+    return adapter.blobStorageForRef(fetchedSourcesStoreRef());
+  }
+
   function upsertCard(input: CommandInput): CommandResult {
     try {
       const cardId  = input.params?.['cardId']  as string | undefined;
@@ -902,7 +986,6 @@ export function createBoardLiveCardsPublic(
       const decoded = decodeCallbackToken(token);
       if (!decoded) return fail('Invalid callback token');
       appendJournalEvent({ type: 'task-failed', taskName: decoded.taskName, error, timestamp: nowIso() });
-      try { archive().stream('exec-history').append({ taskName: decoded.taskName, status: 'failed', error, completedAt: nowIso() }); } catch { /* best-effort */ }
       drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
@@ -933,7 +1016,7 @@ export function createBoardLiveCardsPublic(
       const { cbk, cid, b, d, cs, rqt, dt } = payload;
 
       const fetchedSourcesStore = createFetchedSourcesStore(
-        adapter.blobStorage('sources'),
+        fetchedSourcesBlobStore(),
         (ref) => adapter.resolveBlob(ref),
       );
 
@@ -988,6 +1071,12 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string }>; }
   }
 
+  function getBoardRuntimeStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
+    try {
+      return ok({ storeRef: runtimeStoreRef ?? null }) as CommandResult<{ storeRef: string | null }>;
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
+  }
+
   function getOutputsStoreRef(_input: CommandInput): CommandResult<{ storeRef: string }> {
     try {
       const storeRef = configStore().readOutputsStoreRef();
@@ -998,15 +1087,7 @@ export function createBoardLiveCardsPublic(
 
   function getScratchStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
     try {
-      const storeRef = configStore().readScratchStoreRef();
-      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
-    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
-  }
-
-  function getArchiveStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
-    try {
-      const storeRef = configStore().readArchiveStoreRef();
-      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
+      return ok({ storeRef: scratchStoreRef ?? null }) as CommandResult<{ storeRef: string | null }>;
     } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
   }
 
@@ -1024,6 +1105,13 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
   }
 
+  function getFetchedSourcesStoreRef(_input: CommandInput): CommandResult<{ storeRef: string | null }> {
+    try {
+      const storeRef = configStore().readFetchedSourcesStoreRef();
+      return ok({ storeRef }) as CommandResult<{ storeRef: string | null }>;
+    } catch (e) { return err(e) as CommandResult<{ storeRef: string | null }>; }
+  }
+
   function getConfig(input: CommandInput): CommandResult<{ value: unknown }> {
     try {
       const key = input.params?.['key'] as string | undefined;
@@ -1031,14 +1119,15 @@ export function createBoardLiveCardsPublic(
       const cfg = configStore();
       let value: unknown;
       switch (key) {
-        case 'task-executor':     value = cfg.readTaskExecutorRef() ?? null; break;
-        case 'chat-handler-flow': value = cfg.readChatHandlerFlow() ?? null; break;
+        case 'task-executor':     value = hostedTaskExecutorRef ?? null; break;
+        case 'chat-handler-flow': value = hostedChatHandlerFlow ?? null; break;
+        case 'board-runtime-store-ref': value = cfg.readBoardRuntimeStoreRef(); break;
         case 'card-store-ref':    value = cfg.readCardStoreRef(); break;
         case 'outputs-store-ref': value = cfg.readOutputsStoreRef(); break;
-        case 'scratch-store-ref': value = cfg.readScratchStoreRef(); break;
-        case 'archive-store-ref':    value = cfg.readArchiveStoreRef(); break;
+        case 'scratch-store-ref': value = scratchStoreRef ?? null; break;
         case 'chat-store-ref':        value = cfg.readChatStoreRef(); break;
         case 'artifacts-store-ref':   value = cfg.readArtifactsStoreRef(); break;
+        case 'fetched-sources-store-ref': value = cfg.readFetchedSourcesStoreRef(); break;
         default: return fail(`getConfig: unknown key "${key}"`) as CommandResult<{ value: unknown }>;
       }
       return ok({ value }) as CommandResult<{ value: unknown }>;
@@ -1077,14 +1166,15 @@ export function createBoardLiveCardsPublic(
 
   function sourcesStore() {
     return createFetchedSourcesStore(
-      adapter.blobStorage('sources'),
+      fetchedSourcesBlobStore(),
       (ref) => adapter.resolveBlob(ref),
     );
   }
 
   function toSourceRef(blobKey: string): string {
-    const ref = adapter.blobStorage('sources').keyRef?.(blobKey);
-    return ref ? serializeRef(ref) : blobKey;
+    const keyRef = fetchedSourcesBlobStore().keyRef?.(blobKey);
+    if (!keyRef) throw new Error('configured fetched-sources store does not support keyRef');
+    return serializeRef(keyRef);
   }
 
   function getOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, string>> {
@@ -1102,7 +1192,7 @@ export function createBoardLiveCardsPublic(
     try {
       const store = sourcesStore();
       const cardIds = new Set<string>();
-      for (const key of adapter.blobStorage('sources').listKeys()) {
+      for (const key of fetchedSourcesBlobStore().listKeys()) {
         const slash = key.indexOf('/');
         if (slash > 0 && !key.includes('/.staged/')) cardIds.add(key.slice(0, slash));
       }
@@ -1119,7 +1209,7 @@ export function createBoardLiveCardsPublic(
   }
 
   return {
-    init, status, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getArchiveStoreRef, getChatStoreRef, getArtifactsStoreRef, getConfig,
+    init, status, getBoardRuntimeStoreRef, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getChatStoreRef, getArtifactsStoreRef, getFetchedSourcesStoreRef, getConfig,
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     getOutputsFetchedSources, getAllOutputsFetchedSources,
@@ -1212,9 +1302,19 @@ export interface BoardLiveCardsNonCorePublic {
 export function createBoardLiveCardsNonCorePublic(
   baseRef: KindValueRef,
   adapter: BoardNonCorePlatformAdapter,
+  opts?: { boardRuntimeStoreRef?: string; taskExecutorRef?: ExecutionRef },
 ): BoardLiveCardsNonCorePublic {
+  const hostedTaskExecutorRef = opts?.taskExecutorRef;
   // Mirror the same internal helpers as the core factory.
-  const configStore = () => createBoardConfigStore(adapter.kvStorage('config'));
+  const configStore = () => {
+    if (opts) {
+      if (!opts.boardRuntimeStoreRef) {
+        throw new Error(`Board at ${baseRef.value} requires boardRuntimeStoreRef for non-core runtime operations.`);
+      }
+      return createBoardConfigStore(adapter.kvStorageForRef(opts.boardRuntimeStoreRef));
+    }
+    return createBoardConfigStore(adapter.kvStorage('config'));
+  };
   function makeCardAdapterNC(): CardStorageAdapter {
     const storeRef = configStore().readCardStoreRef();
     if (!storeRef) throw new Error(`Board at ${baseRef.value} has no card store configured. Run: init --base-ref <ref> --store-ref <b64-ref>`);
@@ -1231,6 +1331,10 @@ export function createBoardLiveCardsNonCorePublic(
   }
   const cardStore = () => createCardStore(makeCardAdapterNC(), adapter.onWarn ?? (() => { /* no-op */ }));
 
+  function resolveTaskExecutorRef(): ExecutionRef | undefined {
+    return hostedTaskExecutorRef ?? configStore().readTaskExecutorRef();
+  }
+
   // ── Shared validation helper ───────────────────────────────────────────────
 
   async function validateCardObject(
@@ -1240,7 +1344,7 @@ export function createBoardLiveCardsNonCorePublic(
     const schemaResult = adapter.validateSchema(card);
     const sourceErrors: string[] = [];
 
-    const teRef = configStore().readTaskExecutorRef();
+    const teRef = resolveTaskExecutorRef();
     if (teRef && Array.isArray(card['source_defs'])) {
       for (const src of card['source_defs'] as Array<Record<string, unknown>>) {
         const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : '(unknown)';
@@ -1313,7 +1417,7 @@ export function createBoardLiveCardsNonCorePublic(
       if ('status' in resolved) return resolved;
 
       // Lightweight probe only. Do not silently degrade into a real fetch path.
-      const teRef = configStore().readTaskExecutorRef();
+      const teRef = resolveTaskExecutorRef();
       if (!teRef) return fail('No task-executor registered for this board');
       try {
         const inPayload = { ...resolved.src, _projections: resolved.mockProjections };
@@ -1333,7 +1437,7 @@ export function createBoardLiveCardsNonCorePublic(
       const resolved = resolvePreflightSource(input, 'runSourcePreflight');
       if ('status' in resolved) return resolved as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
 
-      const teRef = configStore().readTaskExecutorRef();
+      const teRef = resolveTaskExecutorRef();
       if (!teRef) {
         return fail('No task-executor registered for this board') as CommandResult<{ bindTo: string; ok: boolean; result: unknown; issues: string[] }>;
       }
@@ -1378,7 +1482,7 @@ export function createBoardLiveCardsNonCorePublic(
 
   async function describeTaskExecutorCapabilities(_input: CommandInput): Promise<CommandResult> {
     try {
-      const teRef = configStore().readTaskExecutorRef();
+      const teRef = resolveTaskExecutorRef();
       if (!teRef) return fail('No task-executor registered for this board');
       const stdout = await adapter.invokeExecutor(teRef, 'describe-capabilities', { timeout: adapter.executorTimeouts?.describeMs ?? 10_000 });
       return ok(JSON.parse(stdout.trim()) as Record<string, unknown>);
@@ -1524,7 +1628,7 @@ export function createBoardLiveCardsNonCorePublic(
       const fetchedSources: Record<string, unknown> = { ...mockFetchedSources };
       const bodyTeRef = body['task-executor-ref'] as ExecutionRef | undefined;
       const teRef = (bodyTeRef?.howToRun && bodyTeRef?.whatToRun ? bodyTeRef : undefined)
-        ?? configStore().readTaskExecutorRef();
+        ?? resolveTaskExecutorRef();
       for (let i = 0; i < enrichedSources.length; i++) {
         const src = enrichedSources[i];
         const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : `source_${i}`;
