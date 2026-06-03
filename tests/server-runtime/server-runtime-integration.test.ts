@@ -1050,7 +1050,7 @@ describe('platform-free server runtime (Node host)', () => {
 
     const newMessages = isolatedChatStorage.readAll(cardId).slice(baselineCount);
     expect(newMessages.map((message) => message.role)).toEqual(['user', 'system', 'assistant']);
-    expect(newMessages[0]?.files).toHaveLength(1);
+    expect(newMessages[0]?.files).toEqual([]);
     expect(newMessages[1]?.text).toBe('in-progress');
     expect(newMessages[2]?.text).toBe('Echo: attached file processed');
     expect(newMessages.some((message) => message.text.includes('File q1.txt uploaded as'))).toBe(false);

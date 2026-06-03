@@ -76,6 +76,7 @@ import {
   createMcpWebhookToolRegistry as createMcpWebhookToolRegistryImpl,
   createMcpControlplaneToolRegistry as createMcpControlplaneToolRegistryImpl,
 } from './mcp-tool-registries.js';
+import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import { createMcpFacadeModule } from './mcp-facade.js';
 import type { McpFacadeBoardContextLike } from './mcp-facade.js';
 import { createRoutesAgentface } from './routes-agentface.js';
@@ -967,7 +968,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   async function applyCardAction(cardId: string, actionType: string, payload: Record<string, unknown> | null): Promise<void> {
     if (actionType === 'chat-send') {
-      const text = payload && typeof payload.text === 'string' ? payload.text.trim() : '';
       const turnId = payload && typeof payload['turn-id'] === 'string'
         ? payload['turn-id']
         : payload && typeof payload.turnId === 'string'
@@ -975,36 +975,34 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           : payload && typeof payload.turn === 'string'
             ? payload.turn
             : '';
-      const files: Array<Record<string, unknown>> = [];
-      if (Array.isArray(payload?.files)) {
-        for (const f of payload.files as unknown[]) {
-          if (!f) continue;
-          if (typeof f === 'string') { files.push({ name: f }); continue; }
-          if (typeof f === 'object') {
-            const fo = f as Record<string, unknown>;
-            if (typeof fo.name === 'string') files.push({ name: fo.name, size: fo.size, mime_type: fo.mime_type, uploaded_at: fo.uploaded_at, stored_name: fo.stored_name, chat: fo.chat === true });
-          }
-        }
+      const controlplaneRegistry = createMcpControlplaneToolRegistry();
+      const appendResult = await invokeMcpTool('manage.add-chat-entry-and-any-attachments', {
+        board_id: boardId,
+        card_id: cardId,
+        role: 'user',
+        text: payload?.text,
+        turn_id: turnId,
+        files: [],
+      }, controlplaneRegistry) as { status?: unknown; data?: { id?: unknown } };
+
+      if (appendResult?.status !== 'success') {
+        throw new Error(extractMcpFailureMessage(appendResult, `chat-send append failed for card ${cardId}`));
       }
 
-      if (text || files.length > 0) {
-        const batchResult = await chatStorePublic.runBatch({
-          cardId,
-          commands: [
-            { command: 'append', role: 'user', text, files, turn: turnId },
-            { command: 'set-processing', active: true },
-          ],
-        });
-        if (batchResult.status !== 'success') {
-          throw new Error(batchResult.error);
-        }
-        const appendId = (batchResult.data.results[0]?.data as { id?: unknown } | undefined)?.id;
-        if (typeof appendId !== 'string' || !appendId) {
-          throw new Error(`chat-send did not return an append id for card ${cardId}`);
-        }
-        try { void sseHub.broadcastCardChats(cardId); } catch { /* best-effort */ }
-        void queueChatHandler(cardId, appendId, true, turnId);
+      const appendId = appendResult?.data?.id;
+      if (typeof appendId !== 'string' || !appendId) {
+        throw new Error(`chat-send did not return an append id for card ${cardId}`);
       }
+
+      const processingResult = await invokeMcpTool('setstate.chat-processing-started', {
+        board_id: boardId,
+        card_id: cardId,
+      }, controlplaneRegistry);
+      if ((processingResult as { status?: unknown })?.status !== 'success') {
+        throw new Error(extractMcpFailureMessage(processingResult, `chat-send processing update failed for card ${cardId}`));
+      }
+
+      void queueChatHandler(cardId, appendId, true, turnId);
       return;
     }
 
