@@ -46,6 +46,7 @@ export type { BoardState, CardModel, DeriveBoardStateOptions };
 
 export interface BoardPaths {
   stream: string;
+  mcpActions: string;
   patchCard: (id: string) => string;
   retriggerCard: (id: string) => string;
   cardAction: (id: string) => string;
@@ -166,6 +167,7 @@ export function defaultBoardPaths(boardId: string, apiBase = '/api/boards'): Boa
   const base = `${base_}/${b}`;
   return {
     stream:    `${base}/sse`,
+    mcpActions: `${base}/mcp-actions`,
     patchCard:       (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
     retriggerCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/retrigger`,
     cardAction:      (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
@@ -181,6 +183,7 @@ export function singleBoardPaths(apiBase = '/api/board'): BoardPaths {
   const base = apiBase.replace(/\/$/, '');
   return {
     stream:    `${base}/sse`,
+    mcpActions: `${base}/mcp-actions`,
     patchCard:       (id: string) => `${base}/cards/${encodeURIComponent(id)}`,
     retriggerCard:   (id: string) => `${base}/cards/${encodeURIComponent(id)}/retrigger`,
     cardAction:      (id: string) => `${base}/cards/${encodeURIComponent(id)}/actions`,
@@ -332,10 +335,15 @@ export async function dispatchCardAction(opts: {
 }): Promise<{ payload: Record<string, unknown> }> {
   const paths = opts.boardPaths(opts.boardId);
   const processedPayload = await prepareActionPayload(opts);
-  const res = await opts.fetchServer(paths.cardAction(opts.cardId), {
+  const useMcpActions = opts.actionType === 'chat-send';
+  const res = await opts.fetchServer(useMcpActions ? paths.mcpActions : paths.cardAction(opts.cardId), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ actionType: opts.actionType, payload: processedPayload }),
+    body: JSON.stringify(
+      useMcpActions
+        ? { tool: opts.actionType, args: { card_id: opts.cardId, payload: processedPayload } }
+        : { actionType: opts.actionType, payload: processedPayload },
+    ),
   });
   if (!res.ok) {
     throw new Error(`${opts.actionType === 'refresh' ? 'Refresh' : 'Action'} failed for ${opts.cardId} (${res.status})`);

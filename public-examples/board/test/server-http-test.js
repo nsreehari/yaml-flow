@@ -740,11 +740,14 @@ try {
 
       const t3TurnId = randomTurnId();
       t3Dbg(`step 4: posting probe chat-send (turn-id=${t3TurnId})`);
-      const t2SendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
-        actionType: 'chat-send',
-        payload: {
-          text: `${ECHO_PROBE_MARKER}${t2ProbePrompt}${ECHO_PROBE_MARKER}`,
-          'turn-id': t3TurnId,
+      const t2SendRes = await httpJson('POST', `${BASE}/mcp-actions`, {
+        tool: 'chat-send',
+        args: {
+          card_id: CHAT_CARD_ID,
+          payload: {
+            text: `${ECHO_PROBE_MARKER}${t2ProbePrompt}${ECHO_PROBE_MARKER}`,
+            'turn-id': t3TurnId,
+          },
         },
       });
       t3Dbg(`step 4: chat-send returned status=${t2SendRes.status}`);
@@ -818,14 +821,17 @@ try {
 
     const t3aTurnId = randomTurnId();
     t3aDbg(`step 2: posting non-probe chat-send (turn-id=${t3aTurnId})`);
-    const t2aSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
-      actionType: 'chat-send',
-      payload: {
-        text: JSON.stringify({
-          prompt: t2aPrompt,
-          chatTimeoutMs: 180000,
-        }),
-        'turn-id': t3aTurnId,
+    const t2aSendRes = await httpJson('POST', `${BASE}/mcp-actions`, {
+      tool: 'chat-send',
+      args: {
+        card_id: CHAT_CARD_ID,
+        payload: {
+          text: JSON.stringify({
+            prompt: t2aPrompt,
+            chatTimeoutMs: 180000,
+          }),
+          'turn-id': t3aTurnId,
+        },
       },
     });
     t3aDbg(`step 2: chat-send returned status=${t2aSendRes.status}`);
@@ -910,12 +916,15 @@ try {
     const t2bEventStart = NS.chatEvents.length;
 
     const t2bPrompt = `probe echo file-upload validation ${Date.now()}`;
-    const t2bSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
-      actionType: 'chat-send',
-      payload: {
-        text: `${ECHO_PROBE_MARKER}${t2bPrompt}${ECHO_PROBE_MARKER}`,
-        files: [uploadedFile],
-        'turn-id': t3bTurnId,
+    const t2bSendRes = await httpJson('POST', `${BASE}/mcp-actions`, {
+      tool: 'chat-send',
+      args: {
+        card_id: CHAT_CARD_ID,
+        payload: {
+          text: `${ECHO_PROBE_MARKER}${t2bPrompt}${ECHO_PROBE_MARKER}`,
+          files: [uploadedFile],
+          'turn-id': t3bTurnId,
+        },
       },
     });
     assert(t2bSendRes.status === 200, `T3b chat-send returned ${t2bSendRes.status}`);
@@ -982,11 +991,14 @@ try {
     const t3dTurnId = randomTurnId();
     const t2dPrompt = `probe generated attachment validation ${Date.now()}`;
     const t2dEventStart = NS.chatEvents.length;
-    const t2dSendRes = await httpJson('POST', `${BASE}/cards/${CHAT_CARD_ID}/actions`, {
-      actionType: 'chat-send',
-      payload: {
-        text: `${ECHO_PROBE_MARKER}[attach] ${t2dPrompt}${ECHO_PROBE_MARKER}`,
-        'turn-id': t3dTurnId,
+    const t2dSendRes = await httpJson('POST', `${BASE}/mcp-actions`, {
+      tool: 'chat-send',
+      args: {
+        card_id: CHAT_CARD_ID,
+        payload: {
+          text: `${ECHO_PROBE_MARKER}[attach] ${t2dPrompt}${ECHO_PROBE_MARKER}`,
+          'turn-id': t3dTurnId,
+        },
       },
     });
     assert(t2dSendRes.status === 200, `T3d chat-send returned ${t2dSendRes.status}`);

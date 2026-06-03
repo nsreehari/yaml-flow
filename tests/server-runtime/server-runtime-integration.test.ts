@@ -414,17 +414,20 @@ describe('platform-free server runtime (Node host)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('POST /api/board/cards/:id/actions returns an error when chat-send has no handler', async () => {
+  it('POST /api/board/mcp-actions returns an error when chat-send has no handler', async () => {
     const initData = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
     const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
 
-    const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/actions`, {
+    const res = await fetch(`${API_BASE}/mcp-actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        actionType: 'chat-send',
-        payload: { text: 'hello from integration test', 'turn-id': 'test-turn-no-handler' },
+        tool: 'chat-send',
+        args: {
+          card_id: cardId,
+          payload: { text: 'hello from integration test', 'turn-id': 'test-turn-no-handler' },
+        },
       }),
     });
     expect(res.status).toBe(409);
@@ -759,10 +762,16 @@ describe('platform-free server runtime (Node host)', () => {
     const port = typeof addr === 'object' && addr ? addr.port : 0;
     const cardId = 'card-portfolio';
 
-    const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/actions`, {
+    const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/mcp-actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow should fail dispatch', 'turn-id': 'test-turn-fail-dispatch' } }),
+      body: JSON.stringify({
+        tool: 'chat-send',
+        args: {
+          card_id: cardId,
+          payload: { text: 'flow should fail dispatch', 'turn-id': 'test-turn-fail-dispatch' },
+        },
+      }),
     });
     expect(chatRes.ok).toBe(true);
     expect(flowRuns).toBe(0);
@@ -862,10 +871,16 @@ describe('platform-free server runtime (Node host)', () => {
     const addr = server2.address();
     const port = typeof addr === 'object' && addr ? addr.port : 0;
 
-    const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/card-portfolio/actions`, {
+    const chatRes = await fetch(`http://127.0.0.1:${port}/api/board/mcp-actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actionType: 'chat-send', payload: { text: 'flow preferred', 'turn-id': 'test-turn-flow-preferred' } }),
+      body: JSON.stringify({
+        tool: 'chat-send',
+        args: {
+          card_id: 'card-portfolio',
+          payload: { text: 'flow preferred', 'turn-id': 'test-turn-flow-preferred' },
+        },
+      }),
     });
     expect(chatRes.ok).toBe(true);
     expect(flowRuns).toBe(0);
@@ -1011,15 +1026,18 @@ describe('platform-free server runtime (Node host)', () => {
     expect(storedUpload?.chat).toBe(true);
 
     const baselineCount = afterUploadMessages.length;
-    const sendRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/actions`, {
+    const sendRes = await fetch(`http://127.0.0.1:${port}/api/board/mcp-actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        actionType: 'chat-send',
-        payload: {
-          text: 'please use the uploaded file',
-          files: [uploadedFile],
-          'turn-id': 'test-turn-upload-send',
+        tool: 'chat-send',
+        args: {
+          card_id: cardId,
+          payload: {
+            text: 'please use the uploaded file',
+            files: [uploadedFile],
+            'turn-id': 'test-turn-upload-send',
+          },
         },
       }),
     });

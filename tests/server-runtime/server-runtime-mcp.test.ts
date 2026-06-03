@@ -553,7 +553,7 @@ process.exit(1);
     expect(uploadSystemMessage?.turn).toBe('turn-upload');
   });
 
-  it('POST /cards/:id/actions chat-send propagates turn-id to the user message and flow args', async () => {
+  it('chat-send propagates turn-id to the user message and flow args', async () => {
     const observed: Array<Record<string, unknown>> = [];
     const { runtime, boardAdapter, queueStoreRef } = createRuntimeHarness({
       chatHandlerFlow: { id: 'test-flow' },
@@ -565,16 +565,19 @@ process.exit(1);
       },
     });
 
-    const req = makeRequest('POST', '/api/board/cards/card-1/actions', {
-      actionType: 'chat-send',
-      payload: {
-        text: 'Hello turn aware world',
-        'turn-id': 'turn-chat-send',
+    const req = makeRequest('POST', '/api/board/mcp-actions', {
+      tool: 'chat-send',
+      args: {
+        card_id: 'card-1',
+        payload: {
+          text: 'Hello turn aware world',
+          'turn-id': 'turn-chat-send',
+        },
       },
     });
     const res = makeResponse();
 
-    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/cards/card-1/actions'));
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-actions'));
     expect(handled).toBe(true);
     expect(res._status).toBe(200);
     await drainQueuedChatRequests(runtime, boardAdapter, queueStoreRef);
@@ -592,6 +595,72 @@ process.exit(1);
     expect(userMessage?.turn).toBe('turn-chat-send');
     expect(observed.length).toBe(1);
     expect(observed[0].turnId).toBe('turn-chat-send');
+  });
+
+  it('POST /mcp-actions chat-send propagates turn-id to the user message and flow args', async () => {
+    const observed: Array<Record<string, unknown>> = [];
+    const { runtime, boardAdapter, queueStoreRef } = createRuntimeHarness({
+      chatHandlerFlow: { id: 'test-flow' },
+      chatFlowRunner: {
+        async run(_flow, args) {
+          observed.push(args);
+          return { dispatched: true };
+        },
+      },
+    });
+
+    const req = makeRequest('POST', '/api/board/mcp-actions', {
+      tool: 'chat-send',
+      args: {
+        card_id: 'card-1',
+        payload: {
+          text: 'Hello mcp-actions world',
+          'turn-id': 'turn-mcp-actions',
+        },
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-actions'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: expect.objectContaining({ ok: true, cardId: 'card-1', actionType: 'chat-send', responseStatus: 200 }),
+    });
+    await drainQueuedChatRequests(runtime, boardAdapter, queueStoreRef);
+
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', all_turns: true },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const userMessage = (((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>)
+      .find((message) => message.role === 'user' && message.text === 'Hello mcp-actions world');
+    expect(userMessage).toBeTruthy();
+    expect(userMessage?.turn).toBe('turn-mcp-actions');
+    expect(observed.length).toBe(1);
+    expect(observed[0].turnId).toBe('turn-mcp-actions');
+  });
+
+  it('POST /mcp-actions retrigger-card retriggers a card', async () => {
+    const runtime = createRuntime();
+
+    const req = makeRequest('POST', '/api/board/mcp-actions', {
+      tool: 'retrigger-card',
+      args: { card_id: 'card-1' },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-actions'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: expect.objectContaining({ ok: true, cardId: 'card-1', actionType: 'retrigger-card', responseStatus: 200 }),
+    });
   });
 
   it('routes manage.add-chat-entry-and-any-attachments through /mcp-controlplane for assistant chat messages', async () => {

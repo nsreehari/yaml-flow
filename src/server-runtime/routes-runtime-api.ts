@@ -13,6 +13,7 @@
 
 import type { RuntimeRequest, RuntimeResponse } from './types.js';
 import { escapeRegExp } from './internal-helpers.js';
+import { getMcpArgRecord, getMcpArgString } from './mcp-args.js';
 import { invokeMcpTool, extractMcpFailureMessage } from './mcp-invoker.js';
 import type { ToolRegistry } from './mcp-tool-registries.js';
 export interface RoutesRuntimeApiDeps {
@@ -63,6 +64,94 @@ export function createRoutesRuntimeApi(deps: RoutesRuntimeApiDeps): RoutesRuntim
     const p = url.pathname;
 
     try {
+      if (method === 'POST' && p === `${apiBasePath}/mcp-actions`) {
+        await bootstrapBoard();
+        const requestReceivedAtMs = Date.now();
+        const requestReceivedAt = new Date(requestReceivedAtMs).toISOString();
+        const body = await readJsonBody(req);
+        const tool = typeof body.tool === 'string' ? body.tool.trim() : '';
+        const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+          ? body.args as Record<string, unknown>
+          : {};
+        if (!tool) {
+          json(res, 400, { error: 'tool is required' });
+          return true;
+        }
+        const cardId = getMcpArgString(args, 'card_id');
+        if (!cardId) {
+          json(res, 400, { error: 'MCP action requires card_id' });
+          return true;
+        }
+        if (tool === 'retrigger-card' || tool === 'retrigger') {
+          await retriggerCard(cardId);
+          const responseSentAtMs = Date.now();
+          json(res, 200, {
+            status: 'success',
+            data: {
+              ok: true,
+              cardId,
+              actionType: tool,
+              requestReceivedAt,
+              requestReceivedAtMs,
+              responseSentAt: new Date(responseSentAtMs).toISOString(),
+              responseSentAtMs,
+              responseStatus: 200,
+            },
+          });
+          return true;
+        }
+        const payload = getMcpArgRecord(args, 'payload');
+        if (tool === 'chat-send' && !await resolveChatHandlerTarget(cardId)) {
+          const responseSentAtMs = Date.now();
+          json(res, 409, {
+            error: `chat handler is not configured for card: ${cardId}`,
+            requestReceivedAt,
+            requestReceivedAtMs,
+            responseSentAt: new Date(responseSentAtMs).toISOString(),
+            responseSentAtMs,
+            responseStatus: 409,
+          });
+          return true;
+        }
+        if (tool === 'chat-send') {
+          const rawTurnId = typeof payload['turn-id'] === 'string'
+            ? payload['turn-id']
+            : typeof payload.turnId === 'string'
+              ? payload.turnId
+              : typeof payload.turn === 'string'
+                ? payload.turn
+                : '';
+          if (!rawTurnId || !String(rawTurnId).trim()) {
+            const responseSentAtMs = Date.now();
+            json(res, 400, {
+              error: `chat-send requires a non-empty 'turn-id' (or 'turnId'/'turn') in payload for card: ${cardId}`,
+              requestReceivedAt,
+              requestReceivedAtMs,
+              responseSentAt: new Date(responseSentAtMs).toISOString(),
+              responseSentAtMs,
+              responseStatus: 400,
+            });
+            return true;
+          }
+        }
+        await applyCardAction(cardId, tool, payload);
+        const responseSentAtMs = Date.now();
+        json(res, 200, {
+          status: 'success',
+          data: {
+            ok: true,
+            cardId,
+            actionType: tool,
+            requestReceivedAt,
+            requestReceivedAtMs,
+            responseSentAt: new Date(responseSentAtMs).toISOString(),
+            responseSentAtMs,
+            responseStatus: 200,
+          },
+        });
+        return true;
+      }
+
       if (method === 'POST' && p === `${apiBasePath}/mcp-controlplane`) {
         await bootstrapBoard();
         const body = await readJsonBody(req);

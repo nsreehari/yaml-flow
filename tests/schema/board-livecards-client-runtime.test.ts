@@ -138,6 +138,42 @@ describe('session.retriggerCard', () => {
   });
 });
 
+describe('session.dispatchCardAction', () => {
+  it('routes chat-send through /mcp-actions', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    const session = createBoardRuntimeSession({
+      fetchServer: async (path, init) => {
+        calls.push({ path, init });
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      boardPaths: (boardId: string) => defaultBoardPaths(boardId),
+      getServerOrigin: () => 'http://localhost:7799',
+    });
+    session.attachProvidedState({ boardId: 'board-1', payload: PAYLOAD });
+
+    await session.dispatchCardAction('card-a', 'chat-send', {
+      text: 'hello',
+      'turn-id': 'turn-1',
+    });
+
+    const actionCall = calls.find((call) => call.path === '/api/boards/board-1/mcp-actions');
+
+    expect(actionCall).toBeTruthy();
+    expect(actionCall?.init?.method).toBe('POST');
+    expect(actionCall?.init?.body).toBe(JSON.stringify({
+      tool: 'chat-send',
+      args: {
+        card_id: 'card-a',
+        payload: {
+          text: 'hello',
+          'turn-id': 'turn-1',
+          files: [],
+        },
+      },
+    }));
+  });
+});
+
 describe('board-livecards-client action upload turn propagation', () => {
   it('adds turn-id query parameter for in-chat uploads when provided', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];

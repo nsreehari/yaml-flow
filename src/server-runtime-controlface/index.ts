@@ -4,6 +4,7 @@
  * MCP-only server runtime surface.
  *   POST /mcp
  *   POST /mcp-raw
+ *   POST /mcp-actions
  *   POST /mcp-controlplane
  *   POST /mcp-webhooks
  *
@@ -29,7 +30,7 @@ export type {
   MultiBoardRuntime,
 } from '../server-runtime/index.js';
 
-const MCP_ONLY_SUFFIXES = ['/mcp', '/mcp-raw', '/mcp-controlplane', '/mcp-webhooks'] as const;
+const MCP_ONLY_SUFFIXES = ['/mcp', '/mcp-raw', '/mcp-actions', '/mcp-controlplane', '/mcp-webhooks'] as const;
 
 function isAllowedSingleBoardMcpPath(apiBasePath: string, pathName: string): boolean {
   return MCP_ONLY_SUFFIXES.some((suffix) => pathName === `${apiBasePath}${suffix}`);

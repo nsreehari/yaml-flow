@@ -251,6 +251,9 @@ export function createPublishedOutputsStoreFromBacking(kv: SyncKVStoreOps | Asyn
     writeDataObjects(data: Record<string, unknown>) {
       return runSequentially(Object.entries(data), ([token, payload]) => {
         if (!token) return;
+        if (payload === undefined) {
+          return kv.delete(`data-objects/${token}`);
+        }
         return kv.write(`data-objects/${token}`, payload);
       });
     },
