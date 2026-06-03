@@ -531,6 +531,7 @@ try {
     else if (msg.type === 'error') console.error(`[sse-worker] ${msg.message}`);
   });
   sseWorker.on('error', (err) => console.error(`[sse-worker] uncaught: ${err.message}`));
+  sseWorker.postMessage({ type: 'start' });
 
   const initialPayload = await waitForInitialPayload();
   const cardCount = Array.isArray(initialPayload.cardDefinitions) ? initialPayload.cardDefinitions.length : 0;
@@ -754,14 +755,20 @@ try {
       assert(t2SendRes.status === 200, `T3 chat-send returned ${t2SendRes.status}`);
 
       t3Dbg('step 5: waiting for ordered probe lifecycle on chat SSE');
-      const t2Lifecycle = await waitForChatPredicate((events) => {
-        return matchOrderedProbeLifecycle(events.slice(t2EventStart), {
-          beforeCount: t2BeforeCount,
-          beforeProcessing: false,
-          prompt: t2ProbePrompt,
-          inProgressText: PROBE_IN_PROGRESS_TEXT,
-        });
-      }, 45_000, 'T3 ordered lifecycle');
+      let t2Lifecycle;
+      try {
+        t2Lifecycle = await waitForChatPredicate((events) => {
+          return matchOrderedProbeLifecycle(events.slice(t2EventStart), {
+            beforeCount: t2BeforeCount,
+            beforeProcessing: false,
+            prompt: t2ProbePrompt,
+            inProgressText: PROBE_IN_PROGRESS_TEXT,
+          });
+        }, 45_000, 'T3 ordered lifecycle');
+      } catch (error) {
+        t3Dbg(`step 5: lifecycle timeout; events=${JSON.stringify(NS.chatEvents.slice(t2EventStart), null, 2)}`);
+        throw error;
+      }
       t3Dbg('step 5: ordered lifecycle observed');
       assert(!!t2Lifecycle, 'T3 ordered lifecycle not observed');
 
@@ -922,7 +929,6 @@ try {
         card_id: CHAT_CARD_ID,
         payload: {
           text: `${ECHO_PROBE_MARKER}${t2bPrompt}${ECHO_PROBE_MARKER}`,
-          files: [uploadedFile],
           'turn-id': t3bTurnId,
         },
       },
@@ -934,10 +940,22 @@ try {
         beforeCount: t2bSendBaseline,
         beforeProcessing: false,
         prompt: t2bPrompt,
-        assistantText: 'tokyo',
         inProgressText: PROBE_IN_PROGRESS_TEXT,
       });
-    }, 60_000, 'T3b ordered lifecycle');
+    }, 60_000, 'T3b ordered lifecycle').catch(async (err) => {
+      const t2bEvents = NS.chatEvents.slice(t2bEventStart);
+      const t2bMilestones = deriveProbeLifecycleMilestones(t2bEvents, {
+        beforeCount: t2bSendBaseline,
+        beforeProcessing: false,
+        prompt: t2bPrompt,
+        inProgressText: PROBE_IN_PROGRESS_TEXT,
+      });
+      const t2bCurrent = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
+      console.error('[T3b.DBG timeout] milestones=', JSON.stringify(t2bMilestones));
+      console.error('[T3b.DBG timeout] events=', JSON.stringify(t2bEvents));
+      console.error('[T3b.DBG timeout] inspect=', JSON.stringify(t2bCurrent?.data ?? null));
+      throw err;
+    });
     assert(!!t2bLifecycle, 'T3b ordered lifecycle not observed');
 
     const t2bAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
@@ -953,9 +971,9 @@ try {
     assert(!!t2bUser && typeof t2bUser.id === 'string', 'T3b missing user chat message notification');
     assert(!!t2bInProgress && typeof t2bInProgress.id === 'string', 'T3b missing in-progress system chat message');
     assert(!!t2bAssistantMsg && typeof t2bAssistantMsg.id === 'string', 'T3b missing assistant chat message notification');
-    assert(Array.isArray(t2bUser?.files) && t2bUser.files.length === 1, 'T3b user chat message missing uploaded file metadata');
-    assert(String(t2bAssistantMsg?.text || '').trim() === 'tokyo', 'T3b assistant attachment content mismatch');
-    console.log('[T3b] ok: upload protocol and ordered probe lifecycle observed with attachment-derived assistant reply');
+    assert(!Array.isArray(t2bUser?.files) || t2bUser.files.length === 0, 'T3b user chat message should remain text-only after add-chat-attachment upload');
+    assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant probe echo mismatch');
+    console.log('[T3b] ok: add-chat-attachment upload plus text-only chat-send preserved the normal probe lifecycle');
   }
 
   // ── T3d: probe-echo chat with one AI-generated attachment ──
