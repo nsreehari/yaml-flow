@@ -138,7 +138,7 @@ export type {
   SyncTransportInvoker,
   TransportInvoker,
 } from './execution-adapter.js';
-export { createFsQueueStorage } from './storage-fs-adapters.js';
+export { createFsQueueStorage, createFsBlobStorage } from './storage-fs-adapters.js';
 export {
   createBoardWorkerQueueLane,
   createQueueStorageLane,

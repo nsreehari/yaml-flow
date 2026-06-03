@@ -176,11 +176,11 @@ function applyFrame(payload) {
     });
   }
 
-  function httpPatch(url, payload) {
+  function httpPost(url, payload) {
     return new Promise((resolve, reject) => {
       const body = JSON.stringify(payload);
       const req = http.request(url, {
-        method: 'PATCH',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
       }, (res) => {
         let data = '';
@@ -193,6 +193,13 @@ function applyFrame(payload) {
       req.on('error', reject);
       req.write(body);
       req.end();
+    });
+  }
+
+  function mcpPatchCard(cardId, patch) {
+    return httpPost(`${BASE}/mcp-controlplane`, {
+      tool: 'manage.patch-card',
+      args: { board_id: 'portfolio-tracker', card_id: cardId, patch },
     });
   }
 
@@ -287,10 +294,7 @@ function applyFrame(payload) {
     // ── T2a: Add GOOG to holdings ────────────────────────────────────────────────
     console.log('\n=== T2a: Update holdings — add GOOG ===');
     const t2CardRefreshedBefore = NS.cardRefreshedCount;
-    const t2Patch = await httpPatch(
-      `${BASE}/cards/portfolio-form`,
-      makeHoldingsPatch({ AAPL: 50, MSFT: 30, GOOG: 100 }),
-    );
+    const t2Patch = await mcpPatchCard('portfolio-form', makeHoldingsPatch({ AAPL: 50, MSFT: 30, GOOG: 100 }));
     assert(t2Patch.status === 200, `PATCH portfolio-form returned ${t2Patch.status}`);
     console.log('[T2a] PATCH ok — worker will receive SSE notifications independently');
 
@@ -321,7 +325,7 @@ function applyFrame(payload) {
       { AAPL: 40, MSFT: 35, GOOG: 120, TSLA: 70 },  // V5 — expected final state
     ];
     for (const holdings of rapidUpdates) {
-      await httpPatch(`${BASE}/cards/portfolio-form`, makeHoldingsPatch(holdings));
+      await mcpPatchCard('portfolio-form', makeHoldingsPatch(holdings));
     }
     console.log('[T3] rapid PATCHes sent — worker accumulates SSE state in parallel');
 
@@ -341,25 +345,19 @@ function applyFrame(payload) {
     console.log(`[T4] passed: totalValue=${t4Total.toFixed(2)}, sumRows=${sumRows.toFixed(2)}`);
 
     // ── T5: board-status HTTP cross-check ────────────────────────────────────────
-    // Compare the HTTP board-status endpoint response against what the worker
-    // accumulated via SSE — the two sources must agree.
+    // Use MCP inspect.board-runtime-status (GET /board-status was removed).
     console.log('\n=== T5: board-status HTTP cross-check ===');
-    const t5Res = await httpGet(`${BASE}/board-status`);
+    const t5Res = await httpPost(`${BASE}/mcp`, { tool: 'inspect.board-runtime-status', args: {} });
     assert(t5Res.status === 200, `board-status returned ${t5Res.status}`);
-    const t5Summary = t5Res.data?.statusSnapshot?.summary;
-    assert(t5Summary, 'T5: statusSnapshot.summary missing from board-status');
+    const t5Summary = t5Res.data?.data?.summary;
+    assert(t5Summary, 'T5: summary missing from inspect.board-runtime-status');
     assert(t5Summary.completed === t5Summary.card_count,
       `T5: completed=${t5Summary.completed} !== card_count=${t5Summary.card_count}`);
     assert(t5Summary.failed === 0, `T5: failed=${t5Summary.failed} (expected 0)`);
 
-    // Cross-check: dataObjects from HTTP response matches what worker accumulated
-    const httpDataObjKeys = Object.keys(t5Res.data.dataObjectsByToken || {}).sort().join(',');
     const workerDataObjKeys = Object.keys(NS.dataObjects).sort().join(',');
-    assert(httpDataObjKeys === workerDataObjKeys,
-      `T5: HTTP dataObjects keys [${httpDataObjKeys}] differ from worker-accumulated [${workerDataObjKeys}]`);
-
     console.log(`[T5] summary: ${JSON.stringify(t5Summary)}`);
-    console.log(`[T5] HTTP vs worker dataObjects agree: [${workerDataObjKeys}]`);
+    console.log(`[T5] worker dataObjects: [${workerDataObjKeys}]`);
     console.log(`[T5] statusGen at end: ${NS.statusGeneration}`);
     console.log('[T5] all assertions passed');
 
