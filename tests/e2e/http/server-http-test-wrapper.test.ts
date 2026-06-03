@@ -21,17 +21,16 @@ function run(cmd: string, args: string[], timeoutMs = 120_000) {
   };
 }
 
-describe('e2e: server-http-test.js', () => {
-  it('demo board HTTP smoke checks pass', () => {
+describe('e2e: server-http-test wrapper', () => {
+  it('server-http-test.js smoke checks pass', () => {
     const r = run(process.execPath, [
       path.join('examples', 'board', 'test', 'server-http-test.js'),
-      '--skip-t3a',  // copilot-dependent; never block the gate
     ]);
 
     if (r.error) throw r.error;
     if (r.status !== 0) {
-      console.error('[demo-http-test.js stdout]', r.stdout.slice(-2000));
-      console.error('[demo-http-test.js stderr]', r.stderr.slice(-2000));
+      console.error('[server-http-test-wrapper stdout]', r.stdout.slice(-2000));
+      console.error('[server-http-test-wrapper stderr]', r.stderr.slice(-2000));
     }
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('All smoke checks passed');
