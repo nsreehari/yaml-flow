@@ -957,6 +957,9 @@ export function createFirestoreBoardAdapter(
     genId() {
       return lexicalId();
     },
+    supportsDirectSourceOutput(ref) {
+      return ref.howToRun === 'queue-storage' || ref.howToRun === 'http:post';
+    },
     requestProcessAccumulated: options.requestProcessAccumulated,
     publishBoardChangeNotifications: options.publishBoardChangeNotifications as any,
     onWarn: (msg) => console.warn(`[firestore-board-adapter:${boardId}] ${msg}`),

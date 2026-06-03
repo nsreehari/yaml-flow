@@ -27,7 +27,7 @@ import { createCardStorePublic } from '../../src/cli/common/card-store-lib-publi
 import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
 
 // ── Import FS adapters (Node-specific) ─────────────────────────────────────
-import { createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
+import { createFsBoardNonCorePlatformAdapter, createFsBoardPlatformAdapter } from '../../src/cli/node/fs-board-adapter.js';
 import { serializeRef, parseRef } from '../../src/cli/common/storage-interface.js';
 import { createInMemoryChatStorage } from '../../src/cli/common/chat-storage-lib.js';
 
@@ -107,6 +107,52 @@ beforeAll(async () => {
 
   const baseRef = parseRef(serializeRef({ kind: 'fs-path', value: BOARD_DIR }));
   const boardAdapter = createFsBoardPlatformAdapter(baseRef, repoRoot, { suppressSpawn: true });
+  const nonCoreAdapter = createFsBoardNonCorePlatformAdapter(baseRef, repoRoot, { suppressSpawn: true, onWarn: () => {} });
+  const executorPath = path.join(TEST_ROOT, 'fake-task-executor.mjs');
+  fs.writeFileSync(executorPath, `#!/usr/bin/env node
+const subcommand = process.argv[2] || '';
+const inputText = await new Promise((resolve) => {
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { buf += chunk; });
+  process.stdin.on('end', () => resolve(buf.trim()));
+  process.stdin.resume();
+});
+const parsedInput = inputText ? JSON.parse(inputText) : null;
+if (subcommand === 'describe-capabilities') {
+  console.log(JSON.stringify({ version: '1.0', commonSourceDefFields: { bindTo: { type: 'string' } }, sourceKinds: { fake: { title: 'Fake Source' } } }));
+  process.exit(0);
+}
+if (subcommand === 'validate-card-preflight') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
+  process.exit(0);
+}
+if (subcommand === 'probe-source-preflight') {
+  console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 3 }));
+  process.exit(0);
+}
+if (subcommand === 'run-source-preflight') {
+  console.log(JSON.stringify({ ok: true, reachable: true, latencyMs: 4, bindTo: parsedInput?.bindTo || 'source', resultValue: { ok: true } }));
+  process.exit(0);
+}
+if (subcommand === 'run-source-fetch') {
+  const outIdx = process.argv.indexOf('--out-ref');
+  const outRef = process.argv[outIdx + 1];
+  if (!outRef) {
+    console.error('missing --out-ref');
+    process.exit(1);
+  }
+  const refValue = JSON.parse(Buffer.from(outRef.slice(4), 'base64url').toString('utf8')).value;
+  await import('node:fs/promises').then((nodeFs) => nodeFs.writeFile(refValue, JSON.stringify({ ok: true })));
+  process.exit(0);
+}
+if (subcommand === 'validate-source-def') {
+  console.log(JSON.stringify({ ok: true, errors: [] }));
+  process.exit(0);
+}
+console.error('unsupported subcommand: ' + subcommand);
+process.exit(1);
+`, 'utf-8');
 
   const runtimeOptions: SingleBoardRuntimeOptions = {
     apiBasePath: '/api/board',
@@ -115,10 +161,15 @@ beforeAll(async () => {
     boards: [{
       label: 'base',
       boardAdapter,
+      nonCoreAdapter,
       baseRef,
       cardStoreRef: serializeRef({ kind: 'fs-path', value: CARD_STORE_DIR }),
       outputsStoreRef: serializeRef({ kind: 'fs-path', value: OUTPUTS_DIR }),
       cardSource: createFsCardSource(testCardsDir),
+      taskExecutorRef: {
+        howToRun: 'local-node',
+        whatToRun: serializeRef({ kind: 'fs-path', value: executorPath }),
+      },
     }],
     logger: {
       info: () => {},
@@ -214,8 +265,8 @@ describe('platform-free server runtime (Node host)', () => {
     expect(data).toHaveProperty('statusSnapshot');
   });
 
-  it('GET /api/board/board-status returns card definitions', async () => {
-    const res = await fetch(`${API_BASE}/board-status`);
+  it('GET /api/board/init-board includes card definitions with expected IDs', async () => {
+    const res = await fetch(`${API_BASE}/init-board`);
     expect(res.ok).toBe(true);
     const data = await res.json() as Record<string, unknown>;
     expect(data).toHaveProperty('cardDefinitions');
@@ -227,12 +278,12 @@ describe('platform-free server runtime (Node host)', () => {
     expect(ids).toContain('card-my-identity');
   });
 
-  it('GET /api/board/board-status returns current status', async () => {
-    const res = await fetch(`${API_BASE}/board-status`);
+  it('GET /api/board/init-board includes runtime status snapshot', async () => {
+    const res = await fetch(`${API_BASE}/init-board`);
     expect(res.ok).toBe(true);
     const data = await res.json() as Record<string, unknown>;
     expect(data).toHaveProperty('cardDefinitions');
-    expect(data).toHaveProperty('cardRuntimeById');
+    expect(data).toHaveProperty('statusSnapshot');
   });
 
   it('POST /api/board/mcp-webhooks returns a client error for an invalid source token', async () => {
@@ -250,28 +301,31 @@ describe('platform-free server runtime (Node host)', () => {
     expect(String(data.error || '')).toContain('Invalid source token');
   });
 
-  it('PATCH /api/board/cards/:id updates card data', async () => {
-    // Get a card that exists
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
-    const cardId = cards[0].id as string;
-
-    // Patch it
-    const patchRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`, {
-      method: 'PATCH',
+  it('manage.patch-card updates card data', async () => {
+    const cardId = 'patch-test-card';
+    // Seed a simple card via /mcp first
+    const seedRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_data: { testKey: 'testValue' } }),
+      body: JSON.stringify({ tool: 'manage.upsert-card', args: { card_id: cardId, candidate_card_content: { id: cardId, card_data: { title: 'Patch Test' }, view: { elements: [{ id: 'title', kind: 'text', data: { bind: 'card_data.title' } }] } } } }),
+    });
+    expect(seedRes.ok).toBe(true);
+
+    // Patch it via MCP controlplane
+    const patchRes = await fetch(`${API_BASE}/mcp-controlplane`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.patch-card', args: { board_id: 'test-board', card_id: cardId, patch: { card_data: { testKey: 'testValue' } } } }),
     });
     expect(patchRes.ok).toBe(true);
     const patchData = await patchRes.json() as Record<string, unknown>;
-    expect(patchData).toHaveProperty('ok', true);
+    expect(patchData).toHaveProperty('status', 'success');
   });
 
   it('POST /api/board/cards/:id/retrigger triggers a forced refresh', async () => {
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const initRes = await fetch(`${API_BASE}/init-board`);
+    const initData = await initRes.json() as Record<string, unknown>;
+    const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
 
     const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/retrigger`, {
@@ -282,28 +336,57 @@ describe('platform-free server runtime (Node host)', () => {
     expect(data).toHaveProperty('ok', true);
   });
 
-  it('PATCH /api/board/cards/:id with unchanged content still returns ok', async () => {
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
-    const cardId = cards[0].id as string;
-
-    // First set a known value
-    await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`, {
-      method: 'PATCH',
+  it('manage.patch-card with unchanged content still returns ok', async () => {
+    const cardId = 'patch-unchanged-card';
+    // Seed a simple card via /mcp first
+    const seedRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_data: { noChangeKey: 'stable' } }),
+      body: JSON.stringify({ tool: 'manage.upsert-card', args: { card_id: cardId, candidate_card_content: { id: cardId, card_data: { noChangeKey: 'stable' }, view: { elements: [{ id: 'v', kind: 'text', data: { bind: 'card_data.noChangeKey' } }] } } } }),
     });
+    if (!seedRes.ok) {
+      throw new Error(`Seed upsert failed with status ${seedRes.status}: ${await seedRes.text()}`);
+    }
 
-    // PATCH again with the exact same value — content unchanged, no restart should fire
-    const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`, {
-      method: 'PATCH',
+    // First patch to set a known value
+    const firstPatchRes = await fetch(`${API_BASE}/mcp-controlplane`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_data: { noChangeKey: 'stable' } }),
+      body: JSON.stringify({ tool: 'manage.patch-card', args: { board_id: 'test-board', card_id: cardId, patch: { card_data: { noChangeKey: 'stable' } } } }),
+    });
+    if (!firstPatchRes.ok) {
+      throw new Error(`First unchanged patch failed with status ${firstPatchRes.status}: ${await firstPatchRes.text()}`);
+    }
+
+    const firstReadRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.read-card', args: { card_id: cardId } }),
+    });
+    expect(firstReadRes.ok).toBe(true);
+    const firstReadData = await firstReadRes.json() as Record<string, unknown>;
+    const firstCard = (firstReadData.data as Array<Record<string, unknown>>)[0];
+    expect(firstCard?.card_data).toEqual({ noChangeKey: 'stable' });
+
+    // Patch again with the exact same value — content unchanged, no restart should fire
+    const res = await fetch(`${API_BASE}/mcp-controlplane`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.patch-card', args: { board_id: 'test-board', card_id: cardId, patch: { card_data: { noChangeKey: 'stable' } } } }),
     });
     expect(res.ok).toBe(true);
     const data = await res.json() as Record<string, unknown>;
-    expect(data).toHaveProperty('ok', true);
+    expect(data).toHaveProperty('status', 'success');
+
+    const secondReadRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.read-card', args: { card_id: cardId } }),
+    });
+    expect(secondReadRes.ok).toBe(true);
+    const secondReadData = await secondReadRes.json() as Record<string, unknown>;
+    const secondCard = (secondReadData.data as Array<Record<string, unknown>>)[0];
+    expect(secondCard?.card_data).toEqual(firstCard?.card_data);
   });
 
   it('POST /api/board/cards/:id/retrigger returns 404 for an unknown card', async () => {
@@ -312,9 +395,9 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   it('POST /api/board/cards/:id/actions returns an error when chat-send has no handler', async () => {
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const initRes = await fetch(`${API_BASE}/init-board`);
+    const initData = await initRes.json() as Record<string, unknown>;
+    const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
 
     const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/actions`, {
@@ -328,42 +411,50 @@ describe('platform-free server runtime (Node host)', () => {
     expect(res.status).toBe(409);
     await expect(res.json()).resolves.toMatchObject({ error: `chat handler is not configured for card: ${cardId}` });
 
-    const chatsRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/chats`);
+    const chatsRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'inspect.chat-messages-on-cards', args: { card_id: cardId } }),
+    });
     expect(chatsRes.ok).toBe(true);
-    const chatsData = await chatsRes.json() as Record<string, unknown>;
-    expect(chatsData).toHaveProperty('ok', true);
-    const messages = (chatsData as any).messages as Array<Record<string, unknown>>;
+    const chatsData = await chatsRes.json() as { status: string; data: { messages: Array<Record<string, unknown>> } };
+    expect(chatsData.status).toBe('success');
+    const messages = chatsData.data?.messages;
     expect(messages).toEqual([]);
   });
 
-  it('POST /api/board/cards/:id/files uploads a file', async () => {
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
-    const cardId = cards[0].id as string;
+  it('manage.upload-card-file uploads a non-chat file', async () => {
+    const initRes = await fetch(`${API_BASE}/init-board`);
+    const initData = await initRes.json() as Record<string, unknown>;
+    const cardDefs = initData.cardDefinitions as Array<Record<string, unknown>>;
+    const cardId = cardDefs[0].id as string;
 
-    const res = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}/files`, {
+    const res = await fetch(`${API_BASE}/mcp-controlplane`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain',
-        'x-file-name': encodeURIComponent('test-upload.txt'),
-      },
-      body: Buffer.from('hello world', 'utf-8'),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'manage.upload-card-file',
+        args: { board_id: 'test-board', card_id: cardId, file_name: 'test-upload.txt', content_type: 'text/plain', text: 'hello world' },
+      }),
     });
     expect(res.ok).toBe(true);
-    const data = await res.json() as Record<string, unknown>;
-    expect(data).toHaveProperty('ok', true);
-    expect(data).toHaveProperty('file');
-    const file = data.file as Record<string, unknown>;
+    const resp = await res.json() as { status: string; data: { ok: boolean; file: Record<string, unknown> } };
+    expect(resp.status).toBe('success');
+    const file = resp.data?.file as Record<string, unknown>;
     expect(file).toHaveProperty('name', 'test-upload.txt');
     expect(file).toHaveProperty('stored_name');
     expect(file).toHaveProperty('size');
 
-    const cardRes = await fetch(`${API_BASE}/cards/${encodeURIComponent(cardId)}`);
+    const cardRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.read-card', args: { card_id: cardId } }),
+    });
     expect(cardRes.ok).toBe(true);
-    const cardData = await cardRes.json() as { card_data?: { files?: Array<Record<string, unknown>> } };
-    const uploaded = Array.isArray(cardData.card_data?.files)
-      ? cardData.card_data.files.find((entry) => entry?.stored_name === file.stored_name)
+    const cardResp = await cardRes.json() as { status: string; data: Array<{ card_data?: { files?: Array<Record<string, unknown>> } }> };
+    const cardData = cardResp.data?.[0];
+    const uploaded = Array.isArray(cardData?.card_data?.files)
+      ? cardData.card_data!.files!.find((entry) => entry?.stored_name === file.stored_name)
       : undefined;
     expect(uploaded).toBeTruthy();
     expect(uploaded?.chat).toBe(false);
@@ -471,9 +562,9 @@ describe('platform-free server runtime (Node host)', () => {
   });
 
   it('supports board-scoped and card-scoped watch-channel subscribe/unsubscribe hooks', async () => {
-    const statusRes = await fetch(`${API_BASE}/board-status`);
-    const statusData = await statusRes.json() as Record<string, unknown>;
-    const cards = statusData.cardDefinitions as Array<Record<string, unknown>>;
+    const initRes = await fetch(`${API_BASE}/init-board`);
+    const initData = await initRes.json() as Record<string, unknown>;
+    const cards = initData.cardDefinitions as Array<Record<string, unknown>>;
     const cardId = cards[0].id as string;
     const clientId = 'test-watch-channel';
     const controller = new AbortController();
@@ -805,30 +896,44 @@ describe('platform-free server runtime (Node host)', () => {
     const port = typeof addr === 'object' && addr ? addr.port : 0;
     const cardId = 'card-portfolio';
 
-    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}/files?inChat=true&turn-id=test-turn-upload-send`, {
+    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/board/mcp-controlplane`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain',
-        'x-file-name': encodeURIComponent('q1.txt'),
-      },
-      body: Buffer.from('what is the capital of japan', 'utf-8'),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'manage.add-chat-attachment',
+        args: {
+          board_id: 'upload-chat-board',
+          card_id: cardId,
+          turn_id: 'test-turn-upload-send',
+          file_name: 'q1.txt',
+          content_type: 'text/plain',
+          text: 'what is the capital of japan',
+        },
+      }),
     });
     expect(uploadRes.ok).toBe(true);
-    const uploadData = await uploadRes.json() as { file?: Record<string, unknown> };
-    const uploadedFile = uploadData.file;
+    const uploadData = await uploadRes.json() as { status: string; data: { files: Array<Record<string, unknown>> } };
+    expect(uploadData.status).toBe('success');
+    const uploadedFile = uploadData.data?.files?.[0];
     expect(uploadedFile).toBeTruthy();
 
     const afterUploadMessages = isolatedChatStorage.readAll(cardId);
     expect(afterUploadMessages).toHaveLength(1);
-    expect(afterUploadMessages[0]?.role).toBe('system');
+    expect(afterUploadMessages.map((message) => message.role)).toEqual(['system']);
     expect(afterUploadMessages[0]?.text).toContain('file uploaded: q1.txt as ');
     expect(afterUploadMessages[0]?.text).toMatch(/#0$/);
+    expect(afterUploadMessages[0]?.turn).toBe('test-turn-upload-send');
 
-    const afterUploadCardRes = await fetch(`http://127.0.0.1:${port}/api/board/cards/${encodeURIComponent(cardId)}`);
+    const afterUploadCardRes = await fetch(`http://127.0.0.1:${port}/api/board/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.read-card', args: { card_id: cardId } }),
+    });
     expect(afterUploadCardRes.ok).toBe(true);
-    const afterUploadCard = await afterUploadCardRes.json() as { card_data?: { files?: Array<Record<string, unknown>> } };
-    const storedUpload = Array.isArray(afterUploadCard.card_data?.files)
-      ? afterUploadCard.card_data.files.find((entry) => entry?.stored_name === uploadedFile?.stored_name)
+    const afterUploadCardResp = await afterUploadCardRes.json() as { status: string; data: Array<{ card_data?: { files?: Array<Record<string, unknown>> } }> };
+    const afterUploadCard = afterUploadCardResp.data?.[0];
+    const storedUpload = Array.isArray(afterUploadCard?.card_data?.files)
+      ? afterUploadCard.card_data!.files!.find((entry) => entry?.stored_name === uploadedFile?.stored_name)
       : undefined;
     expect(storedUpload).toBeTruthy();
     expect(storedUpload?.chat).toBe(true);
@@ -859,6 +964,7 @@ describe('platform-free server runtime (Node host)', () => {
     expect(newMessages[1]?.text).toBe('in-progress');
     expect(newMessages[2]?.text).toBe('Echo: attached file processed');
     expect(newMessages.some((message) => message.text.includes('File q1.txt uploaded as'))).toBe(false);
+    expect(newMessages.some((message) => message.text.includes('file uploaded: q1.txt as '))).toBe(false);
 
     await new Promise<void>((resolve) => server2.close(() => resolve()));
     try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch { /* ignore */ }

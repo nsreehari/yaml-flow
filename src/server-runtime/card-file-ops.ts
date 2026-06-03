@@ -38,7 +38,7 @@ export interface CardFileOps {
     requestedName: string,
     contentType: string,
     buffer: Uint8Array,
-    opts?: { inChat?: boolean; turnId?: string },
+    opts?: { inChat?: boolean; turnId?: string; suppressChatRecordWrite?: boolean },
   ) => Promise<{ ok: true; file: Record<string, unknown> }>;
   readCardStoredFileNames: (cardId: string) => Promise<string[]>;
 }
@@ -104,7 +104,7 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
     requestedName: string,
     contentType: string,
     buffer: Uint8Array,
-    opts?: { inChat?: boolean; turnId?: string },
+    opts?: { inChat?: boolean; turnId?: string; suppressChatRecordWrite?: boolean },
   ): Promise<{ ok: true; file: Record<string, unknown> }> {
     if (!buffer.length) {
       throw Object.assign(new Error('Empty upload body'), { statusCode: 400 });
@@ -131,7 +131,7 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
       return card;
     });
 
-    if (inChat) {
+    if (inChat && opts?.suppressChatRecordWrite !== true) {
       const idxSuffix = typeof uploadedFileIndex === 'number' && uploadedFileIndex >= 0 ? ` #${uploadedFileIndex}` : '';
       writeChatRecord(cardId, 'system', `file uploaded: ${file.name} as ${file.stored_name}${idxSuffix}`, [], opts?.turnId ?? '');
     }

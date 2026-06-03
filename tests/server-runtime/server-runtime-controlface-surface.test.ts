@@ -195,19 +195,29 @@ describe('server-runtime-controlface surface split', () => {
     expect(JSON.stringify(parseJsonBody(controlplaneRes))).toContain('card-multi');
   });
 
-  it('browser controlface runtime keeps the full dispatcher including board-status and sse', async () => {
+  it('browser controlface runtime keeps sse routing (full dispatcher surface)', async () => {
     const runtime = createBrowserSingleBoardRuntime(createRuntimeOptions());
     seedCard(runtime, 'card-browser');
 
+    // board-status is no longer in the full runtime (trimmed in 0f548ae); verify it returns false
     const boardStatusRes = makeResponse();
     const boardStatusHandled = await runtime.handleRuntimeApi(
       makeRequest('GET', '/api/board/board-status'),
       boardStatusRes,
       new URL('http://example.test/api/board/board-status'),
     );
-    expect(boardStatusHandled).toBe(true);
-    expect(boardStatusRes._status).toBe(200);
-    expect(JSON.stringify(parseJsonBody(boardStatusRes))).toContain('card-browser');
+    expect(boardStatusHandled).toBe(false);
+
+    // init-board IS available on the full runtime
+    const initBoardRes = makeResponse();
+    const initBoardHandled = await runtime.handleRuntimeApi(
+      makeRequest('GET', '/api/board/init-board'),
+      initBoardRes,
+      new URL('http://example.test/api/board/init-board'),
+    );
+    expect(initBoardHandled).toBe(true);
+    expect(initBoardRes._status).toBe(200);
+    expect(JSON.stringify(parseJsonBody(initBoardRes))).toContain('card-browser');
 
     const sseRes = makeResponse();
     const sseHandled = await runtime.handleRuntimeApi(

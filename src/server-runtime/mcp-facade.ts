@@ -67,7 +67,7 @@ export interface McpFacadeDeps {
     fileName: string,
     contentType: string,
     bytes: Uint8Array,
-    opts?: { inChat?: boolean },
+    opts?: { inChat?: boolean; suppressChatRecordWrite?: boolean },
   ) => unknown | Promise<unknown>;
   chatStorePublic: Parameters<typeof createBoardLiveCardsMcp>[0]['chatStore'];
   serverUrl: string | null;
@@ -245,8 +245,11 @@ export function createMcpFacadeModule(deps: McpFacadeDeps): McpFacadeModule {
       processAccumulated: () => processAccumulatedLaneInternal(true),
       sourceFetchDone: ({ token, ref }) => reportSourceFetched(token, ref),
       sourceFetchFailed: ({ token, reason }) => reportSourceFetchFailure(token, reason),
-      uploadCardFile({ cardId, fileName, contentType, bytes }) {
-          return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: true }) as ReturnType<NonNullable<Parameters<typeof createBoardLiveCardsMcp>[0]['uploadCardFile']>>;
+      uploadCardFile({ cardId, fileName, contentType, bytes, suppressChatRecordWrite }) {
+          return uploadCardFile(cardId, fileName, contentType, bytes, {
+            inChat: true,
+            ...(suppressChatRecordWrite === true ? { suppressChatRecordWrite: true } : {}),
+          }) as ReturnType<NonNullable<Parameters<typeof createBoardLiveCardsMcp>[0]['uploadCardFile']>>;
       },
       buildFileDownloadUrl({ cardId, fileIdx, storedName }) {
         const base = `${serverUrl || ''}${apiBasePath}/cards/${encodeURIComponent(cardId)}/files/${fileIdx}`;

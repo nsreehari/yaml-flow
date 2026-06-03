@@ -199,7 +199,7 @@ export interface BoardLiveCardsMcpDeps {
   processAccumulated?: () => Awaitable<CommandResult>;
   sourceFetchDone?: (args: { token: string; ref: string }) => Awaitable<CommandResult>;
   sourceFetchFailed?: (args: { token: string; reason: string }) => Awaitable<CommandResult>;
-  uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array }): Awaitable<{ ok: true; file: Record<string, unknown>; file_idx?: number | null }>;
+  uploadCardFile(args: { cardId: string; fileName: string; contentType: string; bytes: Uint8Array; suppressChatRecordWrite?: boolean }): Awaitable<{ ok: true; file: Record<string, unknown>; file_idx?: number | null }>;
   buildFileDownloadUrl(args: { cardId: string; fileIdx: number; storedName?: string | null }): string;
   readFetchedSourceJsonByRef?(args: { cardId: string; ref: string }): unknown | null;
 }
@@ -951,6 +951,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
         fileName,
         contentType,
         bytes: decodeAttachmentBytes(fileEntry),
+        suppressChatRecordWrite: true,
       });
     }));
 

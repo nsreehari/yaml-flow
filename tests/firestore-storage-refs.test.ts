@@ -136,4 +136,16 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
       'validate-source-def',
     ]);
   });
+
+  it('marks hosted queue-storage task executors as direct source output capable', () => {
+    const db = makeFakeFirestore() as any;
+    const bundle = createFirestoreBoardRuntimeBundle(db, 'board-A');
+
+    expect(bundle.boardAdapter.supportsDirectSourceOutput?.({
+      meta: 'task-executor',
+      howToRun: 'queue-storage',
+      whatToRun: 'b64:eyJraW5kIjoicXVldWUtc3RvcmFnZSIsInZhbHVlIjoiYm9hcmQ6Ym9hcmQtQTpib2FyZC13b3JrZXIifQ',
+      extra: { boardId: 'board-A' },
+    })).toBe(true);
+  });
 });
