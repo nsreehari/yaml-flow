@@ -297,7 +297,8 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
   const leasedDir = path.join(rootDir, 'leased');
   const doneDir = path.join(rootDir, 'done');
   const deadDir = path.join(rootDir, 'dead');
-  for (const dir of [activeDir, leasedDir, doneDir, deadDir]) {
+  const stagedDir = path.join(rootDir, 'staged');
+  for (const dir of [activeDir, leasedDir, doneDir, deadDir, stagedDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -316,6 +317,10 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
 
   function deadPath(messageId: string): string {
     return path.join(deadDir, `${messageId}.json`);
+  }
+
+  function stagedPath(messageId: string): string {
+    return path.join(stagedDir, `${messageId}.json`);
   }
 
   function reviveExpiredLeases(): void {
@@ -350,7 +355,7 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
 
     enqueueIfAbsent<T>(body: T, dedupKey: string): QueueMessage<T> | null {
       reviveExpiredLeases();
-      for (const dir of [activeDir, leasedDir]) {
+      for (const dir of [activeDir, leasedDir, stagedDir]) {
         for (const filePath of listJsonFiles(dir)) {
           const existing = readJsonFile<FsQueueRecord>(filePath);
           if (existing?.dedupKey === dedupKey) return null;
@@ -439,6 +444,65 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
         .map((filePath) => readJsonFile<FsQueueRecord<T>>(filePath))
         .filter((record): record is FsQueueRecord<T> => Boolean(record))
         .map(queueRecordToDead);
+    },
+
+    stage<T>(body: T, opts?: { dedupKey?: string }): QueueMessage<T> | null {
+      const dedupKey = opts?.dedupKey;
+      if (dedupKey) {
+        reviveExpiredLeases();
+        for (const dir of [activeDir, leasedDir, stagedDir]) {
+          for (const filePath of listJsonFiles(dir)) {
+            const existing = readJsonFile<FsQueueRecord>(filePath);
+            if (existing?.dedupKey === dedupKey) return null;
+          }
+        }
+      }
+      const record: FsQueueRecord<T> = {
+        id: randomUUID(),
+        body,
+        enqueuedAt: new Date().toISOString(),
+        attempt: 0,
+        ...(dedupKey ? { dedupKey } : {}),
+      };
+      writeJsonAtomic(stagedPath(record.id), record);
+      return queueRecordToMessage(record);
+    },
+
+    commitStaged(messageId: string): boolean {
+      const filePath = stagedPath(messageId);
+      const record = readJsonFile<FsQueueRecord>(filePath);
+      if (!record) return false;
+      const promoted: FsQueueRecord = {
+        ...record,
+        attempt: 0,
+        enqueuedAt: new Date().toISOString(),
+      };
+      writeJsonAtomic(activePath(promoted), promoted);
+      try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
+      return true;
+    },
+
+    discardStaged(messageId: string, reason?: string): boolean {
+      const filePath = stagedPath(messageId);
+      const record = readJsonFile<FsQueueRecord>(filePath);
+      if (!record) return false;
+      const discarded: FsQueueRecord = {
+        id: record.id,
+        body: record.body,
+        enqueuedAt: record.enqueuedAt,
+        attempt: record.attempt,
+        reason,
+      };
+      writeJsonAtomic(deadPath(messageId), discarded);
+      try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
+      return true;
+    },
+
+    peekStaged<T>(_prefix?: string): QueueMessage<T>[] {
+      return listJsonFiles(stagedDir)
+        .map((filePath) => readJsonFile<FsQueueRecord<T>>(filePath))
+        .filter((record): record is FsQueueRecord<T> => Boolean(record))
+        .map(queueRecordToMessage);
     },
   };
 }

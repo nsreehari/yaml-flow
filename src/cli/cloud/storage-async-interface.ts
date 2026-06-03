@@ -43,6 +43,15 @@ export interface AsyncQueueStorage {
   nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): Promise<boolean>;
   peekActive<T>(prefix?: string): Promise<QueueMessage<T>[]>;
   peekDeadLetter<T>(prefix?: string): Promise<QueueDeadLetterMessage<T>[]>;
+
+  /** See QueueStorage.stage. */
+  stage<T>(body: T, opts?: { dedupKey?: string }): Promise<QueueMessage<T> | null>;
+  /** See QueueStorage.commitStaged. */
+  commitStaged(messageId: string): Promise<boolean>;
+  /** See QueueStorage.discardStaged. */
+  discardStaged(messageId: string, reason?: string): Promise<boolean>;
+  /** See QueueStorage.peekStaged. */
+  peekStaged<T>(prefix?: string): Promise<QueueMessage<T>[]>;
 }
 
 export interface AsyncKVStorage {

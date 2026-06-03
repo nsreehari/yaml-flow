@@ -232,6 +232,40 @@ export interface QueueStorage {
   nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): boolean;
   peekActive<T>(prefix?: string): QueueMessage<T>[];
   peekDeadLetter<T>(prefix?: string): QueueDeadLetterMessage<T>[];
+
+  /**
+   * Stage a message in a pending, uncommitted state. Staged messages are
+   * invisible to `lease` and `peekActive`, do not consume a lease, and have no
+   * automatic transition out of the staged state — they remain until
+   * `commitStaged` or `discardStaged` is called for them.
+   *
+   * If `opts.dedupKey` is supplied, the same dedup contract used by
+   * `enqueueIfAbsent` applies: the key is reserved while the message is staged,
+   * active, or leased, and a concurrent `enqueueIfAbsent`/`stage` with the same
+   * key returns null.
+   *
+   * Backends that cannot keep an "invisible" message in their native queue
+   * (e.g. Azure Storage Queue, SQS) should store staged records in a sibling
+   * key-value table and only `enqueue` into the underlying queue on commit.
+   */
+  stage<T>(body: T, opts?: { dedupKey?: string }): QueueMessage<T> | null;
+
+  /**
+   * Promote a staged message to active so it can be leased.
+   * Sets `enqueuedAt` to the commit time and `attempt` to 0.
+   * Returns false if no staged message with that id exists.
+   */
+  commitStaged(messageId: string): boolean;
+
+  /**
+   * Move a staged message directly to the dead-letter store with the given
+   * reason. The message never becomes leasable.
+   * Returns false if no staged message with that id exists.
+   */
+  discardStaged(messageId: string, reason?: string): boolean;
+
+  /** Inspect staged messages. Order is implementation-defined. */
+  peekStaged<T>(prefix?: string): QueueMessage<T>[];
 }
 
 // ============================================================================

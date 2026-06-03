@@ -39,6 +39,7 @@ import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.j
 import { createSingleBoardServerRuntime } from '../../src/server-runtime/index.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
+import { createInMemoryChatStorage } from '../../src/cli/common/chat-storage-lib.js';
 
 // ============================================================================
 // Minimal in-memory adapters (same pattern as firebase-runtime-integration.test.ts)
@@ -110,6 +111,13 @@ function createMemoryQueueStorage(): QueueStorage {
     leaseExpiresAt?: string;
     dedupKey?: string;
   }>();
+  const staged = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    dedupKey?: string;
+  }>();
   const dead = new Map<string, {
     id: string;
     body: unknown;
@@ -176,6 +184,34 @@ function createMemoryQueueStorage(): QueueStorage {
     peekDeadLetter<T>() {
       return [...dead.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: item.reason }));
     },
+    stage<T>(body: T, opts?: { dedupKey?: string }) {
+      const dedupKey = opts?.dedupKey;
+      if (dedupKey) {
+        for (const m of [...active.values(), ...staged.values()]) {
+          if ((m as { dedupKey?: string }).dedupKey === dedupKey) return null;
+        }
+      }
+      const item = { id: `s-${Math.random().toString(36).slice(2)}`, body, enqueuedAt: new Date().toISOString(), attempt: 0, ...(dedupKey ? { dedupKey } : {}) };
+      staged.set(item.id, item);
+      return { id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+    },
+    commitStaged(messageId: string) {
+      const item = staged.get(messageId);
+      if (!item) return false;
+      staged.delete(messageId);
+      active.set(messageId, { ...item, attempt: 0, enqueuedAt: new Date().toISOString() });
+      return true;
+    },
+    discardStaged(messageId: string, reason?: string) {
+      const item = staged.get(messageId);
+      if (!item) return false;
+      staged.delete(messageId);
+      dead.set(messageId, { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason });
+      return true;
+    },
+    peekStaged<T>() {
+      return [...staged.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
+    },
   };
 }
 
@@ -187,11 +223,23 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
   publishedBatches: BoardChangeNotification[][];
 } {
   const kvStores = new Map<string, KVStorage>();
+  const blobStores = new Map<string, BlobStorage>();
+  const chatStores = new Map<string, ReturnType<typeof createInMemoryChatStorage>>();
   const publishedBatches: BoardChangeNotification[][] = [];
 
   function getKv(ns: string): KVStorage {
     if (!kvStores.has(ns)) kvStores.set(ns, createMemoryKvStorage());
     return kvStores.get(ns)!;
+  }
+
+  function getBlob(ns: string): BlobStorage {
+    if (!blobStores.has(ns)) blobStores.set(ns, createMemoryBlobStorage());
+    return blobStores.get(ns)!;
+  }
+
+  function getChat(ns: string) {
+    if (!chatStores.has(ns)) chatStores.set(ns, createInMemoryChatStorage());
+    return chatStores.get(ns)!;
   }
 
   const journal = createMemoryJournalAdapter();
@@ -208,6 +256,12 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
       return getKv(`_ref/${ref}`);
     },
     blobStorage: (_ns) => createMemoryBlobStorage(),
+    blobStorageForRef(ref: string) {
+      return getBlob(`_ref/${ref}`);
+    },
+    chatStorageForRef(ref: string) {
+      return getChat(`_ref/${ref}`);
+    },
     journalAdapter: () => journal,
     boardWorkerStore: () => createBoardWorkerStore(workerQueue),
     chatAgentStore: () => createBoardWorkerStore(chatQueue),
@@ -258,8 +312,15 @@ const SAMPLE_CARDS: Array<Record<string, unknown>> = [
 // ============================================================================
 
 function buildRuntime(adapter: ReturnType<typeof createTestAdapter>) {
+  const boardRuntimeStoreRef = serializeRef({ kind: 'mem', value: 'runtime-board' });
+  const queueStoreRef = serializeRef({ kind: 'mem', value: 'runtime-queue' });
   const cardStoreRef = serializeRef({ kind: 'mem', value: 'card-store' });
   const outputsStoreRef = serializeRef({ kind: 'mem', value: 'outputs' });
+  const chatStoreRef = serializeRef({ kind: 'mem', value: 'chat' });
+  const artifactsStoreRef = serializeRef({ kind: 'mem', value: 'files' });
+  const fetchedSourcesStoreRef = serializeRef({ kind: 'mem', value: 'sources' });
+  const scratchStoreRef = serializeRef({ kind: 'mem', value: 'scratch' });
+  const archiveStoreRef = serializeRef({ kind: 'mem', value: 'archive' });
 
   const preloadKv = adapter.kvStorageForRef(cardStoreRef);
   const preloadStore = createCardStorePublic(createCardStore({
@@ -288,8 +349,15 @@ function buildRuntime(adapter: ReturnType<typeof createTestAdapter>) {
       label: 'base',
       boardAdapter: adapter,
       baseRef: { kind: 'mem', value: 'board' },
+      boardRuntimeStoreRef,
+      queueStoreRef,
       cardStoreRef,
       outputsStoreRef,
+      chatStoreRef,
+      artifactsStoreRef,
+      fetchedSourcesStoreRef,
+      scratchStoreRef,
+      archiveStoreRef,
     }],
     invocationAdapter,
     logger: { info: () => {}, warn: () => {}, error: () => {} },

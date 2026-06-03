@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createHostedAsyncBoardPlatformAdapter } from '../../src/cli/cloud/board-platform-adapter-async.js';
+import { createAsyncBoardWorkerStore, createHostedAsyncBoardPlatformAdapter } from '../../src/cli/cloud/board-platform-adapter-async.js';
 import { createBoardWorkerStore } from '../../src/cli/common/board-worker-store.js';
 import type { QueueStorage } from '../../src/cli/common/storage-interface.js';
 import type {
@@ -24,6 +24,21 @@ function createMemoryQueueStorage(): QueueStorage {
     attempt: number;
     leaseToken?: string;
     leaseExpiresAt?: string;
+    dedupKey?: string;
+  }>();
+  const staged = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    dedupKey?: string;
+  }>();
+  const dead = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    reason?: string;
   }>();
 
   return {
@@ -59,18 +74,50 @@ function createMemoryQueueStorage(): QueueStorage {
       active.delete(messageId);
       return true;
     },
-    nack(messageId: string, leaseToken: string) {
+    nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }) {
       const item = active.get(messageId);
       if (!item || item.leaseToken !== leaseToken) return false;
       delete item.leaseToken;
       delete item.leaseExpiresAt;
+      if (opts?.dead) {
+        active.delete(messageId);
+        dead.set(messageId, { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: opts.reason });
+      }
       return true;
     },
     peekActive<T>() {
       return [...active.values()].filter((item) => !item.leaseToken).map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
     },
     peekDeadLetter<T>() {
-      return [] as Array<{ id: string; body: T; enqueuedAt: string; attempt: number; reason?: string }>;
+      return [...dead.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: item.reason }));
+    },
+    stage<T>(body: T, opts?: { dedupKey?: string }) {
+      const dedupKey = opts?.dedupKey;
+      if (dedupKey) {
+        for (const m of [...active.values(), ...staged.values()]) {
+          if ((m as { dedupKey?: string }).dedupKey === dedupKey) return null;
+        }
+      }
+      const item = { id: `s-${Math.random().toString(36).slice(2)}`, body, enqueuedAt: new Date().toISOString(), attempt: 0, ...(dedupKey ? { dedupKey } : {}) };
+      staged.set(item.id, item);
+      return { id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+    },
+    commitStaged(messageId: string) {
+      const item = staged.get(messageId);
+      if (!item) return false;
+      staged.delete(messageId);
+      active.set(messageId, { ...item, attempt: 0, enqueuedAt: new Date().toISOString() });
+      return true;
+    },
+    discardStaged(messageId: string, reason?: string) {
+      const item = staged.get(messageId);
+      if (!item) return false;
+      staged.delete(messageId);
+      dead.set(messageId, { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason });
+      return true;
+    },
+    peekStaged<T>() {
+      return [...staged.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
     },
   };
 }
@@ -137,6 +184,21 @@ class MemoryAsyncQueueStorage implements AsyncQueueStorage {
     attempt: number;
     leaseToken?: string;
     leaseExpiresAt?: string;
+    dedupKey?: string;
+  }>();
+  private readonly staged = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    dedupKey?: string;
+  }>();
+  private readonly dead = new Map<string, {
+    id: string;
+    body: unknown;
+    enqueuedAt: string;
+    attempt: number;
+    reason?: string;
   }>();
 
   async enqueue<T>(body: T) {
@@ -174,11 +236,15 @@ class MemoryAsyncQueueStorage implements AsyncQueueStorage {
     return true;
   }
 
-  async nack(messageId: string, leaseToken: string): Promise<boolean> {
+  async nack(messageId: string, leaseToken: string, opts?: { dead?: boolean; reason?: string }): Promise<boolean> {
     const item = this.active.get(messageId);
     if (!item || item.leaseToken !== leaseToken) return false;
     delete item.leaseToken;
     delete item.leaseExpiresAt;
+    if (opts?.dead) {
+      this.active.delete(messageId);
+      this.dead.set(messageId, { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: opts.reason });
+    }
     return true;
   }
 
@@ -187,7 +253,39 @@ class MemoryAsyncQueueStorage implements AsyncQueueStorage {
   }
 
   async peekDeadLetter<T>() {
-    return [] as Array<{ id: string; body: T; enqueuedAt: string; attempt: number; reason?: string }>;
+    return [...this.dead.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason: item.reason }));
+  }
+
+  async stage<T>(body: T, opts?: { dedupKey?: string }) {
+    const dedupKey = opts?.dedupKey;
+    if (dedupKey) {
+      for (const m of [...this.active.values(), ...this.staged.values()]) {
+        if ((m as { dedupKey?: string }).dedupKey === dedupKey) return null;
+      }
+    }
+    const item = { id: `as-${Math.random().toString(36).slice(2)}`, body, enqueuedAt: new Date().toISOString(), attempt: 0, ...(dedupKey ? { dedupKey } : {}) };
+    this.staged.set(item.id, item);
+    return { id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt };
+  }
+
+  async commitStaged(messageId: string): Promise<boolean> {
+    const item = this.staged.get(messageId);
+    if (!item) return false;
+    this.staged.delete(messageId);
+    this.active.set(messageId, { ...item, attempt: 0, enqueuedAt: new Date().toISOString() });
+    return true;
+  }
+
+  async discardStaged(messageId: string, reason?: string): Promise<boolean> {
+    const item = this.staged.get(messageId);
+    if (!item) return false;
+    this.staged.delete(messageId);
+    this.dead.set(messageId, { id: item.id, body: item.body, enqueuedAt: item.enqueuedAt, attempt: item.attempt, reason });
+    return true;
+  }
+
+  async peekStaged<T>() {
+    return [...this.staged.values()].map((item) => ({ id: item.id, body: item.body as T, enqueuedAt: item.enqueuedAt, attempt: item.attempt }));
   }
 }
 
@@ -286,14 +384,18 @@ describe('server-runtime hosted queue lane registry', () => {
     const workerQueue = createMemoryQueueStorage();
     const chatQueue = createMemoryQueueStorage();
     const processQueue = createMemoryQueueStorage();
+    const queueStoreRef = 'queue-store-ref';
     const boardAdapter = {
-      boardWorkerStore: () => createBoardWorkerStore(workerQueue),
-      chatAgentStore: () => createBoardWorkerStore(chatQueue),
-      processAccumulatedStore: () => processQueue,
-    } as Pick<BoardPlatformAdapter, 'boardWorkerStore' | 'chatAgentStore' | 'processAccumulatedStore'> as BoardPlatformAdapter;
+      queueStorageForRef: (_ref: string, lane: string) => lane === 'task-executor'
+        ? workerQueue
+        : lane === 'chat-agent'
+          ? chatQueue
+          : processQueue,
+    } as Pick<BoardPlatformAdapter, 'queueStorageForRef'> as BoardPlatformAdapter;
 
     const registry = createHostedBoardQueueLaneRegistry({
       boardId: 'board-a',
+      queueStoreRef,
       runtime,
       boardAdapter,
       logger: { info() {}, warn() {}, error() {} },
@@ -310,19 +412,22 @@ describe('server-runtime hosted queue lane registry', () => {
     const workerQueue = createMemoryQueueStorage();
     const chatQueue = createMemoryQueueStorage();
     const processQueue = createMemoryQueueStorage();
+    const queueStoreRef = 'queue-store-ref';
 
     const processCalls: number[] = [];
     const chatCalls: Array<Record<string, unknown>> = [];
     const taskCalls: Array<Record<string, unknown>> = [];
 
     const boardAdapter = {
-      boardWorkerStore: () => createBoardWorkerStore(workerQueue),
-      chatAgentStore: () => createBoardWorkerStore(chatQueue),
-      processAccumulatedStore: () => processQueue,
-    } as Pick<BoardPlatformAdapter, 'boardWorkerStore' | 'chatAgentStore' | 'processAccumulatedStore'> as BoardPlatformAdapter;
+      queueStorageForRef: (_ref: string, lane: string) => lane === 'task-executor'
+        ? workerQueue
+        : lane === 'chat-agent'
+          ? chatQueue
+          : processQueue,
+    } as Pick<BoardPlatformAdapter, 'queueStorageForRef'> as BoardPlatformAdapter;
 
     const runtime = {
-      async processAccumulatedLane() {
+      async __drainProcessAccumulatedLane() {
         processCalls.push(Date.now());
         return { status: 'success' } as const;
       },
@@ -333,6 +438,7 @@ describe('server-runtime hosted queue lane registry', () => {
 
     const registry = createHostedBoardQueueLaneRegistry({
       boardId: 'board-a',
+      queueStoreRef,
       runtime,
       boardAdapter,
       logger: { info() {}, warn() {}, error() {} },
@@ -342,7 +448,7 @@ describe('server-runtime hosted queue lane registry', () => {
     });
 
     processQueue.enqueue({ boardRef: 'board-a' });
-    boardAdapter.chatAgentStore().enqueueRequest({
+    createBoardWorkerStore(boardAdapter.queueStorageForRef(queueStoreRef, 'chat-agent')).enqueueRequest({
       boardId: 'board-a',
       ref: {
         meta: 'chat-handler',
@@ -351,7 +457,7 @@ describe('server-runtime hosted queue lane registry', () => {
       },
       args: { cardId: 'card-1', turnId: 'turn-1' },
     });
-    boardAdapter.boardWorkerStore().enqueueRequest({
+    createBoardWorkerStore(boardAdapter.queueStorageForRef(queueStoreRef, 'task-executor')).enqueueRequest({
       boardId: 'board-a',
       ref: {
         meta: 'task-executor',
@@ -364,8 +470,8 @@ describe('server-runtime hosted queue lane registry', () => {
     const stop = startQueueLaneRunners(registry);
     try {
       await waitFor(() => processCalls.length === 1 && chatCalls.length === 1 && taskCalls.length === 1);
-      expect(boardAdapter.boardWorkerStore().peekActive()).toHaveLength(0);
-      expect(boardAdapter.chatAgentStore().peekActive()).toHaveLength(0);
+      expect(createBoardWorkerStore(boardAdapter.queueStorageForRef(queueStoreRef, 'task-executor')).peekActive()).toHaveLength(0);
+      expect(createBoardWorkerStore(boardAdapter.queueStorageForRef(queueStoreRef, 'chat-agent')).peekActive()).toHaveLength(0);
       expect(processQueue.peekActive()).toHaveLength(0);
       expect(chatCalls[0]).toMatchObject({ cardId: 'card-1', turnId: 'turn-1' });
       expect(taskCalls[0]).toMatchObject({ source_def: { bindTo: 'prices' } });
@@ -379,6 +485,7 @@ describe('server-runtime hosted queue lane registry', () => {
     const blob = new MemoryAsyncBlobStorage();
     const scratch = createAsyncScratchStorage();
     const archiveFactory = createAsyncArchiveFactory();
+    const queueStoreRef = 'queue-store-ref';
     const queueStorage = new MemoryAsyncQueueStorage();
     const chatQueueStorage = new MemoryAsyncQueueStorage();
     const processQueueStorage = new MemoryAsyncQueueStorage();
@@ -387,14 +494,29 @@ describe('server-runtime hosted queue lane registry', () => {
       kvStorage: () => kv,
       kvStorageForRef: () => kv,
       blobStorage: () => blob,
+      blobStorageForRef: () => blob,
+      chatStorageForRef: () => ({
+        append: async () => ({ id: 'noop' }),
+        readAll: async () => [],
+        readAfter: async () => ({ records: [], cursor: null }),
+        clear: async () => {},
+        setProcessing: async () => {},
+        isProcessing: async () => false,
+        getConfig: async () => ({}),
+        setConfig: async () => {},
+      }),
+      queueStoreRef,
+      queueStorageForRef: (_ref: string, lane: string) => lane === 'task-executor'
+        ? queueStorage
+        : lane === 'chat-agent'
+          ? chatQueueStorage
+          : processQueueStorage,
       scratchStorage: () => scratch,
       scratchStorageForRef: () => scratch,
       archiveFactory: () => archiveFactory,
       archiveFactoryForRef: () => archiveFactory,
       journalStorage: () => archiveFactory.stream('board-journal'),
-      queueStorage,
-      chatAgentQueueStorage: chatQueueStorage,
-      processAccumulatedQueueStorage: processQueueStorage,
+      journalStorageForRef: () => archiveFactory.stream('board-journal'),
       lock: createImmediateAsyncLock(),
       resolveBlob: async (ref) => ref.value,
       hashFn: (value: unknown) => JSON.stringify(value),
@@ -407,9 +529,10 @@ describe('server-runtime hosted queue lane registry', () => {
 
     const registry = createHostedBoardQueueLaneRegistry({
       boardId: 'board-async',
+      queueStoreRef,
       runtime: {
         queueLaneTuning: { chatAgent: { pollIntervalMs: 10 }, taskExecutor: { concurrency: 2 } },
-        async processAccumulatedLane() {
+        async __drainProcessAccumulatedLane() {
           processCalls.push(Date.now());
           return { status: 'success' } as const;
         },
@@ -424,8 +547,8 @@ describe('server-runtime hosted queue lane registry', () => {
       },
     });
 
-    await adapter.processAccumulatedStore().enqueue({ boardRef: 'board-async' });
-    await adapter.chatAgentStore().enqueueRequest({
+    await adapter.queueStorageForRef(queueStoreRef, 'process-accumulated').enqueue({ boardRef: 'board-async' });
+    await createAsyncBoardWorkerStore(adapter.queueStorageForRef(queueStoreRef, 'chat-agent')).enqueueRequest({
       boardId: 'board-async',
       ref: {
         meta: 'chat-handler',
@@ -434,7 +557,7 @@ describe('server-runtime hosted queue lane registry', () => {
       },
       args: { cardId: 'card-async', turnId: 'turn-async' },
     });
-    await adapter.boardWorkerStore().enqueueRequest({
+    await createAsyncBoardWorkerStore(adapter.queueStorageForRef(queueStoreRef, 'task-executor')).enqueueRequest({
       boardId: 'board-async',
       ref: {
         meta: 'task-executor',
@@ -447,9 +570,9 @@ describe('server-runtime hosted queue lane registry', () => {
     const stop = startQueueLaneRunners(registry);
     try {
       await waitFor(() => processCalls.length === 1 && chatCalls.length === 1 && taskCalls.length === 1);
-      expect(await adapter.boardWorkerStore().peekActive()).toHaveLength(0);
-      expect(await adapter.chatAgentStore().peekActive()).toHaveLength(0);
-      expect(await adapter.processAccumulatedStore().peekActive()).toHaveLength(0);
+      expect(await createAsyncBoardWorkerStore(adapter.queueStorageForRef(queueStoreRef, 'task-executor')).peekActive()).toHaveLength(0);
+      expect(await createAsyncBoardWorkerStore(adapter.queueStorageForRef(queueStoreRef, 'chat-agent')).peekActive()).toHaveLength(0);
+      expect(await adapter.queueStorageForRef(queueStoreRef, 'process-accumulated').peekActive()).toHaveLength(0);
       expect(chatCalls[0]).toMatchObject({ cardId: 'card-async', turnId: 'turn-async' });
       expect(taskCalls[0]).toMatchObject({ source_def: { bindTo: 'cloud-prices' } });
     } finally {
