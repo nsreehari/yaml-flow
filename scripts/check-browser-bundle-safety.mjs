@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const bundleNames = [
-  'board-livecards-client.js',
   'server-runtime-controlface.js',
   'adapters/firestore-storage.js',
   'adapters/localstorage-storage.js',

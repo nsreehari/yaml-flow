@@ -10,7 +10,6 @@ total files: 195
 
 ## Browser files (published)
 - browser/asset-integrity.json
-- browser/board-livecards-client.js
 - browser/compute-jsonata.js
 - browser/live-cards.js
 - browser/live-cards.schema.json

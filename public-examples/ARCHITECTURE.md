@@ -82,32 +82,6 @@ No public API — just sets `window.jsonataSync` for other bundles to pick up.
 
 ---
 
-### board-livecards-client.js → `window.BoardLiveCardsClient`
-
-**Client for a yaml-flow HTTP/SSE server.** Two modes in one bundle:
-
-1. **SSE/HTTP mode** — connects to a `board-live-cards-server-runtime` host:
-```html
-<script src="board-livecards-client.js"></script>
-<script>
-  const client = BoardLiveCardsClient.createBoardRuntimeClient({
-    fetchServer,
-    boardPaths: BoardLiveCardsClient.defaultBoardPaths('my-board'),
-    getServerOrigin,
-  });
-  await client.bootstrapBoard({ boardId: 'my-board', rootElement: el });
-</script>
-```
-
-2. **Custom transport mode** — use the platform-free state layer with Firebase,
-   WebSocket, or any other transport. Import `buildBoardState`, `applyNotification`,
-   `selectAllLiveCardModels` and drive them yourself.
-
-Key exports: `createBoardRuntimeClient`, `defaultBoardPaths`, `singleBoardPaths`,
-`buildBoardState`, `applyNotification`, `selectLiveCardModel`, `selectAllLiveCardModels`
-
----
-
 ### live-cards.js → `window.LiveCard`
 
 **UI rendering engine** — turns board state (card models) into interactive HTML.
@@ -156,6 +130,5 @@ charts fall back to tables and markdown renders as escaped plain text.
 <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 
 <!-- 2. yaml-flow bundles -->
-<script src="board-livecards-client.js"></script>
 <script src="live-cards.js"></script>
 ```

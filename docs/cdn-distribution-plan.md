@@ -17,7 +17,6 @@ browser/
   live-cards.js                 + .map
   live-cards.schema.json
   compute-jsonata.js            + .map
-  board-livecards-client.js     + .map
   server-runtime-controlface.js + .map
   board-livegraph-engine.js     + .map
   card-compute.js

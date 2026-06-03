@@ -127,13 +127,6 @@ export default defineConfig([
     globalName: 'ComputeJsonata',
     esbuildPlugins: [browserStubPlugin],
   },
-  // ── board-livecards-client — platform-free state + SSE/HTTP server transport ──────────
-  {
-    ...sharedBrowserOptions,
-    entry: { 'board-livecards-client': 'src/board-livecards-client/index.ts' },
-    globalName: 'BoardLiveCardsClient',
-    esbuildPlugins: [jsonataGlobalShim, browserStubPlugin],
-  },
   // ── server-runtime-controlface — board control-plane runtime (browser edition) ────────
   // Platform-free: no node:* imports in the runtime or its transitive deps.
   // Use with a Firestore JS SDK adapter for in-browser board orchestration.
