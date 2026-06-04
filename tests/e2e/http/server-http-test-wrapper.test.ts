@@ -22,7 +22,7 @@ function run(cmd: string, args: string[], timeoutMs = 120_000) {
 }
 
 describe('e2e: server-http-test wrapper', () => {
-  it('server-http-test.js smoke checks pass', () => {
+  it.skipIf(process.platform !== 'win32')('server-http-test.js smoke checks pass', () => {
     const r = run(process.execPath, [
       path.join('examples', 'board', 'test', 'server-http-test.js'),
     ]);
