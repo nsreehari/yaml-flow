@@ -23,8 +23,8 @@ export function assertBoardSelfRef(
 export function createYamlFlowCliBoardSelfRef(notifyChannel?: string): ExecutionRef {
   return {
     meta: 'board-live-cards',
-    howToRun: 'local-node',
-    whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'board-live-cards-cli.js' }),
+    howToRun: 'built-in',
+    whatToRun: serializeRef({ kind: 'built-in', value: 'board-live-cards' }),
     ...(notifyChannel ? { extra: { notifyChannel } } : {}),
   };
 }

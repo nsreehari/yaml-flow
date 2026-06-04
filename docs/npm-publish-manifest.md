@@ -31,8 +31,6 @@ total files: 195
 - cli/node/card-store-cli.js
 - cli/node/execution-adapter.d.ts
 - cli/node/execution-adapter.js
-- cli/node/fs-board-adapter.d.ts
-- cli/node/fs-board-adapter.js
 - cli/node/jsonata-sync.cjs
 - cli/node/source-cli-task-executor.d.ts
 - cli/node/source-cli-task-executor.js

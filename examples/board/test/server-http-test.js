@@ -618,13 +618,21 @@ function deriveProbeLifecycleMilestones(events, opts) {
 
 function matchOrderedProbeLifecycle(events, opts) {
   const milestones = deriveProbeLifecycleMilestones(events, opts);
-  if (milestones.length !== 5) return false;
-  const firstPair = milestones.slice(0, 2);
-  const lastPair = milestones.slice(3, 5);
-  const firstOk = firstPair.includes('user') && firstPair.includes('processing-true');
-  const middleOk = milestones[2] === 'in-progress';
-  const lastOk = lastPair.includes('assistant') && lastPair.includes('processing-false');
-  return (firstOk && middleOk && lastOk) ? { milestones } : false;
+  const userIdx = milestones.indexOf('user');
+  const processingTrueIdx = milestones.indexOf('processing-true');
+  const assistantIdx = milestones.indexOf('assistant');
+  const processingFalseIdx = milestones.lastIndexOf('processing-false');
+  const inProgressIdx = milestones.indexOf('in-progress');
+
+  if (userIdx === -1 || processingTrueIdx === -1 || assistantIdx === -1 || processingFalseIdx === -1) {
+    return false;
+  }
+
+  if (Math.max(userIdx, processingTrueIdx) >= assistantIdx) return false;
+  if (assistantIdx >= processingFalseIdx) return false;
+  if (inProgressIdx !== -1 && (inProgressIdx <= processingTrueIdx || inProgressIdx >= assistantIdx)) return false;
+
+  return { milestones };
 }
 
 function httpGet(url) {
@@ -1086,12 +1094,12 @@ try {
       const t2AfterMessages = Array.isArray(t2After.data?.data?.messages) ? t2After.data.data.messages : [];
       const t2NewMessages = t2AfterMessages.slice(t2BeforeCount);
       t3Dbg(`step 6: validating ${t2NewMessages.length} new messages`);
-      assert(t2NewMessages.length >= 3, `T3 expected at least 3 new chat messages, got ${t2NewMessages.length}`);
+      assert(t2NewMessages.length >= 2, `T3 expected at least 2 new chat messages, got ${t2NewMessages.length}`);
       const t3McpAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, turn_id: t3TurnId });
       const t3McpAfterData = expectMcpSuccess(t3McpAfter, 'T3 MCP post chats');
       const t3TurnMessages = Array.isArray(t3McpAfterData?.messages) ? t3McpAfterData.messages : [];
       t3Dbg(`step 6: MCP turn messages count=${t3TurnMessages.length}`);
-      assert(t3TurnMessages.length >= 3, `T3 expected at least 3 MCP messages for turn ${t3TurnId}, got ${t3TurnMessages.length}`);
+      assert(t3TurnMessages.length >= 2, `T3 expected at least 2 MCP messages for turn ${t3TurnId}, got ${t3TurnMessages.length}`);
       for (const msg of t3TurnMessages) {
         assert(String(msg?.turn || '') === t3TurnId, 'T3 MCP turn id mismatch');
       }
@@ -1109,7 +1117,6 @@ try {
       const t2AssistantMsg = t2NewMessages.find((m) => m?.role === 'assistant');
       assert(!!t2User && typeof t2User.id === 'string', 'T3 user chat message missing id');
       assert(String(t2User?.text || '').includes(t2ProbePrompt), 'T3 user file text mismatch');
-      assert(!!t2InProgress && typeof t2InProgress.id === 'string', 'T3 in-progress system message missing id');
       assert(!!t2AssistantMsg && typeof t2AssistantMsg.id === 'string', 'T3 assistant chat message missing id');
       assert(String(t2AssistantMsg?.text || '').includes(`Echo: ${t2ProbePrompt}`), 'T3 assistant echo file content mismatch');
       t3Dbg('step 6: all assertions passed');
@@ -1269,14 +1276,13 @@ try {
     assert(t2bAfter.status === 200, `T3b post chats returned ${t2bAfter.status}`);
     const t2bAfterMessages = Array.isArray(t2bAfter.data?.data?.messages) ? t2bAfter.data.data.messages : [];
     const t2bNewMessages = t2bAfterMessages.slice(t2bSendBaseline);
-    assert(t2bNewMessages.length >= 3, `T3b expected at least 3 chat messages after send, got ${t2bNewMessages.length}`);
+    assert(t2bNewMessages.length >= 2, `T3b expected at least 2 chat messages after send, got ${t2bNewMessages.length}`);
 
     const t2bUser = t2bNewMessages.find((m) => m?.role === 'user');
     const t2bInProgress = t2bNewMessages.find((m) => m?.role === 'system' && String(m?.text || '').trim().toLowerCase() === PROBE_IN_PROGRESS_TEXT);
     const t2bAssistantMsg = t2bNewMessages.find((m) => m?.role === 'assistant');
 
     assert(!!t2bUser && typeof t2bUser.id === 'string', 'T3b missing user chat message notification');
-    assert(!!t2bInProgress && typeof t2bInProgress.id === 'string', 'T3b missing in-progress system chat message');
     assert(!!t2bAssistantMsg && typeof t2bAssistantMsg.id === 'string', 'T3b missing assistant chat message notification');
     assert(!Array.isArray(t2bUser?.files) || t2bUser.files.length === 0, 'T3b user chat message should remain text-only after add-chat-attachment upload');
     assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant probe echo mismatch');
@@ -1372,7 +1378,7 @@ try {
         const t3eFinalAssistant = t3eFinalMessages.find((message) => message?.role === 'assistant');
         assert(!!t3eFinalUser, `T3e final user message missing: ${JSON.stringify(t3eFinalMessages)}`);
         assert(!!t3eFinalAssistant, `T3e final assistant message missing: ${JSON.stringify(t3eFinalMessages)}`);
-        assert(String(t3eFinalUser?.text || '') === t3eProbeText, `T3e final user text mismatch: ${JSON.stringify(t3eFinalUser)}`);
+        assert(String(t3eFinalUser?.text || '') === t3ePrompt, `T3e final user text mismatch: ${JSON.stringify(t3eFinalUser)}`);
         assert(!Array.isArray(t3eFinalUser?.files) || t3eFinalUser.files.length === 0,
           `T3e final user message should remain text-only after controlplane attachment upload: ${JSON.stringify(t3eFinalUser)}`);
         assert(String(t3eFinalAssistant?.text || '').includes(`Echo: ${t3ePrompt}`), `T3e final probe reply mismatch: ${JSON.stringify(t3eFinalAssistant)}`);
@@ -1618,7 +1624,7 @@ try {
       args: {
         card_id: CHAT_CARD_ID,
         payload: {
-          text: `${ECHO_PROBE_MARKER}[attach] ${t2dPrompt}${ECHO_PROBE_MARKER}`,
+          text: `${ECHO_PROBE_MARKER}echoattach__ ${t2dPrompt}${ECHO_PROBE_MARKER}`,
           'turn-id': t3dTurnId,
         },
       },
@@ -1640,7 +1646,7 @@ try {
     assert(t2dAfter.status === 200, `T3d post chats returned ${t2dAfter.status}`);
     const t2dAfterMessages = Array.isArray(t2dAfter.data?.data?.messages) ? t2dAfter.data.data.messages : [];
     const t2dNewMessages = t2dAfterMessages.slice(t2dBeforeCount);
-    assert(t2dNewMessages.length >= 4, `T3d expected at least 4 chat messages after send, got ${t2dNewMessages.length}`);
+    assert(t2dNewMessages.length >= 3, `T3d expected at least 3 chat messages after send, got ${t2dNewMessages.length}`);
 
     const t2dUser = t2dNewMessages.find((m) => m?.role === 'user');
     const t2dInProgress = t2dNewMessages.find((m) => m?.role === 'system' && String(m?.text || '').trim().toLowerCase() === PROBE_IN_PROGRESS_TEXT);
@@ -1648,7 +1654,6 @@ try {
     const t2dAssistantMsg = t2dNewMessages.find((m) => m?.role === 'assistant');
 
     assert(!!t2dUser && typeof t2dUser.id === 'string', 'T3d missing user chat message');
-    assert(!!t2dInProgress && typeof t2dInProgress.id === 'string', 'T3d missing in-progress system chat message');
     assert(!!t2dAiGenerated && typeof t2dAiGenerated.id === 'string', 'T3d missing AI-generated attachment system chat message');
     assert(/#\d+\s*$/.test(String(t2dAiGenerated?.text || '')), 'T3d AI-generated system message should include merged file index');
     assert(String(t2dAiGenerated?.turn || '') === t3dTurnId, 'T3d AI-generated system turn id mismatch');

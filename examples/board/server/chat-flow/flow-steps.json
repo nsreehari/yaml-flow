@@ -72,11 +72,10 @@
           "data._legacyEnvelope = data._hasLegacyEnvelope ? $eval(data._rawMessageText) : null",
           "data._legacyPrompt = ($type(data._legacyEnvelope.prompt) = \"string\" and $length($trim(data._legacyEnvelope.prompt)) > 0) ? data._legacyEnvelope.prompt : (($type(data._legacyEnvelope.text) = \"string\" and $length($trim(data._legacyEnvelope.text)) > 0) ? data._legacyEnvelope.text : (($type(data._legacyEnvelope.userText) = \"string\" and $length($trim(data._legacyEnvelope.userText)) > 0) ? data._legacyEnvelope.userText : (($type(data._legacyEnvelope.query) = \"string\" and $length($trim(data._legacyEnvelope.query)) > 0) ? data._legacyEnvelope.query : null)))",
           "data.userText = data._isEchoProbe ? $trim($substring(data._rawMessageText, data._markerLen, $length(data._rawMessageText) - (data._markerLen * 2))) : (($type(data._legacyPrompt) = \"string\" and $length($trim(data._legacyPrompt)) > 0) ? $trim(data._legacyPrompt) : data._rawMessageText)",
-          "data._attachMarker = \"[attach]\"",
-          "data.probeGenerateAttachment = $lowercase($substring(data.userText, 0, $length(data._attachMarker))) = data._attachMarker",
-          "data.userText = data.probeGenerateAttachment ? $trim($substring(data.userText, $length(data._attachMarker))) : data.userText",
+          "data._probeMode = $type(expects_data.probe) = \"string\" ? $lowercase($trim(expects_data.probe)) : \"\"",
+          "data.probeGenerateAttachment = data._probeMode = \"echoattach\"",
           "data.replyFiles = []",
-          "data.probe = data._isEchoProbe ? true : (data._legacyEnvelope.probe = true or data._legacyEnvelope.probe = 1 or ($type(data._legacyEnvelope.probe) = \"string\" and $count($filter([\"1\", \"true\", \"yes\", \"on\"], function($value) { $value = $lowercase($trim(data._legacyEnvelope.probe)) })) > 0))",
+          "data.probe = (data._isEchoProbe or $length(data._probeMode) > 0) ? true : (data._legacyEnvelope.probe = true or data._legacyEnvelope.probe = 1 or ($type(data._legacyEnvelope.probe) = \"string\" and $count($filter([\"1\", \"true\", \"yes\", \"on\"], function($value) { $value = $lowercase($trim(data._legacyEnvelope.probe)) })) > 0))",
           "data.chatHandlerMode = data._isEchoProbe ? \"echo-probe\" : (($type(data._legacyEnvelope.chatHandlerMode) = \"string\" and $length($trim(data._legacyEnvelope.chatHandlerMode)) > 0) ? $lowercase($trim(data._legacyEnvelope.chatHandlerMode)) : (data.probe ? \"probe\" : \"copilot\"))",
           "data.chatCopilotTimeoutMs = ($parsePositiveInt := function($value) { ($type($value) = \"number\" and $value > 0) ? $floor($value) : (($type($value) = \"string\" and $count($match($trim($value), /^[0-9]+$/)) > 0 and $number($trim($value)) > 0) ? $floor($number($trim($value))) : null) }; $legacyTimeout := $parsePositiveInt(data._legacyEnvelope.chatTimeoutMs); $legacyCopilotTimeout := $parsePositiveInt(data._legacyEnvelope.chatCopilotTimeoutMs); $fallbackTimeout := $parsePositiveInt(expects_data.chatCopilotTimeoutMs); $legacyTimeout ? $legacyTimeout : ($legacyCopilotTimeout ? $legacyCopilotTimeout : ($fallbackTimeout ? $fallbackTimeout : 300000)))",
           "result = \"success\""
@@ -95,7 +94,8 @@
       "handler": {
         "type": "compute-jsonata",
         "expr": [
-          "data.selectedAssistant = (expects_data.probe = true or expects_data.probe = \"true\" or expects_data.probe = 1 or $lowercase($string(expects_data.chatHandlerMode)) = \"probe\" or $lowercase($string(expects_data.chatHandlerMode)) = \"echo-probe\") ? \"probe\" : \"copilot\"",
+          "data._probeMode = $type(expects_data.probe) = \"string\" ? $lowercase($trim(expects_data.probe)) : \"\"",
+          "data.selectedAssistant = (expects_data.probe = true or expects_data.probe = \"true\" or expects_data.probe = 1 or $length(data._probeMode) > 0 or $lowercase($string(expects_data.chatHandlerMode)) = \"probe\" or $lowercase($string(expects_data.chatHandlerMode)) = \"echo-probe\") ? \"probe\" : \"copilot\"",
           "result = data.selectedAssistant"
         ]
       },

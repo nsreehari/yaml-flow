@@ -68,8 +68,8 @@ export function createLocalNodeBoardCallbackTransport(opts?: string | {
   if (options.queueStoreRef) extra.queueStoreRef = options.queueStoreRef;
   return createStaticExecutionRefCallbackTransport({
     meta: 'board-live-cards',
-    howToRun: 'local-node',
-    whatToRun: serializeRef({ kind: 'yaml-flow-cli', value: 'board-live-cards-cli.js' }),
+    howToRun: 'built-in',
+    whatToRun: serializeRef({ kind: 'built-in', value: 'board-live-cards' }),
     ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 }

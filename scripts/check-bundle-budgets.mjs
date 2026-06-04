@@ -9,7 +9,6 @@ const budgets = [
   { file: 'lib/index.js', maxBytes: 30_000 },
   { file: 'lib/index.cjs', maxBytes: 45_000 },
   { file: 'cli/node/board-live-cards-cli.js', maxBytes: 250_000 },
-  { file: 'cli/node/fs-board-adapter.js', maxBytes: 270_000 },
 ];
 
 let hasFailure = false;

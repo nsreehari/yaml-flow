@@ -1,7 +1,7 @@
 /**
  * build-cli-bundled.mjs
  *
- * Runs esbuild over the six CLI entrypoints that tsup already built into
+ * Runs esbuild over the CLI entrypoints that tsup already built into
  * cli/node/ and produces fully self-contained ESM bundles in cli/bundled/.
  *
  * Each bundle:
@@ -17,7 +17,6 @@ import { build } from 'esbuild';
 import { mkdirSync, existsSync, cpSync } from 'fs';
 
 const ENTRYPOINTS = [
-  'board-live-cards-cli',
   'step-machine-cli',
   'batch-runner-cli',
   'card-store-cli',
