@@ -5,6 +5,7 @@ import {
   createFirestoreBoardRuntimeBundle,
   makeFirestoreRef,
 } from '../src/firestore-storage/index.js';
+import { createHostedAsyncBoardNonCorePublic } from '../src/cli/cloud/hosted-async-board-non-core.js';
 import { parseRef } from '../src/cli/common/storage-interface.js';
 
 function makeFakeFirestore() {
@@ -134,8 +135,9 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
   it('exposes a non-core preflight surface for hosted runtimes', async () => {
     const db = makeFakeFirestore() as any;
     const bundle = createFirestoreBoardRuntimeBundle(db, 'board-A');
+    const nonCore = createHostedAsyncBoardNonCorePublic(bundle.boardAdapter);
 
-    const result = await bundle.nonCore.validateCardPreflight({
+    const result = await nonCore.validateCardPreflight({
       body: {
         id: 'card-a',
         card_data: { rows: [] },
@@ -152,26 +154,32 @@ describe('firestore-storage createFirestoreBoardRefs', () => {
   it('routes hosted non-core executor-backed preflight calls through the immediate hook', async () => {
     const db = makeFakeFirestore() as any;
     const calls: Array<{ subcommand: string; input?: string }> = [];
-    const bundle = createFirestoreBoardRuntimeBundle(db, 'board-A', {
-      nonCoreTaskExecutor: async (request) => {
-        calls.push({ subcommand: request.subcommand, input: request.input });
-        if (request.subcommand === 'describe-capabilities') {
-          return { executor: 'hosted-hook', sourceKinds: { json: {} } };
+    const bundle = createFirestoreBoardRuntimeBundle(db, 'board-A');
+    const nonCore = createHostedAsyncBoardNonCorePublic(bundle.boardAdapter, {
+      taskExecutorRef: {
+        meta: 'task-executor',
+        howToRun: 'local-node',
+        whatToRun: 'b64:eyJraW5kIjoiZnMtcGF0aCIsInZhbHVlIjoiL3RtcC90YXNrLWV4ZWN1dG9yLmpzIn0',
+      },
+      invokeExecutor: async (_ref, subcommand, opts) => {
+        calls.push({ subcommand, input: opts?.input });
+        if (subcommand === 'describe-capabilities') {
+          return JSON.stringify({ executor: 'hosted-hook', sourceKinds: { json: {} } });
         }
-        if (request.subcommand === 'validate-source-def') {
-          return { ok: true, errors: [] };
+        if (subcommand === 'validate-source-def') {
+          return JSON.stringify({ ok: true, errors: [] });
         }
-        throw new Error(`unexpected subcommand ${request.subcommand}`);
+        throw new Error(`unexpected subcommand ${subcommand}`);
       },
     });
 
-    const describeResult = await bundle.nonCore.describeTaskExecutorCapabilities({});
+    const describeResult = await nonCore.describeTaskExecutorCapabilities({});
     expect(describeResult.status).toBe('success');
     if (describeResult.status === 'success') {
       expect(describeResult.data).toMatchObject({ executor: 'hosted-hook' });
     }
 
-    const validateResult = await bundle.nonCore.validateCardPreflight({
+    const validateResult = await nonCore.validateCardPreflight({
       body: {
         id: 'card-with-source',
         card_data: { rows: [] },
