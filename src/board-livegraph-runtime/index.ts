@@ -50,6 +50,7 @@ export interface CardChatMessage {
   role: string;
   text: string;
   files?: unknown[];
+  turn?: string;
 }
 
 export interface CardChatState {

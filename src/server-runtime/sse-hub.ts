@@ -146,6 +146,7 @@ export function createSseHub(deps: SseHubDeps): SseHub {
         role: String(r.role || 'system'),
         text: String(r.text || ''),
         files: Array.isArray(r.files) ? r.files : [],
+        ...(typeof r.turn === 'string' && r.turn ? { turn: r.turn } : {}),
       })),
       receiving,
       processing: await deps.getChatProcessing(cardId),
