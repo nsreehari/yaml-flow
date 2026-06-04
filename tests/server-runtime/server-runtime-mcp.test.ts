@@ -595,6 +595,41 @@ process.exit(1);
     expect(userMessage?.turn).toBe('turn-chat-send');
     expect(observed.length).toBe(1);
     expect(observed[0].turnId).toBe('turn-chat-send');
+    expect(observed[0].isProbe).toBe(false);
+  });
+
+  it('chat-send stamps isProbe in flow args when probe markers wrap the user text', async () => {
+    const observed: Array<Record<string, unknown>> = [];
+    const { runtime, boardAdapter, queueStoreRef } = createRuntimeHarness({
+      chatHandlerFlow: { id: 'test-flow' },
+      chatFlowRunner: {
+        async run(_flow, args) {
+          observed.push(args);
+          return { dispatched: true };
+        },
+      },
+    });
+
+    const req = makeRequest('POST', '/api/board/mcp-actions', {
+      tool: 'chat-send',
+      args: {
+        card_id: 'card-1',
+        payload: {
+          text: '__probe__echo__probe__hello probe__probe__echo__probe__',
+          'turn-id': 'turn-chat-probe',
+        },
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp-actions'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    await drainQueuedChatRequests(runtime, boardAdapter, queueStoreRef);
+
+    expect(observed.length).toBe(1);
+    expect(observed[0].turnId).toBe('turn-chat-probe');
+    expect(observed[0].isProbe).toBe(true);
   });
 
   it('POST /mcp-actions chat-send propagates turn-id to the user message and flow args', async () => {

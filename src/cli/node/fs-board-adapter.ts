@@ -31,6 +31,8 @@ import {
   invokeExecutionRef,
   resolveWhatToRunValue,
 } from './execution-adapter.js';
+import { invokeBoardWorker } from '../public/board-worker-adapter.js';
+import type { ExecutionRef as BoardWorkerExecutionRef } from '../public/board-worker-adapter.js';
 import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { KindValueRef } from '../common/storage-interface.js';
 import type { BoardCallbackTransport } from '../common/board-callback-transport.js';
@@ -579,7 +581,19 @@ export function createFsBoardNonCorePlatformAdapter(
         throw new Error('queue-storage does not support inline executor request/response');
       }
 
-      if (ref.howToRun === 'http:post' || ref.howToRun === 'http:get' || ref.howToRun === 'in-process-loop') {
+      if (ref.howToRun === 'http:post' || ref.howToRun === 'in-process-loop') {
+        const result = await invokeBoardWorker(ref as BoardWorkerExecutionRef, {
+          subcommand,
+          ...(execOpts?.input !== undefined ? { input: execOpts.input } : {}),
+        });
+        if (typeof result === 'string') return result;
+        if (result && typeof result === 'object' && !Array.isArray(result) && typeof (result as Record<string, unknown>).stdout === 'string') {
+          return String((result as Record<string, unknown>).stdout);
+        }
+        return JSON.stringify(result ?? {});
+      }
+
+      if (ref.howToRun === 'http:get') {
         const result = await invokeExecutionRef(ref, {
           subcommand,
           ...(execOpts?.input !== undefined ? { input: execOpts.input } : {}),

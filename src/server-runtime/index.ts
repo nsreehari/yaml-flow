@@ -109,6 +109,7 @@ const DEFAULT_CORS_HEADERS: Record<string, string> = {
 };
 
 const CHAT_HANDLER_FLOW_QUEUE_TARGET = 'chat-handler-flow-queue';
+const ECHO_PROBE_MARKER = '__probe__echo__probe__';
 
 // ============================================================================
 // Internal types
@@ -523,7 +524,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       chatStoreRef: ctx.chatStoreRef,
       scratchStoreRef: ctx.scratchStoreRef,
     };
-    const initResult = await ctx.boardOps.init({ params, body: {} });
+    const body: Record<string, unknown> = {};
+    if (ctx.taskExecutorRef) body['task-executor-ref'] = ctx.taskExecutorRef;
+    if (ctx.chatHandlerFlow !== undefined) body['chat-handler-flow'] = ctx.chatHandlerFlow;
+    const initResult = await ctx.boardOps.init({ params, body });
     if (initResult.status !== 'success') {
       throw Object.assign(
         new Error((initResult as any).error || `init failed for ${ctx.label}`),
@@ -871,7 +875,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (!ctx) return null;
 
     const flowResult = await ctx.boardOps.getConfig({ params: { key: 'chat-handler-flow' } });
-    const handlerFlow = flowResult.status === 'success' ? (flowResult as any).data?.value : null;
+    const persistedHandlerFlow = flowResult.status === 'success' ? (flowResult as any).data?.value : null;
+    const handlerFlow = persistedHandlerFlow ?? ctx.chatHandlerFlow ?? null;
     const handlerRef = ctx.chatHandlerRef;
     if (handlerFlow == null && (!handlerRef || typeof handlerRef !== 'object')) return null;
 
@@ -884,33 +889,44 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat handler queueing + dispatch ─────────────────────────────────────
 
-  async function queueChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = ''): Promise<void> {
-    const target = await resolveChatHandlerTarget(cardId);
-    if (!target) return;
-    const { ctx, handlerFlow, handlerRef } = target;
+  function isEchoProbeText(text: unknown): boolean {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    return trimmed.length >= (ECHO_PROBE_MARKER.length * 2)
+      && trimmed.startsWith(ECHO_PROBE_MARKER)
+      && trimmed.endsWith(ECHO_PROBE_MARKER);
+  }
 
-    if (!processingAlreadySet) {
-      try { await setChatProcessing(cardId, true); } catch {}
-    }
-
-    const args: Record<string, unknown> = {
-      boardId,
-      cardId: String(cardId),
-      lastChatEntryId: lastEntryId,
-      ...(turnId ? { turnId } : {}),
-      ...executionExtra,
-      ...(serverUrl ? { serverUrl } : {}),
-    };
-
-    const executionRef = handlerFlow != null
-      ? {
-          meta: 'chat-handler-flow',
-          howToRun: 'built-in' as const,
-          whatToRun: { kind: 'built-in', value: CHAT_HANDLER_FLOW_QUEUE_TARGET },
-        }
-      : handlerRef;
-
+  async function queueChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = '', isProbe = false): Promise<void> {
     try {
+      const target = await resolveChatHandlerTarget(cardId);
+      if (!target) {
+        try { await setChatProcessing(cardId, false); } catch {}
+        return;
+      }
+      const { ctx, handlerFlow, handlerRef } = target;
+
+      if (!processingAlreadySet) {
+        try { await setChatProcessing(cardId, true); } catch {}
+      }
+
+      const args: Record<string, unknown> = {
+        boardId,
+        cardId: String(cardId),
+        lastChatEntryId: lastEntryId,
+        ...(turnId ? { turnId } : {}),
+        isProbe: Boolean(isProbe),
+        ...executionExtra,
+        ...(serverUrl ? { serverUrl } : {}),
+      };
+
+      const executionRef = handlerFlow != null
+        ? {
+            meta: 'chat-handler-flow',
+            howToRun: 'built-in' as const,
+            whatToRun: { kind: 'built-in', value: CHAT_HANDLER_FLOW_QUEUE_TARGET },
+          }
+        : handlerRef;
+
       if (isAsyncBoardPlatformAdapter(ctx.boardAdapter)) {
         await queueWorkerStoreForLane(ctx, 'chat-agent').enqueueRequest({
           boardId,
@@ -986,6 +1002,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
             ? payload.turn
             : '';
       const controlplaneRegistry = createMcpControlplaneToolRegistry();
+      const isProbe = isEchoProbeText(payload?.text);
       const appendResult = await invokeMcpTool('manage.add-chat-entry-and-any-attachments', {
         board_id: boardId,
         card_id: cardId,
@@ -1012,7 +1029,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         throw new Error(extractMcpFailureMessage(processingResult, `chat-send processing update failed for card ${cardId}`));
       }
 
-      void queueChatHandler(cardId, appendId, true, turnId);
+      void queueChatHandler(cardId, appendId, true, turnId, isProbe);
       return;
     }
 

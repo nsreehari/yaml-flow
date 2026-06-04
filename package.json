@@ -144,7 +144,7 @@
     "check:bundle-budget": "node scripts/check-bundle-budgets.mjs",
     "check:browser-bundle": "node scripts/check-browser-bundle-safety.mjs",
     "check:minified": "node scripts/check-minified.mjs",
-    "release:gate": "npm run -s build && npm run -s build:browser && npm run -s test:run && npm run -s test:e2e && npm run -s check:bundle-budget && npm run -s check:browser-bundle && npm run -s check:minified",
+    "release:gate": "npm run -s build && npm run -s build:cli && npm run -s build:browser && npm run -s test:run && npm run -s test:e2e && npm run -s check:bundle-budget && npm run -s check:browser-bundle && npm run -s check:minified",
     "standalone": "echo standalone is canonical; no assembly step required",
     "pycli:install": "python -m pip install -r py-standalone/requirements.txt",
     "pycli:install:venv": "c:/Users/sreenaga/ADO/ai-tool-evolver/.venv/Scripts/python.exe -m pip install -r py-standalone/requirements.txt",
@@ -160,7 +160,7 @@
     "validate:cards": "tsx scripts/validate-live-cards.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run build:browser && npm run check:bundle-budget && npm run check:browser-bundle && npm run check:minified"
+    "prepublishOnly": "npm run build && npm run build:cli && npm run build:browser && npm run check:bundle-budget && npm run check:browser-bundle && npm run check:minified"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

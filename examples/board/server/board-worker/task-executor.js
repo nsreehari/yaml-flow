@@ -38,9 +38,7 @@
  *     "boardRuntimeDir": "<relative>",
  *     "runtimeStatusDir": "<relative>",
  *     "cardsDir": "<relative>",
- *     "serverUrl": "<base url>",
- *     "boardLiveCardsCliJs": "<abs path>",
- *     "stepMachineCliPath": "<abs path>"
+ *     "serverUrl": "<base url>"
  *   }
  *
  * Source kinds are resolved from source_def_flows.json in resolveOrder.

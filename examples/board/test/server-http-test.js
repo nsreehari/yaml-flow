@@ -14,7 +14,6 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
@@ -51,8 +50,17 @@ const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).sl
 const BOARD_ID = 'live';
 const BOARD_DIR = path.resolve(__dirname, '..');
 const SERVER_SCRIPT = path.resolve(BOARD_DIR, 'server', 'board-server.js');
-const SSE_WORKER_SCRIPT = path.join(__dirname, 'sse-worker.js');
-const CARD_PATTERN = 'cardT*';
+// Force the board server to start with zero cards; the test upserts the
+// three cardT-* fixtures itself in T0 so the SSE upsert/delta path is
+// exercised end-to-end.
+const CARD_PATTERN = '__none__*';
+const CARDS_DIR = path.resolve(BOARD_DIR, 'cards');
+const T0_CARD_FILES = [
+  'cardT-portfolio.json',
+  'cardT-market-prices.json',
+  'cardT-portfolio-value.json',
+];
+const T0_EXPECTED_CARD_IDS = ['card-market-prices', 'card-portfolio', 'card-portfolio-value'];
 const T2_FILE_CARD_ID = 'card-market-prices';
 const CHAT_CARD_ID = 'card-portfolio';
 
@@ -92,7 +100,6 @@ if (fs.existsSync(SETUP_DIR)) {
 // ---------------------------------------------------------------------------
 
 const NS = {
-  initialPayload: null,
   statusSummary: null,
   statusGeneration: 0,
   computedValues: {},
@@ -102,9 +109,6 @@ const NS = {
 
 function applyFrame(payload) {
   if (payload && Array.isArray(payload.cardDefinitions)) {
-    if (!NS.initialPayload && payload.cardDefinitions.length > 0) {
-      NS.initialPayload = payload;
-    }
     const summary = payload.statusSnapshot && payload.statusSnapshot.summary;
     if (summary) {
       NS.statusSummary = summary;
@@ -266,9 +270,6 @@ async function stopChildProcess(proc, label) {
     throw new Error(`${label} did not exit after kill()`);
   }
 }
-
-const waitForInitialPayload = (ms = 15_000) =>
-  waitUntil(() => NS.initialPayload || false, ms, 'initial SSE payload');
 
 const waitForAllCompleted = (ms = 60_000, label = 'all completed') =>
   waitUntil(() => {
@@ -502,7 +503,7 @@ console.log(`target: ${BASE}`);
 console.log(`card pattern: ${CARD_PATTERN}`);
 
 const serverProc = await startServer(PORT);
-let sseWorker = null;
+let boardSseClient = null;
 let chatSseClient = null;
 let chatSseClientId = '';
 
@@ -515,32 +516,34 @@ try {
     `POST /api/boards returned ${regRes.status}: ${JSON.stringify(regRes.data)}`);
   console.log(`[setup] board '${BOARD_ID}' registered (${regRes.status})`);
 
-  console.log('\n=== T0 Step 1: /sse?one-shot bootstrap ===');
-  const initRes = await httpGet(`${BASE}/sse?one-shot`);
-  assert(initRes.status === 200, `sse one-shot returned ${initRes.status}`);
-  console.log('[T0.1] sse one-shot ok');
-
-  console.log('\n=== T0 Step 2: start SSE worker ===');
+  console.log('\n=== T0 Step 1: start SSE client (board expected empty) ===');
   const sseClientId = `server-http-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const sseUrl = `${BASE}/sse?clientId=${encodeURIComponent(sseClientId)}`;
-  sseWorker = new Worker(SSE_WORKER_SCRIPT, {
-    workerData: { sseUrl },
-  });
-  sseWorker.on('message', (msg) => {
-    if (msg.type === 'frame') applyFrame(msg.payload);
-    else if (msg.type === 'error') console.error(`[sse-worker] ${msg.message}`);
-  });
-  sseWorker.on('error', (err) => console.error(`[sse-worker] uncaught: ${err.message}`));
-  sseWorker.postMessage({ type: 'start' });
+  boardSseClient = startSseClient(sseUrl, applyFrame);
+  // Give the streaming endpoint a moment to deliver the initial (empty) snapshot.
+  await wait(500);
+  console.log('[T0.1] SSE client connected');
 
-  const initialPayload = await waitForInitialPayload();
-  const cardCount = Array.isArray(initialPayload.cardDefinitions) ? initialPayload.cardDefinitions.length : 0;
-  assert(cardCount === 3, `expected 3 cards (cardT*), got ${cardCount}`);
-  const cardIds = initialPayload.cardDefinitions.map(c => c.id).sort();
-  console.log(`[T0.2] SSE initial payload received (${cardCount} cards: ${cardIds.join(', ')})`);
+  console.log('\n=== T0 Step 2: upsert 3 cardT-* fixtures ===');
+  for (const fileName of T0_CARD_FILES) {
+    const cardJson = JSON.parse(fs.readFileSync(path.join(CARDS_DIR, fileName), 'utf-8'));
+    const cardId = cardJson?.id;
+    assert(typeof cardId === 'string' && cardId.length > 0, `fixture ${fileName} missing id`);
+    const upsertRes = await httpMcp('manage.upsert-card', {
+      card_id: cardId,
+      candidate_card_content: cardJson,
+    });
+    assert(upsertRes.status === 200, `manage.upsert-card(${cardId}) returned ${upsertRes.status}: ${JSON.stringify(upsertRes.data)}`);
+    assert(upsertRes.data?.status === 'success', `manage.upsert-card(${cardId}) failed: ${JSON.stringify(upsertRes.data)}`);
+    console.log(`[T0.2] upserted ${cardId}`);
+  }
 
-  console.log('\n=== T0 Step 3: wait for all cards to complete ===');
-  const t0Summary = await waitForAllCompleted(30_000, 'T0 initial completion');
+  console.log('\n=== T0 Step 3: wait for all 3 cards to complete via SSE ===');
+  const t0Summary = await waitUntil(() => {
+    const s = NS.statusSummary;
+    if (s && s.card_count === 3 && s.completed === 3) return s;
+    return false;
+  }, 60_000, 'T0 initial completion (3 cards)');
   assert(t0Summary.failed === 0, `T0 expected failed=0, got ${t0Summary.failed}`);
   console.log(`[T0.3] completed: ${JSON.stringify(t0Summary)}`);
 
@@ -550,6 +553,8 @@ try {
   assert(statusMcpRes.data?.status === 'success', `inspect.board-runtime-status failed: ${JSON.stringify(statusMcpRes.data)}`);
   const mcpSummary = statusMcpRes.data?.data?.summary;
   assert(mcpSummary, 'summary missing from inspect.board-runtime-status');
+  assert(mcpSummary.card_count === T0_EXPECTED_CARD_IDS.length,
+    `expected card_count=${T0_EXPECTED_CARD_IDS.length}, got ${mcpSummary.card_count}`);
   assert(mcpSummary.completed === mcpSummary.card_count, `not all complete: ${JSON.stringify(mcpSummary)}`);
   console.log(`[T0.4] board-status: ${JSON.stringify(mcpSummary)}`);
 
@@ -1673,8 +1678,8 @@ try {
     } catch { /* ignore */ }
   }
   if (chatSseClient) chatSseClient.close();
+  if (boardSseClient) boardSseClient.close();
   await stopChildProcess(serverProc, 'demo board server');
-  if (sseWorker) await sseWorker.terminate();
 
   // Clean up the test setup directory
   if (fs.existsSync(SETUP_DIR)) {

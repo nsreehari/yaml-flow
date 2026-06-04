@@ -36,7 +36,11 @@ import {
   startQueueLaneRunners,
   serializeRef,
 } from 'yaml-flow/board-live-cards-node';
-import { registerInProcessBoardWorkerCallback } from 'yaml-flow/board-worker-adapter';
+import {
+  createImmediateBoardWorkerHook,
+  registerInProcessBoardWorkerCallback,
+  registerInProcessBoardWorkerInvoke,
+} from 'yaml-flow/board-worker-adapter';
 import {
   createStepMachineChatFlowRunner,
 } from 'yaml-flow/step-machine-public';
@@ -106,32 +110,6 @@ function applyFlowTimeout(flow, timeoutMs) {
   };
 }
 
-function buildChatHandlerFlowFromScript(scriptPath, timeoutMs = null) {
-  if (!scriptPath) return null;
-  const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(BOARD_ROOT, scriptPath);
-  const resolvedTimeoutMs = normalizeTimeoutMs(timeoutMs, 300000);
-  return {
-    id: 'demo-chat-script-handler',
-    settings: { start_step: 'respond', max_total_steps: 5, timeout_ms: resolvedTimeoutMs },
-    steps: {
-      respond: {
-        description: 'Run the demo board chat responder from a script path',
-        handler: {
-          type: 'ref',
-          howToRun: 'local-node',
-          whatToRun: { kind: 'fs-path', value: resolved },
-          meta: 'chat-handler',
-        },
-        transitions: { success: 'completed', failure: 'failed' },
-      },
-    },
-    terminal_states: {
-      completed: { description: 'Chat response completed', return_intent: 'success', return_artifacts: false },
-      failed: { description: 'Chat response failed', return_intent: 'failure', return_artifacts: false },
-    },
-  };
-}
-
 function resolveKindRefFromConfig(configValue) {
   if (typeof configValue !== 'string' || !configValue.trim()) return null;
   const trimmed = configValue.trim();
@@ -174,20 +152,18 @@ const configuredRuntimeMode = normalizeRuntimeMode(
 );
 
 // Resolve top-level config defaults (used as fallbacks for per-board config)
-const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath);
-const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath);
-const configuredFlowFromPath = loadJsonFromConfig(serverConfig.chatHandlerFlowPath);
+const configuredTaskExecutorPath = resolveFromConfig(serverConfig.taskExecutorPath)
+  || path.join(SERVER_DIR, 'board-worker', 'task-executor.js');
+const configuredChatHandlerPath = resolveFromConfig(serverConfig.chatHandlerPath)
+  || path.join(SERVER_DIR, 'chat-flow', 'copilot-chat', 'assistant.js');
+const configuredFlowFromPath = loadJsonFromConfig(serverConfig.chatHandlerFlowPath)
+  || loadJsonFromConfig(path.join('server', 'chat-flow', 'flow-steps.json'));
 const configuredChatHandlerFlow = applyFlowTimeout(
-  configuredFlowFromPath || buildChatHandlerFlowFromScript(configuredChatHandlerPath, configuredChatFlowTimeoutMs),
+  configuredFlowFromPath,
   configuredChatFlowTimeoutMs,
 );
 const configuredInferenceAdapterPath = resolveFromConfig(serverConfig.inferenceAdapterPath);
-const configuredStepMachineCliPath = resolveFromConfig(serverConfig.stepMachineCliPath);
 const configuredServerMetaStoreRef = resolveKindRefFromConfig(serverConfig.serverMetaStoreRef);
-
-if (!process.env.DEMO_STEP_MACHINE_CLI_PATH && configuredStepMachineCliPath) {
-  process.env.DEMO_STEP_MACHINE_CLI_PATH = configuredStepMachineCliPath;
-}
 if (!process.env.DEMO_CHAT_HANDLER_PATH && configuredChatHandlerPath) {
   process.env.DEMO_CHAT_HANDLER_PATH = configuredChatHandlerPath;
 }
@@ -262,24 +238,6 @@ function makeExecutionRef(scriptPath, extra) {
   };
 }
 
-function makeLocalTaskExecutorRef(scriptPath, extra) {
-  if (!scriptPath) return undefined;
-  const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(process.cwd(), scriptPath);
-  return {
-    meta: 'task-executor',
-    howToRun: 'local-node',
-    whatToRun: serializeRef({ kind: 'fs-path', value: resolved }),
-    ...(extra !== undefined ? { extra } : {}),
-  };
-}
-
-function isHostedTaskExecutorRef(ref) {
-  return ref?.howToRun === 'queue-storage'
-    || ref?.howToRun === 'in-process-loop'
-    || ref?.howToRun === 'http:post'
-    || ref?.howToRun === 'http:get';
-}
-
 function makeHostedBoardWorkerRef(boardId, taskExecPath, transport, executionExtra) {
   if (!taskExecPath) return undefined;
   if (transport === 'in-process-loop') {
@@ -309,6 +267,21 @@ function makeHostedBoardWorkerRef(boardId, taskExecPath, transport, executionExt
     };
   }
   throw new Error(`Unsupported board-worker transport for demo host: ${transport}`);
+}
+
+function isHostedTaskExecutorRef(ref) {
+  return ref?.howToRun === 'queue-storage'
+    || ref?.howToRun === 'in-process-loop'
+    || ref?.howToRun === 'http:post'
+    || ref?.howToRun === 'http:get';
+}
+
+function normalizeImmediateExecutorResult(result) {
+  if (typeof result === 'string') return result;
+  if (result && typeof result === 'object' && !Array.isArray(result) && typeof result.stdout === 'string') {
+    return String(result.stdout);
+  }
+  return JSON.stringify(result ?? {});
 }
 
 function makeBoardWorkerCallbackTransport(serverUrl, boardApiBasePath, transport, boardId) {
@@ -948,12 +921,21 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
       return cloudKvStorageForRef(ref);
     };
     const cloudHostedTaskExecutorRef = makeHostedBoardWorkerRef(boardId, taskExecPath, boardWorkerTransport, executionExtra);
-    const cloudLocalSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
-    if (cloudLocalSyncTaskExecutorRef) {
+    const hostedBoardWorkerDispatch = createHostedBoardWorkerDispatcher(boardId, taskExecPath);
+    if (hostedBoardWorkerDispatch) {
+      const immediateTaskExecutor = createImmediateBoardWorkerHook(hostedBoardWorkerDispatch, executionExtra);
       const invokeExecutor = cloudNonCoreAdapter.invokeExecutor.bind(cloudNonCoreAdapter);
-      cloudNonCoreAdapter.invokeExecutor = (ref, subcommand, execOpts) => {
-        const syncRef = isHostedTaskExecutorRef(ref) ? cloudLocalSyncTaskExecutorRef : ref;
-        return invokeExecutor(syncRef, subcommand, execOpts);
+      cloudNonCoreAdapter.invokeExecutor = async (ref, subcommand, execOpts) => {
+        if (isHostedTaskExecutorRef(ref)) {
+          const result = await immediateTaskExecutor({
+            subcommand,
+            ...(execOpts?.input !== undefined ? { input: execOpts.input } : {}),
+            ...(execOpts?.timeout !== undefined ? { timeoutMs: execOpts.timeout } : {}),
+            ...(ref?.extra ? { extra: ref.extra } : {}),
+          });
+          return normalizeImmediateExecutorResult(result);
+        }
+        return invokeExecutor(ref, subcommand, execOpts);
       };
     }
     cloudNonCoreAdapter.requestProcessAccumulated = () => {};
@@ -997,14 +979,6 @@ function buildBoardContextConfig(label, boardDir, taskExecPath, chatHandlerFlow,
     notifyChannel,
     ...(callbackTransport ? { callbackTransport } : {}),
   });
-  const localSyncTaskExecutorRef = makeLocalTaskExecutorRef(taskExecPath, executionExtra);
-  if (localSyncTaskExecutorRef) {
-    const invokeExecutor = nonCoreAdapter.invokeExecutor.bind(nonCoreAdapter);
-    nonCoreAdapter.invokeExecutor = (ref, subcommand, execOpts) => {
-      const syncRef = isHostedTaskExecutorRef(ref) ? localSyncTaskExecutorRef : ref;
-      return invokeExecutor(syncRef, subcommand, execOpts);
-    };
-  }
   boardAdapter.requestProcessAccumulated = () => {};
   nonCoreAdapter.requestProcessAccumulated = () => {};
 
@@ -1093,12 +1067,10 @@ const runtime = createMultiBoardServerRuntime({
     const chatHandlerFlow = applyFlowTimeout(
       loadJsonFromConfig(regular.chatHandlerFlowPath)
         || entry?.chatHandlerFlow
-        || buildChatHandlerFlowFromScript(chatHandlerPath, boardFlowTimeoutMs)
         || configuredChatHandlerFlow,
       boardFlowTimeoutMs,
     );
     const infAdapterPath = resolveFromConfig(regular.inferenceAdapterPath) || (entry?.inferenceAdapterPath || configuredInferenceAdapterPath);
-    const stepMachinePath = resolveFromConfig(regular.stepMachineCliPath || cfg?.stepMachineCliPath) || (entry?.stepMachineCliPath || configuredStepMachineCliPath);
     const runtimeMode = normalizeRuntimeMode(regular.mode || entry?.mode || cfg?.mode || configuredRuntimeMode);
     const boardWorkerTransport = normalizeHostedBoardWorkerTransport(
       runtimeMode,
@@ -1141,7 +1113,6 @@ const runtime = createMultiBoardServerRuntime({
       serverUrl: `http://127.0.0.1:${PORT}`,
       taskExecutorTransport: boardWorkerTransport,
       chatCopilotTimeoutMs,
-      ...(stepMachinePath ? { stepMachineCliPath: stepMachinePath } : {}),
     };
 
     const baseCfg = buildBoardContextConfig('base', boardDir, taskExecPath, chatHandlerFlow, infAdapterPath, boardId, baseExecutionExtra, runtimeMode);
@@ -1181,7 +1152,6 @@ const runtime = createMultiBoardServerRuntime({
         projectRoot: BOARD_ROOT,
         chatFlowRoot,
         chatCopilotTimeoutMs,
-        ...(stepMachinePath ? { stepMachineCliPath: stepMachinePath } : {}),
       },
     });
 
@@ -1200,6 +1170,9 @@ const runtime = createMultiBoardServerRuntime({
           logger.error(`[board-server] in-process board-worker failed for ${boardId}: ${String(err && err.message || err)}`);
         });
         return { result: 'success', data: { dispatched: true } };
+      });
+      registerInProcessBoardWorkerInvoke(`board:${boardId}:board-worker`, async (request) => {
+        return await hostedBoardWorkerDispatch(request);
       });
     }
     if ((boardWorkerTransport === 'in-process-loop' || boardWorkerTransport === 'queue' || boardWorkerTransport === 'http') && hostedBoardWorkerDispatch) {
