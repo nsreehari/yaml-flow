@@ -1001,6 +1001,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           : payload && typeof payload.turn === 'string'
             ? payload.turn
             : '';
+      // chat-send is the text-only entrypoint; attachments must be uploaded
+      // separately via manage.add-chat-attachment before sending the text.
+      if (payload && 'files' in payload && payload.files !== undefined && payload.files !== null) {
+        throw Object.assign(
+          new Error('chat-send does not accept a "files" parameter; upload attachments via manage.add-chat-attachment first'),
+          { statusCode: 400 },
+        );
+      }
       const controlplaneRegistry = createMcpControlplaneToolRegistry();
       const isProbe = isEchoProbeText(payload?.text);
       const appendResult = await invokeMcpTool('manage.add-chat-entry-and-any-attachments', {
