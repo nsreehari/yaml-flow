@@ -6,7 +6,7 @@
  * Targets the 'live' board with --cards-pattern cardT* to load only the 3
  * test cards (cardT-portfolio, cardT-market-prices, cardT-portfolio-value).
  *
- * T0: /sse?one-shot bootstrap → SSE initial payload → wait for all cards to complete
+ * T0: /sse streaming connect → upsert fixtures → wait for all cards to complete
  * T1: PATCH holdings (+1 row) → verify recomputation (holdings +1, positions +1)
  *
  * Usage:
@@ -168,6 +168,39 @@ function parseSseBlocks(buffer) {
   return { payloads, remainder: buf };
 }
 
+function parseRawSseBlocks(buffer) {
+  const frames = [];
+  let buf = buffer;
+  while (true) {
+    const idx = buf.indexOf('\n\n');
+    if (idx === -1) break;
+    const block = buf.slice(0, idx);
+    buf = buf.slice(idx + 2);
+    if (!block.trim()) continue;
+    const frame = { id: null, event: null, data: '', payload: null, raw: block };
+    const dataLines = [];
+    for (const line of block.split('\n')) {
+      if (line.startsWith(':')) continue;
+      if (line.startsWith('id:')) {
+        frame.id = line.slice(3).trim();
+      } else if (line.startsWith('event:')) {
+        frame.event = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).replace(/^ /, ''));
+      }
+    }
+    frame.data = dataLines.join('\n');
+    if (!frame.id && !frame.event && !frame.data) continue;
+    if (frame.data) {
+      try {
+        frame.payload = JSON.parse(frame.data);
+      } catch { /* ignore malformed */ }
+    }
+    frames.push(frame);
+  }
+  return { frames, remainder: buf };
+}
+
 function startSseClient(sseUrl, onPayload) {
   const req = http.get(sseUrl, (res) => {
     let buf = '';
@@ -185,6 +218,113 @@ function startSseClient(sseUrl, onPayload) {
       try { req.destroy(); } catch { /* */ }
     },
   };
+}
+
+function startRawSseClient({ sseUrl, headers = {}, onResponse, onFrame, onClose, onError }) {
+  let closed = false;
+  const req = http.request(sseUrl, { headers }, (res) => {
+    let buf = '';
+    res.setEncoding('utf-8');
+    try { onResponse?.(res); } catch { /* ignore */ }
+    res.on('data', (chunk) => {
+      buf = normalizeSseChunkBuffer(buf, chunk);
+      const parsed = parseRawSseBlocks(buf);
+      buf = parsed.remainder;
+      for (const frame of parsed.frames) {
+        try { onFrame?.(frame, res); } catch { /* ignore */ }
+      }
+    });
+    const closeOnce = () => {
+      if (closed) return;
+      closed = true;
+      try { onClose?.(res); } catch { /* ignore */ }
+    };
+    res.on('end', closeOnce);
+    res.on('close', closeOnce);
+    res.on('error', (err) => {
+      try { onError?.(err); } catch { /* ignore */ }
+    });
+  });
+  req.on('error', (err) => {
+    try { onError?.(err); } catch { /* ignore */ }
+  });
+  req.end();
+  return {
+    close() {
+      try { req.destroy(); } catch { /* ignore */ }
+    },
+  };
+}
+
+function waitForRawSseFrames({ sseUrl, headers = {}, until, timeoutMs = 15_000, waitForClose = false }) {
+  return new Promise((resolve, reject) => {
+    const state = { statusCode: null, headers: {}, frames: [], closed: false };
+    let settled = false;
+    let client = null;
+    const predicate = typeof until === 'function' ? until : ((current) => current.frames.length > 0);
+
+    function maybeResolve() {
+      if (settled) return;
+      if (!predicate(state)) return;
+      if (waitForClose && !state.closed) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (!waitForClose && client) client.close();
+      resolve(state);
+    }
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (client) client.close();
+      reject(new Error(`Timeout (${timeoutMs}ms) waiting for raw SSE frames`));
+    }, timeoutMs);
+
+    client = startRawSseClient({
+      sseUrl,
+      headers,
+      onResponse(res) {
+        state.statusCode = res.statusCode ?? null;
+        state.headers = res.headers || {};
+        maybeResolve();
+      },
+      onFrame(frame) {
+        state.frames.push(frame);
+        maybeResolve();
+      },
+      onClose() {
+        state.closed = true;
+        maybeResolve();
+      },
+      onError(err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(err);
+      },
+    });
+  });
+}
+
+function waitForFirstSsePayload(sseUrl, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let client = null;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (client) client.close();
+      reject(new Error(`Timeout (${timeoutMs}ms) waiting for: first SSE payload`));
+    }, timeoutMs);
+
+    client = startSseClient(sseUrl, (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      client.close();
+      resolve(payload);
+    });
+  });
 }
 
 function captureChatEvents(payload, cardId) {
@@ -236,6 +376,79 @@ function waitUntil(predicate, timeoutMs, label) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractStatusSummaryFromPayload(payload) {
+  if (payload?.statusSnapshot?.summary && typeof payload.statusSnapshot.summary === 'object') {
+    return payload.statusSnapshot.summary;
+  }
+  if (payload?.kind === 'notification-batch' && Array.isArray(payload.notifications)) {
+    for (const notification of payload.notifications) {
+      if (notification?.kind === 'status' && notification.status?.summary && typeof notification.status.summary === 'object') {
+        return notification.status.summary;
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeHydratedChatMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).map((message) => ({
+    role: String(message?.role || ''),
+    text: String(message?.text || ''),
+    files: Array.isArray(message?.files) ? message.files : [],
+  }));
+}
+
+function readHeaderValue(headers, name) {
+  const raw = headers?.[name.toLowerCase()];
+  return Array.isArray(raw) ? String(raw[0] || '') : String(raw || '');
+}
+
+function buildTsStaticCard(cardId, label) {
+  return {
+    id: cardId,
+    meta: {
+      title: label,
+      tags: ['ts', 'sse'],
+      desc: `${label} disposable SSE delta card`,
+    },
+    compute: [],
+    view: {
+      elements: [
+        {
+          kind: 'markdown',
+          data: {
+            bind: 'card_data.text',
+          },
+        },
+      ],
+      layout: {
+        board: {
+          col: 2,
+          order: 99,
+        },
+        canvas: {
+          x: 1600,
+          y: 600,
+          w: 260,
+          h: 120,
+        },
+      },
+      features: {},
+    },
+    card_data: {
+      text: label,
+    },
+  };
+}
+
+function assertObjectContains(actual, expected, label) {
+  assert(actual && typeof actual === 'object', `${label} actual value is not an object`);
+  assert(expected && typeof expected === 'object', `${label} expected value is not an object`);
+  for (const [key, value] of Object.entries(expected)) {
+    assert(Object.is(actual[key], value), `${label}.${key} mismatch: expected ${JSON.stringify(value)}, got ${JSON.stringify(actual[key])}`);
+  }
 }
 
 async function stopChildProcess(proc, label) {
@@ -508,7 +721,7 @@ let chatSseClient = null;
 let chatSseClientId = '';
 
 try {
-  // ── T0: one-shot bootstrap, SSE connect, wait for initial completion ──
+  // ── T0: streaming SSE connect, upsert fixtures, wait for initial completion ──
 
   // Register the 'live' board via POST (v8 runtime requires explicit registration)
   const regRes = await httpJson('POST', `http://127.0.0.1:${PORT}/api/boards`, { id: BOARD_ID, label: 'Live' });
@@ -979,6 +1192,168 @@ try {
     assert(!Array.isArray(t2bUser?.files) || t2bUser.files.length === 0, 'T3b user chat message should remain text-only after add-chat-attachment upload');
     assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant probe echo mismatch');
     console.log('[T3b] ok: add-chat-attachment upload plus text-only chat-send preserved the normal probe lifecycle');
+
+    console.log('\n=== T3c: fresh /sse connect hydrates current board state ===');
+    const t3cInspectStatusRes = await httpMcp('inspect.board-runtime-status', {});
+    assert(t3cInspectStatusRes.status === 200, `T3c inspect.board-runtime-status returned ${t3cInspectStatusRes.status}`);
+    assert(t3cInspectStatusRes.data?.status === 'success', `T3c inspect.board-runtime-status failed: ${JSON.stringify(t3cInspectStatusRes.data)}`);
+    const t3cExpectedSummary = t3cInspectStatusRes.data?.data?.summary;
+    assert(t3cExpectedSummary, 'T3c summary missing from inspect.board-runtime-status');
+
+    const t3cExpectedCards = {};
+    for (const cardId of T0_EXPECTED_CARD_IDS) {
+      const t3cInspectCardRes = await httpMcp('inspect.card-definition-and-runtime', { card_id: cardId });
+      assert(t3cInspectCardRes.status === 200, `T3c inspect.card-definition-and-runtime(${cardId}) returned ${t3cInspectCardRes.status}`);
+      assert(t3cInspectCardRes.data?.status === 'success', `T3c inspect.card-definition-and-runtime(${cardId}) failed: ${JSON.stringify(t3cInspectCardRes.data)}`);
+      const t3cInspectCardData = t3cInspectCardRes.data?.data;
+      assert(t3cInspectCardData && typeof t3cInspectCardData === 'object', `T3c inspect.card-definition-and-runtime(${cardId}) missing data`);
+      t3cExpectedCards[cardId] = t3cInspectCardData;
+    }
+
+    const t3cRefreshClientId = `server-http-refresh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const t3cRefreshPayload = await waitForFirstSsePayload(`${BASE}/sse?clientId=${encodeURIComponent(t3cRefreshClientId)}`);
+    assert(t3cRefreshPayload && typeof t3cRefreshPayload === 'object', 'T3c missing refresh SSE payload');
+
+    const t3cCardDefinitions = Array.isArray(t3cRefreshPayload.cardDefinitions) ? t3cRefreshPayload.cardDefinitions : [];
+    const t3cCardIds = t3cCardDefinitions.map((card) => card?.id).filter((id) => typeof id === 'string').sort();
+    assert(JSON.stringify(t3cCardIds) === JSON.stringify(T0_EXPECTED_CARD_IDS),
+      `T3c refreshed SSE cardDefinitions mismatch: ${JSON.stringify(t3cCardIds)}`);
+
+    const t3cStatusSummary = t3cRefreshPayload.statusSnapshot?.summary;
+    assert(t3cStatusSummary, 'T3c refresh SSE payload missing statusSnapshot.summary');
+    assertObjectContains(t3cStatusSummary, t3cExpectedSummary, 'T3c refresh SSE summary');
+
+    const t3cCardRuntimeById = t3cRefreshPayload.cardRuntimeById && typeof t3cRefreshPayload.cardRuntimeById === 'object'
+      ? t3cRefreshPayload.cardRuntimeById
+      : {};
+    for (const card of t3cCardDefinitions) {
+      const cardId = card?.id;
+      if (typeof cardId !== 'string' || !t3cExpectedCards[cardId]) continue;
+      const t3cExpectedCard = t3cExpectedCards[cardId];
+      assert(JSON.stringify(card) === JSON.stringify(t3cExpectedCard.card_definition_and_static_data),
+        `T3c refresh SSE cardDefinitions[${cardId}] mismatch`);
+
+      const t3cHydratedCardRuntime = t3cCardRuntimeById[cardId];
+      assert(t3cHydratedCardRuntime && typeof t3cHydratedCardRuntime === 'object', `T3c refresh SSE payload missing cardRuntimeById.${cardId}`);
+      assert(JSON.stringify(t3cHydratedCardRuntime.card_data || {}) === JSON.stringify(t3cExpectedCard.card_definition_and_static_data?.card_data || {}),
+        `T3c refresh SSE cardRuntimeById.${cardId}.card_data mismatch`);
+      assert(JSON.stringify(t3cHydratedCardRuntime.computed_values || {}) === JSON.stringify(t3cExpectedCard.runtime_data?.computed_values || {}),
+        `T3c refresh SSE cardRuntimeById.${cardId}.computed_values mismatch`);
+    }
+    console.log('[T3c] ok: fresh /sse first payload hydrated the current board state');
+
+    console.log('\n=== TS: one-shot, raw framing, replay, delta ordering, and chat hydration ===');
+    const tsExpectedChatRes = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
+    assert(tsExpectedChatRes.status === 200, `TS inspect.chat-messages-on-cards returned ${tsExpectedChatRes.status}`);
+    const tsExpectedChatMessages = normalizeHydratedChatMessages(tsExpectedChatRes.data?.data?.messages || []);
+
+    const tsOneShot = await waitForRawSseFrames({
+      sseUrl: `${BASE}/sse?one-shot`,
+      timeoutMs: 15_000,
+      until: (state) => state.frames.length >= 1,
+      waitForClose: true,
+    });
+    assert(tsOneShot.statusCode === 200, `TS one-shot returned ${tsOneShot.statusCode}`);
+    assert(/text\/event-stream/i.test(readHeaderValue(tsOneShot.headers, 'content-type')),
+      `TS one-shot content-type mismatch: ${readHeaderValue(tsOneShot.headers, 'content-type')}`);
+    assert(tsOneShot.closed === true, 'TS one-shot connection should close after first frame');
+    assert(tsOneShot.frames.length === 1, `TS one-shot expected exactly 1 frame, got ${tsOneShot.frames.length}`);
+    const tsOneShotFrame = tsOneShot.frames[0];
+    assert(/^\d+$/.test(String(tsOneShotFrame.id || '')), `TS one-shot frame missing numeric id: ${JSON.stringify(tsOneShotFrame)}`);
+    assert(tsOneShotFrame.payload && typeof tsOneShotFrame.payload === 'object', 'TS one-shot frame missing JSON payload');
+    const tsOneShotChatState = tsOneShotFrame.payload.cardChatsByCardId?.[CHAT_CARD_ID];
+    assert(tsOneShotChatState && typeof tsOneShotChatState === 'object', `TS one-shot payload missing cardChatsByCardId.${CHAT_CARD_ID}`);
+    assert(JSON.stringify(normalizeHydratedChatMessages(tsOneShotChatState.messages)) === JSON.stringify(tsExpectedChatMessages),
+      'TS one-shot cardChatsByCardId hydration mismatch');
+
+    const tsDeltaClientId = `ts-delta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tsRawFrames = [];
+    const tsDeltaClient = startRawSseClient({
+      sseUrl: `${BASE}/sse?clientId=${encodeURIComponent(tsDeltaClientId)}`,
+      onFrame(frame) {
+        tsRawFrames.push(frame);
+      },
+    });
+
+    try {
+      const tsInitialFrame = await waitUntil(() => tsRawFrames[0] || false, 15_000, 'TS initial raw SSE frame');
+      assert(/^\d+$/.test(String(tsInitialFrame.id || '')), `TS initial streaming frame missing numeric id: ${JSON.stringify(tsInitialFrame)}`);
+      const tsInitialChatState = tsInitialFrame.payload?.cardChatsByCardId?.[CHAT_CARD_ID];
+      assert(tsInitialChatState && typeof tsInitialChatState === 'object', `TS initial streaming payload missing cardChatsByCardId.${CHAT_CARD_ID}`);
+      assert(JSON.stringify(normalizeHydratedChatMessages(tsInitialChatState.messages)) === JSON.stringify(tsExpectedChatMessages),
+        'TS initial streaming cardChatsByCardId hydration mismatch');
+
+      const tsTempCards = [
+        buildTsStaticCard(`card-ts-${Date.now()}-a`, 'TS Delta Card A'),
+        buildTsStaticCard(`card-ts-${Date.now()}-b`, 'TS Delta Card B'),
+      ];
+      let tsLastEventId = Number(tsInitialFrame.id);
+
+      for (let idx = 0; idx < tsTempCards.length; idx += 1) {
+        const tsCard = tsTempCards[idx];
+        const tsExpectedCardCount = T0_EXPECTED_CARD_IDS.length + idx + 1;
+        const tsFrameStart = tsRawFrames.length;
+        const tsUpsertRes = await httpMcp('manage.upsert-card', {
+          card_id: tsCard.id,
+          candidate_card_content: tsCard,
+        });
+        assert(tsUpsertRes.status === 200, `TS manage.upsert-card(${tsCard.id}) returned ${tsUpsertRes.status}`);
+        assert(tsUpsertRes.data?.status === 'success', `TS manage.upsert-card(${tsCard.id}) failed: ${JSON.stringify(tsUpsertRes.data)}`);
+        const tsDeltaFrame = await waitUntil(() => {
+          for (const frame of tsRawFrames.slice(tsFrameStart)) {
+            const summary = extractStatusSummaryFromPayload(frame.payload);
+            if (summary?.card_count === tsExpectedCardCount) return frame;
+          }
+          return false;
+        }, 30_000, `TS board delta card_count=${tsExpectedCardCount}`);
+        assert(Number(tsDeltaFrame.id) > tsLastEventId,
+          `TS delta frame id did not increase: prev=${tsLastEventId}, next=${JSON.stringify(tsDeltaFrame.id)}`);
+        tsLastEventId = Number(tsDeltaFrame.id);
+      }
+
+      tsDeltaClient.close();
+      await wait(250);
+
+      const tsReconnect = await waitForRawSseFrames({
+        sseUrl: `${BASE}/sse?clientId=${encodeURIComponent(tsDeltaClientId)}`,
+        headers: { 'Last-Event-ID': String(tsLastEventId) },
+        timeoutMs: 15_000,
+        until: (state) => state.frames.length >= 1,
+      });
+      assert(tsReconnect.statusCode === 200, `TS reconnect returned ${tsReconnect.statusCode}`);
+      assert(/text\/event-stream/i.test(readHeaderValue(tsReconnect.headers, 'content-type')),
+        `TS reconnect content-type mismatch: ${readHeaderValue(tsReconnect.headers, 'content-type')}`);
+      const tsReconnectFrame = tsReconnect.frames[0];
+      assert(Number(tsReconnectFrame.id) > tsLastEventId,
+        `TS reconnect frame id did not advance beyond Last-Event-ID: prev=${tsLastEventId}, next=${JSON.stringify(tsReconnectFrame.id)}`);
+      const tsReconnectPayload = tsReconnectFrame.payload;
+      assert(tsReconnectPayload && typeof tsReconnectPayload === 'object', 'TS reconnect first frame missing JSON payload');
+      const tsReconnectIds = (Array.isArray(tsReconnectPayload.cardDefinitions) ? tsReconnectPayload.cardDefinitions : [])
+        .map((card) => card?.id)
+        .filter((cardId) => typeof cardId === 'string')
+        .sort();
+      const tsExpectedReconnectIds = [...T0_EXPECTED_CARD_IDS, ...tsTempCards.map((card) => card.id)].sort();
+      assert(JSON.stringify(tsReconnectIds) === JSON.stringify(tsExpectedReconnectIds),
+        `TS reconnect snapshot mismatch: expected ${JSON.stringify(tsExpectedReconnectIds)}, got ${JSON.stringify(tsReconnectIds)}`);
+      const tsReconnectChatState = tsReconnectPayload.cardChatsByCardId?.[CHAT_CARD_ID];
+      assert(tsReconnectChatState && typeof tsReconnectChatState === 'object', `TS reconnect payload missing cardChatsByCardId.${CHAT_CARD_ID}`);
+      assert(JSON.stringify(normalizeHydratedChatMessages(tsReconnectChatState.messages)) === JSON.stringify(tsExpectedChatMessages),
+        'TS reconnect cardChatsByCardId hydration mismatch');
+
+      for (const tsCard of tsTempCards) {
+        const tsRemoveRes = await httpMcp('manage.remove-card', { card_id: tsCard.id });
+        assert(tsRemoveRes.status === 200, `TS manage.remove-card(${tsCard.id}) returned ${tsRemoveRes.status}`);
+        assert(tsRemoveRes.data?.status === 'success', `TS manage.remove-card(${tsCard.id}) failed: ${JSON.stringify(tsRemoveRes.data)}`);
+      }
+      await waitUntil(() => {
+        const summary = NS.statusSummary;
+        if (summary && summary.card_count === T0_EXPECTED_CARD_IDS.length) return summary;
+        return false;
+      }, 30_000, 'TS cleanup card_count back to 3');
+    } finally {
+      tsDeltaClient.close();
+    }
+    console.log('[TS] ok: one-shot framing, event ids, Last-Event-ID reconnect, ordered board deltas, and initial chat hydration verified');
   }
 
   // ── T3d: probe-echo chat with one AI-generated attachment ──
