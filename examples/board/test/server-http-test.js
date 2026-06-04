@@ -44,6 +44,7 @@ function isCopilotAvailable() {
 
 const skipT3a = cliArgs.includes('--skip-t3a') || !isCopilotAvailable();
 const skipT3b = cliArgs.includes('--skip-t3b');
+const skipT3e = cliArgs.includes('--skip-t3e');
 const skipT3d = cliArgs.includes('--skip-t3d');
 const RUN_ID = `run-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -104,6 +105,7 @@ const NS = {
   statusGeneration: 0,
   computedValues: {},
   chatEvents: [],
+  allChatNotifications: [],
   boardEvents: [],
 };
 
@@ -330,6 +332,17 @@ function waitForFirstSsePayload(sseUrl, timeoutMs = 15_000) {
 function captureChatEvents(payload, cardId) {
   if (!payload || payload.kind !== 'notification-batch' || !Array.isArray(payload.notifications)) return;
   for (const n of payload.notifications) {
+    if (n && n.kind === 'card_chats' && n.cardId) {
+      const messages = Array.isArray(n.messages) ? n.messages : [];
+      NS.allChatNotifications.push({
+        at: Date.now(),
+        cardId: n.cardId,
+        processing: !!n.processing,
+        receiving: !!n.receiving,
+        messageCount: messages.length,
+        messages,
+      });
+    }
     if (n && n.kind === 'card_chats' && n.cardId === cardId) {
       const messages = Array.isArray(n.messages) ? n.messages : [];
       NS.chatEvents.push({
@@ -361,6 +374,25 @@ function waitUntil(predicate, timeoutMs, label) {
     const interval = setInterval(() => {
       let result;
       try { result = predicate(); } catch { /* retry */ }
+      if (result !== undefined && result !== null && result !== false) {
+        clearInterval(interval);
+        resolve(result);
+        return;
+      }
+      if (Date.now() > deadline) {
+        clearInterval(interval);
+        reject(new Error(`Timeout (${timeoutMs}ms) waiting for: ${label}`));
+      }
+    }, 150);
+  });
+}
+
+function waitUntilAsync(predicate, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const interval = setInterval(async () => {
+      let result;
+      try { result = await predicate(); } catch { /* retry */ }
       if (result !== undefined && result !== null && result !== false) {
         clearInterval(interval);
         resolve(result);
@@ -439,6 +471,63 @@ function buildTsStaticCard(cardId, label) {
     },
     card_data: {
       text: label,
+    },
+  };
+}
+
+function buildChatProbeCard(cardId, label) {
+  return {
+    id: cardId,
+    meta: {
+      title: label,
+      tags: ['chat', 'probe'],
+      desc: `${label} disposable chat probe card`,
+    },
+    provides: [
+      {
+        bindTo: 'holdings',
+        ref: 'card_data.holdings',
+      },
+    ],
+    compute: [],
+    view: {
+      elements: [
+        {
+          kind: 'editable-table',
+          label: 'Holdings',
+          data: {
+            bind: 'card_data.holdings',
+            writeTo: 'card_data.holdings',
+            columns: ['ticker', 'quantity', 'cost_basis'],
+            schema: {
+              properties: {
+                quantity: { type: 'number' },
+                cost_basis: { type: 'number' },
+              },
+            },
+          },
+        },
+      ],
+      layout: {
+        board: {
+          col: 3,
+          order: 98,
+        },
+        canvas: {
+          x: 1400,
+          y: 420,
+          w: 320,
+          h: 260,
+        },
+      },
+      features: {
+        chat: true,
+      },
+    },
+    card_data: {
+      holdings: [
+        { ticker: 'AAPL', quantity: 1, cost_basis: 150 },
+      ],
     },
   };
 }
@@ -1192,6 +1281,141 @@ try {
     assert(!Array.isArray(t2bUser?.files) || t2bUser.files.length === 0, 'T3b user chat message should remain text-only after add-chat-attachment upload');
     assert(String(t2bAssistantMsg?.text || '').includes(`Echo: ${t2bPrompt}`), 'T3b assistant probe echo mismatch');
     console.log('[T3b] ok: add-chat-attachment upload plus text-only chat-send preserved the normal probe lifecycle');
+
+    if (skipT3e) {
+      console.log('\n=== T3e: skipped (--skip-t3e) ===');
+    } else {
+      console.log('\n=== T3e: subscribed chat turn with attachment plus unsubscribed negative case ===');
+      const t3eOtherCardId = `card-t3e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const t3eOtherCard = buildChatProbeCard(t3eOtherCardId, 'T3e Chat Probe');
+
+      const t3eUpsertOtherRes = await httpMcp('manage.upsert-card', {
+        card_id: t3eOtherCardId,
+        candidate_card_content: t3eOtherCard,
+      });
+      assert(t3eUpsertOtherRes.status === 200, `T3e manage.upsert-card(${t3eOtherCardId}) returned ${t3eUpsertOtherRes.status}`);
+      assert(t3eUpsertOtherRes.data?.status === 'success', `T3e manage.upsert-card(${t3eOtherCardId}) failed: ${JSON.stringify(t3eUpsertOtherRes.data)}`);
+      await waitUntil(() => {
+        const s = NS.statusSummary;
+        if (s && s.card_count === T0_EXPECTED_CARD_IDS.length + 1) return s;
+        return false;
+      }, 30_000, 'T3e extra chat card visible in board summary');
+
+      try {
+        const t3eBefore = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
+        assert(t3eBefore.status === 200, `T3e pre chats returned ${t3eBefore.status}`);
+        const t3eBeforeMessages = Array.isArray(t3eBefore.data?.data?.messages) ? t3eBefore.data.data.messages : [];
+        const t3eBeforeCount = t3eBeforeMessages.length;
+
+        const t3eTurnId = randomTurnId();
+        const t3eUploadRes = await httpMcpControlplane('manage.add-chat-attachment', {
+          board_id: BOARD_ID,
+          card_id: CHAT_CARD_ID,
+          turn_id: t3eTurnId,
+          file_name: 't3e-probe.txt',
+          content_type: 'text/plain; charset=utf-8',
+          text: 'what is the capital of japan',
+        });
+        assert(t3eUploadRes.status === 200, `T3e file upload returned ${t3eUploadRes.status}`);
+        assert(t3eUploadRes.data?.status === 'success', `T3e file upload failed: ${JSON.stringify(t3eUploadRes.data)}`);
+        const t3eUploadedFile = t3eUploadRes.data?.data?.files?.[0];
+        assert(t3eUploadedFile && typeof t3eUploadedFile === 'object', 'T3e upload response missing file metadata');
+        assert(!Object.prototype.hasOwnProperty.call(t3eUploadedFile, 'path'), 'T3e uploaded file metadata should not expose path');
+
+        const t3eCardAfterUpload = await httpMcp('manage.read-card', { card_id: CHAT_CARD_ID });
+        assert(t3eCardAfterUpload.status === 200, `T3e card read after upload returned ${t3eCardAfterUpload.status}`);
+        const t3eStoredFiles = Array.isArray(t3eCardAfterUpload.data?.data?.[0]?.card_data?.files)
+          ? t3eCardAfterUpload.data.data[0].card_data.files
+          : [];
+        const t3eStoredFile = t3eStoredFiles.find((file) => String(file?.stored_name || '') === String(t3eUploadedFile?.stored_name || ''));
+        assert(!!t3eStoredFile, 'T3e stored file metadata missing after upload');
+        assert(t3eStoredFile?.chat === true, 'T3e stored file should be marked as chat-origin');
+        assert(!Object.prototype.hasOwnProperty.call(t3eStoredFile || {}, 'path'), 'T3e stored file metadata should not expose path');
+
+        const t3eUploadMessages = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, turn_id: t3eTurnId });
+        assert(t3eUploadMessages.status === 200, `T3e chats after upload returned ${t3eUploadMessages.status}`);
+        const t3eUploadTurnMessages = Array.isArray(t3eUploadMessages.data?.data?.messages) ? t3eUploadMessages.data.data.messages : [];
+        const t3eUploadSystem = t3eUploadTurnMessages.find((message) => message?.role === 'system');
+        assert(!!t3eUploadSystem, 'T3e upload protocol missing system chat message');
+        assert(String(t3eUploadSystem?.text || '').toLowerCase().includes('file uploaded:'), 'T3e upload system message does not describe uploaded file');
+
+        const t3eEventStart = NS.chatEvents.length;
+        const t3eAllNotificationsStart = NS.allChatNotifications.length;
+        const t3ePrompt = `attachment probe ${Date.now()}`;
+        const t3eProbeText = `${ECHO_PROBE_MARKER}${t3ePrompt}${ECHO_PROBE_MARKER}`;
+        const t3eSendRes = await httpJson('POST', `${BASE}/mcp-actions`, {
+          tool: 'chat-send',
+          args: {
+            card_id: CHAT_CARD_ID,
+            payload: {
+              text: t3eProbeText,
+              'turn-id': t3eTurnId,
+            },
+          },
+        });
+        assert(t3eSendRes.status === 200, `T3e chat-send returned ${t3eSendRes.status}`);
+
+        const t3eLifecycle = await waitForChatPredicate((events) => {
+          return matchOrderedProbeLifecycle(events.slice(t3eEventStart), {
+            beforeCount: t3eBeforeCount + t3eUploadTurnMessages.length,
+            beforeProcessing: false,
+            prompt: t3ePrompt,
+            inProgressText: PROBE_IN_PROGRESS_TEXT,
+          });
+        }, 60_000, 'T3e ordered lifecycle');
+        assert(!!t3eLifecycle, 'T3e ordered lifecycle not observed');
+
+        const t3eAfter = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, turn_id: t3eTurnId });
+        assert(t3eAfter.status === 200, `T3e post chats returned ${t3eAfter.status}`);
+        const t3eFinalMessages = Array.isArray(t3eAfter.data?.data?.messages) ? t3eAfter.data.data.messages : [];
+        const t3eFinalUser = t3eFinalMessages.find((message) => message?.role === 'user');
+        const t3eFinalAssistant = t3eFinalMessages.find((message) => message?.role === 'assistant');
+        assert(!!t3eFinalUser, `T3e final user message missing: ${JSON.stringify(t3eFinalMessages)}`);
+        assert(!!t3eFinalAssistant, `T3e final assistant message missing: ${JSON.stringify(t3eFinalMessages)}`);
+        assert(String(t3eFinalUser?.text || '') === t3eProbeText, `T3e final user text mismatch: ${JSON.stringify(t3eFinalUser)}`);
+        assert(!Array.isArray(t3eFinalUser?.files) || t3eFinalUser.files.length === 0,
+          `T3e final user message should remain text-only after controlplane attachment upload: ${JSON.stringify(t3eFinalUser)}`);
+        assert(String(t3eFinalAssistant?.text || '').includes(`Echo: ${t3ePrompt}`), `T3e final probe reply mismatch: ${JSON.stringify(t3eFinalAssistant)}`);
+
+        const t3eNegativeTurnId = randomTurnId();
+        const t3eNegativeSendRes = await httpJson('POST', `${BASE}/mcp-actions`, {
+          tool: 'chat-send',
+          args: {
+            card_id: t3eOtherCardId,
+            payload: {
+              text: `${ECHO_PROBE_MARKER}negative unsubscribed ${Date.now()}${ECHO_PROBE_MARKER}`,
+              'turn-id': t3eNegativeTurnId,
+            },
+          },
+        });
+        assert(t3eNegativeSendRes.status === 200, `T3e negative chat-send returned ${t3eNegativeSendRes.status}`);
+
+        const t3eNegativePersisted = await waitUntilAsync(async () => {
+          const result = await httpMcp('inspect.chat-messages-on-cards', { card_id: t3eOtherCardId, turn_id: t3eNegativeTurnId });
+          if (result.status !== 200) return false;
+          const messages = Array.isArray(result.data?.data?.messages) ? result.data.data.messages : [];
+          return messages.find((message) => message?.role === 'assistant') ? messages : false;
+        }, 60_000, 'T3e negative turn persisted on unsubscribed card');
+        assert(Array.isArray(t3eNegativePersisted), 'T3e negative turn did not persist as expected');
+
+        await wait(1_500);
+        const t3eUnexpectedNotification = NS.allChatNotifications.slice(t3eAllNotificationsStart)
+          .find((event) => event?.cardId === t3eOtherCardId);
+        assert(!t3eUnexpectedNotification,
+          `T3e unsubscribed client unexpectedly received chat notification for ${t3eOtherCardId}: ${JSON.stringify(t3eUnexpectedNotification)}`);
+
+        console.log('[T3e] ok: subscribed client received attachment-bearing turn and unsubscribed card produced no chat SSE notification');
+      } finally {
+        const t3eRemoveOtherRes = await httpMcp('manage.remove-card', { card_id: t3eOtherCardId });
+        assert(t3eRemoveOtherRes.status === 200, `T3e manage.remove-card(${t3eOtherCardId}) returned ${t3eRemoveOtherRes.status}`);
+        assert(t3eRemoveOtherRes.data?.status === 'success', `T3e manage.remove-card(${t3eOtherCardId}) failed: ${JSON.stringify(t3eRemoveOtherRes.data)}`);
+        await waitUntil(() => {
+          const s = NS.statusSummary;
+          if (s && s.card_count === T0_EXPECTED_CARD_IDS.length) return s;
+          return false;
+        }, 30_000, 'T3e cleanup card_count back to 3');
+      }
+    }
 
     console.log('\n=== T3c: fresh /sse connect hydrates current board state ===');
     const t3cInspectStatusRes = await httpMcp('inspect.board-runtime-status', {});
