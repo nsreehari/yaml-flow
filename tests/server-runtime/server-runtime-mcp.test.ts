@@ -595,7 +595,7 @@ process.exit(1);
     expect(userMessage?.turn).toBe('turn-chat-send');
     expect(observed.length).toBe(1);
     expect(observed[0].turnId).toBe('turn-chat-send');
-    expect(observed[0].probe).toBeUndefined();
+    expect(observed[0].isProbe).toBe(false);
   });
 
   it('chat-send stamps isProbe in flow args when probe markers wrap the user text', async () => {
@@ -629,7 +629,7 @@ process.exit(1);
 
     expect(observed.length).toBe(1);
     expect(observed[0].turnId).toBe('turn-chat-probe');
-    expect(observed[0].probe).toBe('echo');
+    expect(observed[0].isProbe).toBe(true);
   });
 
   it('POST /mcp-actions chat-send propagates turn-id to the user message and flow args', async () => {

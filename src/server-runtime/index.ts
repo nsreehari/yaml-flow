@@ -109,7 +109,7 @@ const DEFAULT_CORS_HEADERS: Record<string, string> = {
 };
 
 const CHAT_HANDLER_FLOW_QUEUE_TARGET = 'chat-handler-flow-queue';
-const PROBE_MARKER = '__probe__echo__probe__';
+const ECHO_PROBE_MARKER = '__probe__echo__probe__';
 
 // ============================================================================
 // Internal types
@@ -889,30 +889,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Chat handler queueing + dispatch ─────────────────────────────────────
 
-  function parseProbeText(text: unknown): { assistant: string; text: string } | null {
+  function isEchoProbeText(text: unknown): boolean {
     const trimmed = typeof text === 'string' ? text.trim() : '';
-    if (
-      trimmed.length < (PROBE_MARKER.length * 2)
-      || !trimmed.startsWith(PROBE_MARKER)
-      || !trimmed.endsWith(PROBE_MARKER)
-    ) {
-      return null;
-    }
-    const innerText = trimmed.slice(PROBE_MARKER.length, trimmed.length - PROBE_MARKER.length).trim();
-    const stemMatch = /^([A-Za-z0-9_-]+)__(.*)$/s.exec(innerText);
-    if (!stemMatch) {
-      return {
-        assistant: 'echo',
-        text: innerText,
-      };
-    }
-    return {
-      assistant: stemMatch[1].trim().toLowerCase(),
-      text: stemMatch[2].trim(),
-    };
+    return trimmed.length >= (ECHO_PROBE_MARKER.length * 2)
+      && trimmed.startsWith(ECHO_PROBE_MARKER)
+      && trimmed.endsWith(ECHO_PROBE_MARKER);
   }
 
-  async function queueChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = '', probe = ''): Promise<void> {
+  async function queueChatHandler(cardId: string, lastEntryId: string, processingAlreadySet = false, turnId = '', isProbe = false): Promise<void> {
     try {
       const target = await resolveChatHandlerTarget(cardId);
       if (!target) {
@@ -930,7 +914,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         cardId: String(cardId),
         lastChatEntryId: lastEntryId,
         ...(turnId ? { turnId } : {}),
-        ...(typeof probe === 'string' && probe.trim() ? { probe: probe.trim() } : {}),
+        isProbe: Boolean(isProbe),
         ...executionExtra,
         ...(serverUrl ? { serverUrl } : {}),
       };
@@ -1026,13 +1010,12 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         );
       }
       const controlplaneRegistry = createMcpControlplaneToolRegistry();
-      const probe = parseProbeText(payload?.text);
-      const normalizedUserText = probe ? probe.text : payload?.text;
+      const isProbe = isEchoProbeText(payload?.text);
       const appendResult = await invokeMcpTool('manage.add-chat-entry-and-any-attachments', {
         board_id: boardId,
         card_id: cardId,
         role: 'user',
-        text: normalizedUserText,
+        text: payload?.text,
         turn_id: turnId,
         files: [],
       }, controlplaneRegistry) as { status?: unknown; data?: { id?: unknown } };
@@ -1054,7 +1037,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         throw new Error(extractMcpFailureMessage(processingResult, `chat-send processing update failed for card ${cardId}`));
       }
 
-      void queueChatHandler(cardId, appendId, true, turnId, probe?.assistant || '');
+      void queueChatHandler(cardId, appendId, true, turnId, isProbe);
       return;
     }
 
