@@ -138,7 +138,7 @@ describe('mountChatPane', () => {
     expect(stopSpy).not.toHaveBeenCalled();
   });
 
-  it('Send button invokes onAction(cardId, "chat-send", { text, files })', async () => {
+  it('Send button invokes onAction(cardId, "chat-send", { text })', async () => {
     const onAction = vi.fn().mockResolvedValue(undefined);
     const engine = makeEngine({ a: makeNode('a') }, { onAction });
     const host = document.createElement('div');
@@ -157,7 +157,37 @@ describe('mountChatPane', () => {
       expect(nodeId).toBe('a');
       expect(kind).toBe('chat-send');
       expect(payload.text).toBe('hello world');
-      expect(Array.isArray(payload.files)).toBe(true);
+      expect(payload.files).toBeUndefined();
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it('does not invoke chat-send when files are staged in the chat composer', async () => {
+    const onAction = vi.fn().mockResolvedValue(undefined);
+    const engine = makeEngine({ a: makeNode('a') }, { onAction });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const handle = engine.mountChatPane({ container: host, cardId: 'a' });
+    try {
+      const input = host.querySelector('[data-lc-chat-input]') as HTMLTextAreaElement;
+      const fileInput = host.querySelector('[data-lc-chat-file]') as HTMLInputElement;
+      const send = host.querySelector('[data-lc-chat-send]') as HTMLButtonElement;
+      const file = new File(['hello'], 'hello.txt', { type: 'text/plain' });
+
+      Object.defineProperty(fileInput, 'files', {
+        configurable: true,
+        value: [file],
+      });
+
+      fileInput.dispatchEvent(new Event('change'));
+      input.value = 'hello world';
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onAction).not.toHaveBeenCalled();
+      expect(host.textContent || '').toContain('Chat send does not support files. Upload attachments separately before sending.');
     } finally {
       handle.dispose();
     }

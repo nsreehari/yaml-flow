@@ -1035,7 +1035,6 @@ describe('platform-free server runtime (Node host)', () => {
           card_id: cardId,
           payload: {
             text: 'please use the uploaded file',
-            files: [uploadedFile],
             'turn-id': 'test-turn-upload-send',
           },
         },

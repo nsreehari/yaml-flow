@@ -720,6 +720,10 @@ var LiveCard = (function () {
         const text = (pane.input.value || '').trim();
         const files = pane.stagedFiles.slice();
         if (!text && !files.length) return;
+        if (files.length) {
+          pane.appendMessage('system', 'Chat send does not support files. Upload attachments separately before sending.', []);
+          return;
+        }
 
         pane.loading = true;
         pane.syncComposerState();
@@ -733,7 +737,7 @@ var LiveCard = (function () {
         renderStagedFiles();
 
         try {
-          await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text, files }));
+          await Promise.resolve(cfg.onAction(nodeId, 'chat-send', { text }));
         } catch (err) {
           pane.setSendButtonPending(false);
           pane.clearPending();
