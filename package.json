@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "8.8.6",
+  "version": "8.8.7",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -60,6 +60,8 @@
       "import": "./lib/compute-jsonata/index.js",
       "require": "./lib/compute-jsonata/index.cjs"
     },
+    "./browser/compute-jsonata": "./browser/compute-jsonata.js",
+    "./browser/compute-jsonata.js": "./browser/compute-jsonata.js",
     "./card-validation": {
       "types": "./lib/card-validation.d.ts",
       "import": "./lib/card-validation.js",
