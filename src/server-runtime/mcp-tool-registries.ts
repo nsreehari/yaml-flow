@@ -97,6 +97,28 @@ export function createMcpToolRegistry(mcp: McpFacadeForRegistry): ToolRegistry {
         ...(Array.isArray(args.files) ? { files: args.files as unknown[] } : {}),
       });
     },
+    'stage-ai-failure-message': (args) => {
+      const turnId = getMcpArgString(args, 'turn_id');
+      const failure = getMcpArgString(args, 'failure');
+      if (!turnId) {
+        throw Object.assign(
+          new Error('stage-ai-failure-message requires a non-empty turn_id'),
+          { statusCode: 400 },
+        );
+      }
+      if (!failure) {
+        throw Object.assign(
+          new Error('stage-ai-failure-message requires a non-empty failure'),
+          { statusCode: 400 },
+        );
+      }
+      return mcp.manageAddChatEntryAndAnyAttachments({
+        cardId: getMcpArgString(args, 'card_id'),
+        role: 'system',
+        text: failure,
+        turn: turnId,
+      });
+    },
     'manage.upsert-card': (args) => mcp.manageUpsertCard({
       cardId: getMcpArgString(args, 'card_id'),
       candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),

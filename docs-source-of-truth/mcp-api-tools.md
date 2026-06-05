@@ -358,6 +358,36 @@ Stages an assistant response (with optional file attachments) directly into a ca
 
 ---
 
+### `stage-ai-failure-message`
+
+Stages a system failure message directly into a card's chat store for a specific turn. Used by agent pipelines to record an AI failure without going through the SSE chat flow.
+
+**Endpoint:** `POST /api/boards/:boardId/mcp`
+
+**Args:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `card_id` | string | required |
+| `turn_id` | string | required turn id to associate the failure message with |
+| `failure` | string | required failure text written into the system message |
+
+**Returns:**
+```json
+{
+  "status": "success",
+  "data": {
+    "cardId": "my-card",
+    "id": "msg-uuid-...",
+    "role": "system",
+    "turn": "abc123",
+    "files": []
+  }
+}
+```
+
+---
+
 ## `/mcp-controlplane` tools
 
 Control-plane tools are intended for direct runtime-state mutation and orchestration tasks. They are separate from the regular `/mcp` surface.

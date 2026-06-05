@@ -1116,7 +1116,8 @@ try {
       const t2InProgress = t2NewMessages.find((m) => m?.role === 'system' && String(m?.text || '').trim().toLowerCase() === PROBE_IN_PROGRESS_TEXT);
       const t2AssistantMsg = t2NewMessages.find((m) => m?.role === 'assistant');
       assert(!!t2User && typeof t2User.id === 'string', 'T3 user chat message missing id');
-      assert(String(t2User?.text || '').includes(t2ProbePrompt), 'T3 user file text mismatch');
+      assert(String(t2User?.text || '') === t2ProbePrompt, `T3 expected stored user text to equal prompt without probe envelope, got ${JSON.stringify(String(t2User?.text || ''))}`);
+      assert(!String(t2User?.text || '').includes(ECHO_PROBE_MARKER), 'T3 stored user text should not include probe envelope markers');
       assert(!!t2AssistantMsg && typeof t2AssistantMsg.id === 'string', 'T3 assistant chat message missing id');
       assert(String(t2AssistantMsg?.text || '').includes(`Echo: ${t2ProbePrompt}`), 'T3 assistant echo file content mismatch');
       t3Dbg('step 6: all assertions passed');

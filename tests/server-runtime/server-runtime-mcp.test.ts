@@ -1122,6 +1122,50 @@ process.exit(1);
     expect((assistantMessage?.files as Array<Record<string, unknown>>)[0]).toEqual(expect.objectContaining({ name: 'result.txt', mime_type: 'text/plain' }));
   });
 
+  it('routes stage-ai-failure-message through /mcp and appends a system chat entry for the turn', async () => {
+    const runtime = createRuntime();
+    const req = makeRequest('POST', '/api/board/mcp', {
+      tool: 'stage-ai-failure-message',
+      args: {
+        card_id: 'card-1',
+        turn_id: 'turn-failure-123',
+        failure: 'Model invocation failed: timeout talking to provider',
+      },
+    });
+    const res = makeResponse();
+
+    const handled = await runtime.handleRuntimeApi(req, res, new URL('http://example.test/api/board/mcp'));
+    expect(handled).toBe(true);
+    expect(res._status).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      status: 'success',
+      data: {
+        cardId: 'card-1',
+        id: expect.any(String),
+        role: 'system',
+        turn: 'turn-failure-123',
+        files: [],
+      },
+    });
+
+    const chatsRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', turn_id: 'turn-failure-123' },
+    }), chatsRes, new URL('http://example.test/api/board/mcp'));
+    expect(chatsRes._status).toBe(200);
+    const chatsBody = parseJsonBody(chatsRes) as Record<string, unknown>;
+    const messages = ((chatsBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>;
+    expect(messages).toEqual([
+      expect.objectContaining({
+        role: 'system',
+        text: 'Model invocation failed: timeout talking to provider',
+        turn: 'turn-failure-123',
+        files: [],
+      }),
+    ]);
+  });
+
   it('routes manage.add-chat-entry-and-any-attachments through /mcp-controlplane for user chat messages', async () => {
     const runtime = createRuntime();
     const req = makeRequest('POST', '/api/board/mcp-controlplane', {
