@@ -8,10 +8,16 @@ import type { KindValueRef } from '../common/storage-interface.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
 import { assertBoardCallbackTransport } from '../common/board-callback-transport.js';
 import type {
-  BoardChangeNotification,
   CommandInput,
   CommandResult,
 } from '../common/board-live-cards-public.js';
+import type {
+  BoardChangeNotification,
+  BoardOutputNotification,
+  NotificationEmitter,
+  RuntimeNotification,
+} from '../common/notification-interface.js';
+import { withRuntimeNotificationBatchCategories, withRuntimeNotificationCategories } from '../common/notification-interface.js';
 import {
   BOARD_GRAPH_KEY,
   EMPTY_CONFIG,
@@ -23,7 +29,6 @@ import type {
   CardUpsertIndexEntry,
   ExecutionRequestEntry,
   LiveCard,
-  OutputStoreEvent,
   SourceTokenPayload,
 } from '../common/board-live-cards-lib.js';
 import {
@@ -96,6 +101,7 @@ export interface AsyncBoardLiveCardsPublicOptions {
   scratchStoreRef?: string;
   taskExecutorRef?: ExecutionRef;
   chatHandlerFlow?: unknown;
+  emitNotification?: NotificationEmitter;
 }
 
 interface AsyncPublishedOutputsStore {
@@ -406,6 +412,13 @@ export function createAsyncBoardLiveCardsPublic(
   const callbackTransport = adapter.callbackTransport;
   const warn = adapter.warn ?? (() => undefined);
   const boardPath = serializeRef(baseRef);
+  const emitNotification = options.emitNotification ?? ((notification: RuntimeNotification | import('../common/notification-interface.js').RuntimeNotificationBatch) => {
+    if (!adapter.publishBoardChangeNotifications) return undefined;
+    const notifications = notification.kind === 'notification-batch'
+      ? notification.notifications as BoardChangeNotification[]
+      : [notification as BoardChangeNotification];
+    return adapter.publishBoardChangeNotifications(notifications);
+  });
   let drainInFlight: Promise<CommandResult> | null = null;
   let runtimeStoreRef = options.boardRuntimeStoreRef;
   let scratchStoreRef = options.scratchStoreRef;
@@ -420,11 +433,13 @@ export function createAsyncBoardLiveCardsPublic(
   function flushBoardChangeNotifications(notifications: BoardChangeNotification[]): Promise<void> | undefined {
     if (notifications.length === 0) return undefined;
     try {
-      return Promise.resolve(adapter.publishBoardChangeNotifications?.(notifications)).catch((error) => {
-        warn(`[async-board-live-cards-public] publishBoardChangeNotifications failed: ${error instanceof Error ? error.message : String(error)}`);
+      const normalized = withRuntimeNotificationCategories(notifications as RuntimeNotification[]) as BoardChangeNotification[];
+      const batch = withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications: normalized as RuntimeNotification[] });
+      return Promise.resolve(emitNotification(batch)).catch((error) => {
+        warn(`[async-board-live-cards-public] emitNotification failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     } catch (error) {
-      warn(`[async-board-live-cards-public] publishBoardChangeNotifications failed: ${error instanceof Error ? error.message : String(error)}`);
+      warn(`[async-board-live-cards-public] emitNotification failed: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
     }
   }
@@ -626,13 +641,13 @@ export function createAsyncBoardLiveCardsPublic(
     await resolvedOutputStore.writeStatusSnapshot(statusObj);
 
     const notifications: BoardChangeNotification[] = [];
-    for (const { cardId, values } of computedWrites) notifications.push({ kind: 'computed_values', cardId, values } satisfies OutputStoreEvent);
+    for (const { cardId, values } of computedWrites) notifications.push({ kind: 'computed_values', cardId, values } satisfies BoardOutputNotification);
     for (const data of dataWrites) {
-      for (const [key, payload] of Object.entries(data)) notifications.push({ kind: 'data_object', key, payload } satisfies OutputStoreEvent);
+      for (const [key, payload] of Object.entries(data)) notifications.push({ kind: 'data_object', key, payload } satisfies BoardOutputNotification);
     }
     for (const [cardId, card] of refreshedCards) notifications.push({ kind: 'card_refreshed', cardId, card });
     for (const cardId of removedCards) notifications.push({ kind: 'card_removed', cardId });
-    notifications.push({ kind: 'status', status: statusObj } satisfies OutputStoreEvent);
+    notifications.push({ kind: 'status', status: statusObj } satisfies BoardOutputNotification);
     await flushBoardChangeNotifications(notifications);
 
     const executorRef = await resolveTaskExecutorRef();

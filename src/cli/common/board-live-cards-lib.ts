@@ -18,6 +18,7 @@ import type { KVStorage, BlobStorage, KindValueRef } from './storage-interface.j
 import { serializeRef } from './storage-interface.js';
 import { parseExecutionRef, serializeExecutionRef } from './execution-interface.js';
 import type { ExecutionRef } from './execution-interface.js';
+import type { BoardOutputNotification } from './notification-interface.js';
 import type { GraphEvent, TaskConfig, GraphConfig } from '../../event-graph/types.js';
 import type { LiveGraph, LiveGraphSnapshot } from '../../continuous-event-graph/types.js';
 import { schedule } from '../../continuous-event-graph/schedule.js';
@@ -539,10 +540,7 @@ export function createBoardConfigStore(kv: KVStorage): BoardConfigStore {
 // PublishedOutputsStore
 // ============================================================================
 
-export type OutputStoreEvent =
-  | { kind: 'computed_values'; cardId: string; values: Record<string, unknown> }
-  | { kind: 'data_object'; key: string; payload: unknown }
-  | { kind: 'status'; status: unknown };
+export type OutputStoreEvent = BoardOutputNotification;
 
 export interface PublishedOutputsStore {
   writeComputedValues(cardId: string, values: Record<string, unknown>): void;

@@ -1,4 +1,4 @@
-import type { BoardChangeNotification } from '../common/board-live-cards-public.js';
+import type { BoardChangeNotification } from '../common/notification-interface.js';
 import type { BoardCallbackTransport } from '../common/board-callback-transport.js';
 import type { ExecutionRef } from '../common/execution-interface.js';
 import { parseExecutionRef, serializeExecutionRef } from '../common/execution-interface.js';

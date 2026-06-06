@@ -6,16 +6,20 @@
  * Pure functions; no side effects; no DOM/localStorage/fetch dependencies.
  */
 
+import type {
+  NotificationChatMessage,
+  RuntimeNotification,
+} from './notification-interface.js';
+import {
+  isBoardChangeNotification,
+  isChatScopedRuntimeNotification,
+} from './notification-interface.js';
+
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface CardChatMessage {
-  role: string;
-  text: string;
-  files?: unknown[];
-  turn?: string;
-}
+export type CardChatMessage = NotificationChatMessage;
 
 export interface CardChatState {
   messages: CardChatMessage[];
@@ -176,7 +180,7 @@ export function deriveBoardState(
 
 export function applyNotification(
   prevState: BoardState,
-  notifications: Array<{ kind: string; [key: string]: unknown }>,
+  notifications: RuntimeNotification[],
   selectLiveCardModel: SelectLiveCardModelFn,
   getFullPayload: () => unknown,
 ): BoardState {
@@ -205,6 +209,41 @@ export function applyNotification(
 
   for (const note of notifications) {
     if (!note || !note.kind) continue;
+
+    if (isChatScopedRuntimeNotification(note)) {
+      if (note.kind === 'card_chats') {
+        const cardId = note.cardId as string;
+        const prev = modelsById[cardId];
+        if (!prev) continue;
+        const rawMessages = Array.isArray(note.messages)
+          ? (note.messages as CardChatMessage[])
+          : (prev.card_chats?.messages ?? []);
+        const receiving = typeof note.receiving === 'boolean' ? note.receiving : (prev.card_chats?.receiving ?? false);
+        const processing = typeof note.processing === 'boolean' ? note.processing : (prev.card_chats?.processing ?? false);
+        const newCardChats: CardChatState = { messages: rawMessages, receiving, processing };
+        if (deepEqJson(prev.card_chats, newCardChats)) continue;
+        ensureClone();
+        modelsById[cardId] = { ...prev, card_chats: newCardChats };
+        changed = true;
+      } else if (note.kind === 'chat_messages') {
+        // chat_messages updates messages only, preserves receiving flag
+        const cardId = note.cardId as string;
+        const prev = modelsById[cardId];
+        if (!prev) continue;
+        const rawMessages = Array.isArray(note.messages) ? (note.messages as CardChatMessage[]) : [];
+        const prevChats = prev.card_chats || { messages: [], receiving: false, processing: false };
+        const newCardChats: CardChatState = { messages: rawMessages, receiving: prevChats.receiving, processing: !!prevChats.processing };
+        if (deepEqJson(prev.card_chats, newCardChats)) continue;
+        ensureClone();
+        modelsById[cardId] = { ...prev, card_chats: newCardChats };
+        changed = true;
+      }
+      continue;
+    }
+
+    if (!isBoardChangeNotification(note)) {
+      continue;
+    }
 
     if (note.kind === 'computed_values') {
       const cardId = note.cardId as string;
@@ -297,34 +336,6 @@ export function applyNotification(
       ensureClone();
       delete modelsById[cardId];
       cardIds = cardIds.filter((id) => id !== cardId);
-      changed = true;
-
-    } else if (note.kind === 'card_chats') {
-      const cardId = note.cardId as string;
-      const prev = modelsById[cardId];
-      if (!prev) continue;
-      const rawMessages = Array.isArray(note.messages)
-        ? (note.messages as CardChatMessage[])
-        : (prev.card_chats?.messages ?? []);
-      const receiving = typeof note.receiving === 'boolean' ? note.receiving : (prev.card_chats?.receiving ?? false);
-      const processing = typeof note.processing === 'boolean' ? note.processing : (prev.card_chats?.processing ?? false);
-      const newCardChats: CardChatState = { messages: rawMessages, receiving, processing };
-      if (deepEqJson(prev.card_chats, newCardChats)) continue;
-      ensureClone();
-      modelsById[cardId] = { ...prev, card_chats: newCardChats };
-      changed = true;
-
-    } else if (note.kind === 'chat_messages') {
-      // chat_messages updates messages only, preserves receiving flag
-      const cardId = note.cardId as string;
-      const prev = modelsById[cardId];
-      if (!prev) continue;
-      const rawMessages = Array.isArray(note.messages) ? (note.messages as CardChatMessage[]) : [];
-      const prevChats = prev.card_chats || { messages: [], receiving: false, processing: false };
-      const newCardChats: CardChatState = { messages: rawMessages, receiving: prevChats.receiving, processing: !!prevChats.processing };
-      if (deepEqJson(prev.card_chats, newCardChats)) continue;
-      ensureClone();
-      modelsById[cardId] = { ...prev, card_chats: newCardChats };
       changed = true;
 
     } else if (note.kind === 'status') {

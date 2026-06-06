@@ -25,6 +25,13 @@
 
 import type { CommandInput, CommandResult } from './board-live-cards-public.js';
 import type { ChatConfig, ChatRecord, ChatReadAfterResult, ChatStorage } from './chat-storage-lib.js';
+import {
+  type NotificationEmitter,
+  type NotificationChatMessage,
+  type RuntimeNotification,
+  withRuntimeNotificationBatchCategories,
+  withRuntimeNotificationCategories,
+} from './notification-interface.js';
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -63,6 +70,10 @@ export type ChatStoreCommandBatchEnvelope = {
 export type ChatStoreBatchResult = {
   results: Array<{ index: number; command: string; data?: unknown }>;
 };
+
+export interface ChatStorePublicOptions {
+  emitNotification?: NotificationEmitter;
+}
 
 // ============================================================================
 // ChatStorePublic — public interface
@@ -142,7 +153,9 @@ export interface ChatStorePublic {
 // createChatStorePublic — factory
 // ============================================================================
 
-export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
+export function createChatStorePublic(store: ChatStorage, options: ChatStorePublicOptions = {}): ChatStorePublic {
+  const emitNotification = options.emitNotification;
+
   function parsePositiveInteger(value: unknown): number | null {
     const parsed = typeof value === 'number' ? value : Number(value);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
@@ -189,6 +202,39 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
   }
   function oops<T>(e: unknown): CommandResult<T> {
     return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>;
+  }
+
+  function toNotificationMessage(record: ChatRecord): NotificationChatMessage {
+    return {
+      role: String(record.role || 'system'),
+      text: String(record.text || ''),
+      files: Array.isArray(record.files) ? record.files : [],
+      ...(typeof record.turn === 'string' && record.turn ? { turn: record.turn } : {}),
+    };
+  }
+
+  async function emitRuntimeNotifications(notifications: RuntimeNotification[]): Promise<void> {
+    if (!emitNotification || notifications.length === 0) return;
+    const normalized = withRuntimeNotificationCategories(notifications);
+    if (normalized.length === 1) {
+      await emitNotification(normalized[0]);
+      return;
+    }
+    await emitNotification(withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications: normalized }));
+  }
+
+  async function buildCardChatsNotification(cardId: string): Promise<Extract<RuntimeNotification, { kind: 'card_chats' }>> {
+    const records = await store.readAll(cardId);
+    const sentAtMs = Date.now();
+    return {
+      kind: 'card_chats',
+      cardId,
+      sentAt: new Date(sentAtMs).toISOString(),
+      sentAtMs,
+      messages: records.map(toNotificationMessage),
+      receiving: true,
+      processing: await store.isProcessing(cardId),
+    };
   }
 
   async function run(envelope: ChatStoreCommandEnvelope, label = 'command envelope'): Promise<CommandResult<unknown>> {
@@ -272,6 +318,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         const turn = typeof body.turn === 'string' ? body.turn : '';
         if (!role) return fail('append requires body.role');
         const id = await store.append(cardId, role, text, files, turn);
+        await emitRuntimeNotifications([await buildCardChatsNotification(cardId)]);
         return ok({ id });
       } catch (e) { return oops(e); }
     },
@@ -344,6 +391,7 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('clear requires params.cardId');
         await store.clear(cardId);
+        await emitRuntimeNotifications([await buildCardChatsNotification(cardId)]);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },
@@ -355,6 +403,10 @@ export function createChatStorePublic(store: ChatStorage): ChatStorePublic {
         const body = (input.body ?? {}) as Record<string, unknown>;
         if (typeof body.active !== 'boolean') return fail('setProcessing requires body.active (boolean)');
         await store.setProcessing(cardId, body.active);
+        await emitRuntimeNotifications([
+          { kind: 'chat_processing', cardId, active: body.active, sentAtMs: Date.now() },
+          await buildCardChatsNotification(cardId),
+        ]);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },

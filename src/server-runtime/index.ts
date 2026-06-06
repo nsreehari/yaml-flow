@@ -83,6 +83,15 @@ import { createRoutesAgentface } from './routes-agentface.js';
 import { createRoutesWebhooks } from './routes-webhooks.js';
 import { createRoutesWatchers } from './routes-watchers.js';
 import { createRoutesRuntimeApi } from './routes-runtime-api.js';
+import { createRoutesNotify } from './routes-notify.js';
+import { runtimeNotificationsFromUnknownEvent } from './runtime-notification-ingress.js';
+import {
+  type BoardChangeNotification,
+  type BoardOutputNotification,
+  type RuntimeNotification,
+  type RuntimeNotificationBatch,
+  withRuntimeNotificationCategories,
+} from '../cli/common/notification-interface.js';
 
 export type {
   SingleBoardRuntimeOptions,
@@ -316,18 +325,33 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       };
     }
 
+    let contextRef: BoardContext | null = null;
     const board = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
       ? createAsyncBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter, {
         boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
         scratchStoreRef: cfg.scratchStoreRef,
         taskExecutorRef: cfg.taskExecutorRef,
         chatHandlerFlow: cfg.chatHandlerFlow,
+        emitNotification(notification) {
+          if (notification.kind === 'notification-batch') {
+            emitNotifications(notification.notifications, contextRef ?? undefined);
+            return;
+          }
+          emitNotifications([notification], contextRef ?? undefined);
+        },
       })
       : createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter, {
         boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
         scratchStoreRef: cfg.scratchStoreRef,
         taskExecutorRef: cfg.taskExecutorRef,
         chatHandlerFlow: cfg.chatHandlerFlow,
+        emitNotification(notification) {
+          if (notification.kind === 'notification-batch') {
+            emitNotifications(notification.notifications, contextRef ?? undefined);
+            return;
+          }
+          emitNotifications([notification], contextRef ?? undefined);
+        },
       });
     const nonCoreAdapter = cfg.nonCoreAdapter
       ?? (!isAsyncBoardPlatformAdapter(cfg.boardAdapter) && isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
@@ -421,7 +445,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       async sourceDataFetched(input) { return board.sourceDataFetched(input); },
       async sourceDataFetchFailure(input) { return board.sourceDataFetchFailure(input); },
     };
-    return {
+    contextRef = {
       label: cfg.label,
       board,
       nonCore,
@@ -449,6 +473,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       initialized: false,
       cardsBootstrapped: false,
     };
+    return contextRef;
   }
 
   const boardContexts: BoardContext[] = options.boards.map(buildContext);
@@ -493,17 +518,78 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
 
   // ── Notification transport ───────────────────────────────────────────────
 
+  function contextForNotification(notification: RuntimeNotification): BoardContext | undefined {
+    if ('cardId' in notification && typeof notification.cardId === 'string') {
+      return cardContextForCard(notification.cardId) ?? undefined;
+    }
+    return boardContexts[0] ?? undefined;
+  }
+
+  function contextForNotifications(notifications: RuntimeNotification[]): BoardContext | undefined {
+    for (const notification of notifications) {
+      const ctx = contextForNotification(notification);
+      if (ctx) return ctx;
+    }
+    return boardContexts[0] ?? undefined;
+  }
+
+  interface RouteNotificationsOptions {
+    ctx?: BoardContext;
+    appendState?: boolean;
+    broadcastSse?: boolean;
+    mirrorExternal?: boolean;
+  }
+
+  function routeNotifications(
+    notifications: RuntimeNotification[],
+    options: RouteNotificationsOptions = {},
+  ): void {
+    if (!notifications || notifications.length === 0) return;
+    const normalized = withRuntimeNotificationCategories(notifications);
+    const batch: RuntimeNotificationBatch = { kind: 'notification-batch', category: 'batch', notifications: normalized };
+    const ctx = options.ctx ?? contextForNotifications(normalized);
+
+    if (options.appendState !== false && ctx) {
+      appendNotification(ctx.notification, batch);
+    }
+
+    if (options.broadcastSse !== false) {
+      sseHub.broadcastNotificationBatch(normalized);
+    }
+
+    if (options.mirrorExternal === false || !ctx?.boardAdapter.publishBoardChangeNotifications) return;
+    try {
+      const boardNotifications = normalized.filter(
+        (note): note is BoardChangeNotification => note.category === 'board-output' || note.category === 'card-store',
+      );
+      if (boardNotifications.length > 0) {
+        ctx.boardAdapter.publishBoardChangeNotifications(boardNotifications);
+      }
+    } catch {
+      // Best-effort — external publisher failures must not affect runtime routing.
+    }
+  }
+
+  /**
+   * Single choke-point for all runtime-originated notification emission.
+   * 1. Broadcasts to all connected SSE clients (chat-scoped kinds are
+   *    routed only to subscribed clients by sseHub).
+   * 2. Optionally mirrors to the board adapter's external publisher
+   *    (named pipe, Firestore, webhook relay, etc.) when ctx is provided.
+   */
+  function emitNotifications(
+    notifications: RuntimeNotification[],
+    ctx?: BoardContext,
+  ): void {
+    routeNotifications(notifications, { ctx, appendState: true, broadcastSse: true, mirrorExternal: true });
+  }
+
   async function ensureNotificationConsumer(ctx: BoardContext): Promise<void> {
     if (!ctx || ctx.notificationTeardown) return;
     if (!notificationTransport || !ctx.notifyRef) return;
     const teardown = await notificationTransport.subscribe(ctx.notifyRef, (event) => {
-      appendNotification(ctx.notification, event);
-      // Broadcast incremental notifications to SSE clients so shells can use
-      // applyNotification instead of re-deriving the full payload each time.
-      const notifications = (event as Record<string, unknown>).kind === 'notification-batch'
-        ? (event as Record<string, unknown[]>).notifications as unknown[]
-        : [event];
-      sseHub.broadcastNotificationBatch(notifications);
+      const notifications = runtimeNotificationsFromUnknownEvent(event);
+      routeNotifications(notifications, { ctx, appendState: true, broadcastSse: true, mirrorExternal: false });
     });
     ctx.notificationTeardown = teardown;
   }
@@ -554,8 +640,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   async function publishPersistedStateSnapshot(ctx: BoardContext): Promise<void> {
-    if (!ctx.boardAdapter.publishBoardChangeNotifications) return;
-    const notifications: Array<{ kind: string; [k: string]: unknown }> = [];
+    const notifications: BoardOutputNotification[] = [];
     // 1. Status
     const statusResult = await ctx.boardOps.status({});
     if (statusResult.status === 'success' && statusResult.data != null) {
@@ -574,11 +659,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     const cvResult = await ctx.boardOps.getAllOutputsComputedValues({});
     if (cvResult.status === 'success' && cvResult.data != null) {
       for (const [cardId, values] of Object.entries(cvResult.data as Record<string, unknown>)) {
-        if (cardId) notifications.push({ kind: 'computed_values', cardId, values });
+        if (cardId && values && typeof values === 'object' && !Array.isArray(values)) {
+          notifications.push({ kind: 'computed_values', cardId, values: values as Record<string, unknown> });
+        }
       }
     }
     if (notifications.length > 0) {
-      ctx.boardAdapter.publishBoardChangeNotifications(notifications as import('../cli/common/board-live-cards-public.js').BoardChangeNotification[]);
+      routeNotifications(notifications, {
+        ctx,
+        appendState: true,
+        broadcastSse: true,
+        mirrorExternal: false,
+      });
     }
   }
 
@@ -679,17 +771,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   }
 
   async function setChatProcessing(cardId: string, active: boolean): Promise<void> {
-    await requireChatStorageForCard(cardId).setProcessing(cardId, active);
-    await sseHub.broadcastCardChats(cardId, true);
+    const result = await chatStorePublic.setProcessing({ params: { cardId }, body: { active } });
+    if (result.status !== 'success') {
+      throw Object.assign(new Error(result.error || `Failed to set chat processing for card: ${cardId}`), { statusCode: 500 });
+    }
   }
 
   const chatStorePublic = createChatStorePublic({
     append(cardId, role, text, files, turn) {
-      return Promise.resolve(requireChatStorageForCard(cardId).append(cardId, role, text, files, turn))
-        .then(async (entryId) => {
-          await sseHub.broadcastCardChats(cardId, true);
-          return entryId;
-        });
+      return requireChatStorageForCard(cardId).append(cardId, role, text, files, turn);
     },
     readAll(cardId) {
       return requireChatStorageForCard(cardId).readAll(cardId);
@@ -701,10 +791,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       return requireChatStorageForCard(cardId).clear(cardId);
     },
     setProcessing(cardId, active) {
-      return Promise.resolve(requireChatStorageForCard(cardId).setProcessing(cardId, active))
-        .then(async () => {
-          await sseHub.broadcastCardChats(cardId, true);
-        });
+      return requireChatStorageForCard(cardId).setProcessing(cardId, active);
     },
     isProcessing(cardId) {
       return requireChatStorageForCard(cardId).isProcessing(cardId);
@@ -714,6 +801,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     },
     setConfig(cardId, patch) {
       return requireChatStorageForCard(cardId).setConfig(cardId, patch);
+    },
+  }, {
+    emitNotification(notification) {
+      if (notification.kind === 'notification-batch') {
+        emitNotifications(notification.notifications);
+        return;
+      }
+      emitNotifications([notification]);
     },
   });
 
@@ -837,16 +932,24 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // ── Chat & file operations ───────────────────────────────────────────────
 
   async function clearChatRecords(cardId: string): Promise<void> {
-    await requireChatStorageForCard(cardId).clear(cardId);
+    const result = await chatStorePublic.clear({ params: { cardId } });
+    if (result.status !== 'success') {
+      throw Object.assign(new Error(result.error || `Failed to clear chat records for card: ${cardId}`), { statusCode: 500 });
+    }
     try { await setChatProcessing(cardId, false); } catch {}
   }
 
   /** Append a chat message; returns the new entry id (used as cursor). */
   async function writeChatRecord(cardId: string, role: string, text: string, files: Array<Record<string, unknown>>, turn = ''): Promise<string> {
     const msg = typeof text === 'string' ? text.trim() : '';
-    const entryId = await requireChatStorageForCard(cardId).append(cardId, role || 'system', msg, files, turn);
-    await sseHub.broadcastCardChats(cardId, true);
-    return entryId;
+    const result = await chatStorePublic.append({
+      params: { cardId },
+      body: { role: role || 'system', text: msg, files, turn },
+    });
+    if (result.status !== 'success') {
+      throw Object.assign(new Error(result.error || `Failed to append chat record for card: ${cardId}`), { statusCode: 500 });
+    }
+    return String((result.data as { id?: unknown })?.id || '');
   }
 
   async function readChatRecords(cardId: string): Promise<Array<Record<string, unknown>>> {
@@ -1240,6 +1343,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   });
   const handleRuntimeApi = routesRuntimeApi.handleRuntimeApi;
 
+  // ── Notify ingress route (co-process loopback only) ────────────────────────
+  const routesNotify = createRoutesNotify({
+    apiBasePath,
+    emitNotifications: (notifications) => emitNotifications(notifications),
+    readJsonBody: (req) => readJsonBody(req),
+    json: (res, status, payload) => json(res, status, payload),
+  });
+  const handleNotifyRoute = routesNotify.handleNotifyRoute;
+
   // ── Full request dispatcher ──────────────────────────────────────────────
   // Chains all 4 faces. Exposed as handleRuntimeApi on the service object so
   // that the host (HTTP server / createMultiBoardServerRuntime) has a single
@@ -1248,6 +1360,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (await handleAgentfaceApi(req, res, parsedUrl)) return true;
     if (await handleWebhooksApi(req, res, parsedUrl)) return true;
     if (await handleWatchersRoutes(req, res, parsedUrl)) return true;
+    if (await handleNotifyRoute(req, res, parsedUrl)) return true;
     if (await handleRuntimeApi(req, res, parsedUrl)) return true;
     return false;
   }

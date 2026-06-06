@@ -54,6 +54,7 @@ export default defineConfig({
     'board-livegraph-runtime/index': 'src/board-livegraph-runtime/index.ts',
     'compute-jsonata/index': 'src/compute-jsonata/index.ts',
     'compute-jsonata/browser': 'src/compute-jsonata/browser.ts',
+    'notification-consumer/index': 'src/notification-consumer/index.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'card-validation': 'src/card-validation.ts',
     'board-live-cards-node': 'src/cli/node/fs-board-adapter.ts',

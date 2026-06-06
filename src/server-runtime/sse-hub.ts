@@ -18,6 +18,15 @@
  */
 
 import type { RuntimeResponse } from './types.js';
+import type {
+  BoardChangeNotification,
+  ChatStoreNotification,
+  HostedRuntimeNotification,
+  NotificationChatMessage,
+  RuntimeNotification,
+  RuntimeNotificationBatch,
+} from '../cli/common/notification-interface.js';
+import { withRuntimeNotificationBatchCategories, withRuntimeNotificationCategory } from '../cli/common/notification-interface.js';
 
 export interface SseClientState {
   res: RuntimeResponse;
@@ -46,7 +55,7 @@ export interface SseHub {
   /** Unsubscribe a client from a card's chat stream. */
   unsubscribeChat(clientId: string, cardId: string): boolean;
   /** Broadcast a notification batch; chat-scoped notes are routed to chat-subscribed clients. */
-  broadcastNotificationBatch(notifications: unknown[]): void;
+  broadcastNotificationBatch(notifications: RuntimeNotification[]): void;
   /** Push a fresh card-chats notification to every chat-subscribed client. */
   broadcastCardChats(cardId: string, receiving?: boolean): Promise<void>;
 }
@@ -134,10 +143,10 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     return hasNewRecords || processingChanged;
   }
 
-  async function buildCardChatsNotification(cardId: string, receiving: boolean): Promise<Record<string, unknown>> {
+  async function buildCardChatsNotification(cardId: string, receiving: boolean): Promise<Extract<ChatStoreNotification, { kind: 'card_chats' }>> {
     const records = await deps.readChatRecords(cardId);
     const sentAtMs = Date.now();
-    return {
+    return withRuntimeNotificationCategory({
       kind: 'card_chats',
       cardId,
       sentAt: new Date(sentAtMs).toISOString(),
@@ -147,14 +156,22 @@ export function createSseHub(deps: SseHubDeps): SseHub {
         text: String(r.text || ''),
         files: Array.isArray(r.files) ? r.files : [],
         ...(typeof r.turn === 'string' && r.turn ? { turn: r.turn } : {}),
-      })),
+      })) as NotificationChatMessage[],
       receiving,
       processing: await deps.getChatProcessing(cardId),
-    };
+    });
+  }
+
+  function buildNotificationBatch(notifications: RuntimeNotification[]): RuntimeNotificationBatch {
+    return withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications });
+  }
+
+  async function buildCardChatsBatch(cardId: string, receiving: boolean): Promise<RuntimeNotificationBatch> {
+    return buildNotificationBatch([await buildCardChatsNotification(cardId, receiving)]);
   }
 
   async function broadcastCardChats(cardId: string, receiving = true): Promise<void> {
-    const payload = { kind: 'notification-batch', notifications: [await buildCardChatsNotification(cardId, receiving)] };
+    const payload = await buildCardChatsBatch(cardId, receiving);
     for (const [clientId, client] of sseClients.entries()) {
       if (!client.subscribedChatCardIds.has(cardId)) continue;
       writeFrame(clientId, payload);
@@ -203,7 +220,7 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     lastChatCursorByCardId.set(cardId, latestCursor);
     lastChatProcessingByCardId.set(cardId, await deps.getChatProcessing(cardId));
     ensureChatSubscriptionScan();
-    writeFrame(clientId, { kind: 'notification-batch', notifications: [await buildCardChatsNotification(cardId, true)] });
+    writeFrame(clientId, await buildCardChatsBatch(cardId, true));
     return true;
   }
 
@@ -219,25 +236,23 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     return true;
   }
 
-  function isChatScopedNotification(notification: unknown): notification is Record<string, unknown> {
-    if (!notification || typeof notification !== 'object') return false;
-    const kind = (notification as Record<string, unknown>).kind;
-    return kind === 'card_chats' || kind === 'chat_messages';
+  function isChatScopedNotification(notification: RuntimeNotification): notification is ChatStoreNotification | HostedRuntimeNotification {
+    return notification.kind === 'card_chats' || notification.kind === 'chat_messages' || notification.kind === 'chat_processing';
   }
 
-  function broadcastNotificationBatch(notifications: unknown[]): void {
+  function broadcastNotificationBatch(notifications: RuntimeNotification[]): void {
     if (!notifications || notifications.length === 0) return;
-    const generalNotifications: unknown[] = [];
+    const generalNotifications: BoardChangeNotification[] = [];
     const chatCardIds = new Set<string>();
     for (const note of notifications) {
-      if (isChatScopedNotification(note) && typeof (note as Record<string, unknown>).cardId === 'string') {
-        chatCardIds.add(String((note as Record<string, unknown>).cardId));
+      if (isChatScopedNotification(note)) {
+        chatCardIds.add(note.cardId);
       } else {
         generalNotifications.push(note);
       }
     }
     if (generalNotifications.length > 0) {
-      const payload = { kind: 'notification-batch', notifications: generalNotifications };
+      const payload = buildNotificationBatch(generalNotifications);
       for (const clientId of sseClients.keys()) writeFrame(clientId, payload);
     }
     for (const cardId of chatCardIds) void broadcastCardChats(cardId, true);

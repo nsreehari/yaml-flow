@@ -16,6 +16,7 @@ import { serializeRef, parseRef } from '../common/storage-interface.js';
 import type { BoardPlatformAdapter } from '../common/board-live-cards-public.js';
 import { createChatStorage } from '../common/chat-storage-lib.js';
 import type { ChatStorage } from '../common/chat-storage-lib.js';
+import { isRuntimeNotificationBatch } from '../common/notification-interface.js';
 import {
   createLocalStorageBlobStorage,
   createLocalStorageKvStorage,
@@ -150,9 +151,8 @@ export function createInMemoryNotificationTransport(): import('../../server-runt
       }
       const bus = getInMemoryNotificationBus(ref.value);
       return bus.subscribe((event) => {
-        const e = event as { kind?: string; notifications?: unknown[] };
-        if (e && e.kind === 'notification-batch' && Array.isArray(e.notifications)) {
-          for (const n of e.notifications) onEvent(n);
+        if (isRuntimeNotificationBatch(event)) {
+          for (const notification of event.notifications) onEvent(notification);
           return;
         }
         onEvent(event);

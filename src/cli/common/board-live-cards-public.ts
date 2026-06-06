@@ -36,6 +36,13 @@ import type { ChatStorage } from './chat-storage-lib.js';
 import type { BoardCallbackTransport } from './board-callback-transport.js';
 import { assertBoardCallbackTransport } from './board-callback-transport.js';
 import type { ExecutionRef } from './execution-interface.js';
+import {
+  type BoardChangeNotification,
+  type NotificationEmitter,
+  type RuntimeNotification,
+  withRuntimeNotificationBatchCategories,
+  withRuntimeNotificationCategories,
+} from './notification-interface.js';
 import { restore, createLiveGraph, snapshot } from '../../continuous-event-graph/core.js';
 import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
 import type { GraphEvent } from '../../event-graph/types.js';
@@ -73,12 +80,12 @@ import type {
   CardRuntimeStore,
   CardRuntimeSnapshot,
   FetchedSourcesStore,
-  OutputStoreEvent,
 } from './board-live-cards-lib.js';
 import { createCardStorePublic } from './card-store-lib-public.js';
 
 // Re-export constants so platform adapter files can import them without going through lib directly.
 export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from './board-live-cards-lib.js';
+export type { BoardChangeNotification } from './notification-interface.js';
 
 // ============================================================================
 // CommandInput — uniform request envelope
@@ -319,11 +326,6 @@ export interface BoardLiveCardsPublic {
   sourceDataFetchFailure(input: CommandInput): CommandResult;
 }
 
-export type BoardChangeNotification =
-  | OutputStoreEvent
-  | { kind: 'card_refreshed'; cardId: string; card: LiveCard }
-  | { kind: 'card_removed'; cardId: string };
-
 // ============================================================================
 // Internal pure helpers — no platform deps
 // ============================================================================
@@ -403,6 +405,7 @@ export interface BoardLiveCardsPublicOptions {
   scratchStoreRef?: string;
   taskExecutorRef?: ExecutionRef;
   chatHandlerFlow?: unknown;
+  emitNotification?: NotificationEmitter;
 }
 
 export function createBoardLiveCardsPublic(
@@ -418,6 +421,13 @@ export function createBoardLiveCardsPublic(
   let scratchStoreRef = options.scratchStoreRef;
   const hostedTaskExecutorRef = options.taskExecutorRef;
   const hostedChatHandlerFlow = options.chatHandlerFlow;
+  const emitNotification = options.emitNotification ?? ((notification: RuntimeNotification | import('./notification-interface.js').RuntimeNotificationBatch) => {
+    if (!adapter.publishBoardChangeNotifications) return;
+    const notifications = notification.kind === 'notification-batch'
+      ? notification.notifications as BoardChangeNotification[]
+      : [notification as BoardChangeNotification];
+    return adapter.publishBoardChangeNotifications(notifications);
+  });
 
   function requireBoardRuntimeStoreRef(): string {
     if (!runtimeStoreRef) throw new Error(`Board at ${baseRef.value} has no board runtime store configured. Pass boardRuntimeStoreRef at construction or init.`);
@@ -427,14 +437,16 @@ export function createBoardLiveCardsPublic(
   function flushBoardChangeNotifications(notifications: BoardChangeNotification[]): void {
     if (notifications.length === 0) return;
     try {
-      const p = adapter.publishBoardChangeNotifications?.(notifications);
+      const normalized = withRuntimeNotificationCategories(notifications as RuntimeNotification[]) as BoardChangeNotification[];
+      const batch = withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications: normalized as RuntimeNotification[] });
+      const p = emitNotification(batch);
       if (p && typeof (p as Promise<void>).catch === 'function') {
         void (p as Promise<void>).catch((e: unknown) =>
-          warn(`[board-live-cards-public] publishBoardChangeNotifications failed: ${e instanceof Error ? e.message : String(e)}`),
+          warn(`[board-live-cards-public] emitNotification failed: ${e instanceof Error ? e.message : String(e)}`),
         );
       }
     } catch (e) {
-      warn(`[board-live-cards-public] publishBoardChangeNotifications failed: ${e instanceof Error ? e.message : String(e)}`);
+      warn(`[board-live-cards-public] emitNotification failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

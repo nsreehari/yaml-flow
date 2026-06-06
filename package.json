@@ -60,6 +60,11 @@
       "import": "./lib/compute-jsonata/index.js",
       "require": "./lib/compute-jsonata/index.cjs"
     },
+    "./notification-consumer": {
+      "types": "./lib/notification-consumer/index.d.ts",
+      "import": "./lib/notification-consumer/index.js",
+      "require": "./lib/notification-consumer/index.cjs"
+    },
     "./browser/compute-jsonata": "./browser/compute-jsonata.js",
     "./browser/compute-jsonata.js": "./browser/compute-jsonata.js",
     "./card-validation": {
