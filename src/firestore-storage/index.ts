@@ -555,12 +555,13 @@ export function createFirestoreQueueStorage(col: FirestoreCollectionLike, opts: 
       const max = Math.max(1, Number(options.max ?? 1));
       const visibilityMs = Math.max(1, Number(options.visibilityMs ?? defaultVisibilityMs));
       const nowIso = new Date().toISOString();
+      const scanLimit = Math.max(max * 32, 128);
       const snap = await col
         .where('dead', '==', false)
         .where('staged', '==', false)
         .where('visibleAfter', '<=', nowIso)
         .orderBy('visibleAfter')
-        .limit(max * 4)
+        .limit(scanLimit)
         .get();
       const leased: Array<Record<string, any>> = [];
       for (const doc of snap.docs) {
