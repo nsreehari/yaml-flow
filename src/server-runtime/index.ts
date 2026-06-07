@@ -216,17 +216,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const onChannelSubscribed = options.onChannelSubscribed;
   const onChannelUnsubscribed = options.onChannelUnsubscribed;
 
-  // SSE hub: owns the client registry, broadcast helpers, and chat-subscription scanner.
+  // SSE hub: owns the client registry, broadcast helpers, and chat-subscription hydration.
   // Constructed lazily-bound to chat-store hydration helpers (defined further down in the closure).
   const sseHub = createSseHub({
-    getChatProcessing: (cardId: string) => getChatProcessing(cardId),
-    readChatAfter: async (cardId: string, cursor: string | null) => {
-      const result = await readChatAfter(cardId, cursor);
-      return {
-        records: result.records as unknown as Array<Record<string, unknown>>,
-        cursor: result.cursor,
-      };
-    },
     buildChatOneShotBatch: async (cardId: string, receiving: boolean) => await chatStorePublic.buildSseOneShotBatch({ params: { cardId }, body: { receiving } }),
     onSseClientDisconnected,
   });
@@ -706,10 +698,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       throw Object.assign(new Error(`Board context is unavailable for chat operations: ${cardId}`), { statusCode: 404 });
     }
     return ctx.chatStorage;
-  }
-
-  async function readChatAfter(cardId: string, cursor: string | null) {
-    return await requireChatStorageForCard(cardId).readAfter(cardId, cursor);
   }
 
   async function getChatProcessing(cardId: string): Promise<boolean> {

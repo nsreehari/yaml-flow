@@ -9,10 +9,8 @@
  * State owned here:
  *   - sseClients (clientId -> { res, subscribedChatCardIds })
  *   - sseEventId monotonic counter
- *   - chat-subscription scan timer + per-card cursor/processing snapshots
  *
  * Dependencies passed in by the runtime:
- *   - chatStorage for tailing chat history
  *   - chat-store one-shot builder for subscription hydration
  *   - optional host hooks (onSseClientDisconnected, etc.)
  */
@@ -50,29 +48,22 @@ export interface SseHub {
   disconnect(clientId: string, expectedRes?: RuntimeResponse): void;
   /** Write an SSE frame to one client; transport errors disconnect that client. */
   writeFrame(clientId: string, payload: unknown): void;
-  /** Subscribe a client to a card's chat stream and prime its cursor. */
+  /** Subscribe a client to a card's chat stream and send one-shot hydration. */
   subscribeChat(clientId: string, cardId: string): Promise<boolean>;
   /** Unsubscribe a client from a card's chat stream. */
   unsubscribeChat(clientId: string, cardId: string): boolean;
   /** Broadcast a notification batch; chat-scoped notes are routed to chat-subscribed clients. */
   broadcastNotificationBatch(notifications: RuntimeNotification[]): void;
-  /** Push a fresh card-chats notification to every chat-subscribed client. */
-  broadcastCardChats(cardId: string, receiving?: boolean): Promise<void>;
 }
 
 export interface SseHubDeps {
-  readChatAfter: (cardId: string, cursor: string | null) => Promise<{ records: Array<Record<string, unknown>>; cursor: string | null }>;
-  getChatProcessing: (cardId: string) => Promise<boolean>;
   buildChatOneShotBatch: (cardId: string, receiving: boolean) => Promise<CommandResult<RuntimeNotificationBatch>>;
   onSseClientDisconnected?: (clientId: string) => void;
 }
 
 export function createSseHub(deps: SseHubDeps): SseHub {
   const sseClients = new Map<string, SseClientState>();
-  const lastChatCursorByCardId = new Map<string, string | null>();
-  const lastChatProcessingByCardId = new Map<string, boolean>();
   let sseEventId = 0;
-  let chatSubscriptionScanTimer: ReturnType<typeof setInterval> | null = null;
 
   function buildFrame(payload: unknown): string {
     const jsonStr = JSON.stringify(payload);
@@ -100,7 +91,6 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     if (!client) return;
     if (expectedRes && client.res !== expectedRes) return;
     sseClients.delete(clientId);
-    stopChatSubscriptionScanIfIdle();
     try { deps.onSseClientDisconnected?.(clientId); } catch { /* ignore host hook failures */ }
     try { client.res.end(); } catch { /* ignore */ }
   }
@@ -123,26 +113,6 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     }
   }
 
-  function currentSubscribedChatCardIds(): string[] {
-    const ids = new Set<string>();
-    for (const client of sseClients.values()) {
-      for (const cardId of client.subscribedChatCardIds) ids.add(cardId);
-    }
-    return Array.from(ids);
-  }
-
-  /** Returns true when there are new messages or the processing flag changed since last call. Advances cursor as a side effect. */
-  async function hasChatChanges(cardId: string): Promise<boolean> {
-    const lastCursor = lastChatCursorByCardId.has(cardId) ? lastChatCursorByCardId.get(cardId)! : null;
-    const { cursor: newCursor } = await deps.readChatAfter(cardId, lastCursor);
-    const processing = await deps.getChatProcessing(cardId);
-    const processingChanged = processing !== (lastChatProcessingByCardId.get(cardId) ?? false);
-    const hasNewRecords = newCursor !== lastCursor;
-    if (hasNewRecords) lastChatCursorByCardId.set(cardId, newCursor);
-    lastChatProcessingByCardId.set(cardId, processing);
-    return hasNewRecords || processingChanged;
-  }
-
   function buildNotificationBatch(notifications: RuntimeNotification[]): RuntimeNotificationBatch {
     return withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications });
   }
@@ -153,56 +123,10 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     return buildNotificationBatch([]);
   }
 
-  async function broadcastCardChats(cardId: string, receiving = true): Promise<void> {
-    const payload = await buildCardChatsBatch(cardId, receiving);
-    for (const [clientId, client] of sseClients.entries()) {
-      if (!client.subscribedChatCardIds.has(cardId)) continue;
-      writeFrame(clientId, payload);
-    }
-  }
-
-  function stopChatSubscriptionScanIfIdle(): void {
-    if (currentSubscribedChatCardIds().length > 0) return;
-    if (chatSubscriptionScanTimer) {
-      clearInterval(chatSubscriptionScanTimer);
-      chatSubscriptionScanTimer = null;
-    }
-    lastChatCursorByCardId.clear();
-    lastChatProcessingByCardId.clear();
-  }
-
-  function ensureChatSubscriptionScan(): void {
-    if (chatSubscriptionScanTimer) return;
-    const scan = async () => {
-      const activeCardIds = currentSubscribedChatCardIds();
-      if (activeCardIds.length === 0) {
-        stopChatSubscriptionScanIfIdle();
-        return;
-      }
-      const activeSet = new Set(activeCardIds);
-      for (const cardId of Array.from(lastChatCursorByCardId.keys())) {
-        if (!activeSet.has(cardId)) lastChatCursorByCardId.delete(cardId);
-      }
-      for (const cardId of Array.from(lastChatProcessingByCardId.keys())) {
-        if (!activeSet.has(cardId)) lastChatProcessingByCardId.delete(cardId);
-      }
-      for (const cardId of activeCardIds) {
-        if (await hasChatChanges(cardId)) await broadcastCardChats(cardId, true);
-      }
-    };
-    void scan();
-    chatSubscriptionScanTimer = setInterval(() => { void scan(); }, 1000);
-  }
-
   async function subscribeChat(clientId: string, cardId: string): Promise<boolean> {
     const client = sseClients.get(clientId);
     if (!client) return false;
     client.subscribedChatCardIds.add(cardId);
-    // Initialise cursor to latest so we only push deltas from this point forward.
-    const { cursor: latestCursor } = await deps.readChatAfter(cardId, null);
-    lastChatCursorByCardId.set(cardId, latestCursor);
-    lastChatProcessingByCardId.set(cardId, await deps.getChatProcessing(cardId));
-    ensureChatSubscriptionScan();
     writeFrame(clientId, await buildCardChatsBatch(cardId, true));
     return true;
   }
@@ -211,11 +135,6 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     const client = sseClients.get(clientId);
     if (!client) return false;
     client.subscribedChatCardIds.delete(cardId);
-    if (!currentSubscribedChatCardIds().includes(cardId)) {
-      lastChatCursorByCardId.delete(cardId);
-      lastChatProcessingByCardId.delete(cardId);
-    }
-    stopChatSubscriptionScanIfIdle();
     return true;
   }
 
@@ -261,6 +180,5 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     subscribeChat,
     unsubscribeChat,
     broadcastNotificationBatch,
-    broadcastCardChats,
   };
 }
