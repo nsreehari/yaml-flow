@@ -28,6 +28,7 @@ import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-pu
 import { createAsyncBoardWorkerStore } from '../cli/cloud/board-platform-adapter-async.js';
 import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
 import type { AsyncCardAdminStore } from '../cli/cloud/board-live-cards-storage-async.js';
+import { createAsyncCardStorePublic } from '../cli/cloud/card-store-lib-public-async.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
 import { createCardStore } from '../cli/common/board-live-cards-lib.js';
@@ -86,6 +87,7 @@ import { createRoutesRuntimeApi } from './routes-runtime-api.js';
 import { createRoutesNotify } from './routes-notify.js';
 import { runtimeNotificationsFromUnknownEvent } from './runtime-notification-ingress.js';
 import {
+  type CardStoreNotification,
   type BoardChangeNotification,
   type BoardOutputNotification,
   type RuntimeNotification,
@@ -145,7 +147,6 @@ interface BoardOpsAwaitable {
   getOutputsFetchedSources(input: CommandInput): Awaitable<CommandResult<Record<string, string>>>;
   upsertCard(input: CommandInput): Awaitable<CommandResult>;
   removeCard(input: CommandInput): Awaitable<CommandResult>;
-  cardRefreshedNotify(input: CommandInput): Awaitable<CommandResult>;
   sourceDataFetched(input: CommandInput): Awaitable<CommandResult>;
   sourceDataFetchFailure(input: CommandInput): Awaitable<CommandResult>;
 }
@@ -254,74 +255,18 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       };
     }
 
-    function createAsyncCardStoreOps(store: AsyncCardAdminStore): CardStoreOpsAwaitable {
-      function ok<T>(data: T): CommandResult<T> { return { status: 'success', data } as CommandResult<T>; }
-      function fail<T>(error: string): CommandResult<T> { return { status: 'fail', error } as CommandResult<T>; }
-      function oops<T>(e: unknown): CommandResult<T> { return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>; }
+    function emitCardStoreNotifications(notifications: CardStoreNotification[]): void {
+      if (!notifications || notifications.length === 0) return;
+      emitNotifications(notifications, contextRef ?? undefined);
+    }
 
+    function createAsyncCardStoreOps(store: ReturnType<typeof createAsyncCardStorePublic>): CardStoreOpsAwaitable {
       return {
-        async get(input) {
-          try {
-            const id = input.params?.id as string | undefined;
-            if (id) {
-              const card = await store.readCard(id);
-              if (!card) return fail(`card "${id}" not found`);
-              return ok({ cards: [card as Record<string, unknown>] });
-            }
-            return ok({ cards: await store.readAllCards() as Array<Record<string, unknown>> });
-          } catch (e) { return oops(e); }
-        },
-        async set(input) {
-          try {
-            const body = input.body;
-            if (body == null) return fail('set requires a body (card object or array of cards)');
-            const cards = Array.isArray(body) ? body as Array<Record<string, unknown>> : [body as Record<string, unknown>];
-            for (const card of cards) {
-              if (typeof card.id !== 'string') return fail('each card must have a string `id` field');
-              await store.writeCard(card.id, card as import('../cli/common/board-live-cards-lib.js').LiveCard);
-            }
-            return ok({ count: cards.length });
-          } catch (e) { return oops(e); }
-        },
-        async del(input) {
-          try {
-            const bodyIds = (input.body as { ids?: string[] } | undefined)?.ids ?? [];
-            const paramId = input.params?.id as string | undefined;
-            const ids = paramId ? [...bodyIds, paramId] : bodyIds;
-            if (ids.length === 0) return fail('del requires body.ids (string[]) or params.id');
-            for (const id of ids) await store.removeCard(id);
-            return ok({ count: ids.length });
-          } catch (e) { return oops(e); }
-        },
-        async patch(input) {
-          try {
-            const id = input.params?.id as string | undefined;
-            const jsonPath = input.params?.path as string | undefined;
-            if (!id) return fail('patch requires params.id');
-            if (!jsonPath) return fail('patch requires params.path');
-            const body = input.body as { value?: unknown } | undefined;
-            const value = body && Object.prototype.hasOwnProperty.call(body, 'value') ? body.value : input.body;
-            await store.patchCard(id, jsonPath, value);
-            return ok({ count: 1 });
-          } catch (e) { return oops(e); }
-        },
-        async appendFiles(input) {
-          try {
-            const id = input.params?.id as string | undefined;
-            if (!id) return fail('appendFiles requires params.id');
-            const card = await store.readCard(id);
-            if (!card) return fail(`card "${id}" not found`);
-            const files = normalizeFilesBody(input.body);
-            if (!files || files.length === 0) return fail('appendFiles requires a file metadata object, array, or body.files array');
-            const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
-              ? card.card_data as Record<string, unknown>
-              : {};
-            const existingFiles = Array.isArray(cardData.files) ? cardData.files : [];
-            const nextFiles = [...existingFiles, ...files];
-            await store.patchCard(id, 'card_data.files', nextFiles);
-            return ok({ files_added: files.map((entry, offset) => ({ idx: existingFiles.length + offset, entry })) });
-          } catch (e) { return oops(e); }
-        },
+        async get(input) { return await store.get(input) as CommandResult<{ cards: Array<Record<string, unknown>> }>; },
+        async set(input) { return await store.set(input); },
+        async del(input) { return await store.del(input); },
+        async patch(input) { return await store.patch(input); },
+        async appendFiles(input) { return await store.appendFiles(input); },
       };
     }
 
@@ -369,7 +314,16 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           createAsyncCardStorageAdapter(createAsyncJsonStorage(cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef)), cfg.boardAdapter.hashFn),
           logger.warn,
         );
-        const ops = createAsyncCardStoreOps(asyncStore);
+        const asyncPublicStore = createAsyncCardStorePublic(asyncStore, {
+          emitNotification(notification) {
+            if (notification.kind === 'notification-batch') {
+              emitNotifications(notification.notifications, contextRef ?? undefined);
+              return;
+            }
+            emitNotifications([notification], contextRef ?? undefined);
+          },
+        });
+        const ops = createAsyncCardStoreOps(asyncPublicStore);
         publicCardStore = {
           get(input) { return ops.get(input); },
           set(input) { return ops.set(input); },
@@ -387,7 +341,15 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           cardExists: (id: string) => kv.read(id) !== null,
           defaultCardKey: (id: string) => id,
         };
-        const syncStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn));
+        const syncStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn), {
+          emitNotification(notification) {
+            if (notification.kind === 'notification-batch') {
+              emitNotifications(notification.notifications, contextRef ?? undefined);
+              return;
+            }
+            emitNotifications([notification], contextRef ?? undefined);
+          },
+        });
         publicCardStore = syncStore;
         return createSyncCardStoreOps(syncStore);
       })();
@@ -441,7 +403,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       async getOutputsFetchedSources(input) { return board.getOutputsFetchedSources(input); },
       async upsertCard(input) { return board.upsertCard(input); },
       async removeCard(input) { return board.removeCard(input); },
-      async cardRefreshedNotify(input) { return board.cardRefreshedNotify(input); },
       async sourceDataFetched(input) { return board.sourceDataFetched(input); },
       async sourceDataFetchFailure(input) { return board.sourceDataFetchFailure(input); },
     };

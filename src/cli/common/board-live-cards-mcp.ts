@@ -108,7 +108,6 @@ export interface BoardLiveCardsMcpManageUpsertCardSuccessResult {
     validation: unknown;
     card_saved: unknown;
     board_result: unknown;
-    refresh_notify: unknown;
   };
 }
 
@@ -165,7 +164,6 @@ export interface BoardLiveCardsMcpBoardDeps {
   getOutputsComputedValues(input: { params: { key: string } }): Awaitable<CommandResult>;
   getOutputsFetchedSources(input: { params: { key: string } }): Awaitable<CommandResult<Record<string, string>>>;
   removeCard(input: { params: { id: string } }): Awaitable<CommandResult>;
-  cardRefreshedNotify(input: { params: { cardId: string } }): Awaitable<CommandResult>;
   upsertCard(input: { params: { cardId: string; restart?: boolean } }): Awaitable<CommandResult>;
 }
 
@@ -1081,20 +1079,12 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       }
       throw boardErr;
     }
-    let refreshNotify: unknown = null;
-    try {
-      refreshNotify = await board.cardRefreshedNotify({ params: { cardId } });
-      expectSuccess(refreshNotify as CommandResult<unknown>, 'cardRefreshedNotify');
-    } catch {
-      refreshNotify = null;
-    }
     return {
       status: 'success',
       data: {
         validation: null,
         card_saved: null,
         board_result: boardUpdate,
-        refresh_notify: refreshNotify,
       },
     };
   }
@@ -1154,21 +1144,12 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       throw boardErr;
     }
 
-    let refreshNotify: unknown = null;
-    try {
-      refreshNotify = await board.cardRefreshedNotify({ params: { cardId } });
-      expectSuccess(refreshNotify as CommandResult<unknown>, 'cardRefreshedNotify');
-    } catch {
-      refreshNotify = null;
-    }
-
     return {
       status: 'success',
       data: {
         validation,
         card_saved: null,
         board_result: boardUpdate,
-        refresh_notify: refreshNotify,
       },
     };
   }
@@ -1244,17 +1225,9 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       throw boardErr;
     }
 
-    let refreshNotify: unknown = null;
-    try {
-      refreshNotify = await board.cardRefreshedNotify({ params: { cardId } });
-      expectSuccess(refreshNotify as CommandResult<unknown>, 'cardRefreshedNotify');
-    } catch {
-      refreshNotify = null;
-    }
-
     return {
       status: 'success',
-      data: { validation, card_saved: null, board_result: boardUpdate, refresh_notify: refreshNotify },
+      data: { validation, card_saved: null, board_result: boardUpdate },
     };
   }
 

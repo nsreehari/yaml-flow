@@ -31,7 +31,6 @@ export interface McpFacadeBoardContextLike {
   boardOps: {
     getOutputsFetchedSources: (input: { params: { key: string } }) => Promise<CommandResult>;
     removeCard: (input: { params: { id: string } }) => Promise<CommandResult>;
-    cardRefreshedNotify: (input: { params: { cardId: string } }) => Promise<CommandResult>;
     upsertCard: (input: { params: { cardId: string; restart: boolean } }) => Promise<CommandResult>;
   };
   cardStoreOps: {
@@ -138,13 +137,6 @@ export function createMcpFacadeModule(deps: McpFacadeDeps): McpFacadeModule {
         const ctx = cardContextForCard(id) ?? primaryContext();
         if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
         return ctx.boardOps.removeCard({ params: { id } });
-      },
-      async cardRefreshedNotify(input) {
-        const cardId = input?.params?.cardId;
-        if (!cardId) return { status: 'fail', error: 'cardRefreshedNotify requires params.cardId' };
-        const ctx = cardContextForCard(cardId) ?? primaryContext();
-        if (!ctx) return { status: 'fail', error: 'Board context is unavailable' };
-        return ctx.boardOps.cardRefreshedNotify({ params: { cardId } });
       },
       async upsertCard(input) {
         const cardId = input?.params?.cardId;

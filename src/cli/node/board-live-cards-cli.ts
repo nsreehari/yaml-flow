@@ -355,11 +355,6 @@ export async function cli(argv: string[]): Promise<void> {
       process.stdout.write(Buffer.from(readAttachmentBytes(baseRef, boardRuntimeStoreRef, notifyChannel, cardId, fileIdx)));
       return;
     }
-    case 'card-refreshed-notify': {
-      const cardId = requireFlag(rest, '--card-id', 'card-refreshed-notify --base-ref <ref> --card-id <card-id>');
-      printResult(writeBoard().cardRefreshedNotify({ params: { cardId } }));
-      return;
-    }
     case 'retrigger': {
       const id = requireFlag(rest, '--id', 'retrigger --base-ref <ref> --id <card-id>');
       printResult(writeBoard().retrigger({ params: { id } }));

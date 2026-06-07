@@ -54,6 +54,7 @@ import {
   createStateSnapshotStoreFromAdapter,
 } from '../common/board-live-cards-shared-snapshot-journal.js';
 import type { ExecutionRef } from '../common/execution-interface.js';
+import { createAsyncCardStorePublic } from './card-store-lib-public-async.js';
 import type {
   AsyncBlobStorage,
   AsyncKVStorage,
@@ -85,7 +86,6 @@ export interface AsyncBoardLiveCardsPublic {
   getOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, string>>>;
   getAllOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, Record<string, string>>>>;
   addCardFiles(input: CommandInput): Promise<CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>>;
-  cardRefreshedNotify(input: CommandInput): Promise<CommandResult>;
   removeCard(input: CommandInput): Promise<CommandResult>;
   retrigger(input: CommandInput): Promise<CommandResult>;
   processAccumulatedEvents(input: CommandInput): Promise<CommandResult>;
@@ -1006,55 +1006,12 @@ export function createAsyncBoardLiveCardsPublic(
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('addCardFiles requires params.cardId') as R;
 
-        const cards = await cardStore();
-        const card = await cards.readCard(cardId);
-        if (!card) return fail(`card "${cardId}" not found`) as R;
-
-        const body = input.body;
-        const files = Array.isArray(body)
-          ? body
-          : body && typeof body === 'object' && Array.isArray((body as { files?: unknown }).files)
-            ? (body as { files: unknown[] }).files
-            : body != null
-              ? [body]
-              : null;
-        if (!files || files.length === 0) {
-          return fail('addCardFiles requires a file metadata object, array, or body.files array') as R;
-        }
-
-        const cardData = (card.card_data && typeof card.card_data === 'object' && !Array.isArray(card.card_data))
-          ? card.card_data as Record<string, unknown>
-          : {};
-        const existingFiles = Array.isArray(cardData.files) ? cardData.files : [];
-        const nextFiles = [...existingFiles, ...files];
-        const filesAdded = files.map((entry, offset) => ({ idx: existingFiles.length + offset, entry }));
-
-        await cards.writeCard(cardId, {
-          ...card,
-          card_data: {
-            ...cardData,
-            files: nextFiles,
-          },
-        });
-
-        const notifyResult = await this.cardRefreshedNotify({ params: { cardId } });
-        if (notifyResult.status !== 'success') return notifyResult as unknown as R;
-        return ok({ cardId, files_added: filesAdded, notified: true }) as R;
+        const publicCards = createAsyncCardStorePublic(await cardStore(), { emitNotification });
+        const appendResult = await publicCards.appendFiles({ params: { id: cardId }, body: input.body });
+        if (appendResult.status !== 'success') return appendResult as unknown as R;
+        return ok({ cardId, files_added: appendResult.data.files_added, notified: true }) as R;
       } catch (error) {
         return err(error) as R;
-      }
-    },
-
-    async cardRefreshedNotify(input: CommandInput): Promise<CommandResult> {
-      try {
-        const cardId = input.params?.['cardId'] as string | undefined;
-        if (!cardId) return fail('cardRefreshedNotify requires params.cardId');
-        const card = await (await cardStore()).readCard(cardId);
-        if (!card) return fail(`Card "${cardId}" not found in board at ${baseRef.value}`);
-        await flushBoardChangeNotifications([{ kind: 'card_refreshed', cardId, card }]);
-        return ok({ cardId, notified: true });
-      } catch (error) {
-        return err(error);
       }
     },
 

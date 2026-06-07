@@ -77,9 +77,6 @@ addCardFiles(input: CommandInput): CommandResult<{ cardId: string; files_added: 
   params: { cardId }
   body:   file metadata object | array | { files: [...] }
 
-cardRefreshedNotify(input: CommandInput): CommandResult
-  params: { cardId }
-
 retrigger(input: CommandInput): CommandResult
   params: { id }
 

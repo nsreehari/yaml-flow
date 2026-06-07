@@ -232,33 +232,6 @@ describe('BoardLiveCardsPublic — init and status', () => {
     expect(notifications.flat()).toContainEqual({ kind: 'card_removed', cardId: 'my-card' });
   });
 
-  it('cardRefreshedNotify emits a card_refreshed notification from the card store', () => {
-    const { boardDir, br } = freshBoard();
-    const notifications: Array<Array<{ kind: string; [key: string]: unknown }>> = [];
-    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
-    const board = createBoardLiveCardsPublic(br, {
-      ...adapter,
-      publishBoardChangeNotifications(batch) {
-        notifications.push(batch);
-      },
-    });
-    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
-      boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
-    });
-
-    board.init({ params: mkInitParams(boardDir) });
-    expect(nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'notify-card', 'card-content': minCard('notify-card', { title: 'hello' }) }] } }).status).toBe('success');
-
-    const result = board.cardRefreshedNotify({ params: { cardId: 'notify-card' } });
-
-    expect(result.status).toBe('success');
-    expect(notifications.flat()).toContainEqual({
-      kind: 'card_refreshed',
-      cardId: 'notify-card',
-      card: expect.objectContaining({ id: 'notify-card', card_data: { v: 1 }, title: 'hello' }),
-    });
-  });
-
   it('addCardFiles appends files and emits card_refreshed notification', () => {
     const { boardDir, br } = freshBoard();
     const notifications: Array<Array<{ kind: string; [key: string]: unknown }>> = [];

@@ -731,10 +731,6 @@ describe('cloud storage adapters', () => {
       },
     });
 
-    expect(await board.cardRefreshedNotify({ params: { cardId: 'card-1' } })).toEqual({
-      status: 'success',
-      data: { cardId: 'card-1', notified: true },
-    });
     expect(boardNotifications).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'card_refreshed', cardId: 'card-1' }),
     ]));

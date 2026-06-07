@@ -306,8 +306,6 @@ export interface BoardLiveCardsPublic {
   removeCard(input: CommandInput): CommandResult;
   // params: cardId; body matches card-store appendFiles input
   addCardFiles(input: CommandInput): CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>;
-  // params: cardId
-  cardRefreshedNotify(input: CommandInput): CommandResult;
   // params: id
   retrigger(input: CommandInput): CommandResult;
   processAccumulatedEvents(input: CommandInput): Promise<CommandResult>;
@@ -914,17 +912,6 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as R; }
   }
 
-  function cardRefreshedNotify(input: CommandInput): CommandResult {
-    try {
-      const cardId = input.params?.['cardId'] as string | undefined;
-      if (!cardId) return fail('cardRefreshedNotify requires params.cardId');
-      const card = cardStore().readCard(cardId);
-      if (!card) return fail(`Card "${cardId}" not found in board at ${baseRef.value}`);
-      flushBoardChangeNotifications([{ kind: 'card_refreshed', cardId, card }]);
-      return ok({ cardId, notified: true });
-    } catch (e) { return err(e); }
-  }
-
   function retrigger(input: CommandInput): CommandResult {
     try {
       const id = input.params?.['id'] as string | undefined;
@@ -1222,7 +1209,7 @@ export function createBoardLiveCardsPublic(
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
     getOutputsFetchedSources, getAllOutputsFetchedSources,
-    removeCard, addCardFiles, cardRefreshedNotify, retrigger, processAccumulatedEvents,
+    removeCard, addCardFiles, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,
     sourceDataFetched, sourceDataFetchFailure,

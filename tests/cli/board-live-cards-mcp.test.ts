@@ -10,7 +10,6 @@ function makeDeps() {
       getOutputsComputedValues: vi.fn(() => ({ status: 'success', data: {} })),
       getOutputsFetchedSources: vi.fn(() => ({ status: 'success', data: {} })),
       removeCard: vi.fn(() => ({ status: 'success' })),
-      cardRefreshedNotify: vi.fn(() => ({ status: 'success', data: { notified: true } })),
       upsertCard: vi.fn(() => ({ status: 'success' })),
     },
     nonCore: {
@@ -100,7 +99,6 @@ describe('BoardLiveCardsMcp', () => {
         validation: { status: 'success', data: { cardId: 'card-1', isValid: true, issues: [] } },
         card_saved: null,
         board_result: { status: 'success' },
-        refresh_notify: { status: 'success', data: { notified: true } },
       },
     });
   });

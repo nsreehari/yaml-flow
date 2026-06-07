@@ -288,7 +288,6 @@ If `candidate_card_content` contains top-level `meta`, regular `/mcp` strips it 
     "validation": { "status": "success", "data": { "isValid": true } },
     "card_saved": null,
     "board_result": { "status": "success" },
-    "refresh_notify": { "status": "success" }
   }
 }
 ```
