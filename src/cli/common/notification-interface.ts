@@ -57,6 +57,15 @@ export type HostedRuntimeNotification = {
   cardId: string;
   active: boolean;
   sentAtMs?: number;
+} | {
+  category?: 'hosted-runtime';
+  kind: 'card_watchparty';
+  cardId: string;
+  channel: string;
+  payload: unknown;
+  clear?: boolean;
+  replace?: boolean;
+  sentAtMs?: number;
 };
 
 export type QueueStorageNotification =
@@ -115,6 +124,7 @@ export function notificationCategoryForKind(kind: RuntimeNotification['kind']): 
     case 'chat_messages':
       return 'chat-store';
     case 'chat_processing':
+    case 'card_watchparty':
       return 'hosted-runtime';
     case 'message_enqueued':
       return 'queue-storage';

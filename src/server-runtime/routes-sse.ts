@@ -59,8 +59,10 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
       return;
     }
     if (subscribed) {
+      sseHub.subscribeChannel(clientId, channelName, params.cardId);
       onChannelSubscribed?.(clientId, channelName, params);
     } else {
+      sseHub.unsubscribeChannel(clientId, channelName, params.cardId);
       onChannelUnsubscribed?.(clientId, channelName, params);
     }
     json(res, 200, {
@@ -82,6 +84,10 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
     const bootstrapPayload = opts?.bootstrapPayload !== false;
     const existing = !oneShot && clientId ? sseHub.get(clientId) : null;
     const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
+    const subscribedChannelNames = existing ? new Set(existing.subscribedChannelNames) : new Set<string>();
+    const subscribedCardChannels = existing
+      ? new Map(Array.from(existing.subscribedCardChannels.entries(), ([cardId, channelSet]) => [cardId, new Set(channelSet)]))
+      : new Map<string, Set<string>>();
     res.writeHead(200, {
       ...corsHeaders,
       'Content-Type': 'text/event-stream',
@@ -107,7 +113,7 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
       throw new Error('clientId is required for streaming SSE');
     }
 
-    sseHub.register(clientId, res, subscribedChatCardIds);
+    sseHub.register(clientId, res, { subscribedChatCardIds, subscribedChannelNames, subscribedCardChannels });
     try { onSseClientConnected?.(clientId, (customPayload: unknown) => { sseHub.writeFrame(clientId, customPayload); }); } catch { /* ignore host hook failures */ }
 
     const keepAlive = setInterval(() => {

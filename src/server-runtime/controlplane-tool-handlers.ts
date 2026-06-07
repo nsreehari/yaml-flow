@@ -24,7 +24,7 @@ import type { SseHub } from './sse-hub.js';
 export interface ControlplaneToolHandlersDeps {
   boardId: string;
   bootstrapBoard: () => Promise<void>;
-  sseHub: Pick<SseHub, 'has' | 'subscribeChat' | 'unsubscribeChat'>;
+  sseHub: Pick<SseHub, 'has' | 'subscribeChat' | 'unsubscribeChat' | 'subscribeChannel' | 'unsubscribeChannel'>;
   onChannelSubscribed?: (clientId: string, channelName: string, params: { cardId?: string }) => void;
   onChannelUnsubscribed?: (clientId: string, channelName: string, params: { cardId?: string }) => void;
   /** Returns the live MCP facade (chat processing getters/setters). */
@@ -129,8 +129,10 @@ export function createControlplaneToolHandlers(deps: ControlplaneToolHandlersDep
       throw Object.assign(new Error(`SSE client not connected: ${clientId}`), { statusCode: 404 });
     }
     if (subscribed) {
+      sseHub.subscribeChannel(clientId, channelName, cardId);
       onChannelSubscribed?.(clientId, channelName, cardId ? { cardId } : {});
     } else {
+      sseHub.unsubscribeChannel(clientId, channelName, cardId);
       onChannelUnsubscribed?.(clientId, channelName, cardId ? { cardId } : {});
     }
     return {

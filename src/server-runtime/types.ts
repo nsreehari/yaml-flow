@@ -11,6 +11,7 @@
  */
 
 import type { BoardPlatformAdapter, BoardNonCorePlatformAdapter, BoardLiveCardsPublic, BoardLiveCardsNonCorePublic, CommandInput, CommandResult, BoardChangeNotification } from '../cli/common/board-live-cards-public.js';
+import type { RuntimeNotification, RuntimeNotificationBatch } from '../cli/common/notification-interface.js';
 import type { BoardWorkerRequest } from '../cli/common/board-worker-store.js';
 import type { AsyncBoardPlatformAdapter } from '../cli/cloud/board-platform-adapter-async.js';
 import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
@@ -227,6 +228,7 @@ export interface SingleBoardRuntime {
     get(input: { params?: { id?: string } }): Awaitable<{ status: string; data?: { cards?: Array<Record<string, unknown>> }; error?: string }>;
     set(input: { body: unknown }): Awaitable<{ status: string; data?: { count?: number }; error?: string }>;
   };
+  emitNotification(notification: RuntimeNotification | RuntimeNotificationBatch): void;
 }
 
 // ============================================================================

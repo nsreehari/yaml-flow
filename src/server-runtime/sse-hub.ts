@@ -28,6 +28,8 @@ import type { CommandResult } from '../cli/common/board-live-cards-public.js';
 export interface SseClientState {
   res: RuntimeResponse;
   subscribedChatCardIds: Set<string>;
+  subscribedChannelNames: Set<string>;
+  subscribedCardChannels: Map<string, Set<string>>;
 }
 
 export interface SseHub {
@@ -42,7 +44,15 @@ export interface SseHub {
   /** Best-effort transport-level flush for the underlying response object. */
   flushTransport(res: RuntimeResponse): void;
   /** Register a fresh client. Any prior registration with the same id is disconnected first. */
-  register(clientId: string, res: RuntimeResponse, subscribedChatCardIds?: Set<string>): void;
+  register(
+    clientId: string,
+    res: RuntimeResponse,
+    state?: {
+      subscribedChatCardIds?: Set<string>;
+      subscribedChannelNames?: Set<string>;
+      subscribedCardChannels?: Map<string, Set<string>>;
+    },
+  ): void;
   /** Drop a registered client. If expectedRes is supplied and does not match, no-op. */
   disconnect(clientId: string, expectedRes?: RuntimeResponse): void;
   /** Write an SSE frame to one client; transport errors disconnect that client. */
@@ -51,6 +61,10 @@ export interface SseHub {
   subscribeChat(clientId: string, cardId: string): Promise<boolean>;
   /** Unsubscribe a client from a card's chat stream. */
   unsubscribeChat(clientId: string, cardId: string): boolean;
+  /** Subscribe a client to a named board or card-scoped channel. */
+  subscribeChannel(clientId: string, channelName: string, cardId?: string): boolean;
+  /** Unsubscribe a client from a named board or card-scoped channel. */
+  unsubscribeChannel(clientId: string, channelName: string, cardId?: string): boolean;
   /** Broadcast a notification batch; chat-scoped notes are routed to chat-subscribed clients. */
   broadcastNotificationBatch(notifications: RuntimeNotification[]): void;
 }
@@ -94,10 +108,23 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     try { client.res.end(); } catch { /* ignore */ }
   }
 
-  function register(clientId: string, res: RuntimeResponse, subscribedChatCardIds?: Set<string>): void {
+  function register(
+    clientId: string,
+    res: RuntimeResponse,
+    state?: {
+      subscribedChatCardIds?: Set<string>;
+      subscribedChannelNames?: Set<string>;
+      subscribedCardChannels?: Map<string, Set<string>>;
+    },
+  ): void {
     const existing = sseClients.get(clientId);
     if (existing) disconnect(clientId, existing.res);
-    sseClients.set(clientId, { res, subscribedChatCardIds: subscribedChatCardIds ?? new Set<string>() });
+    sseClients.set(clientId, {
+      res,
+      subscribedChatCardIds: state?.subscribedChatCardIds ?? new Set<string>(),
+      subscribedChannelNames: state?.subscribedChannelNames ?? new Set<string>(),
+      subscribedCardChannels: state?.subscribedCardChannels ?? new Map<string, Set<string>>(),
+    });
   }
 
   function writeFrame(clientId: string, payload: unknown): void {
@@ -137,16 +164,63 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     return true;
   }
 
+  function subscribeChannel(clientId: string, channelName: string, cardId?: string): boolean {
+    const client = sseClients.get(clientId);
+    if (!client) return false;
+    if (cardId) {
+      const existing = client.subscribedCardChannels.get(cardId) ?? new Set<string>();
+      existing.add(channelName);
+      client.subscribedCardChannels.set(cardId, existing);
+      return true;
+    }
+    client.subscribedChannelNames.add(channelName);
+    return true;
+  }
+
+  function unsubscribeChannel(clientId: string, channelName: string, cardId?: string): boolean {
+    const client = sseClients.get(clientId);
+    if (!client) return false;
+    if (cardId) {
+      const existing = client.subscribedCardChannels.get(cardId);
+      if (!existing) return true;
+      existing.delete(channelName);
+      if (existing.size === 0) {
+        client.subscribedCardChannels.delete(cardId);
+      }
+      return true;
+    }
+    client.subscribedChannelNames.delete(channelName);
+    return true;
+  }
+
   function isChatScopedNotification(notification: RuntimeNotification): notification is ChatStoreNotification | HostedRuntimeNotification {
     return notification.kind === 'card_chats' || notification.kind === 'chat_messages' || notification.kind === 'chat_processing';
+  }
+
+  function isWatchpartyNotification(notification: RuntimeNotification): notification is Extract<RuntimeNotification, { kind: 'card_watchparty' }> {
+    return notification.kind === 'card_watchparty';
+  }
+
+  function isSubscribedToWatchpartyChannel(client: SseClientState, channelName: string, cardId: string): boolean {
+    if (client.subscribedChannelNames.has(channelName)) {
+      return true;
+    }
+    const cardChannels = client.subscribedCardChannels.get(cardId);
+    return !!cardChannels?.has(channelName);
   }
 
   function broadcastNotificationBatch(notifications: RuntimeNotification[]): void {
     if (!notifications || notifications.length === 0) return;
     const generalNotifications: RuntimeNotification[] = [];
     const chatNotificationsByCardId = new Map<string, RuntimeNotification[]>();
+    const watchpartyNotificationsByCardChannel = new Map<string, RuntimeNotification[]>();
     for (const note of notifications) {
-      if (isChatScopedNotification(note)) {
+      if (isWatchpartyNotification(note)) {
+        const key = `${note.cardId}\u0000${note.channel}`;
+        const scoped = watchpartyNotificationsByCardChannel.get(key) ?? [];
+        scoped.push(note);
+        watchpartyNotificationsByCardChannel.set(key, scoped);
+      } else if (isChatScopedNotification(note)) {
         const scoped = chatNotificationsByCardId.get(note.cardId) ?? [];
         scoped.push(note);
         chatNotificationsByCardId.set(note.cardId, scoped);
@@ -165,6 +239,17 @@ export function createSseHub(deps: SseHubDeps): SseHub {
         writeFrame(clientId, payload);
       }
     }
+    for (const [key, scopedNotifications] of watchpartyNotificationsByCardChannel.entries()) {
+      const separator = key.indexOf('\u0000');
+      const cardId = separator >= 0 ? key.slice(0, separator) : '';
+      const channelName = separator >= 0 ? key.slice(separator + 1) : key;
+      const payload = buildNotificationBatch(scopedNotifications);
+      for (const [clientId, client] of sseClients.entries()) {
+        if (!cardId || !channelName) continue;
+        if (!isSubscribedToWatchpartyChannel(client, channelName, cardId)) continue;
+        writeFrame(clientId, payload);
+      }
+    }
   }
 
   return {
@@ -178,6 +263,8 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     writeFrame,
     subscribeChat,
     unsubscribeChat,
+    subscribeChannel,
+    unsubscribeChannel,
     broadcastNotificationBatch,
   };
 }
