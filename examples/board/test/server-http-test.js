@@ -589,31 +589,36 @@ const waitForChatPredicate = (predicate, ms, label) =>
 
 function deriveProbeLifecycleMilestones(events, opts) {
   const milestones = [];
-  let prevMessageCount = Number(opts.beforeCount || 0);
   let prevProcessing = Boolean(opts.beforeProcessing);
   const prompt = String(opts.prompt || '');
   const assistantText = opts.assistantText == null ? `Echo: ${prompt}` : String(opts.assistantText);
   const inProgressText = String(opts.inProgressText || PROBE_IN_PROGRESS_TEXT);
+  const seenRelevantMessages = new Set();
 
   for (const event of events) {
     const messages = Array.isArray(event?.messages) ? event.messages : [];
-    const nextMessageCount = Number(event?.messageCount || messages.length || 0);
-    const newMessages = nextMessageCount > prevMessageCount
-      ? messages.slice(prevMessageCount, nextMessageCount)
-      : [];
-
-    for (const message of newMessages) {
+    for (const message of messages) {
       const role = String(message?.role || '');
       const text = String(message?.text || '');
-      if (role === 'user' && text.includes(prompt)) milestones.push('user');
-      else if (role === 'system' && text.trim().toLowerCase() === inProgressText) milestones.push('in-progress');
-      else if (role === 'assistant' && text.includes(assistantText)) milestones.push('assistant');
+      const turn = typeof message?.turn === 'string' ? message.turn : '';
+      const signature = `${turn}|${role}|${text}`;
+      if (seenRelevantMessages.has(signature)) continue;
+
+      if (role === 'user' && text.includes(prompt)) {
+        milestones.push('user');
+        seenRelevantMessages.add(signature);
+      } else if (role === 'system' && text.trim().toLowerCase() === inProgressText) {
+        milestones.push('in-progress');
+        seenRelevantMessages.add(signature);
+      } else if (role === 'assistant' && text.includes(assistantText)) {
+        milestones.push('assistant');
+        seenRelevantMessages.add(signature);
+      }
     }
 
     const processing = Boolean(event?.processing);
     if (processing !== prevProcessing) milestones.push(processing ? 'processing-true' : 'processing-false');
 
-    prevMessageCount = nextMessageCount;
     prevProcessing = processing;
   }
 
@@ -1167,9 +1172,9 @@ try {
     const t2aAssistant = await waitForChatPredicate((events) => {
       for (let i = events.length - 1; i >= 0; i -= 1) {
         const e = events[i];
-        if (e.messageCount < t2aBeforeCount + 2) continue;
-        const last = e.messages[e.messages.length - 1];
-        if (last?.role === 'assistant' && /paris/i.test(String(last.text || ''))) return e;
+        const messages = Array.isArray(e?.messages) ? e.messages : [];
+        const assistant = [...messages].reverse().find((message) => message?.role === 'assistant');
+        if (assistant?.role === 'assistant' && /paris/i.test(String(assistant.text || ''))) return e;
       }
       return false;
     }, 240_000, 'T3a assistant response with paris');
