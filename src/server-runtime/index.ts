@@ -28,10 +28,12 @@ import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-pu
 import { createAsyncBoardWorkerStore } from '../cli/cloud/board-platform-adapter-async.js';
 import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
 import { createAsyncCardStorePublic } from '../cli/cloud/card-store-lib-public-async.js';
+import { createAsyncQueueStoragePublic } from '../cli/cloud/queue-storage-public-async.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
 import { createCardStore } from '../cli/common/board-live-cards-lib.js';
 import { createBoardWorkerStore, type BoardWorkerRequest } from '../cli/common/board-worker-store.js';
+import { createQueueStoragePublic } from '../cli/common/queue-storage-public.js';
 
 import {
   createArtifactsStore,
@@ -247,57 +249,69 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
 
     let contextRef: BoardContext | null = null;
+    function emitRuntimeNotification(notification: RuntimeNotification | RuntimeNotificationBatch): void {
+      if (notification.kind === 'notification-batch') {
+        emitNotifications(notification.notifications, contextRef ?? undefined);
+        return;
+      }
+      emitNotifications([notification], contextRef ?? undefined);
+    }
+    const runtimeBoardAdapter = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
+      ? {
+          ...cfg.boardAdapter,
+          queueStorageForRef(ref: string, lane: string) {
+            return createAsyncQueueStoragePublic(cfg.boardAdapter.queueStorageForRef(ref, lane), {
+              lane,
+              emitNotification: emitRuntimeNotification,
+            });
+          },
+        }
+      : {
+          ...cfg.boardAdapter,
+          queueStorageForRef(ref: string, lane: string) {
+            return createQueueStoragePublic(cfg.boardAdapter.queueStorageForRef(ref, lane), {
+              lane,
+              emitNotification: emitRuntimeNotification,
+            });
+          },
+        };
+    const runtimeNonCoreAdapter = cfg.nonCoreAdapter === cfg.boardAdapter
+      ? runtimeBoardAdapter
+      : cfg.nonCoreAdapter
+        ?? (!isAsyncBoardPlatformAdapter(runtimeBoardAdapter) && isBoardNonCorePlatformAdapter(runtimeBoardAdapter)
+          ? runtimeBoardAdapter
+          : null);
     const board = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
-      ? createAsyncBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter, {
+      ? createAsyncBoardLiveCardsPublic(cfg.baseRef, runtimeBoardAdapter, {
         boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
         scratchStoreRef: cfg.scratchStoreRef,
         taskExecutorRef: cfg.taskExecutorRef,
         chatHandlerFlow: cfg.chatHandlerFlow,
-        emitNotification(notification) {
-          if (notification.kind === 'notification-batch') {
-            emitNotifications(notification.notifications, contextRef ?? undefined);
-            return;
-          }
-          emitNotifications([notification], contextRef ?? undefined);
-        },
+        emitNotification: emitRuntimeNotification,
       })
-      : createBoardLiveCardsPublic(cfg.baseRef, cfg.boardAdapter, {
+      : createBoardLiveCardsPublic(cfg.baseRef, runtimeBoardAdapter, {
         boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
         scratchStoreRef: cfg.scratchStoreRef,
         taskExecutorRef: cfg.taskExecutorRef,
         chatHandlerFlow: cfg.chatHandlerFlow,
-        emitNotification(notification) {
-          if (notification.kind === 'notification-batch') {
-            emitNotifications(notification.notifications, contextRef ?? undefined);
-            return;
-          }
-          emitNotifications([notification], contextRef ?? undefined);
-        },
+        emitNotification: emitRuntimeNotification,
       });
-    const nonCoreAdapter = cfg.nonCoreAdapter
-      ?? (!isAsyncBoardPlatformAdapter(cfg.boardAdapter) && isBoardNonCorePlatformAdapter(cfg.boardAdapter) ? cfg.boardAdapter : null);
-    const nonCore = cfg.nonCore ?? (nonCoreAdapter
-      ? createBoardLiveCardsNonCorePublic(cfg.baseRef, nonCoreAdapter, {
+    const nonCore = cfg.nonCore ?? (runtimeNonCoreAdapter
+      ? createBoardLiveCardsNonCorePublic(cfg.baseRef, runtimeNonCoreAdapter, {
         boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
         taskExecutorRef: cfg.taskExecutorRef,
       })
       : null);
-    const chatStorage = cfg.boardAdapter.chatStorageForRef(cfg.chatStoreRef);
+    const chatStorage = runtimeBoardAdapter.chatStorageForRef(cfg.chatStoreRef);
     let publicCardStore: SingleBoardRuntime['cardStore'];
     const cardStoreOps = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
       ? (() => {
         const asyncStore = createAsyncCardStore(
-          createAsyncCardStorageAdapter(createAsyncJsonStorage(cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef)), cfg.boardAdapter.hashFn),
+          createAsyncCardStorageAdapter(createAsyncJsonStorage(runtimeBoardAdapter.kvStorageForRef(cfg.cardStoreRef)), runtimeBoardAdapter.hashFn),
           logger.warn,
         );
         const asyncPublicStore = createAsyncCardStorePublic(asyncStore, {
-          emitNotification(notification) {
-            if (notification.kind === 'notification-batch') {
-              emitNotifications(notification.notifications, contextRef ?? undefined);
-              return;
-            }
-            emitNotifications([notification], contextRef ?? undefined);
-          },
+          emitNotification: emitRuntimeNotification,
         });
         const ops = createAsyncCardStoreOps(asyncPublicStore);
         publicCardStore = {
@@ -307,7 +321,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         return ops;
       })()
       : (() => {
-        const kv = cfg.boardAdapter.kvStorageForRef(cfg.cardStoreRef);
+        const kv = runtimeBoardAdapter.kvStorageForRef(cfg.cardStoreRef);
         const cardAdapterObj = {
           readIndex: () => kv.read('_index'),
           writeIndex: (idx: unknown) => kv.write('_index', idx),
@@ -317,21 +331,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
           cardExists: (id: string) => kv.read(id) !== null,
           defaultCardKey: (id: string) => id,
         };
-        const syncStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn), {
-          emitNotification(notification) {
-            if (notification.kind === 'notification-batch') {
-              emitNotifications(notification.notifications, contextRef ?? undefined);
-              return;
-            }
-            emitNotifications([notification], contextRef ?? undefined);
-          },
-        });
+        const syncStore = createCardStorePublic(createCardStore(cardAdapterObj as any, logger.warn), { emitNotification: emitRuntimeNotification });
         publicCardStore = syncStore;
         return createSyncCardStoreOps(syncStore);
       })();
     let _filesArtifacts: RuntimeFilesArtifactsStore;
     if (!isAsyncBoardPlatformAdapter(cfg.boardAdapter)) {
-      const filesBlob = cfg.boardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
+      const filesBlob = runtimeBoardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
       const filesStore = createArtifactsStore(filesBlob);
       _filesArtifacts = {
         putBytes(key, content, contentType) { filesStore.putBytes(key, content, contentType); },
@@ -339,7 +345,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         listKeys(prefix) { return filesStore.list(prefix).map((entry) => entry.key); },
       };
     } else {
-      const filesBlob = cfg.boardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
+      const filesBlob = runtimeBoardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
       _filesArtifacts = {
         async putBytes(key, content) {
           if (filesBlob.writeBytes) {
@@ -392,7 +398,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       cardStoreOps,
       get filesArtifacts() { return _filesArtifacts; },
       get chatStorage() { return chatStorage; },
-      boardAdapter: cfg.boardAdapter,
+      boardAdapter: runtimeBoardAdapter,
       boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
       cardStoreRef: cfg.cardStoreRef,
       outputsStoreRef: cfg.outputsStoreRef,

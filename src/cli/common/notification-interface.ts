@@ -7,12 +7,14 @@
  */
 
 import type { LiveCard } from './board-live-cards-lib.js';
+import type { QueueMessage } from './storage-interface.js';
 
 export type NotificationCategory =
   | 'board-output'
   | 'card-store'
   | 'chat-store'
   | 'hosted-runtime'
+  | 'queue-storage'
   | 'batch';
 
 export interface NotificationChatMessage {
@@ -57,13 +59,22 @@ export type HostedRuntimeNotification = {
   sentAtMs?: number;
 };
 
+export type QueueStorageNotification =
+  | {
+      category?: 'queue-storage';
+      kind: 'message_enqueued';
+      lane?: string;
+      message: QueueMessage<unknown>;
+    };
+
 export type BoardChangeNotification = BoardOutputNotification | CardStoreNotification;
 
 export type RuntimeNotification =
   | BoardOutputNotification
   | CardStoreNotification
   | ChatStoreNotification
-  | HostedRuntimeNotification;
+  | HostedRuntimeNotification
+  | QueueStorageNotification;
 
 export type RuntimeNotificationBatch = {
   category?: 'batch';
@@ -105,6 +116,8 @@ export function notificationCategoryForKind(kind: RuntimeNotification['kind']): 
       return 'chat-store';
     case 'chat_processing':
       return 'hosted-runtime';
+    case 'message_enqueued':
+      return 'queue-storage';
   }
 }
 

@@ -24,6 +24,8 @@ export {
 } from './board-live-cards-storage-async.js';
 export type { AsyncCardStorePublic } from './card-store-lib-public-async.js';
 export { createAsyncCardStorePublic } from './card-store-lib-public-async.js';
+export type { AsyncQueueStoragePublic } from './queue-storage-public-async.js';
+export { createAsyncQueueStoragePublic } from './queue-storage-public-async.js';
 
 export type {
   AsyncBoardConfigStore,

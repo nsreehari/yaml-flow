@@ -96,6 +96,7 @@ export {
 } from '../common/execution-interface.js';
 export type { ExecutionRef } from '../common/execution-interface.js';
 export { createCardStorePublic } from '../common/card-store-lib-public.js';
+export { createQueueStoragePublic } from '../common/queue-storage-public.js';
 export { createArtifactsStorePublic } from '../common/artifacts-store-lib-public.js';
 export { createCardStore } from '../common/board-live-cards-lib.js';
 export { createBoardWorkerStore } from '../common/board-worker-store.js';
@@ -110,6 +111,7 @@ export type {
   BoardWorkerRequest,
   BoardWorkerStore,
 } from '../common/board-worker-store.js';
+export type { QueueStoragePublic } from '../common/queue-storage-public.js';
 export type { LiveCard } from '../common/board-live-cards-lib.js';
 export type { InvocationAdapter, DescribeEnvelope } from '../../server-runtime/types.js';
 type BoardProcessAccumulatorInternal = ReturnType<typeof createBoardLiveCardsPublic> & {

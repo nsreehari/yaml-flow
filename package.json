@@ -34,6 +34,11 @@
       "import": "./lib/card-store-public.js",
       "require": "./lib/card-store-public.cjs"
     },
+    "./queue-storage-public": {
+      "types": "./lib/queue-storage-public.d.ts",
+      "import": "./lib/queue-storage-public.js",
+      "require": "./lib/queue-storage-public.cjs"
+    },
     "./artifacts-store-public": {
       "types": "./lib/artifacts-store-public.d.ts",
       "import": "./lib/artifacts-store-public.js",
@@ -64,6 +69,11 @@
       "types": "./lib/notification-consumer/index.d.ts",
       "import": "./lib/notification-consumer/index.js",
       "require": "./lib/notification-consumer/index.cjs"
+    },
+    "./board-state-reducer": {
+      "types": "./lib/board-state-reducer.d.ts",
+      "import": "./lib/board-state-reducer.js",
+      "require": "./lib/board-state-reducer.cjs"
     },
     "./browser/compute-jsonata": "./browser/compute-jsonata.js",
     "./browser/compute-jsonata.js": "./browser/compute-jsonata.js",
