@@ -23,6 +23,13 @@
 
 import type { CommandInput, CommandResult } from './board-live-cards-public.js';
 import type { CardAdminStore, LiveCard } from './board-live-cards-lib.js';
+import {
+  type CardStoreNotification,
+  type NotificationEmitter,
+  type RuntimeNotificationBatch,
+  withRuntimeNotificationBatchCategories,
+  withRuntimeNotificationCategories,
+} from './notification-interface.js';
 
 // ============================================================================
 // CardStorePublic — public interface
@@ -31,6 +38,9 @@ import type { CardAdminStore, LiveCard } from './board-live-cards-lib.js';
 export interface CardStorePublic {
   /** Read one card (params.id) or all cards. */
   get(input: CommandInput): CommandResult<{ cards: LiveCard[] }>;
+
+  /** Build a notification-batch snapshot from one card (params.id) or all cards. */
+  buildNotificationBatch(input: CommandInput): CommandResult<RuntimeNotificationBatch>;
 
   /**
    * Write cards into the store.
@@ -61,11 +71,15 @@ export interface CardStorePublic {
   appendFiles(input: CommandInput): CommandResult<{ files_added: Array<{ idx: number; entry: unknown }> }>;
 }
 
+export interface CardStorePublicOptions {
+  emitNotification?: NotificationEmitter;
+}
+
 // ============================================================================
 // createCardStorePublic — factory
 // ============================================================================
 
-export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
+export function createCardStorePublic(store: CardAdminStore, options: CardStorePublicOptions = {}): CardStorePublic {
   // Internal result builders mirroring the board-live-cards-public pattern.
   function ok<T>(data: T): CommandResult<T> {
     return { status: 'success', data } as CommandResult<T>;
@@ -75,6 +89,38 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
   }
   function oops<T>(e: unknown): CommandResult<T> {
     return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>;
+  }
+
+  async function emitCardNotifications(notifications: CardStoreNotification[]): Promise<void> {
+    const emitNotification = options.emitNotification;
+    if (!emitNotification || notifications.length === 0) return;
+    const normalized = withRuntimeNotificationCategories(notifications);
+    if (normalized.length === 1) {
+      await emitNotification(normalized[0]);
+      return;
+    }
+    await emitNotification(withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications: normalized }));
+  }
+
+  function readCardsFromInput(input: CommandInput): LiveCard[] {
+    const id = input.params?.['id'] as string | undefined;
+    if (id) {
+      const card = store.readCard(id);
+      if (!card) throw new Error(`card "${id}" not found`);
+      return [card];
+    }
+    return store.readAllCards();
+  }
+
+  function buildCardRefreshedBatch(cards: LiveCard[]): RuntimeNotificationBatch {
+    return withRuntimeNotificationBatchCategories({
+      kind: 'notification-batch',
+      notifications: withRuntimeNotificationCategories(cards.map((card) => ({
+        kind: 'card_refreshed',
+        cardId: card.id,
+        card,
+      }))),
+    });
   }
 
   function normalizeFilesBody(body: unknown): LiveCard[] | null {
@@ -90,13 +136,13 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
   return {
     get(input: CommandInput): CommandResult<{ cards: LiveCard[] }> {
       try {
-        const id = input.params?.['id'] as string | undefined;
-        if (id) {
-          const card = store.readCard(id);
-          if (!card) return fail(`card "${id}" not found`);
-          return ok({ cards: [card] });
-        }
-        return ok({ cards: store.readAllCards() });
+        return ok({ cards: readCardsFromInput(input) });
+      } catch (e) { return oops(e); }
+    },
+
+    buildNotificationBatch(input: CommandInput): CommandResult<RuntimeNotificationBatch> {
+      try {
+        return ok(buildCardRefreshedBatch(readCardsFromInput(input)));
       } catch (e) { return oops(e); }
     },
 
@@ -111,6 +157,7 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
           }
           store.writeCard(card.id, card);
         }
+        void emitCardNotifications(cards.map((card) => ({ kind: 'card_refreshed', cardId: card.id, card })));
         return ok({ count: cards.length });
       } catch (e) { return oops(e); }
     },
@@ -122,6 +169,7 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
         const ids = paramId ? [...bodyIds, paramId] : bodyIds;
         if (ids.length === 0) return fail('del requires body.ids (string[]) or params.id');
         for (const id of ids) store.removeCard(id);
+        void emitCardNotifications(ids.map((id) => ({ kind: 'card_removed', cardId: id })));
         return ok({ count: ids.length });
       } catch (e) { return oops(e); }
     },
@@ -139,6 +187,9 @@ export function createCardStorePublic(store: CardAdminStore): CardStorePublic {
           : input.body;
 
         store.patchCard(id, jsonPath, value);
+        const card = store.readCard(id);
+        if (!card) return fail(`card "${id}" not found`);
+        void emitCardNotifications([{ kind: 'card_refreshed', cardId: id, card }]);
         return ok({ count: 1 });
       } catch (e) { return oops(e); }
     },

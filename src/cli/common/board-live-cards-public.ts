@@ -904,14 +904,11 @@ export function createBoardLiveCardsPublic(
       const cardId = input.params?.['cardId'] as string | undefined;
       if (!cardId) return fail('addCardFiles requires params.cardId') as R;
 
-      const appendResult = createCardStorePublic(cardStore()).appendFiles({
+      const appendResult = createCardStorePublic(cardStore(), { emitNotification }).appendFiles({
         params: { id: cardId },
         body: input.body,
       });
       if (appendResult.status !== 'success') return appendResult as unknown as R;
-
-      const notifyResult = cardRefreshedNotify({ params: { cardId } });
-      if (notifyResult.status !== 'success') return notifyResult as unknown as R;
 
       return ok({ cardId, files_added: appendResult.data.files_added, notified: true });
     } catch (e) { return err(e) as R; }
