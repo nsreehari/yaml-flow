@@ -224,6 +224,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     buildChatOneShotBatch: async (cardId: string, receiving: boolean) => await chatStorePublic.buildSseOneShotBatch({ params: { cardId }, body: { receiving } }),
     onSseClientDisconnected,
   });
+  const queueSseHub = createSseHub({
+    buildChatOneShotBatch: async () => ({ status: 'success', data: { kind: 'notification-batch', category: 'batch', notifications: [] } }),
+  });
 
   // ── Build board contexts from injected configs ───────────────────────────
 
@@ -498,7 +501,14 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     }
 
     if (options.broadcastSse !== false) {
-      sseHub.broadcastNotificationBatch(normalized);
+      const queueNotifications = normalized.filter((note) => note.kind === 'message_enqueued');
+      const uiNotifications = normalized.filter((note) => note.kind !== 'message_enqueued');
+      if (uiNotifications.length > 0) {
+        sseHub.broadcastNotificationBatch(uiNotifications);
+      }
+      if (queueNotifications.length > 0) {
+        queueSseHub.broadcastNotificationBatch(queueNotifications);
+      }
     }
 
     if (options.mirrorExternal === false || !ctx?.boardAdapter.publishBoardChangeNotifications) return;
@@ -1223,6 +1233,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // of sseHub from a routing perspective.
   const routesWatchers = createRoutesWatchers({
     sseHub,
+    queueSseHub,
     corsHeaders,
     json,
     buildPublishedRuntimePayload: () => buildPublishedRuntimePayload(),

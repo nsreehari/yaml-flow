@@ -32,7 +32,7 @@ export interface RoutesSse {
     req: RuntimeRequest,
     res: RuntimeResponse,
     clientId?: string,
-    opts?: { oneShot?: boolean },
+    opts?: { oneShot?: boolean; bootstrapPayload?: boolean },
   ) => Promise<void>;
 }
 
@@ -76,9 +76,10 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
     req: RuntimeRequest,
     res: RuntimeResponse,
     clientId?: string,
-    opts?: { oneShot?: boolean },
+    opts?: { oneShot?: boolean; bootstrapPayload?: boolean },
   ): Promise<void> {
     const oneShot = opts?.oneShot === true;
+    const bootstrapPayload = opts?.bootstrapPayload !== false;
     const existing = !oneShot && clientId ? sseHub.get(clientId) : null;
     const subscribedChatCardIds = existing ? new Set(existing.subscribedChatCardIds) : new Set<string>();
     res.writeHead(200, {
@@ -89,11 +90,13 @@ export function createRoutesSse(deps: RoutesSseDeps): RoutesSse {
     });
     sseHub.flushTransport(res);
 
-    // On reconnect, Last-Event-ID tells us the client's last received id.
-    // We always send the current full snapshot (replay = latest state).
-    const payload = await buildPublishedRuntimePayload();
-    const frame = sseHub.buildFrame(payload);
-    res.write(frame);
+    if (bootstrapPayload) {
+      // On reconnect, Last-Event-ID tells us the client's last received id.
+      // We always send the current full snapshot (replay = latest state).
+      const payload = await buildPublishedRuntimePayload();
+      const frame = sseHub.buildFrame(payload);
+      res.write(frame);
+    }
 
     if (oneShot) {
       res.end();

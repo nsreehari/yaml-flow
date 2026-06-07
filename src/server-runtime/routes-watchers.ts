@@ -20,6 +20,7 @@ import { createRoutesSse } from './routes-sse.js';
 import type { RoutesSseDeps } from './routes-sse.js';
 
 export interface RoutesWatchersDeps extends RoutesSseDeps {
+  queueSseHub: SseHub;
   apiBasePath: string;
   readJsonBody: (req: RuntimeRequest) => Promise<Record<string, unknown>>;
   initBoardAndSetup: () => Promise<void>;
@@ -55,9 +56,15 @@ export function createRoutesWatchers(deps: RoutesWatchersDeps): RoutesWatchers {
     publishPersistedStateSnapshot,
     upsertCardsFromSource,
     sseHub,
+    queueSseHub,
   } = deps;
 
   const { handleSse, handleChannelSubscription } = createRoutesSse(deps);
+  const { handleSse: handleQueueSse } = createRoutesSse({
+    ...deps,
+    sseHub: queueSseHub,
+    buildPublishedRuntimePayload: async () => null,
+  });
 
   async function handleWatchersRoutes(req: RuntimeRequest, res: RuntimeResponse, parsedUrl: URL): Promise<boolean> {
     const method = req.method || 'GET';
@@ -81,6 +88,17 @@ export function createRoutesWatchers(deps: RoutesWatchersDeps): RoutesWatchers {
           await upsertCardsFromSource(boardContexts[i], i);
           await publishPersistedStateSnapshot(boardContexts[i]);
         }
+        return true;
+      }
+
+      // ── GET /sse-q ──────────────────────────────────────────────────────
+      if (method === 'GET' && p === `${apiBasePath}/sse-q`) {
+        const clientId = String(url.searchParams.get('clientId') || '').trim();
+        if (!clientId) {
+          json(res, 400, { error: 'clientId query param is required for SSE' });
+          return true;
+        }
+        await handleQueueSse(req, res, clientId, { bootstrapPayload: false });
         return true;
       }
 

@@ -17,7 +17,6 @@
 
 import type { RuntimeResponse } from './types.js';
 import type {
-  BoardChangeNotification,
   ChatStoreNotification,
   HostedRuntimeNotification,
   RuntimeNotification,
@@ -144,7 +143,7 @@ export function createSseHub(deps: SseHubDeps): SseHub {
 
   function broadcastNotificationBatch(notifications: RuntimeNotification[]): void {
     if (!notifications || notifications.length === 0) return;
-    const generalNotifications: BoardChangeNotification[] = [];
+    const generalNotifications: RuntimeNotification[] = [];
     const chatNotificationsByCardId = new Map<string, RuntimeNotification[]>();
     for (const note of notifications) {
       if (isChatScopedNotification(note)) {
