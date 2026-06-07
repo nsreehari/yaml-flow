@@ -229,7 +229,7 @@ describe('BoardLiveCardsPublic — init and status', () => {
     expect(board.removeCard({ params: { id: 'my-card' } }).status).toBe('success');
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
 
-    expect(notifications.flat()).toContainEqual({ kind: 'card_removed', cardId: 'my-card' });
+    expect(notifications.flat()).toContainEqual(expect.objectContaining({ kind: 'card_removed', cardId: 'my-card' }));
   });
 
   it('addCardFiles appends files and emits card_refreshed notification', () => {
@@ -290,6 +290,40 @@ describe('BoardLiveCardsPublic — init and status', () => {
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data).toEqual({});
+    }
+  });
+
+  it('buildSseOneShotPayload returns the board-owned hydration slice', async () => {
+    const { boardDir, br } = freshBoard();
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
+      boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
+    });
+
+    board.init({ params: mkInitParams(boardDir) });
+    expect(nonCore.updatesInCardStore({ body: { ops: [{ op: 'update', id: 'hydration-card', 'card-content': minCard('hydration-card', { title: 'hydrate me' }) }] } }).status).toBe('success');
+    expect(board.upsertCard({ params: { cardId: 'hydration-card' } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    const result = board.buildSseOneShotPayload({});
+
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.cardDefinitions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'hydration-card', title: 'hydrate me' }),
+      ]));
+      expect(result.data.statusSnapshot).toEqual(expect.objectContaining({
+        summary: expect.objectContaining({ card_count: 1 }),
+      }));
+      expect(result.data.dataObjectsByToken).toEqual({});
+      expect(result.data.cardRuntimeById).toEqual(expect.objectContaining({
+        'hydration-card': expect.objectContaining({
+          card_id: 'hydration-card',
+          card_data: expect.objectContaining({ v: 1 }),
+          computed_values: {},
+        }),
+      }));
     }
   });
 });

@@ -22,12 +22,11 @@ import {
   createBoardLiveCardsPublic,
   createBoardLiveCardsNonCorePublic,
 } from '../cli/common/board-live-cards-public.js';
-import type { CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
+import type { BoardSseOneShotPayload, CommandInput, CommandResult } from '../cli/common/board-live-cards-public.js';
 import { createAsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
 import type { AsyncBoardLiveCardsPublic } from '../cli/cloud/board-live-cards-public-async.js';
 import { createAsyncBoardWorkerStore } from '../cli/cloud/board-platform-adapter-async.js';
 import { createAsyncCardStorageAdapter, createAsyncCardStore, createAsyncJsonStorage } from '../cli/cloud/board-live-cards-storage-async.js';
-import type { AsyncCardAdminStore } from '../cli/cloud/board-live-cards-storage-async.js';
 import { createAsyncCardStorePublic } from '../cli/cloud/card-store-lib-public-async.js';
 
 import { createCardStorePublic } from '../cli/common/card-store-lib-public.js';
@@ -87,7 +86,6 @@ import { createRoutesRuntimeApi } from './routes-runtime-api.js';
 import { createRoutesNotify } from './routes-notify.js';
 import { runtimeNotificationsFromUnknownEvent } from './runtime-notification-ingress.js';
 import {
-  type CardStoreNotification,
   type BoardChangeNotification,
   type BoardOutputNotification,
   type RuntimeNotification,
@@ -145,6 +143,7 @@ interface BoardOpsAwaitable {
   getAllOutputsDataObjects(input: CommandInput): Awaitable<CommandResult<Record<string, unknown>>>;
   getAllOutputsComputedValues(input: CommandInput): Awaitable<CommandResult<Record<string, unknown>>>;
   getOutputsFetchedSources(input: CommandInput): Awaitable<CommandResult<Record<string, string>>>;
+  buildSseOneShotPayload(input: CommandInput): Awaitable<CommandResult<BoardSseOneShotPayload>>;
   upsertCard(input: CommandInput): Awaitable<CommandResult>;
   removeCard(input: CommandInput): Awaitable<CommandResult>;
   sourceDataFetched(input: CommandInput): Awaitable<CommandResult>;
@@ -235,16 +234,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // ── Build board contexts from injected configs ───────────────────────────
 
   function buildContext(cfg: BoardContextConfig): BoardContext {
-    function normalizeFilesBody(body: unknown): Array<Record<string, unknown>> | null {
-      if (Array.isArray(body)) return body as Array<Record<string, unknown>>;
-      if (body && typeof body === 'object') {
-        const obj = body as { files?: unknown };
-        if (Array.isArray(obj.files)) return obj.files as Array<Record<string, unknown>>;
-        return [body as Record<string, unknown>];
-      }
-      return null;
-    }
-
     function createSyncCardStoreOps(store: ReturnType<typeof createCardStorePublic>): CardStoreOpsAwaitable {
       return {
         async get(input) { return store.get(input) as CommandResult<{ cards: Array<Record<string, unknown>> }>; },
@@ -253,11 +242,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         async patch(input) { return store.patch(input); },
         async appendFiles(input) { return store.appendFiles(input); },
       };
-    }
-
-    function emitCardStoreNotifications(notifications: CardStoreNotification[]): void {
-      if (!notifications || notifications.length === 0) return;
-      emitNotifications(notifications, contextRef ?? undefined);
     }
 
     function createAsyncCardStoreOps(store: ReturnType<typeof createAsyncCardStorePublic>): CardStoreOpsAwaitable {
@@ -401,6 +385,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       async getAllOutputsDataObjects(input) { return board.getAllOutputsDataObjects(input); },
       async getAllOutputsComputedValues(input) { return board.getAllOutputsComputedValues(input); },
       async getOutputsFetchedSources(input) { return board.getOutputsFetchedSources(input); },
+      async buildSseOneShotPayload(input) { return board.buildSseOneShotPayload(input); },
       async upsertCard(input) { return board.upsertCard(input); },
       async removeCard(input) { return board.removeCard(input); },
       async sourceDataFetched(input) { return board.sourceDataFetched(input); },
@@ -831,7 +816,6 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const runtimePayloadModule = createRuntimePayloadModule({
     boardId,
     boardContexts,
-    readCardDefinitions: () => readCardDefinitions(),
     readChatRecords: (cardId) => readChatRecords(cardId),
     getChatProcessing: (cardId) => getChatProcessing(cardId),
   });

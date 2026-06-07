@@ -8,6 +8,7 @@ import type { KindValueRef } from '../common/storage-interface.js';
 import { parseRef, serializeRef } from '../common/storage-interface.js';
 import { assertBoardCallbackTransport } from '../common/board-callback-transport.js';
 import type {
+  BoardSseOneShotPayload,
   CommandInput,
   CommandResult,
 } from '../common/board-live-cards-public.js';
@@ -85,6 +86,7 @@ export interface AsyncBoardLiveCardsPublic {
   getAllOutputsComputedValues(input: CommandInput): Promise<CommandResult<Record<string, unknown>>>;
   getOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, string>>>;
   getAllOutputsFetchedSources(input: CommandInput): Promise<CommandResult<Record<string, Record<string, string>>>>;
+  buildSseOneShotPayload(input: CommandInput): Promise<CommandResult<BoardSseOneShotPayload>>;
   addCardFiles(input: CommandInput): Promise<CommandResult<{ cardId: string; files_added: Array<{ idx: number; entry: unknown }>; notified: true }>>;
   removeCard(input: CommandInput): Promise<CommandResult>;
   retrigger(input: CommandInput): Promise<CommandResult>;
@@ -997,6 +999,47 @@ export function createAsyncBoardLiveCardsPublic(
         return ok(result) as CommandResult<Record<string, Record<string, string>>>;
       } catch (error) {
         return err(error) as CommandResult<Record<string, Record<string, string>>>;
+      }
+    },
+
+    async buildSseOneShotPayload(_input: CommandInput): Promise<CommandResult<BoardSseOneShotPayload>> {
+      try {
+        const cardDefinitions = await (await cardStore()).readAllCards() as Array<Record<string, unknown>>;
+        const statusResult = await this.status({});
+        if (statusResult.status !== 'success') return statusResult as unknown as CommandResult<BoardSseOneShotPayload>;
+
+        const dataObjectsResult = await this.getAllOutputsDataObjects({});
+        if (dataObjectsResult.status !== 'success') return dataObjectsResult as unknown as CommandResult<BoardSseOneShotPayload>;
+
+        const computedValuesResult = await this.getAllOutputsComputedValues({});
+        if (computedValuesResult.status !== 'success') return computedValuesResult as unknown as CommandResult<BoardSseOneShotPayload>;
+
+        const computedValues = computedValuesResult.data;
+        const cardRuntimeById: Record<string, unknown> = {};
+        for (const cardDef of cardDefinitions) {
+          const id = typeof cardDef?.id === 'string' ? cardDef.id : null;
+          if (!id) continue;
+          const cardData = cardDef.card_data && typeof cardDef.card_data === 'object' && !Array.isArray(cardDef.card_data)
+            ? cardDef.card_data as Record<string, unknown>
+            : {};
+          cardRuntimeById[id] = {
+            schema_version: 'v1',
+            card_id: id,
+            card_data: { ...cardData },
+            computed_values: computedValues[id] && typeof computedValues[id] === 'object'
+              ? computedValues[id]
+              : {},
+          };
+        }
+
+        return ok({
+          cardDefinitions,
+          statusSnapshot: statusResult.data,
+          dataObjectsByToken: dataObjectsResult.data,
+          cardRuntimeById,
+        }) as CommandResult<BoardSseOneShotPayload>;
+      } catch (error) {
+        return err(error) as CommandResult<BoardSseOneShotPayload>;
       }
     },
 

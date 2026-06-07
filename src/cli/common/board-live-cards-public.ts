@@ -302,6 +302,8 @@ export interface BoardLiveCardsPublic {
   getOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, string>>;
   // no params needed
   getAllOutputsFetchedSources(input: CommandInput): CommandResult<Record<string, Record<string, string>>>;
+  // no params needed; board-owned slice of the /sse snapshot payload
+  buildSseOneShotPayload(input: CommandInput): CommandResult<BoardSseOneShotPayload>;
   // params: id
   removeCard(input: CommandInput): CommandResult;
   // params: cardId; body matches card-store appendFiles input
@@ -322,6 +324,13 @@ export interface BoardLiveCardsPublic {
   // Source callbacks — params: token, ref | token, reason?
   sourceDataFetched(input: CommandInput): CommandResult;
   sourceDataFetchFailure(input: CommandInput): CommandResult;
+}
+
+export interface BoardSseOneShotPayload {
+  cardDefinitions: Array<Record<string, unknown>>;
+  statusSnapshot: BoardStatusObject;
+  dataObjectsByToken: Record<string, unknown>;
+  cardRuntimeById: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -1204,11 +1213,50 @@ export function createBoardLiveCardsPublic(
     } catch (e) { return err(e) as CommandResult<Record<string, Record<string, string>>>; }
   }
 
+  function buildSseOneShotPayload(_input: CommandInput): CommandResult<BoardSseOneShotPayload> {
+    try {
+      const cardDefinitions = cardStore().readAllCards() as Array<Record<string, unknown>>;
+      const statusResult = status({});
+      if (statusResult.status !== 'success') return statusResult as unknown as CommandResult<BoardSseOneShotPayload>;
+
+      const dataObjectsResult = getAllOutputsDataObjects({});
+      if (dataObjectsResult.status !== 'success') return dataObjectsResult as unknown as CommandResult<BoardSseOneShotPayload>;
+
+      const computedValuesResult = getAllOutputsComputedValues({});
+      if (computedValuesResult.status !== 'success') return computedValuesResult as unknown as CommandResult<BoardSseOneShotPayload>;
+
+      const computedValues = computedValuesResult.data;
+      const cardRuntimeById: Record<string, unknown> = {};
+      for (const cardDef of cardDefinitions) {
+        const id = typeof cardDef?.id === 'string' ? cardDef.id : null;
+        if (!id) continue;
+        const cardData = cardDef.card_data && typeof cardDef.card_data === 'object' && !Array.isArray(cardDef.card_data)
+          ? cardDef.card_data as Record<string, unknown>
+          : {};
+        cardRuntimeById[id] = {
+          schema_version: 'v1',
+          card_id: id,
+          card_data: { ...cardData },
+          computed_values: computedValues[id] && typeof computedValues[id] === 'object'
+            ? computedValues[id]
+            : {},
+        };
+      }
+
+      return ok({
+        cardDefinitions,
+        statusSnapshot: statusResult.data,
+        dataObjectsByToken: dataObjectsResult.data,
+        cardRuntimeById,
+      }) as CommandResult<BoardSseOneShotPayload>;
+    } catch (e) { return err(e) as CommandResult<BoardSseOneShotPayload>; }
+  }
+
   return {
     init, status, getBoardRuntimeStoreRef, getCardStoreRef, getOutputsStoreRef, getScratchStoreRef, getChatStoreRef, getArtifactsStoreRef, getFetchedSourcesStoreRef, getConfig,
     getOutputsDataObject, getAllOutputsDataObjects,
     getOutputsComputedValues, getAllOutputsComputedValues,
-    getOutputsFetchedSources, getAllOutputsFetchedSources,
+    getOutputsFetchedSources, getAllOutputsFetchedSources, buildSseOneShotPayload,
     removeCard, addCardFiles, retrigger, processAccumulatedEvents,
     upsertCard,
     taskFailed, taskProgress,

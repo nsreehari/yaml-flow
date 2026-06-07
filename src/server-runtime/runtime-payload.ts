@@ -13,28 +13,16 @@
  */
 
 import type { NotificationState } from './notifications.js';
-
-/** Minimum surface of the kv-storage handle used to read persisted status. */
-interface KvStorageReader {
-  read(key: string): unknown | Promise<unknown>;
-}
-
-/** Minimum surface of the board-platform adapter consumed by readStatusSnapshot. */
-interface BoardAdapterForPayload {
-  kvStorageForRef(ref: string): KvStorageReader;
-}
+import type { BoardSseOneShotPayload } from '../cli/common/board-live-cards-public.js';
 
 /** Minimum surface of the board-ops handle consumed by payload readers. */
 interface BoardOpsForPayload {
-  getAllOutputsComputedValues(input: Record<string, unknown>): { status: string; data?: unknown } | Promise<{ status: string; data?: unknown }>;
-  getAllOutputsDataObjects(input: Record<string, unknown>): { status: string; data?: unknown } | Promise<{ status: string; data?: unknown }>;
+  buildSseOneShotPayload(input: Record<string, unknown>): { status: string; data?: BoardSseOneShotPayload } | Promise<{ status: string; data?: BoardSseOneShotPayload }>;
 }
 
 /** Subset of BoardContext consumed by runtime-payload readers. */
 export interface RuntimePayloadBoardContext {
   boardOps: BoardOpsForPayload;
-  boardAdapter: BoardAdapterForPayload;
-  outputsStoreRef: string;
   notification: NotificationState;
 }
 
@@ -42,7 +30,6 @@ export interface RuntimePayloadDeps {
   boardId: string;
   /** Live reference to the runtime's board-contexts array (read on each call). */
   boardContexts: ReadonlyArray<RuntimePayloadBoardContext>;
-  readCardDefinitions: () => Promise<Array<Record<string, unknown>>>;
   readChatRecords: (cardId: string) => Promise<Array<Record<string, unknown>>>;
   getChatProcessing: (cardId: string) => Promise<boolean>;
 }
@@ -55,23 +42,12 @@ export interface RuntimePayloadModule {
 }
 
 export function createRuntimePayloadModule(deps: RuntimePayloadDeps): RuntimePayloadModule {
-  const { boardId, boardContexts, readCardDefinitions, readChatRecords, getChatProcessing } = deps;
+  const { boardId, boardContexts, readChatRecords, getChatProcessing } = deps;
 
-  async function readStatusSnapshot(): Promise<unknown> {
-    const statuses = (await Promise.all(boardContexts.map(async (ctx) => {
-      try {
-        const kv = ctx.boardAdapter.kvStorageForRef(ctx.outputsStoreRef);
-        const persisted = await Promise.resolve(kv.read('status'));
-        if (persisted !== null && persisted !== undefined) return persisted;
-      } catch {
-        // Fall back to notification memory if direct KV read fails.
-      }
-      return ctx.notification.status;
-    }))).filter(Boolean);
+  function mergeStatusSnapshots(statuses: unknown[]): unknown {
     if (statuses.length === 0) return null;
     if (statuses.length === 1) return statuses[0];
 
-    // Merge multiple board statuses into a single snapshot
     const mergedCards: unknown[] = [];
     const summaryKeys = ['completed', 'eligible', 'pending', 'blocked', 'unresolved', 'failed', 'in_progress', 'orphan_cards'];
     const totals: Record<string, number> = {};
@@ -98,26 +74,35 @@ export function createRuntimePayloadModule(deps: RuntimePayloadDeps): RuntimePay
     };
   }
 
+  async function readBoardOneShotPayloads(): Promise<BoardSseOneShotPayload[]> {
+    const payloads: BoardSseOneShotPayload[] = [];
+    for (const ctx of boardContexts) {
+      try {
+        const result = await ctx.boardOps.buildSseOneShotPayload({});
+        if (result.status === 'success' && result.data) payloads.push(result.data);
+      } catch {
+        // Aggregate readers will fall back to notification memory if needed.
+      }
+    }
+    return payloads;
+  }
+
+  async function readStatusSnapshot(): Promise<unknown> {
+    const payloads = await readBoardOneShotPayloads();
+    const statuses = payloads.map((payload) => payload.statusSnapshot).filter(Boolean);
+    if (statuses.length === 0) {
+      const fallbackStatuses = boardContexts.map((ctx) => ctx.notification.status).filter(Boolean);
+      return mergeStatusSnapshots(fallbackStatuses);
+    }
+    return mergeStatusSnapshots(statuses);
+  }
+
   async function readCardRuntimeArtifacts(): Promise<Record<string, unknown>> {
     const out: Record<string, unknown> = {};
-    const process = async (ctx: RuntimePayloadBoardContext) => {
-      try {
-        const result = await ctx.boardOps.getAllOutputsComputedValues({});
-        if (result.status === 'success' && result.data && typeof result.data === 'object') {
-          for (const [cardId, values] of Object.entries(result.data as Record<string, unknown>)) {
-            const card = ctx.notification.cards[cardId] as Record<string, unknown> | undefined;
-            out[cardId] = {
-              schema_version: 'v1',
-              card_id: cardId,
-              card_data: card?.card_data ?? {},
-              computed_values: values ?? {},
-            };
-          }
-          return;
-        }
-      } catch {
-        // Fall back to notification memory below.
-      }
+    const payloads = await readBoardOneShotPayloads();
+    for (const payload of payloads) Object.assign(out, payload.cardRuntimeById || {});
+    if (Object.keys(out).length > 0) return out;
+    for (const ctx of boardContexts) {
       for (const [cardId, values] of Object.entries(ctx.notification.computedValues)) {
         const card = ctx.notification.cards[cardId] as Record<string, unknown> | undefined;
         out[cardId] = {
@@ -127,49 +112,28 @@ export function createRuntimePayloadModule(deps: RuntimePayloadDeps): RuntimePay
           computed_values: values ?? {},
         };
       }
-    };
-    for (const ctx of boardContexts) await process(ctx);
+    }
     return out;
   }
 
   async function readDataObjectsByToken(): Promise<Record<string, unknown>> {
     const merged: Record<string, unknown> = {};
-    for (const ctx of boardContexts) {
-      try {
-        const result = await ctx.boardOps.getAllOutputsDataObjects({});
-        if (result.status === 'success' && result.data && typeof result.data === 'object') {
-          Object.assign(merged, result.data as Record<string, unknown>);
-          continue;
-        }
-      } catch {
-        // Fall back to notification memory below.
-      }
-      Object.assign(merged, ctx.notification.dataObjects || {});
+    const payloads = await readBoardOneShotPayloads();
+    for (const payload of payloads) Object.assign(merged, payload.dataObjectsByToken || {});
+    if (Object.keys(merged).length === 0) {
+      for (const ctx of boardContexts) Object.assign(merged, ctx.notification.dataObjects || {});
     }
     return merged;
   }
 
   async function buildPublishedRuntimePayload(): Promise<unknown> {
-    const cardDefinitions = await readCardDefinitions();
-    const rawArtifacts = await readCardRuntimeArtifacts();
-    const dataObjectsByToken = await readDataObjectsByToken();
+    const payloads = await readBoardOneShotPayloads();
+    const cardDefinitions = payloads.flatMap((payload) => Array.isArray(payload.cardDefinitions) ? payload.cardDefinitions : []);
+    const dataObjectsByToken: Record<string, unknown> = {};
     const cardRuntimeById: Record<string, unknown> = {};
-
-    for (const cardDef of cardDefinitions) {
-      if (!cardDef?.id) continue;
-      const id = cardDef.id as string;
-      const raw = (rawArtifacts[id] || {}) as Record<string, unknown>;
-      const cardData: Record<string, unknown> = {
-        ...((raw.card_data && typeof raw.card_data === 'object' ? raw.card_data
-          : cardDef.card_data && typeof cardDef.card_data === 'object' ? cardDef.card_data
-            : {}) as Record<string, unknown>),
-      };
-      cardRuntimeById[id] = {
-        schema_version: raw.schema_version || 'v1',
-        card_id: raw.card_id || id,
-        card_data: cardData,
-        computed_values: raw.computed_values && typeof raw.computed_values === 'object' ? raw.computed_values : {},
-      };
+    for (const payload of payloads) {
+      Object.assign(dataObjectsByToken, payload.dataObjectsByToken || {});
+      Object.assign(cardRuntimeById, payload.cardRuntimeById || {});
     }
 
     const cardChatsByCardId: Record<string, unknown> = {};

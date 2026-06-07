@@ -735,6 +735,27 @@ describe('cloud storage adapters', () => {
       expect.objectContaining({ kind: 'card_refreshed', cardId: 'card-1' }),
     ]));
 
+    const oneShotResult = await board.buildSseOneShotPayload({});
+    expect(oneShotResult.status).toBe('success');
+    if (oneShotResult.status === 'success') {
+      expect(oneShotResult.data.cardDefinitions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'card-1' }),
+      ]));
+      expect(oneShotResult.data.statusSnapshot).toEqual(expect.objectContaining({
+        summary: expect.objectContaining({ card_count: 1 }),
+      }));
+      expect(oneShotResult.data.dataObjectsByToken).toEqual({ payload: { value: 42 } });
+      expect(oneShotResult.data.cardRuntimeById).toEqual(expect.objectContaining({
+        'card-1': expect.objectContaining({
+          card_id: 'card-1',
+          card_data: expect.objectContaining({
+            files: [{ path: 'docs/readme.md', kind: 'text/markdown' }],
+          }),
+          computed_values: {},
+        }),
+      }));
+    }
+
     expect(await board.retrigger({ params: { id: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
     const retriggerWorkerStore = createAsyncBoardWorkerStore(adapter.queueStorageForRef('queue-store-ref', 'task-executor'));
