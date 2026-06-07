@@ -331,28 +331,32 @@ function waitForFirstSsePayload(sseUrl, timeoutMs = 15_000) {
 
 function captureChatEvents(payload, cardId) {
   if (!payload || payload.kind !== 'notification-batch' || !Array.isArray(payload.notifications)) return;
+  const latestByCardId = new Map();
+  for (const existing of NS.allChatNotifications) {
+    if (existing && existing.cardId) latestByCardId.set(existing.cardId, existing);
+  }
   for (const n of payload.notifications) {
-    if (n && n.kind === 'card_chats' && n.cardId) {
-      const messages = Array.isArray(n.messages) ? n.messages : [];
-      NS.allChatNotifications.push({
-        at: Date.now(),
-        cardId: n.cardId,
-        processing: !!n.processing,
-        receiving: !!n.receiving,
-        messageCount: messages.length,
-        messages,
-      });
-    }
-    if (n && n.kind === 'card_chats' && n.cardId === cardId) {
-      const messages = Array.isArray(n.messages) ? n.messages : [];
-      NS.chatEvents.push({
-        at: Date.now(),
-        cardId: n.cardId,
-        processing: !!n.processing,
-        receiving: !!n.receiving,
-        messageCount: messages.length,
-        messages,
-      });
+    if (!n || !n.cardId) continue;
+    if (n.kind !== 'card_chats' && n.kind !== 'chat_messages' && n.kind !== 'chat_processing') continue;
+    const previous = latestByCardId.get(n.cardId) || {
+      cardId: n.cardId,
+      processing: false,
+      receiving: false,
+      messageCount: 0,
+      messages: [],
+    };
+    const next = {
+      at: Date.now(),
+      cardId: n.cardId,
+      processing: n.kind === 'chat_processing' ? !!n.active : ('processing' in n ? !!n.processing : !!previous.processing),
+      receiving: 'receiving' in n ? !!n.receiving : !!previous.receiving,
+      messageCount: Array.isArray(n.messages) ? n.messages.length : previous.messageCount,
+      messages: Array.isArray(n.messages) ? n.messages : previous.messages,
+    };
+    latestByCardId.set(n.cardId, next);
+    NS.allChatNotifications.push(next);
+    if (n.cardId === cardId) {
+      NS.chatEvents.push(next);
     }
   }
 }

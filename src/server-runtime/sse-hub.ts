@@ -13,7 +13,7 @@
  *
  * Dependencies passed in by the runtime:
  *   - chatStorage for tailing chat history
- *   - readChatRecords for building chat-scoped notifications
+ *   - chat-store one-shot builder for subscription hydration
  *   - optional host hooks (onSseClientDisconnected, etc.)
  */
 
@@ -22,11 +22,11 @@ import type {
   BoardChangeNotification,
   ChatStoreNotification,
   HostedRuntimeNotification,
-  NotificationChatMessage,
   RuntimeNotification,
   RuntimeNotificationBatch,
 } from '../cli/common/notification-interface.js';
-import { withRuntimeNotificationBatchCategories, withRuntimeNotificationCategory } from '../cli/common/notification-interface.js';
+import { withRuntimeNotificationBatchCategories } from '../cli/common/notification-interface.js';
+import type { CommandResult } from '../cli/common/board-live-cards-public.js';
 
 export interface SseClientState {
   res: RuntimeResponse;
@@ -61,9 +61,9 @@ export interface SseHub {
 }
 
 export interface SseHubDeps {
-  readChatRecords: (cardId: string) => Promise<Array<Record<string, unknown>>>;
   readChatAfter: (cardId: string, cursor: string | null) => Promise<{ records: Array<Record<string, unknown>>; cursor: string | null }>;
   getChatProcessing: (cardId: string) => Promise<boolean>;
+  buildChatOneShotBatch: (cardId: string, receiving: boolean) => Promise<CommandResult<RuntimeNotificationBatch>>;
   onSseClientDisconnected?: (clientId: string) => void;
 }
 
@@ -143,31 +143,14 @@ export function createSseHub(deps: SseHubDeps): SseHub {
     return hasNewRecords || processingChanged;
   }
 
-  async function buildCardChatsNotification(cardId: string, receiving: boolean): Promise<Extract<ChatStoreNotification, { kind: 'card_chats' }>> {
-    const records = await deps.readChatRecords(cardId);
-    const sentAtMs = Date.now();
-    return withRuntimeNotificationCategory({
-      kind: 'card_chats',
-      cardId,
-      sentAt: new Date(sentAtMs).toISOString(),
-      sentAtMs,
-      messages: records.map((r) => ({
-        role: String(r.role || 'system'),
-        text: String(r.text || ''),
-        files: Array.isArray(r.files) ? r.files : [],
-        ...(typeof r.turn === 'string' && r.turn ? { turn: r.turn } : {}),
-      })) as NotificationChatMessage[],
-      receiving,
-      processing: await deps.getChatProcessing(cardId),
-    });
-  }
-
   function buildNotificationBatch(notifications: RuntimeNotification[]): RuntimeNotificationBatch {
     return withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications });
   }
 
   async function buildCardChatsBatch(cardId: string, receiving: boolean): Promise<RuntimeNotificationBatch> {
-    return buildNotificationBatch([await buildCardChatsNotification(cardId, receiving)]);
+    const result = await deps.buildChatOneShotBatch(cardId, receiving);
+    if (result.status === 'success') return result.data;
+    return buildNotificationBatch([]);
   }
 
   async function broadcastCardChats(cardId: string, receiving = true): Promise<void> {
@@ -243,10 +226,12 @@ export function createSseHub(deps: SseHubDeps): SseHub {
   function broadcastNotificationBatch(notifications: RuntimeNotification[]): void {
     if (!notifications || notifications.length === 0) return;
     const generalNotifications: BoardChangeNotification[] = [];
-    const chatCardIds = new Set<string>();
+    const chatNotificationsByCardId = new Map<string, RuntimeNotification[]>();
     for (const note of notifications) {
       if (isChatScopedNotification(note)) {
-        chatCardIds.add(note.cardId);
+        const scoped = chatNotificationsByCardId.get(note.cardId) ?? [];
+        scoped.push(note);
+        chatNotificationsByCardId.set(note.cardId, scoped);
       } else {
         generalNotifications.push(note);
       }
@@ -255,7 +240,13 @@ export function createSseHub(deps: SseHubDeps): SseHub {
       const payload = buildNotificationBatch(generalNotifications);
       for (const clientId of sseClients.keys()) writeFrame(clientId, payload);
     }
-    for (const cardId of chatCardIds) void broadcastCardChats(cardId, true);
+    for (const [cardId, scopedNotifications] of chatNotificationsByCardId.entries()) {
+      const payload = buildNotificationBatch(scopedNotifications);
+      for (const [clientId, client] of sseClients.entries()) {
+        if (!client.subscribedChatCardIds.has(cardId)) continue;
+        writeFrame(clientId, payload);
+      }
+    }
   }
 
   return {

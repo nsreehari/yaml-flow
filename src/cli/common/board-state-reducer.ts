@@ -237,6 +237,20 @@ export function applyNotification(
         ensureClone();
         modelsById[cardId] = { ...prev, card_chats: newCardChats };
         changed = true;
+      } else if (note.kind === 'chat_processing') {
+        const cardId = note.cardId as string;
+        const prev = modelsById[cardId];
+        if (!prev) continue;
+        const prevChats = prev.card_chats || { messages: [], receiving: false, processing: false };
+        const newCardChats: CardChatState = {
+          messages: prevChats.messages,
+          receiving: prevChats.receiving,
+          processing: note.active === true,
+        };
+        if (deepEqJson(prev.card_chats, newCardChats)) continue;
+        ensureClone();
+        modelsById[cardId] = { ...prev, card_chats: newCardChats };
+        changed = true;
       }
       continue;
     }

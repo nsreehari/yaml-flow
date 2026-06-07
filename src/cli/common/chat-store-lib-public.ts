@@ -29,6 +29,7 @@ import {
   type NotificationEmitter,
   type NotificationChatMessage,
   type RuntimeNotification,
+  type RuntimeNotificationBatch,
   withRuntimeNotificationBatchCategories,
   withRuntimeNotificationCategories,
 } from './notification-interface.js';
@@ -95,6 +96,13 @@ export interface ChatStorePublic {
     * body.lastUserTurns?: positive integer
    */
   readAll(input: CommandInput): Awaitable<CommandResult<{ records: ChatRecord[] }>>;
+
+  /**
+   * Build the per-card chat subscription hydration batch.
+   * params.cardId: string
+   * body.receiving?: boolean
+   */
+  buildSseOneShotBatch(input: CommandInput): Awaitable<CommandResult<RuntimeNotificationBatch>>;
 
   /**
    * Read messages appended after a cursor.
@@ -223,15 +231,19 @@ export function createChatStorePublic(store: ChatStorage, options: ChatStorePubl
     await emitNotification(withRuntimeNotificationBatchCategories({ kind: 'notification-batch', notifications: normalized }));
   }
 
-  async function buildCardChatsNotification(cardId: string): Promise<Extract<RuntimeNotification, { kind: 'card_chats' }>> {
+  async function readLastTurnMessages(cardId: string): Promise<NotificationChatMessage[]> {
     const records = await store.readAll(cardId);
+    return sliceLastTurns(records, 1).map(toNotificationMessage);
+  }
+
+  async function buildCardChatsNotification(cardId: string): Promise<Extract<RuntimeNotification, { kind: 'card_chats' }>> {
     const sentAtMs = Date.now();
     return {
       kind: 'card_chats',
       cardId,
       sentAt: new Date(sentAtMs).toISOString(),
       sentAtMs,
-      messages: records.map(toNotificationMessage),
+      messages: await readLastTurnMessages(cardId),
       receiving: true,
       processing: await store.isProcessing(cardId),
     };
@@ -318,7 +330,7 @@ export function createChatStorePublic(store: ChatStorage, options: ChatStorePubl
         const turn = typeof body.turn === 'string' ? body.turn : '';
         if (!role) return fail('append requires body.role');
         const id = await store.append(cardId, role, text, files, turn);
-        await emitRuntimeNotifications([await buildCardChatsNotification(cardId)]);
+        await emitRuntimeNotifications([{ kind: 'chat_messages', cardId, messages: await readLastTurnMessages(cardId) }]);
         return ok({ id });
       } catch (e) { return oops(e); }
     },
@@ -375,6 +387,20 @@ export function createChatStorePublic(store: ChatStorage, options: ChatStorePubl
       } catch (e) { return oops(e); }
     },
 
+    async buildSseOneShotBatch(input: CommandInput): Promise<CommandResult<RuntimeNotificationBatch>> {
+      try {
+        const cardId = input.params?.['cardId'] as string | undefined;
+        if (!cardId) return fail('buildSseOneShotBatch requires params.cardId');
+        const body = (input.body ?? {}) as Record<string, unknown>;
+        const receiving = typeof body.receiving === 'boolean' ? body.receiving : true;
+        const notification = await buildCardChatsNotification(cardId);
+        return ok(withRuntimeNotificationBatchCategories({
+          kind: 'notification-batch',
+          notifications: [{ ...notification, receiving }],
+        }));
+      } catch (e) { return oops(e); }
+    },
+
     async readAfter(input: CommandInput): Promise<CommandResult<ChatReadAfterResult>> {
       try {
         const cardId = input.params?.['cardId'] as string | undefined;
@@ -391,7 +417,6 @@ export function createChatStorePublic(store: ChatStorage, options: ChatStorePubl
         const cardId = input.params?.['cardId'] as string | undefined;
         if (!cardId) return fail('clear requires params.cardId');
         await store.clear(cardId);
-        await emitRuntimeNotifications([await buildCardChatsNotification(cardId)]);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },
@@ -403,10 +428,7 @@ export function createChatStorePublic(store: ChatStorage, options: ChatStorePubl
         const body = (input.body ?? {}) as Record<string, unknown>;
         if (typeof body.active !== 'boolean') return fail('setProcessing requires body.active (boolean)');
         await store.setProcessing(cardId, body.active);
-        await emitRuntimeNotifications([
-          { kind: 'chat_processing', cardId, active: body.active, sentAtMs: Date.now() },
-          await buildCardChatsNotification(cardId),
-        ]);
+        await emitRuntimeNotifications([{ kind: 'chat_processing', cardId, active: body.active, sentAtMs: Date.now() }]);
         return ok({ ok: true as const });
       } catch (e) { return oops(e); }
     },

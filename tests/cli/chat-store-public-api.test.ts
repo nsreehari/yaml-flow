@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createFsBoardChatStorage } from '../../src/cli/node/fs-board-adapter.js';
 import { createChatStorePublic } from '../../src/cli/common/chat-store-lib-public.js';
+import type { RuntimeNotification, RuntimeNotificationBatch } from '../../src/cli/common/notification-interface.js';
 
 const tmpDirs: string[] = [];
 
@@ -143,5 +144,75 @@ describe('chat-store public API command dispatch', () => {
         ],
       },
     });
+  });
+
+  it('buildSseOneShotBatch returns only the latest turn and processing state', async () => {
+    const store = makeStore();
+
+    await store.append({ params: { cardId: 'card-hydrate' }, body: { role: 'user', text: 'A1', files: [], turn: 'turn-a' } });
+    await store.append({ params: { cardId: 'card-hydrate' }, body: { role: 'assistant', text: 'A2', files: [], turn: 'turn-a' } });
+    await store.append({ params: { cardId: 'card-hydrate' }, body: { role: 'user', text: 'B1', files: [], turn: 'turn-b' } });
+    await store.setProcessing({ params: { cardId: 'card-hydrate' }, body: { active: true } });
+
+    const batch = await store.buildSseOneShotBatch({ params: { cardId: 'card-hydrate' }, body: { receiving: true } });
+
+    expect(batch).toEqual({
+      status: 'success',
+      data: {
+        category: 'batch',
+        kind: 'notification-batch',
+        notifications: [
+          expect.objectContaining({
+            category: 'chat-store',
+            kind: 'card_chats',
+            cardId: 'card-hydrate',
+            receiving: true,
+            processing: true,
+            messages: [
+              expect.objectContaining({ role: 'user', text: 'B1', turn: 'turn-b' }),
+            ],
+          }),
+        ],
+      },
+    });
+  });
+
+  it('emits last-turn chat_messages and chat_processing deltas', async () => {
+    const notifications: Array<RuntimeNotification | RuntimeNotificationBatch> = [];
+    const boardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-store-public-delta-'));
+    tmpDirs.push(boardDir);
+    const store = createChatStorePublic(createFsBoardChatStorage(boardDir), {
+      emitNotification(notification) {
+        notifications.push(notification);
+      },
+    });
+
+    await store.append({ params: { cardId: 'card-delta' }, body: { role: 'user', text: 'hello', files: [], turn: 'turn-1' } });
+    await store.append({ params: { cardId: 'card-delta' }, body: { role: 'assistant', text: 'world', files: [], turn: 'turn-1' } });
+    await store.setProcessing({ params: { cardId: 'card-delta' }, body: { active: true } });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        category: 'chat-store',
+        kind: 'chat_messages',
+        cardId: 'card-delta',
+        messages: [expect.objectContaining({ role: 'user', text: 'hello', turn: 'turn-1' })],
+      }),
+      expect.objectContaining({
+        category: 'chat-store',
+        kind: 'chat_messages',
+        cardId: 'card-delta',
+        messages: [
+          expect.objectContaining({ role: 'user', text: 'hello', turn: 'turn-1' }),
+          expect.objectContaining({ role: 'assistant', text: 'world', turn: 'turn-1' }),
+        ],
+      }),
+      expect.objectContaining({
+        category: 'hosted-runtime',
+        kind: 'chat_processing',
+        cardId: 'card-delta',
+        active: true,
+      }),
+    ]);
   });
 });

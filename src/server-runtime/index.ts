@@ -217,9 +217,8 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const onChannelUnsubscribed = options.onChannelUnsubscribed;
 
   // SSE hub: owns the client registry, broadcast helpers, and chat-subscription scanner.
-  // Constructed lazily-bound to readChatRecords (defined further down in the closure).
+  // Constructed lazily-bound to chat-store hydration helpers (defined further down in the closure).
   const sseHub = createSseHub({
-    readChatRecords: (cardId: string) => readChatRecords(cardId),
     getChatProcessing: (cardId: string) => getChatProcessing(cardId),
     readChatAfter: async (cardId: string, cursor: string | null) => {
       const result = await readChatAfter(cardId, cursor);
@@ -228,6 +227,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         cursor: result.cursor,
       };
     },
+    buildChatOneShotBatch: (cardId: string, receiving: boolean) => chatStorePublic.buildSseOneShotBatch({ params: { cardId }, body: { receiving } }),
     onSseClientDisconnected,
   });
 
