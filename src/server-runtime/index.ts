@@ -227,7 +227,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         cursor: result.cursor,
       };
     },
-    buildChatOneShotBatch: (cardId: string, receiving: boolean) => chatStorePublic.buildSseOneShotBatch({ params: { cardId }, body: { receiving } }),
+    buildChatOneShotBatch: async (cardId: string, receiving: boolean) => await chatStorePublic.buildSseOneShotBatch({ params: { cardId }, body: { receiving } }),
     onSseClientDisconnected,
   });
 
