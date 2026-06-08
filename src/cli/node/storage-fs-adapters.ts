@@ -242,6 +242,7 @@ type FsQueueRecord<T = unknown> = {
   body: T;
   enqueuedAt: string;
   attempt: number;
+  activeOrderKey?: string;
   leaseToken?: string;
   leaseExpiresAt?: string;
   reason?: string;
@@ -302,9 +303,17 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  function activePath(record: Pick<FsQueueRecord, 'id' | 'enqueuedAt'>): string {
-    const stamp = String(record.enqueuedAt || new Date().toISOString()).replace(/[:.]/g, '-');
-    return path.join(activeDir, `${stamp}-${record.id}.json`);
+  let activeOrderCounter = 0;
+
+  function nextActiveOrderKey(enqueuedAt: string): string {
+    const stamp = enqueuedAt.replace(/[:.]/g, '-');
+    const seq = String(activeOrderCounter++).padStart(6, '0');
+    return `${stamp}-${seq}`;
+  }
+
+  function activePath(record: Pick<FsQueueRecord, 'id' | 'enqueuedAt' | 'activeOrderKey'>): string {
+    const orderKey = record.activeOrderKey || nextActiveOrderKey(String(record.enqueuedAt || new Date().toISOString()));
+    return path.join(activeDir, `${orderKey}-${record.id}.json`);
   }
 
   function leasedPath(messageId: string): string {
@@ -335,6 +344,7 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
         body: record.body,
         enqueuedAt: record.enqueuedAt,
         attempt: record.attempt,
+        activeOrderKey: record.activeOrderKey,
       };
       writeJsonAtomic(activePath(revived), revived);
       try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
@@ -349,6 +359,7 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
         enqueuedAt: new Date().toISOString(),
         attempt: 0,
       };
+      record.activeOrderKey = nextActiveOrderKey(record.enqueuedAt);
       writeJsonAtomic(activePath(record), record);
       return queueRecordToMessage(record);
     },
@@ -372,6 +383,7 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
         attempt: 0,
         dedupKey,
       };
+      record.activeOrderKey = nextActiveOrderKey(record.enqueuedAt);
       writeJsonAtomic(activePath(record), record);
       return queueRecordToMessage(record);
     },
@@ -424,6 +436,7 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
         body: record.body,
         enqueuedAt: record.enqueuedAt,
         attempt: record.attempt,
+        activeOrderKey: record.activeOrderKey,
       };
       if (opts?.dead) {
         nextRecord.reason = opts.reason;
@@ -476,10 +489,12 @@ export function createFsQueueStorage(rootDir: string): QueueStorage {
       const filePath = stagedPath(messageId);
       const record = readJsonFile<FsQueueRecord>(filePath);
       if (!record) return false;
+      const enqueuedAt = new Date().toISOString();
       const promoted: FsQueueRecord = {
         ...record,
         attempt: 0,
-        enqueuedAt: new Date().toISOString(),
+        enqueuedAt,
+        activeOrderKey: nextActiveOrderKey(enqueuedAt),
       };
       writeJsonAtomic(activePath(promoted), promoted);
       try { fs.unlinkSync(filePath); } catch { /* best-effort */ }
