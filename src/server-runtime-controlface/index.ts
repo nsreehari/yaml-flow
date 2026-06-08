@@ -30,7 +30,7 @@ export type {
   MultiBoardRuntime,
 } from '../server-runtime/index.js';
 
-const MCP_ONLY_SUFFIXES = ['/mcp', '/mcp-raw', '/mcp-actions', '/mcp-controlplane', '/mcp-webhooks', '/notify'] as const;
+const MCP_ONLY_SUFFIXES = ['/mcp', '/mcp-raw', '/mcp-actions', '/mcp-controlplane', '/mcp-webhooks', '/notify-q'] as const;
 
 function isAllowedSingleBoardMcpPath(apiBasePath: string, pathName: string): boolean {
   return MCP_ONLY_SUFFIXES.some((suffix) => pathName === `${apiBasePath}${suffix}`);

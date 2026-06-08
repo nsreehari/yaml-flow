@@ -27,6 +27,13 @@ export interface CardChatState {
   processing?: boolean;
 }
 
+export interface CardWatchPartyEvent {
+  payload: unknown;
+  ts: number;
+}
+
+export type CardWatchPartyChannelState = Record<string, CardWatchPartyEvent[]>;
+
 export interface CardModel {
   id: string;
   card: unknown;
@@ -41,6 +48,7 @@ export interface BoardState {
   payload: unknown;
   cardIds: string[];
   modelsById: Record<string, CardModel>;
+  cardWatchParties: Record<string, CardWatchPartyChannelState>;
 }
 
 export interface DeriveBoardStateOptions {
@@ -126,7 +134,14 @@ export function buildBoardState(
     ) ? prev : stab;
   }
 
-  return { payload, cardIds, modelsById };
+  const prevCardWatchParties = prevState?.cardWatchParties || {};
+  const cardWatchParties = Object.fromEntries(
+    cardIds
+      .filter((cardId) => Object.prototype.hasOwnProperty.call(prevCardWatchParties, cardId))
+      .map((cardId) => [cardId, prevCardWatchParties[cardId]]),
+  );
+
+  return { payload, cardIds, modelsById, cardWatchParties };
 }
 
 export function deriveBoardState(
@@ -171,7 +186,12 @@ export function deriveBoardState(
   if (payload !== sourceState.payload) changed = true;
 
   if (!changed && cardIds.length === sourceState.cardIds.length) return sourceState;
-  return { payload, cardIds, modelsById };
+  return {
+    payload,
+    cardIds,
+    modelsById,
+    cardWatchParties: sourceState.cardWatchParties,
+  };
 }
 
 // ============================================================================
@@ -188,6 +208,7 @@ export function applyNotification(
 
   let modelsById = prevState.modelsById;
   let cardIds = prevState.cardIds;
+  let cardWatchParties = prevState.cardWatchParties || {};
   let cloned = false;
   let changed = false;
 
@@ -207,8 +228,61 @@ export function applyNotification(
     if (!cloned) { modelsById = { ...modelsById }; cloned = true; }
   }
 
+  function reduceWatchParty(note: RuntimeNotification) {
+    if (note.kind !== 'card_watchparty' || !note.cardId || !note.channel) {
+      return;
+    }
+
+    const previousByCard = cardWatchParties[note.cardId] || {};
+    const previousChannelEvents = Array.isArray(previousByCard[note.channel])
+      ? previousByCard[note.channel]
+      : [];
+
+    let nextChannelEvents: CardWatchPartyEvent[] = previousChannelEvents;
+    if (note.clear) {
+      if (previousChannelEvents.length === 0) {
+        return;
+      }
+      nextChannelEvents = [];
+    } else if (note.replace) {
+      const replacementTs = Number.isFinite(Number(note.sentAtMs)) ? Number(note.sentAtMs) : 0;
+      const replacementEvent: CardWatchPartyEvent = {
+        payload: note.payload,
+        ts: replacementTs,
+      };
+      if (
+        previousChannelEvents.length === 1
+        && previousChannelEvents[0]?.ts === replacementEvent.ts
+        && deepEqJson(previousChannelEvents[0]?.payload, replacementEvent.payload)
+      ) {
+        return;
+      }
+      nextChannelEvents = [replacementEvent];
+    } else {
+      const nextEvent: CardWatchPartyEvent = {
+        payload: note.payload,
+        ts: Number.isFinite(Number(note.sentAtMs)) ? Number(note.sentAtMs) : 0,
+      };
+      nextChannelEvents = [...previousChannelEvents, nextEvent];
+    }
+
+    cardWatchParties = {
+      ...cardWatchParties,
+      [note.cardId]: {
+        ...previousByCard,
+        [note.channel]: nextChannelEvents,
+      },
+    };
+    changed = true;
+  }
+
   for (const note of notifications) {
     if (!note || !note.kind) continue;
+
+    if (note.kind === 'card_watchparty') {
+      reduceWatchParty(note);
+      continue;
+    }
 
     if (isChatScopedRuntimeNotification(note)) {
       if (note.kind === 'card_chats') {
@@ -350,6 +424,11 @@ export function applyNotification(
       ensureClone();
       delete modelsById[cardId];
       cardIds = cardIds.filter((id) => id !== cardId);
+      if (Object.prototype.hasOwnProperty.call(cardWatchParties, cardId)) {
+        const nextCardWatchParties = { ...cardWatchParties };
+        delete nextCardWatchParties[cardId];
+        cardWatchParties = nextCardWatchParties;
+      }
       changed = true;
 
     } else if (note.kind === 'status') {
@@ -394,5 +473,10 @@ export function applyNotification(
   }
 
   if (!changed) return prevState;
-  return { payload: prevState.payload, cardIds, modelsById };
+  return {
+    payload: prevState.payload,
+    cardIds,
+    modelsById,
+    cardWatchParties,
+  };
 }

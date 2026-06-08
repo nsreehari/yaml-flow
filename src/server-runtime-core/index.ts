@@ -4,7 +4,7 @@
  * Shared, face-agnostic building blocks for the split server-runtime packages:
  *   - server-runtime-agentface  (POST /mcp, /mcp-raw)
  *   - server-runtime-controlface (MCP-only: /mcp*, /mcp-controlplane, /mcp-webhooks)
- *   - server-runtime-watchers    (/sse + chat/notify watchers; sole sseHub owner)
+ *   - server-runtime-watchers    (/sse + chat/notify-q watchers; sole sseHub owner)
  *   - server-runtime-webhooks    (/mcp-webhooks)
  *   - server-jobs-queue-runner   (drains 3 lanes; no HTTP)
  *

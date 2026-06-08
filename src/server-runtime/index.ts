@@ -1320,6 +1320,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     get corsHeaders() { return corsHeaders; },
     get queueLaneTuning() { return queueLaneTuning; },
     handleRuntimeApi: handleAllRoutes,
+    emitNotification(notification) {
+      if (notification.kind === 'notification-batch') {
+        emitNotifications(notification.notifications);
+        return;
+      }
+      emitNotifications([notification]);
+    },
     buildPublishedRuntimePayload,
     __drainProcessAccumulatedLane: processAccumulatedLaneInternal,
     handleChatAgentRequest: handleChatAgentRequestInternal,

@@ -1,7 +1,7 @@
 /**
  * server-runtime/routes-notify.ts
  *
- * POST /<apiBasePath>/notify — co-process notification ingress.
+ * POST /<apiBasePath>/notify-q — co-process notification ingress.
  *
  * Security model: loopback-only (127.0.0.1 / ::1 / ::ffff:127.0.0.1).
  * This endpoint is intentionally NOT reachable from external HTTP consumers.
@@ -38,7 +38,7 @@ export interface RoutesNotifyDeps {
 
 export function createRoutesNotify(deps: RoutesNotifyDeps) {
   const { apiBasePath, emitNotifications, readJsonBody, json } = deps;
-  const notifyPath = `${apiBasePath}/notify`;
+  const notifyPath = `${apiBasePath}/notify-q`;
 
   async function handleNotifyRoute(
     req: RuntimeRequest,
