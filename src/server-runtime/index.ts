@@ -54,6 +54,9 @@ import type {
   BoardContextConfig,
   BoardRuntimeNonCorePublic,
   BoardRuntimePlatformAdapter,
+  BoardPlatformAdapter,
+  BoardNonCorePlatformAdapter,
+  AsyncBoardPlatformAdapter,
   InvocationAdapter,
   NotificationTransport,
 } from './types.js';
@@ -231,6 +234,30 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   // ── Build board contexts from injected configs ───────────────────────────
 
   function buildContext(cfg: BoardContextConfig): BoardContext {
+    function createRuntimeSyncBoardAdapter(adapter: BoardPlatformAdapter): BoardPlatformAdapter {
+      return {
+        ...adapter,
+        queueStorageForRef(ref: string, lane: string) {
+          return createQueueStoragePublic(adapter.queueStorageForRef(ref, lane), {
+            lane,
+            emitNotification: emitRuntimeNotification,
+          });
+        },
+      };
+    }
+
+    function createRuntimeAsyncBoardAdapter(adapter: AsyncBoardPlatformAdapter): AsyncBoardPlatformAdapter {
+      return {
+        ...adapter,
+        queueStorageForRef(ref: string, lane: string) {
+          return createAsyncQueueStoragePublic(adapter.queueStorageForRef(ref, lane), {
+            lane,
+            emitNotification: emitRuntimeNotification,
+          });
+        },
+      };
+    }
+
     function createSyncCardStoreOps(store: ReturnType<typeof createCardStorePublic>): CardStoreOpsAwaitable {
       return {
         async get(input) { return store.get(input) as CommandResult<{ cards: Array<Record<string, unknown>> }>; },
@@ -260,31 +287,13 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       emitNotifications([notification], contextRef ?? undefined);
     }
     const runtimeBoardAdapter = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
-      ? {
-          ...cfg.boardAdapter,
-          queueStorageForRef(ref: string, lane: string) {
-            return createAsyncQueueStoragePublic(cfg.boardAdapter.queueStorageForRef(ref, lane), {
-              lane,
-              emitNotification: emitRuntimeNotification,
-            });
-          },
-        }
-      : {
-          ...cfg.boardAdapter,
-          queueStorageForRef(ref: string, lane: string) {
-            return createQueueStoragePublic(cfg.boardAdapter.queueStorageForRef(ref, lane), {
-              lane,
-              emitNotification: emitRuntimeNotification,
-            });
-          },
-        };
-    const runtimeNonCoreAdapter = cfg.nonCoreAdapter === cfg.boardAdapter
-      ? runtimeBoardAdapter
-      : cfg.nonCoreAdapter
-        ?? (!isAsyncBoardPlatformAdapter(runtimeBoardAdapter) && isBoardNonCorePlatformAdapter(runtimeBoardAdapter)
-          ? runtimeBoardAdapter
-          : null);
-    const board = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
+      ? createRuntimeAsyncBoardAdapter(cfg.boardAdapter)
+      : createRuntimeSyncBoardAdapter(cfg.boardAdapter);
+    const runtimeNonCoreAdapter: BoardNonCorePlatformAdapter | null = cfg.nonCoreAdapter
+      ?? (!isAsyncBoardPlatformAdapter(runtimeBoardAdapter) && isBoardNonCorePlatformAdapter(runtimeBoardAdapter)
+        ? runtimeBoardAdapter
+        : null);
+    const board = isAsyncBoardPlatformAdapter(runtimeBoardAdapter)
       ? createAsyncBoardLiveCardsPublic(cfg.baseRef, runtimeBoardAdapter, {
         boardRuntimeStoreRef: cfg.boardRuntimeStoreRef,
         scratchStoreRef: cfg.scratchStoreRef,
@@ -307,7 +316,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
       : null);
     const chatStorage = runtimeBoardAdapter.chatStorageForRef(cfg.chatStoreRef);
     let publicCardStore: SingleBoardRuntime['cardStore'];
-    const cardStoreOps = isAsyncBoardPlatformAdapter(cfg.boardAdapter)
+    const cardStoreOps = isAsyncBoardPlatformAdapter(runtimeBoardAdapter)
       ? (() => {
         const asyncStore = createAsyncCardStore(
           createAsyncCardStorageAdapter(createAsyncJsonStorage(runtimeBoardAdapter.kvStorageForRef(cfg.cardStoreRef)), runtimeBoardAdapter.hashFn),
@@ -339,7 +348,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
         return createSyncCardStoreOps(syncStore);
       })();
     let _filesArtifacts: RuntimeFilesArtifactsStore;
-    if (!isAsyncBoardPlatformAdapter(cfg.boardAdapter)) {
+    if (!isAsyncBoardPlatformAdapter(runtimeBoardAdapter)) {
       const filesBlob = runtimeBoardAdapter.blobStorageForRef(cfg.artifactsStoreRef);
       const filesStore = createArtifactsStore(filesBlob);
       _filesArtifacts = {

@@ -107,7 +107,7 @@ describe('card-store patch API', () => {
     expect(delResult.status).toBe('success');
 
     expect(json.read('c1')).toBeNull();
-    expect(store.get({ params: { id: 'c1' } }).status).toBe('fail');
+    expect(store.get({ params: { id: 'c1' } }).status).toBe('error');
     expect(json.read('_index')).toEqual({});
   });
 });
