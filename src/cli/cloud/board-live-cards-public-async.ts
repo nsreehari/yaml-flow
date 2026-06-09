@@ -810,7 +810,6 @@ export function createAsyncBoardLiveCardsPublic(
         const fetchedSourcesStoreRef = input.params?.['fetchedSourcesStoreRef'] as string | undefined;
         if (!fetchedSourcesStoreRef) return fail('init requires params.fetchedSourcesStoreRef');
         scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
-        if (!scratchStoreRef) return fail('init requires params.scratchStoreRef');
         const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
         if (!chatStoreRef) return fail('init requires params.chatStoreRef');
         const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;

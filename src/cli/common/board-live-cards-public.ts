@@ -865,7 +865,6 @@ export function createBoardLiveCardsPublic(
       const fetchedSourcesStoreRef = input.params?.['fetchedSourcesStoreRef'] as string | undefined;
       if (!fetchedSourcesStoreRef) return fail('init requires params.fetchedSourcesStoreRef — pass the fetched sources store ref here');
       scratchStoreRef = input.params?.['scratchStoreRef'] as string | undefined;
-      if (!scratchStoreRef) return fail('init requires params.scratchStoreRef — pass the scratch store ref here');
       const chatStoreRef = input.params?.['chatStoreRef'] as string | undefined;
       if (!chatStoreRef) return fail('init requires params.chatStoreRef — pass the chat store ref here');
       const artifactsStoreRef = input.params?.['artifactsStoreRef'] as string | undefined;
