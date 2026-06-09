@@ -244,7 +244,7 @@ export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryD
       return getMcpFacade().managePatchCard({
         cardId,
         patch: getMcpArgRecord(args, 'patch'),
-      });
+      }, { allowControlplaneOnlyCards: true });
     },
     'manage.upsert-card': (args) => {
       const { cardId } = controlplane.requireCardArgs(args);
@@ -252,12 +252,12 @@ export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryD
       return getMcpFacade().manageUpsertCard({
         cardId,
         candidateCardContent: getMcpArgRecord(args, 'candidate_card_content'),
-      });
+      }, { allowControlplaneOnlyCards: true });
     },
     'manage.remove-card': (args) => {
       const { cardId } = controlplane.requireCardArgs(args);
       requireBoardId(args, 'manage.remove-card');
-      return getMcpFacade().manageRemoveCard({ cardId });
+      return getMcpFacade().manageRemoveCard({ cardId }, { allowControlplaneOnlyCards: true });
     },
     'manage.admin-read-card': async (args) => {
       const { cardId } = controlplane.requireCardArgs(args);

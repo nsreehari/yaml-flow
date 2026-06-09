@@ -2332,12 +2332,28 @@ try {
     assert(t5AdminUpsert?.board_result, 'T5 expected board_result from admin upsert');
     console.log('[T5] ok: manage.admin-upsert-card succeeded');
 
-    // 3. Verify the card is now invisible on the regular /mcp surface.
-    // Server throws with statusCode:404 for admin cards, so httpResult.status will be 404 (not 200).
-    const t5HiddenRead = await httpMcp('manage.read-card', { card_id: t5AdminCardId });
-    assert(t5HiddenRead?.status !== 200 || t5HiddenRead?.data?.status === 'fail',
-      `T5 expected manage.read-card to be blocked after admin upsert, got: ${JSON.stringify(t5HiddenRead)}`);
-    console.log('[T5] ok: manage.read-card blocked for admin-only card');
+    // 3. Verify the card is still readable by known id on the regular /mcp surface
+    // (control-plane-only cards are only hidden from *listings*; a by-id read is
+    // allowed, with __private redacted).
+    const t5HiddenRead = expectMcpSuccess(
+      await httpMcp('manage.read-card', { card_id: t5AdminCardId }),
+      'T5 manage.read-card by id for control-plane-only card',
+    );
+    const t5HiddenCard = Array.isArray(t5HiddenRead) ? t5HiddenRead[0] : null;
+    assert(t5HiddenCard, `T5 expected manage.read-card to return the control-plane-only card by id, got: ${JSON.stringify(t5HiddenRead)}`);
+    assert(t5HiddenCard.__private === undefined,
+      `T5 expected __private to be redacted on regular /mcp read, got: ${JSON.stringify(t5HiddenCard.__private)}`);
+    console.log('[T5] ok: manage.read-card by id allowed for control-plane-only card (__private redacted)');
+
+    // 3b. Verify the card IS excluded from regular /mcp listings (board-runtime-status).
+    const t5Listing = expectMcpSuccess(
+      await httpMcp('inspect.board-runtime-status', {}),
+      'T5 inspect.board-runtime-status listing',
+    );
+    const t5ListedIds = Array.isArray(t5Listing?.cards) ? t5Listing.cards.map((c: any) => c?.['card-id']) : [];
+    assert(!t5ListedIds.includes(t5AdminCardId),
+      `T5 expected control-plane-only card to be excluded from board-runtime-status listing, got ids: ${JSON.stringify(t5ListedIds)}`);
+    console.log('[T5] ok: control-plane-only card excluded from regular /mcp listing');
 
     // 4. Verify the card IS visible via the controlplane admin-read-card tool.
     const t5AdminRead = expectMcpSuccess(

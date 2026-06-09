@@ -32,10 +32,13 @@ export function getCardMetaKey(args: Record<string, unknown>): string {
   const key = getMcpArgString(args, 'key');
   if (!key) throw Object.assign(new Error('MCP tool requires key'), { statusCode: 400 });
   const segments = key.split('.');
+  // Any namespace is allowed under __private. Keys must still have at least two
+  // segments (so reserved top-level flags such as visible_controlplane_only are
+  // not addressable) and each segment must be an identifier (blocks dotted-path
+  // tricks and prototype-pollution segments like __proto__).
   const valid = segments.length >= 2
-    && segments[0] === 'chat'
     && segments.every((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment));
-  if (!valid) throw Object.assign(new Error('MCP tool only supports card private keys under chat.*'), { statusCode: 400 });
+  if (!valid) throw Object.assign(new Error('MCP tool requires a card private key with at least two identifier segments (e.g. chat.foundry_thread_id)'), { statusCode: 400 });
   return key;
 }
 

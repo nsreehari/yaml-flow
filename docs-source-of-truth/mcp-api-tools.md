@@ -47,7 +47,7 @@ The MCP server accepts exactly one wire spelling per arg field — the snake_cas
 
 ## Tool reference
 
-Regular `/mcp` card-definition tools treat top-level `meta` as control-plane-only state. `manage.read-card` and `inspect.card-definition-and-runtime` omit `meta` from returned card definitions. `manage.upsert-card` accepts candidate cards that contain `meta`, but silently ignores the incoming `meta` and preserves any existing stored `meta` for that card. Use `/mcp-controlplane` for card metadata state.
+Regular `/mcp` card-definition tools never expose a card's **`__private`** object — this is control-plane-owned private state (see [Card private state](#card-private-state-__private)). `manage.read-card` and `inspect.card-definition-and-runtime` redact `__private` from returned card definitions. Reads by a known `card_id` are allowed even for control-plane-only cards (those whose `__private.visible_controlplane_only` is `true`); such cards are only excluded from card *listings* (board-status / read-all). `manage.upsert-card` strips any incoming `__private` from `candidate_card_content` before validation/storage, then preserves the card's existing stored `__private`. Top-level `meta` authored on a card is caller-owned: the caller's `meta` is stored as supplied (it is not private and is not preserved across writes). All `/mcp` writes — `upsert-card`, `patch-card`, and `remove-card` — are blocked on control-plane-only cards. Use `/mcp-controlplane` (`getstate.card-private` / `setstate.card-private`, and the `admin-*` tools) to read or write private state and control-plane-only cards.
 
 ### `discover.source-kinds`
 
@@ -239,7 +239,7 @@ Unknown values of `resp` are rejected with HTTP 400 (`{ "error": "unsupported re
 
 Reads the stored document for a single live card.
 
-Top-level `meta` is omitted from cards returned on this regular `/mcp` surface.
+The card's `__private` object is redacted from cards returned on this regular `/mcp` surface (see [Card private state](#card-private-state-__private)). Reading by a known `card_id` is allowed even for control-plane-only cards (`__private.visible_controlplane_only === true`); those cards are only hidden from card *listings*, not from a by-id read. Authored `meta` is returned as-is.
 
 **Args:**
 
@@ -271,7 +271,7 @@ Top-level `meta` is omitted from cards returned on this regular `/mcp` surface.
 
 Validates, stores, and registers a card definition. Triggers a board restart for the card.
 
-If `candidate_card_content` contains top-level `meta`, regular `/mcp` strips it before validation/storage. Existing stored card `meta` is preserved and can only be changed through `/mcp-controlplane`.
+If `candidate_card_content` contains a top-level `__private` object, regular `/mcp` strips it before validation/storage — agents cannot author private state. Any `__private` already stored for the card is preserved unchanged and can only be changed through `/mcp-controlplane` (see [Card private state](#card-private-state-__private)). Top-level `meta` is caller-owned: the supplied `meta` is stored as-is (not preserved from the prior card). Control-plane-only cards (`__private.visible_controlplane_only === true`) cannot be overwritten here — this tool returns a "not found" error for them; use `manage.admin-upsert-card` on `/mcp-controlplane` instead.
 
 **Args:**
 
@@ -391,6 +391,44 @@ Stages a system failure message directly into a card's chat store for a specific
 
 Control-plane tools are intended for direct runtime-state mutation and orchestration tasks. They are separate from the regular `/mcp` surface.
 
+### Card private state (`__private`)
+
+Each card may carry a top-level `__private` object holding **control-plane-owned private state** — values the runtime and chat assistants need but that must never be exposed on the regular `/mcp` surface or authored by agents.
+
+**Storage shape.** Private state is stored as nested JSON under `__private`, addressed by dotted lookup keys. A key like `chat.copilot` maps to `__private.chat.copilot`:
+
+```json
+"__private": {
+  "chat": {
+    "copilot": { "ws": "gandalf" }
+  }
+}
+```
+
+Keys are **not** stored flat — there is no `__private["chat.copilot"]`. Every key must have **at least two segments**, and each segment may contain letters, digits, and underscores (must start with a letter or underscore). The first segment is a free namespace — `chat.*` is the convention for chat-runtime state, but any namespace is accepted (e.g. `runtime.cursor`, `agent.session`). The two-segment minimum keeps reserved top-level flags (such as `visible_controlplane_only`) unaddressable through this API, and the identifier rule blocks dotted-path tricks and prototype-pollution segments (`__proto__`). `__private` is persisted to the card-store JSON exactly as written; no normalization or migration is applied.
+
+**Reading and writing values.** Use `getstate.card-private` and `setstate.card-private` with dotted keys (`<namespace>.<...>`, minimum two segments). This is the only supported way to initialise and read individual private values — seeding `__private` through a card-definition upsert is not supported, because regular `/mcp` upserts strip any incoming `__private`.
+
+**Reserved visibility flag.** `__private.visible_controlplane_only` (boolean) marks a card as **control-plane-only**. When `true`, the card is excluded from card *listings* on the regular `/mcp` surface (board-status and read-all results), and all `/mcp` *writes* against it (`manage.upsert-card`, `manage.patch-card`, `manage.remove-card`) return "not found". Reads of a control-plane-only card by a known `card_id` (`manage.read-card`, `inspect.card-definition-and-runtime`, `inspect.chat-messages-on-cards`, `inspect.file-contents`) are still allowed (with `__private` redacted). The flag is owned by the control plane: `setstate.card-private` rejects any attempt to change its value (it accepts only a write whose value matches the current flag), and it is set by control-plane upsert paths rather than by agents. It is stored as a single top-level key `__private.visible_controlplane_only` — being single-segment, it cannot be addressed through `getstate.card-private` / `setstate.card-private` (which require ≥2 segments); the value-match guard additionally rejects any multi-segment key whose final segment is `visible_controlplane_only`.
+
+**Which surfaces see `__private`:**
+
+| Surface | `__private` behavior | Control-plane-only card |
+|---|---|---|
+| `manage.read-card` | redacted | allowed (read by id) |
+| `inspect.card-definition-and-runtime` | redacted | allowed (read by id) |
+| `inspect.chat-messages-on-cards` | n/a (chat only) | allowed (read by id) |
+| `inspect.file-contents` | n/a (files only) | allowed (read by id) |
+| `inspect.board-runtime-status` (listing) | n/a | excluded from listing |
+| `list-runtime-cards` (read-all) | redacted | excluded from listing |
+| `manage.upsert-card` | incoming `__private` stripped; existing stored `__private` preserved; `meta` caller-owned | blocked ("not found") |
+| `manage.remove-card` | n/a | blocked ("not found") |
+| `manage.patch-card` (`/mcp-controlplane`) | incoming `__private` stripped; existing stored `__private` preserved | allowed (control-plane tool) |
+| `preflight.*` | operates on the candidate with `__private` stripped | n/a |
+| `getstate.card-private` / `setstate.card-private` | the only read/write path for individual private values | allowed |
+
+Chat assistants and other runtime consumers should read private state **only** through `getstate.card-private`, never by reading card JSON directly.
+
 ### `getstate.is-chat-processing`
 
 Reads whether a card chat is currently marked as processing.
@@ -464,7 +502,7 @@ Marks a card chat as no longer processing.
 
 ### `getstate.card-private`
 
-Reads control-plane-owned card metadata under `meta.chat.*`.
+Reads control-plane-owned card private state under `__private` (see [Card private state](#card-private-state-__private)). The dotted `key` (for example `chat.foundry_thread_id`) is resolved against nested storage under `__private`; any namespace is accepted as long as the key has at least two identifier segments.
 
 **Args:**
 
@@ -472,7 +510,7 @@ Reads control-plane-owned card metadata under `meta.chat.*`.
 |---|---|---|
 | `board_id` | string | yes |
 | `card_id` | string | yes |
-| `key` | string | yes, must be under `chat.*` |
+| `key` | string | yes, at least two identifier segments |
 
 **Returns:**
 ```json
@@ -490,7 +528,9 @@ Reads control-plane-owned card metadata under `meta.chat.*`.
 
 ### `setstate.card-private`
 
-Sets control-plane-owned card metadata under `meta.chat.*` using the card store patch path `meta.<key>`.
+Sets control-plane-owned card private state under `__private` (see [Card private state](#card-private-state-__private)). The dotted `key` (for example `chat.copilot`) maps to nested storage under `__private` (for example `__private.chat.copilot`); the card store is patched at path `__private.<key>`. Any namespace is accepted as long as the key has at least two identifier segments.
+
+The reserved flag `visible_controlplane_only` cannot be changed through this tool — a write whose key targets it is accepted only when its `value` matches the card's current `__private.visible_controlplane_only`, otherwise it is rejected.
 
 **Args:**
 
@@ -498,7 +538,7 @@ Sets control-plane-owned card metadata under `meta.chat.*` using the card store 
 |---|---|---|
 | `board_id` | string | yes |
 | `card_id` | string | yes |
-| `key` | string | yes, must be under `chat.*` |
+| `key` | string | yes, at least two identifier segments |
 | `value` | any JSON value | yes |
 
 **Example:**
@@ -525,6 +565,102 @@ Sets control-plane-owned card metadata under `meta.chat.*` using the card store 
   }
 }
 ```
+
+### `manage.patch-card`
+
+Applies a partial patch to a stored card and re-registers it, triggering a board restart for the card. Unlike `manage.upsert-card`, the patch is merged into the existing card and full card-structure validation is skipped — only the supplied fields change. This tool is exposed on `/mcp-controlplane`.
+
+The patch is applied to the public (redacted) card definition, then persisted through the shared upsert path: authored `meta` is caller-owned and **`__private` is preserved** verbatim — any existing private state is carried across unchanged. Because it routes through `/mcp-controlplane`, `manage.patch-card` can patch control-plane-only cards (`__private.visible_controlplane_only === true`); the equivalent write on the regular `/mcp` surface is blocked. To change private state directly, use `setstate.card-private`.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+| `patch` | object | yes — fields to merge into the stored card |
+
+**Returns (success):**
+```json
+{
+  "status": "success",
+  "data": {
+    "validation": null,
+    "card_saved": null,
+    "board_result": { "status": "success" }
+  }
+}
+```
+
+---
+
+### `manage.admin-read-card`
+
+Reads the stored document for a single live card **with `__private` intact** (unredacted). This is the control-plane counterpart to `manage.read-card`: it does not strip private state and it returns control-plane-only cards (`__private.visible_controlplane_only === true`) rather than hiding them. See [Card private state](#card-private-state-__private).
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+
+**Returns:** the matching card document(s) under `data.cards` (empty array if not found), wrapped in the MCP success envelope. Note this differs from `manage.read-card`, whose `data` is the array directly.
+```json
+{
+  "status": "success",
+  "data": {
+    "cards": [
+      {
+        "id": "my-card",
+        "card_data": { "id": "my-card", "sources": [ ... ] },
+        "__private": {
+          "visible_controlplane_only": true,
+          "chat": { "foundry_thread_id": "thread_abc" }
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+### `manage.admin-upsert-card`
+
+Validates, stores, and registers a card definition, triggering a board restart for the card. This is the control-plane counterpart to `manage.upsert-card`, with two differences in how `__private` is handled (see [Card private state](#card-private-state-__private)):
+
+- Any `__private` in `candidate_card_content` is still stripped (agents cannot author private state), but the card's **existing stored `__private` is preserved** across the upsert.
+- `__private.visible_controlplane_only` is always **force-set to `true`**, marking the card as control-plane-only so it is hidden from every regular `/mcp` read surface.
+
+This tool does not seed arbitrary `chat.*` values — it only preserves existing private state and sets the visibility flag. Use `setstate.card-private` to initialise individual private values.
+
+**Args:**
+
+| Field | Type | Required |
+|---|---|---|
+| `board_id` | string | yes |
+| `card_id` | string | yes |
+| `candidate_card_content` | object | yes — must include `id` matching `card_id` |
+
+**Returns (success):**
+```json
+{
+  "status": "success",
+  "data": {
+    "validation": { "status": "success", "data": { "isValid": true } },
+    "card_saved": null,
+    "board_result": { "status": "success" }
+  }
+}
+```
+
+**Returns (validation failure):**
+```json
+{ "status": "fail", "step": "validate", "validation": { ... } }
+```
+
+---
 
 ### `manage.upload-card-file`
 

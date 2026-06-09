@@ -248,9 +248,9 @@ export interface BoardLiveCardsMcp {
     turn?: string;
     files?: unknown[];
   }): Promise<BoardLiveCardsMcpManageAddChatEntryAndAnyAttachmentsResult>;
-  managePatchCard(args: { cardId: string; patch: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
-  manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
-  manageRemoveCard(args: { cardId: string }): Promise<unknown>;
+  managePatchCard(args: { cardId: string; patch: UnknownRecord }, opts?: { allowControlplaneOnlyCards?: boolean }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
+  manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }, opts?: { allowControlplaneOnlyCards?: boolean }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
+  manageRemoveCard(args: { cardId: string }, opts?: { allowControlplaneOnlyCards?: boolean }): Promise<unknown>;
   adminReadCard(args: { cardId: string }): Promise<LiveCard[]>;
   adminUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult>;
   getChatProcessing(args: { cardId: string }): Promise<{ cardId: string; active: boolean }>;
@@ -508,8 +508,9 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
 
   async function listRuntimeCards(): Promise<LiveCard[]> {
     const result = await expectSuccessAsync(cardStore.get({}), 'cardStore.get');
+    // Listings (read-all) exclude control-plane-only cards; they stay reachable by id.
     return Array.isArray(result.cards)
-      ? result.cards.map((card) => ensureRecord(card) as LiveCard)
+      ? result.cards.map((card) => ensureRecord(card) as LiveCard).filter((card) => !isAdminCard(card))
       : [];
   }
 
@@ -546,6 +547,17 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     const summary = ensureRecord(statusPayload.summary);
     const cards = ensureArray(statusPayload.cards);
 
+    // Control-plane-only cards are hidden from card listings (but remain readable
+    // by known id). Cross-reference the store to drop them from the listing.
+    const storeForVisibility = await expectSuccessAsync(cardStore.get({}), 'cardStore.get');
+    const adminCardIds = new Set(
+      (Array.isArray(storeForVisibility.cards) ? storeForVisibility.cards.map(ensureRecord) : [])
+        .filter(isAdminCard)
+        .map((card) => (typeof card.id === 'string' ? card.id : ''))
+        .filter(Boolean),
+    );
+    const visibleCards = cards.filter((card) => !adminCardIds.has(String(ensureRecord(card).name ?? '')));
+
     return {
       meta: ensureRecord(statusPayload.meta),
       summary: {
@@ -558,7 +570,7 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
         failed: typeof summary.failed === 'number' ? summary.failed : 0,
         unresolved: typeof summary.unresolved === 'number' ? summary.unresolved : 0,
       },
-      cards: cards.map((card) => {
+      cards: visibleCards.map((card) => {
         const cardObj = ensureRecord(card);
         return {
           'card-id': typeof cardObj.name === 'string' ? cardObj.name : null,
@@ -586,9 +598,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     }
 
     const storedCard = ensureRecord(await readOneCard(cardStore, cardId));
-    if (isAdminCard(storedCard)) {
-      throw Object.assign(new Error(`card "${cardId}" not found`), { statusCode: 404 });
-    }
+    // Inspecting by known id is allowed even for control-plane-only cards; only
+    // listings hide them. __private is still redacted from the returned definition.
     const publicStoredCard = stripMcpPrivateCardFields(storedCard);
     const requiresKeys = ensureArray(cardStatusInBoard.requires_satisfied).filter((key): key is string => typeof key === 'string' && !!key);
     const providesKeys = ensureArray(cardStatusInBoard.provides_runtime).filter((key): key is string => typeof key === 'string' && !!key);
@@ -927,9 +938,8 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     if (!cardId) throw new Error('manageReadCard requires cardId');
     const result = await expectSuccessAsync(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
     const cards = Array.isArray(result.cards) ? result.cards.map(ensureRecord) : [];
-    if (cards.some(isAdminCard)) {
-      throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
-    }
+    // Reading by known id is allowed even for control-plane-only cards; __private is
+    // still redacted (it is only ever exposed through /mcp-controlplane admin tools).
     return cards.map((card) => stripMcpPrivateCardFields(card) as LiveCard);
   }
 
@@ -1049,47 +1059,23 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  async function managePatchCard(args: { cardId: string; patch: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
+  async function managePatchCard(args: { cardId: string; patch: UnknownRecord }, opts: { allowControlplaneOnlyCards?: boolean } = {}): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
     const cardId = String(args.cardId || '').trim();
     const patch = ensureRecord(args.patch);
     if (!cardId) throw new Error('managePatchCard requires cardId');
+    // Read the current public card (manageReadCard redacts __private and allows
+    // reads by known id, including control-plane-only cards).
     const cards = await manageReadCard({ cardId });
     const currentCard = ensureRecord(cards[0]);
     const patchedCard = applyManageCardPatch(currentCard, patch);
-    // Bypass full card-structure validation: the existing card was already valid
-    // when stored; a data-only patch does not change its structural definition
-    // (sources/workiq/type). Re-running preflightValidate would reject complex
-    // workiq cards even though the patch itself is structurally safe.
-    const cardToStore = {
-      ...patchedCard,
-      ...(hasOwn(currentCard, 'meta') ? { meta: currentCard.meta } : {}),
-      ...(hasOwn(currentCard, '__private') ? { __private: currentCard.__private } : {}),
-    };
-    const storeUpdate = await cardStore.set({ body: cardToStore });
-    expectSuccess(storeUpdate, 'cardStore.set');
-    let boardUpdate: unknown;
-    try {
-      boardUpdate = await board.upsertCard({ params: { cardId, restart: true } });
-      expectSuccess(boardUpdate as CommandResult<unknown>, 'upsertCard');
-    } catch (boardErr) {
-      try {
-        await cardStore.set({ body: currentCard });
-      } catch {
-        // best-effort rollback
-      }
-      throw boardErr;
-    }
-    return {
-      status: 'success',
-      data: {
-        validation: null,
-        card_saved: null,
-        board_result: boardUpdate,
-      },
-    };
+    // Delegate persistence to manageUpsertCard. The control-plane-only write block
+    // is enforced there; forward the opt-out so /mcp-controlplane patches still work
+    // while /mcp patches on admin cards are blocked. manageUpsertCard strips any
+    // caller __private and re-applies stored __private; meta passes through.
+    return manageUpsertCard({ cardId, candidateCardContent: patchedCard }, opts);
   }
 
-  async function manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
+  async function manageUpsertCard(args: { cardId: string; candidateCardContent: UnknownRecord }, opts: { allowControlplaneOnlyCards?: boolean } = {}): Promise<BoardLiveCardsMcpManageUpsertCardResult> {
     const cardId = String(args.cardId || '').trim();
     const incomingCandidateCard = ensureRecord(args.candidateCardContent);
     const candidateCard = stripMcpPrivateCardFields(incomingCandidateCard);
@@ -1101,15 +1087,28 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
       throw new Error(`candidateCardContent.id must match cardId (${cardId})`);
     }
 
-    const validation = await preflightValidateCandidateCardDefinition({ candidateCardContent: candidateCard });
-    const validationObj = ensureRecord(validation);
-    const validationData = ensureRecord(validationObj.data);
-    if (validationObj.status !== 'success' || validationData.isValid !== true) {
-      return {
-        status: 'fail',
-        step: 'validate',
-        validation,
-      };
+    // Boards without a non-core (preflight) adapter — e.g. core-only runtimes —
+    // cannot run schema validation. In that case skip validation and proceed with
+    // the upsert rather than failing, so manage.upsert-card / manage.patch-card
+    // still work on those boards.
+    let validation: unknown = null;
+    try {
+      validation = await preflightValidateCandidateCardDefinition({ candidateCardContent: candidateCard });
+    } catch (validateErr) {
+      const message = validateErr instanceof Error ? validateErr.message : String(validateErr);
+      if (!/non-core adapter is not configured/i.test(message)) throw validateErr;
+      validation = null;
+    }
+    if (validation !== null) {
+      const validationObj = ensureRecord(validation);
+      const validationData = ensureRecord(validationObj.data);
+      if (validationObj.status !== 'success' || validationData.isValid !== true) {
+        return {
+          status: 'fail',
+          step: 'validate',
+          validation,
+        };
+      }
     }
 
     let previousCard: LiveCard | null = null;
@@ -1120,9 +1119,16 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     }
 
     const previousCardRecord = previousCard ? ensureRecord(previousCard) : null;
+    // All /mcp writes (upsert, patch, remove) are blocked on control-plane-only
+    // cards; only /mcp-controlplane passes allowControlplaneOnlyCards to write them.
+    if (previousCardRecord && isAdminCard(previousCardRecord) && !opts.allowControlplaneOnlyCards) {
+      throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
+    }
+    // meta is freely caller-owned on the /mcp surface, so the caller's meta flows
+    // through verbatim (no preservation/governance). Only __private is control-plane
+    // state and is preserved from the stored card so the public surface can't author it.
     const cardToStore = {
       ...candidateCard,
-      ...(previousCardRecord && hasOwn(previousCardRecord, 'meta') ? { meta: previousCardRecord.meta } : {}),
       ...(previousCardRecord && hasOwn(previousCardRecord, '__private') ? { __private: previousCardRecord.__private } : {}),
     };
 
@@ -1154,9 +1160,18 @@ export function createBoardLiveCardsMcp(deps: BoardLiveCardsMcpDeps): BoardLiveC
     };
   }
 
-  async function manageRemoveCard(args: { cardId: string }): Promise<unknown> {
+  async function manageRemoveCard(args: { cardId: string }, opts: { allowControlplaneOnlyCards?: boolean } = {}): Promise<unknown> {
     const cardId = String(args.cardId || '').trim();
     if (!cardId) throw new Error('manageRemoveCard requires cardId');
+    // Removing a control-plane-only card is blocked on /mcp; only /mcp-controlplane
+    // passes allowControlplaneOnlyCards to delete it.
+    if (!opts.allowControlplaneOnlyCards) {
+      const existing = await expectSuccessAsync(cardStore.get({ params: { id: cardId } }), 'cardStore.get');
+      const existingCards = Array.isArray(existing.cards) ? existing.cards.map(ensureRecord) : [];
+      if (existingCards.some(isAdminCard)) {
+        throw Object.assign(new Error(`Card "${cardId}" not found`), { statusCode: 404 });
+      }
+    }
     const boardResult = await board.removeCard({ params: { id: cardId } });
     expectSuccess(boardResult, 'removeCard');
     const storeResult = await cardStore.del({ params: { id: cardId } });
