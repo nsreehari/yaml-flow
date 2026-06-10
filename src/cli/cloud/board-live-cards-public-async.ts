@@ -231,7 +231,7 @@ function createAsyncCardHandlerFn(
     const cardId = card.id as string;
     const cardState = (card.card_data ?? {}) as Record<string, unknown>;
     const allSources = (card.source_defs ?? []) as ComputeSource[];
-    const requiredSources = allSources.filter((source) => source.optionalForCompletionGating !== true);
+    const requiredSources = allSources;
 
     let state = await adapters.cardRuntimeStore.readRuntime(cardId);
     let dirty = false;
@@ -379,25 +379,6 @@ function createAsyncCardHandlerFn(
     for (const { bindTo, ref } of providesBindings) data[bindTo] = CardCompute.resolve(computeNode, ref);
 
     (writeDataObjectsFn ?? (() => undefined))(data);
-
-    const undeliveredOptional = allSources.filter((src) => {
-      if (src.optionalForCompletionGating !== true) return false;
-      const entry = getSourceEntry(src.outputFile as string);
-      if (!entry.lastRequestedToken) return true;
-      if (!entry.lastCompletedToken) return true;
-      return entry.lastCompletedToken <= entry.lastRequestedToken;
-    });
-    if (undeliveredOptional.length > 0) {
-      pendingRequests.push({
-        taskKind: 'source-fetch',
-        payload: {
-          boardRef: serializeRef(baseRef),
-          enrichedCard: enrichedCard as Record<string, unknown>,
-          callbackToken: input.callbackToken,
-          rqt: now,
-        },
-      });
-    }
 
     taskCompletedFn(input.nodeId, data);
     if (pendingRequests.length > 0) await adapters.executionRequestStore.appendEntries(journalId, pendingRequests);

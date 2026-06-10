@@ -223,11 +223,6 @@
             "type": "string"
           }
         },
-        "optionalForCompletionGating": {
-          "type": "boolean",
-          "default": false,
-          "description": "When true this source does not gate card completion. Default false when absent, so source_defs are completion-gating by default."
-        },
         "timeout": {
           "type": "integer",
           "minimum": 0,
@@ -577,7 +572,7 @@
     },
     "source_defs": {
       "type": "array",
-      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Sources gate completion by default. Set optionalForCompletionGating: true for enrichment-only source_defs that should not block task-completed.",
+      "description": "Source entries. Each entry is passed verbatim to the board's .task-executor (registered via init --task-executor) as the --in JSON file. The executor fetches/generates the data and writes JSON to --out. If no executor is registered, the built-in executor runs the entry's 'cli' command directly. Sources gate completion.",
       "items": {
         "$ref": "#/definitions/source_def"
       }

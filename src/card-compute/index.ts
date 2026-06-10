@@ -41,7 +41,6 @@ export interface ComputeSource {
   cli?: string;
   // Deprecated alias retained for compatibility with older cards.
   script?: string;
-  optionalForCompletionGating?: boolean;
   /** Named data projections: each key maps to a JSONata expression rooted at card_data or requires.
    *  The engine evaluates these before spawning the executor and passes results as _projections. */
   projections?: Record<string, string>;
@@ -330,9 +329,6 @@ function validateNode(node: unknown): ValidationResult {
               errors.push(`source_defs[${i}]: outputFile "${s.outputFile}" is not unique across source_defs`);
             }
             outputFiles.add(s.outputFile);
-          }
-          if (s.optionalForCompletionGating != null && typeof s.optionalForCompletionGating !== 'boolean') {
-            errors.push(`source_defs[${i}]: optionalForCompletionGating must be a boolean`);
           }
         }
       });
