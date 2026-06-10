@@ -51,8 +51,6 @@ describe('validateLiveCardSchema', () => {
             { kind: 'metric', data: { bind: 'card_data.total' } },
             { kind: 'table', data: { bind: 'card_data.rows', columns: ['a', 'b'] } },
           ],
-          layout: { board: { col: 6, order: 1 } },
-          features: { chat: true, refresh: true },
         },
         compute: [
           { bindTo: 'total', expr: '$sum(card_data.data.revenue)' },

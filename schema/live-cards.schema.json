@@ -139,6 +139,40 @@
         "title": {
           "type": "string"
         },
+        "presentation": {
+          "type": "object",
+          "description": "Semantic presentation hints authored on the card, expressed from the user's perception of the card on the Main Canvas. Content shape is inferred from view.elements[].kind; runtime placement and live drag/resize coordinates are frontend-managed and must not be authored into card JSON.",
+          "properties": {
+            "prominence": {
+              "type": "string",
+              "default": "standard",
+              "description": "How much the user should care about this card / how much attention it earns. Default: standard; omit unless a non-standard value is needed.",
+              "enum": [
+                "glance",
+                "standard",
+                "feature",
+                "spotlight"
+              ]
+            },
+            "footprint": {
+              "type": "string",
+              "default": "standard",
+              "description": "How much room the card wants to render well, independent of attention. Default: standard; omit unless a non-standard value is needed.",
+              "enum": [
+                "compact",
+                "standard",
+                "wide",
+                "large"
+              ]
+            },
+            "resizable": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether the user may resize this card at runtime. Default: true; omit unless it must be false."
+            }
+          },
+          "additionalProperties": true
+        },
         "tags": {
           "type": "array",
           "items": {
@@ -431,58 +465,6 @@
           "items": {
             "$ref": "#/definitions/render_element"
           }
-        },
-        "layout": {
-          "type": "object",
-          "properties": {
-            "board": {
-              "type": "object",
-              "properties": {
-                "col": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 12
-                },
-                "order": {
-                  "type": "integer"
-                }
-              }
-            },
-            "canvas": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "y": {
-                  "type": "number"
-                },
-                "w": {
-                  "type": "number"
-                },
-                "h": {
-                  "type": "number"
-                }
-              }
-            }
-          }
-        },
-        "features": {
-          "type": "object",
-          "properties": {
-            "chat": {
-              "type": "boolean",
-              "default": false
-            },
-            "notes": {
-              "type": "boolean",
-              "default": false
-            },
-            "refresh": {
-              "type": "boolean",
-              "default": true
-            }
-          }
         }
       }
     }
@@ -515,7 +497,7 @@
     },
     "card_data": {
       "type": "object",
-      "description": "Authored card data and runtime metadata. Includes uploaded-file metadata maintained by host handlers and inference evaluation results.",
+      "description": "User editable data on card. Includes uploaded-file metadata maintained by host handlers. Not to be used for card static content.",
       "properties": {
         "files": {
           "type": "array",

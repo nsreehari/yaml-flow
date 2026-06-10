@@ -73,8 +73,6 @@ export interface BoardLiveCardsMcpRenderedViewElement {
 }
 
 export interface BoardLiveCardsMcpRenderedView {
-  layout: unknown;
-  features: unknown;
   elements: BoardLiveCardsMcpRenderedViewElement[];
 }
 
@@ -322,8 +320,6 @@ function materializeView(card: UnknownRecord, runtimeNode: UnknownRecord): Board
   const elements = ensureArray(view.elements);
 
   return {
-    layout: view.layout,
-    features: view.features,
     elements: elements.map((element, index) => {
       const elementObj = ensureRecord(element);
       const dataObj = ensureRecord(elementObj.data);

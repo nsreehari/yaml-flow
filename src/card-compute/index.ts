@@ -355,8 +355,6 @@ function validateNode(node: unknown): ValidationResult {
           }
         });
       }
-      if (view.layout != null && (typeof view.layout !== 'object' || Array.isArray(view.layout))) errors.push('view.layout: must be an object');
-      if (view.features != null && (typeof view.features !== 'object' || Array.isArray(view.features))) errors.push('view.features: must be an object');
     }
   }
 

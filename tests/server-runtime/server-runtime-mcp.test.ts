@@ -1678,8 +1678,6 @@ process.exit(1);
           compute: [{ bindTo: 'total', expr: '1 + 2 + 3' }],
           provides: [{ bindTo: 'summaryTotal', ref: 'computed_values.total' }],
           view: {
-            layout: { kind: 'stack' },
-            features: {},
             elements: [{ id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'computed_values.total' } }],
           },
         },
@@ -1701,8 +1699,6 @@ process.exit(1);
         errors: [],
         provides_outputs: { summaryTotal: 6 },
         rendered_view: {
-          layout: { kind: 'stack' },
-          features: {},
           elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 6 }],
         },
       },
@@ -1803,8 +1799,6 @@ process.exit(1);
         card_data: { title: 'Live Source Card' },
         source_defs: [{ bindTo: 'sourceA', kind: 'fake' }],
         view: {
-          layout: { kind: 'stack' },
-          features: {},
           elements: [{ id: 'summary', kind: 'text', data: { bind: 'card_data.title' } }],
         },
       },
@@ -1867,7 +1861,6 @@ process.exit(1);
         issues: [],
         provides_outputs: { 'cycle-card-summary': 'Cycle Card' },
         rendered_view: {
-          layout: { kind: 'stack' },
           elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 'Cycle Card' }],
         },
       },

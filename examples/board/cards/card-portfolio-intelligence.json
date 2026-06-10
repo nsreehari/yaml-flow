@@ -87,10 +87,6 @@
         "w": 340,
         "h": 200
       }
-    },
-    "features": {
-      "refresh": true,
-      "chat": true
     }
   },
   "card_data": {}

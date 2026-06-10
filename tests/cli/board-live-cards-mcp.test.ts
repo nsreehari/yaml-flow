@@ -122,8 +122,6 @@ describe('BoardLiveCardsMcp', () => {
         card_data: { title: 'Card One' },
         provides: [{ bindTo: 'summaryTotal', ref: 'computed_values.total' }],
         view: {
-          layout: 'stack',
-          features: { dense: true },
           elements: [{ id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'computed_values.total' } }],
         },
       },
@@ -138,8 +136,6 @@ describe('BoardLiveCardsMcp', () => {
         errors: [],
         provides_outputs: { summaryTotal: 6 },
         rendered_view: {
-          layout: 'stack',
-          features: { dense: true },
           elements: [{ id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 6 }],
         },
       },
@@ -171,8 +167,6 @@ describe('BoardLiveCardsMcp', () => {
           { bindTo: 'titleData', ref: 'card_data.title' },
         ],
         view: {
-          layout: 'stack',
-          features: { dense: true },
           elements: [
             { id: 'summary', kind: 'text', label: 'Summary', data: { bind: 'computed_values.total' } },
           ],
@@ -195,8 +189,6 @@ describe('BoardLiveCardsMcp', () => {
           titleData: 'Card One',
         },
         rendered_view: {
-          layout: 'stack',
-          features: { dense: true },
           elements: [
             { id: 'summary', kind: 'text', label: 'Summary', visible: true, resolved: 3 },
           ],

@@ -149,14 +149,6 @@ describe('card-header refresh button → cfg.onRefresh', () => {
     expect(onRefresh).toHaveBeenCalledWith('a');
     expect(btn.disabled).toBe(true); // disabled immediately after click
   });
-
-  it('view.features.refresh=false hides the refresh button even with onRefresh set', () => {
-    const onRefresh = vi.fn();
-    const m = makeModel('a');
-    m.card.view.features = { refresh: false };
-    mount([m], { onRefresh });
-    expect(container.querySelector('[id$="-refresh"]')).toBeNull();
-  });
 });
 
 describe('notes element → cfg.onPatchState', () => {

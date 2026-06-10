@@ -2429,7 +2429,6 @@ var LiveCard = (function () {
       const cleanup = _getCleanup(node.id);
       const signal = cleanup.ac.signal;
       const uid = 'lc-' + (node.id || 'x');
-      const features = (node.card && node.card.view && node.card.view.features) || {};
 
       // Run compute async before populating elements
       // (compute is triggered in the else branch below after DOM is ready)
@@ -2437,7 +2436,7 @@ var LiveCard = (function () {
       let h = `<div class="lc-card" id="${uid}">`;
 
       // Header bar: status dot + time-ago + refresh button
-      const showRefresh = features.refresh !== false && cfg.onRefresh;
+      const showRefresh = cfg.onRefresh;
       h += `<div class="d-flex align-items-center gap-1 mb-2">`;
       h += _statusDot(node.card_data && node.card_data.status);
       h += `<span class="text-muted small">${_timeAgo(node.card_data && node.card_data.lastRun)}</span>`;
@@ -3000,8 +2999,11 @@ var LiveCard = (function () {
     // ---- Helpers ----
 
     function _colWidth(node) {
-      const view = node && node.card ? node.card.view : null;
-      if (view && view.layout && view.layout.board && view.layout.board.col) return view.layout.board.col;
+      const presentation = node && node.card && node.card.meta ? node.card.meta.presentation : null;
+      const emphasis = presentation && typeof presentation.emphasis === 'string' ? presentation.emphasis : null;
+      if (emphasis === 'compact') return 3;
+      if (emphasis === 'wide') return 6;
+      if (emphasis === 'hero') return 8;
       return defaultCol;
     }
 
@@ -3054,8 +3056,6 @@ var LiveCard = (function () {
         if (_positions[node.id]) return; // already set
         if (explicit[node.id]) {
           _positions[node.id] = Object.assign({}, explicit[node.id]);
-        } else if (node.card && node.card.view && node.card.view.layout && node.card.view.layout.canvas && node.card.view.layout.canvas.x != null) {
-          _positions[node.id] = Object.assign({}, node.card.view.layout.canvas);
         } else {
           const col = (i % 4);
           const row = Math.floor(i / 4);
@@ -3348,8 +3348,8 @@ var LiveCard = (function () {
       // Only card nodes in board mode, sorted by order
       const cards = nodeList.filter(n => n.card && n.card.view).slice();
       cards.sort((a, b) => {
-        const ao = (a.card && a.card.view && a.card.view.layout && a.card.view.layout.board && a.card.view.layout.board.order) || 0;
-        const bo = (b.card && b.card.view && b.card.view.layout && b.card.view.layout.board && b.card.view.layout.board.order) || 0;
+        const ao = (a.card && a.card.meta && a.card.meta.presentation && a.card.meta.presentation.priority) || 0;
+        const bo = (b.card && b.card.meta && b.card.meta.presentation && b.card.meta.presentation.priority) || 0;
         return ao - bo;
       });
 
@@ -3535,12 +3535,6 @@ var LiveCard = (function () {
         el.style.left = x + 'px'; el.style.top = y + 'px';
         // Persist
         _positions[node.id] = Object.assign(_positions[node.id] || {}, { x, y });
-        if (node.card && node.card.view) {
-          if (!node.card.view.layout) node.card.view.layout = {};
-          if (!node.card.view.layout.canvas) node.card.view.layout.canvas = {};
-          node.card.view.layout.canvas.x = x;
-          node.card.view.layout.canvas.y = y;
-        }
         engine.notify(node.id);
         _fitCanvasToContent();
         if (_edges.length) _repositionEdges();
@@ -3594,12 +3588,6 @@ var LiveCard = (function () {
         el.style.height = sh + 'px';
         // Persist dimensions
         _positions[node.id] = Object.assign(_positions[node.id] || {}, { w: sw, h: sh });
-        if (node.card && node.card.view) {
-          if (!node.card.view.layout) node.card.view.layout = {};
-          if (!node.card.view.layout.canvas) node.card.view.layout.canvas = {};
-          node.card.view.layout.canvas.w = sw;
-          node.card.view.layout.canvas.h = sh;
-        }
         engine.notify(node.id);
         _fitCanvasToContent();
         if (_edges.length) _repositionEdges();
@@ -3752,11 +3740,6 @@ var LiveCard = (function () {
           y: row * 300 + 40,
           w: (_positions[n.id] && _positions[n.id].w) || cvs.defaultW,
         };
-        // Sync to card nodes
-        if (n.view) {
-          if (!n.view.layout) n.view.layout = {};
-          n.view.layout.canvas = Object.assign({}, _positions[n.id]);
-        }
       });
       if (mode.current === 'canvas') _renderCanvas();
     }
