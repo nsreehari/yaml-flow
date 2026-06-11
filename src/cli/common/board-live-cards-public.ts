@@ -128,6 +128,8 @@ function ok<T>(data?: T): CommandResult<T> {
 function fail(error: string): CommandResult { return { status: 'fail', error }; }
 function err(e: unknown): CommandResult { return { status: 'error', error: e instanceof Error ? e.message : String(e) }; }
 
+const SYS_KEYS_BOARD_STATE = 'sys_keys_board_state';
+
 // ============================================================================
 // BoardPlatformAdapter — the single injection point
 // ============================================================================
@@ -1142,14 +1144,47 @@ export function createBoardLiveCardsPublic(
     try {
       const key = input.params?.['key'] as string | undefined;
       if (!key) return fail('getOutputsDataObject requires params.key');
-      const value = outputStore().readDataObject(key);
+      const value = readBoardDataObjects()[key] ?? null;
       return ok(value);
     } catch (e) { return err(e); }
   }
 
+  function isControlplaneOnlyCard(card: unknown): boolean {
+    if (!card || typeof card !== 'object' || Array.isArray(card)) return false;
+    const priv = (card as { __private?: unknown }).__private;
+    return !!priv
+      && typeof priv === 'object'
+      && !Array.isArray(priv)
+      && (priv as Record<string, unknown>).visible_controlplane_only === true;
+  }
+
+  function buildSysKeysBoardState(dataObjects: Record<string, unknown>): { card_ids: string[]; data_object_keys: string[] } {
+    const cardIds = [...new Set(
+      cardStore().readAllCards()
+        .filter((card) => !isControlplaneOnlyCard(card))
+        .map((card) => card.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    )].sort();
+    const dataObjectKeys = [...new Set(
+      Object.keys(dataObjects).filter((key) => key && key !== SYS_KEYS_BOARD_STATE),
+    )].sort();
+    return {
+      card_ids: cardIds,
+      data_object_keys: dataObjectKeys,
+    };
+  }
+
+  function readBoardDataObjects(): Record<string, unknown> {
+    const storedDataObjects = outputStore().readAllDataObjects();
+    return {
+      ...storedDataObjects,
+      [SYS_KEYS_BOARD_STATE]: buildSysKeysBoardState(storedDataObjects),
+    };
+  }
+
   function getAllOutputsDataObjects(_input: CommandInput): CommandResult<Record<string, unknown>> {
     try {
-      return ok(outputStore().readAllDataObjects()) as CommandResult<Record<string, unknown>>;
+      return ok(readBoardDataObjects()) as CommandResult<Record<string, unknown>>;
     } catch (e) { return err(e) as CommandResult<Record<string, unknown>>; }
   }
 

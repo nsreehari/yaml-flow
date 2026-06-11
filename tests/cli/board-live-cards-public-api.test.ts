@@ -278,7 +278,80 @@ describe('BoardLiveCardsPublic — init and status', () => {
     const result = board.getAllOutputsDataObjects({});
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.data).toEqual({});
+      expect(result.data).toEqual({
+        sys_keys_board_state: {
+          card_ids: [],
+          data_object_keys: [],
+        },
+      });
+    }
+  });
+
+  it('publishes sys_keys_board_state with public card ids and published token keys', async () => {
+    const { boardDir, br } = freshBoard();
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
+      boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
+    });
+
+    board.init({ params: mkInitParams(boardDir) });
+    expect(nonCore.updatesInCardStore({
+      body: {
+        ops: [
+          {
+            op: 'update',
+            id: 'public-card',
+            'card-content': minCard('public-card', {
+              provides: [{ bindTo: 'payload', ref: 'card_data.payload' }],
+              card_data: { payload: { value: 42 } },
+            }),
+          },
+          {
+            op: 'update',
+            id: 'admin-card',
+            'card-content': minCard('admin-card', {
+              __private: { visible_controlplane_only: true },
+            }),
+          },
+        ],
+      },
+    }).status).toBe('success');
+
+    expect(board.upsertCard({ params: { cardId: 'public-card' } }).status).toBe('success');
+    expect(board.upsertCard({ params: { cardId: 'admin-card' } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    expect(board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({
+      status: 'success',
+      data: {
+        card_ids: ['public-card'],
+        data_object_keys: ['payload'],
+      },
+    });
+
+    const result = board.getAllOutputsDataObjects({});
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data).toEqual({
+        payload: { value: 42 },
+        sys_keys_board_state: {
+          card_ids: ['public-card'],
+          data_object_keys: ['payload'],
+        },
+      });
+    }
+
+    const oneShot = board.buildSseOneShotPayload({});
+    expect(oneShot.status).toBe('success');
+    if (oneShot.status === 'success') {
+      expect(oneShot.data.dataObjectsByToken).toEqual({
+        payload: { value: 42 },
+        sys_keys_board_state: {
+          card_ids: ['public-card'],
+          data_object_keys: ['payload'],
+        },
+      });
     }
   });
 
@@ -316,7 +389,12 @@ describe('BoardLiveCardsPublic — init and status', () => {
       expect(result.data.statusSnapshot).toEqual(expect.objectContaining({
         summary: expect.objectContaining({ card_count: 1 }),
       }));
-      expect(result.data.dataObjectsByToken).toEqual({});
+      expect(result.data.dataObjectsByToken).toEqual({
+        sys_keys_board_state: {
+          card_ids: ['hydration-card'],
+          data_object_keys: [],
+        },
+      });
       expect(result.data.cardRuntimeById).toEqual(expect.objectContaining({
         'hydration-card': expect.objectContaining({
           card_id: 'hydration-card',

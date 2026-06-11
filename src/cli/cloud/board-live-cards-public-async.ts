@@ -144,6 +144,8 @@ function ok<T>(data?: T): CommandResult<T> {
 function fail(error: string): CommandResult { return { status: 'fail', error }; }
 function err(error: unknown): CommandResult { return { status: 'error', error: error instanceof Error ? error.message : String(error) }; }
 
+const SYS_KEYS_BOARD_STATE = 'sys_keys_board_state';
+
 function nowIso(): string { return new Date().toISOString(); }
 
 function toBase64Url(str: string): string {
@@ -470,6 +472,40 @@ export function createAsyncBoardLiveCardsPublic(
 
   async function resolveTaskExecutorRef(): Promise<ExecutionRef | undefined> {
     return hostedTaskExecutorRef ?? await configStore().readTaskExecutorRef();
+  }
+
+  function isControlplaneOnlyCard(card: unknown): boolean {
+    if (!card || typeof card !== 'object' || Array.isArray(card)) return false;
+    const priv = (card as { __private?: unknown }).__private;
+    return !!priv
+      && typeof priv === 'object'
+      && !Array.isArray(priv)
+      && (priv as Record<string, unknown>).visible_controlplane_only === true;
+  }
+
+  async function buildSysKeysBoardState(dataObjects: Record<string, unknown>): Promise<{ card_ids: string[]; data_object_keys: string[] }> {
+    const cards = await (await cardStore()).readAllCards();
+    const cardIds = [...new Set(
+      cards
+        .filter((card) => !isControlplaneOnlyCard(card))
+        .map((card) => card.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    )].sort();
+    const dataObjectKeys = [...new Set(
+      Object.keys(dataObjects).filter((key) => key && key !== SYS_KEYS_BOARD_STATE),
+    )].sort();
+    return {
+      card_ids: cardIds,
+      data_object_keys: dataObjectKeys,
+    };
+  }
+
+  async function readBoardDataObjects(): Promise<Record<string, unknown>> {
+    const storedDataObjects = await (await outputStore()).readAllDataObjects();
+    return {
+      ...storedDataObjects,
+      [SYS_KEYS_BOARD_STATE]: await buildSysKeysBoardState(storedDataObjects),
+    };
   }
 
   async function appendJournalEvent(event: GraphEvent): Promise<void> {
@@ -915,7 +951,8 @@ export function createAsyncBoardLiveCardsPublic(
       try {
         const key = input.params?.['key'] as string | undefined;
         if (!key) return fail('getOutputsDataObject requires params.key');
-        return ok(await (await outputStore()).readDataObject(key));
+        const dataObjects = await readBoardDataObjects();
+        return ok(dataObjects[key] ?? null);
       } catch (error) {
         return err(error);
       }
@@ -923,7 +960,7 @@ export function createAsyncBoardLiveCardsPublic(
 
     async getAllOutputsDataObjects(_input: CommandInput): Promise<CommandResult<Record<string, unknown>>> {
       try {
-        return ok(await (await outputStore()).readAllDataObjects()) as CommandResult<Record<string, unknown>>;
+        return ok(await readBoardDataObjects()) as CommandResult<Record<string, unknown>>;
       } catch (error) {
         return err(error) as CommandResult<Record<string, unknown>>;
       }

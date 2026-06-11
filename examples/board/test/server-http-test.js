@@ -877,6 +877,15 @@ try {
   assert(mcpSummary.completed === mcpSummary.card_count, `not all complete: ${JSON.stringify(mcpSummary)}`);
   console.log(`[T0.4] board-status: ${JSON.stringify(mcpSummary)}`);
 
+  const t0OneShotPayload = await waitForFirstSsePayload(`${BASE}/sse?one-shot`);
+  const t0SysKeysBoardState = t0OneShotPayload?.dataObjectsByToken?.sys_keys_board_state;
+  assert(t0SysKeysBoardState && typeof t0SysKeysBoardState === 'object',
+    `T0 sys_keys_board_state missing from one-shot payload: ${JSON.stringify(t0OneShotPayload?.dataObjectsByToken)}`);
+  assert(JSON.stringify(t0SysKeysBoardState) === JSON.stringify({
+    card_ids: T0_EXPECTED_CARD_IDS,
+    data_object_keys: ['holdings', 'positions', 'quotes'],
+  }), `T0 sys_keys_board_state mismatch: ${JSON.stringify(t0SysKeysBoardState)}`);
+
   // Verify computed_values arrived for portfolio-value card
   const t0Positions = NS.computedValues['card-portfolio-value']?.positions;
   assert(Array.isArray(t0Positions) && t0Positions.length > 0, 'T0 positions missing from computed_values');
