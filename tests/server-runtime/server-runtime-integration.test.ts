@@ -590,9 +590,14 @@ describe('platform-free server runtime (Node host)', () => {
     await waitFor(() => sseConnected.includes(clientId) && sseWriters.has(clientId));
     sseWriters.get(clientId)!({ kind: 'server_notice', message: 'hello from host' });
 
-    const { value: secondValue } = await reader.read();
-    const secondText = new TextDecoder().decode(secondValue);
-    expect(secondText).toContain('server_notice');
+    let noticeText = '';
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      noticeText += new TextDecoder().decode(value);
+      if (noticeText.includes('server_notice')) break;
+    }
+    expect(noticeText).toContain('server_notice');
 
     controller.abort();
     await waitFor(() => sseDisconnected.includes(clientId));
