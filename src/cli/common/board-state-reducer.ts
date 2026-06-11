@@ -49,6 +49,7 @@ export interface BoardState {
   cardIds: string[];
   modelsById: Record<string, CardModel>;
   cardWatchParties: Record<string, CardWatchPartyChannelState>;
+  pendingComputedValues: Record<string, unknown>;
 }
 
 export interface DeriveBoardStateOptions {
@@ -141,7 +142,13 @@ export function buildBoardState(
       .map((cardId) => [cardId, prevCardWatchParties[cardId]]),
   );
 
-  return { payload, cardIds, modelsById, cardWatchParties };
+  const prevPendingComputedValues = prevState?.pendingComputedValues || {};
+  const pendingComputedValues = Object.fromEntries(
+    Object.entries(prevPendingComputedValues)
+      .filter(([cardId]) => !cardIds.includes(cardId)),
+  );
+
+  return { payload, cardIds, modelsById, cardWatchParties, pendingComputedValues };
 }
 
 export function deriveBoardState(
@@ -191,6 +198,7 @@ export function deriveBoardState(
     cardIds,
     modelsById,
     cardWatchParties: sourceState.cardWatchParties,
+    pendingComputedValues: sourceState.pendingComputedValues,
   };
 }
 
@@ -209,6 +217,7 @@ export function applyNotification(
   let modelsById = prevState.modelsById;
   let cardIds = prevState.cardIds;
   let cardWatchParties = prevState.cardWatchParties || {};
+  let pendingComputedValues = prevState.pendingComputedValues || {};
   let cloned = false;
   let changed = false;
 
@@ -336,8 +345,17 @@ export function applyNotification(
     if (note.kind === 'computed_values') {
       const cardId = note.cardId as string;
       const prev = modelsById[cardId];
-      if (!prev) continue;
       const nextValues = (note.values || {}) as unknown;
+      if (!prev) {
+        const previousPendingValues = pendingComputedValues[cardId];
+        if (deepEqJson(previousPendingValues, nextValues)) continue;
+        pendingComputedValues = {
+          ...pendingComputedValues,
+          [cardId]: clone(nextValues),
+        };
+        changed = true;
+        continue;
+      }
       if (deepEqJson(prev.computed_values, nextValues)) continue;
       ensureClone();
       modelsById[cardId] = { ...prev, computed_values: nextValues };
@@ -405,6 +423,10 @@ export function applyNotification(
       }
 
       if (!fresh) continue;
+      const pendingValues = pendingComputedValues[cardId];
+      if (pendingValues !== undefined && !deepEqJson(fresh.computed_values, pendingValues)) {
+        fresh = { ...fresh, computed_values: clone(pendingValues) };
+      }
       if (existing &&
         deepEqJson(existing.card,            fresh.card) &&
         deepEqJson(existing.card_data,       fresh.card_data) &&
@@ -416,6 +438,10 @@ export function applyNotification(
       ensureClone();
       modelsById[cardId] = fresh;
       if (!cardIds.includes(cardId)) cardIds = [...cardIds, cardId];
+      if (Object.prototype.hasOwnProperty.call(pendingComputedValues, cardId)) {
+        pendingComputedValues = { ...pendingComputedValues };
+        delete pendingComputedValues[cardId];
+      }
       changed = true;
 
     } else if (note.kind === 'card_removed') {
@@ -428,6 +454,10 @@ export function applyNotification(
         const nextCardWatchParties = { ...cardWatchParties };
         delete nextCardWatchParties[cardId];
         cardWatchParties = nextCardWatchParties;
+      }
+      if (Object.prototype.hasOwnProperty.call(pendingComputedValues, cardId)) {
+        pendingComputedValues = { ...pendingComputedValues };
+        delete pendingComputedValues[cardId];
       }
       changed = true;
 
@@ -478,5 +508,6 @@ export function applyNotification(
     cardIds,
     modelsById,
     cardWatchParties,
+    pendingComputedValues,
   };
 }
