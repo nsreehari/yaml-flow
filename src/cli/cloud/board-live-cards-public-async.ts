@@ -1,7 +1,7 @@
 import type { TaskHandlerFn } from '../../continuous-event-graph/reactive.js';
 import { createReactiveGraph } from '../../continuous-event-graph/reactive.js';
 import { createLiveGraph, restore, snapshot } from '../../continuous-event-graph/core.js';
-import type { GraphEvent } from '../../event-graph/types.js';
+import type { GraphEvent, TaskConfig } from '../../event-graph/types.js';
 import { CardCompute } from '../../card-compute/index.js';
 import type { ComputeNode, ComputeSource } from '../../card-compute/index.js';
 import type { KindValueRef } from '../common/storage-interface.js';
@@ -33,7 +33,14 @@ import type {
   SourceTokenPayload,
 } from '../common/board-live-cards-lib.js';
 import {
+  SYS_KEYS_BOARD_STATE,
+  SYS_KEYS_BOARD_STATE_INIT_CARD_ID,
+  buildSysKeysBoardState,
+  buildSysKeysBoardStateFromTaskConfigs,
+  createSysKeysBoardStateInitCard,
   buildBoardStatusObject,
+  filterPublicDataObjects,
+  sanitizePublishedBoardStatus,
   boardEnvelopeToSnapshotEntries,
   cardRuntimeKey,
   decideSourceAction,
@@ -144,8 +151,6 @@ function ok<T>(data?: T): CommandResult<T> {
 function fail(error: string): CommandResult { return { status: 'fail', error }; }
 function err(error: unknown): CommandResult { return { status: 'error', error: error instanceof Error ? error.message : String(error) }; }
 
-const SYS_KEYS_BOARD_STATE = 'sys_keys_board_state';
-
 function nowIso(): string { return new Date().toISOString(); }
 
 function toBase64Url(str: string): string {
@@ -220,6 +225,7 @@ function createAsyncCardHandlerFn(
     fetchedSourcesStore: AsyncFetchedSourcesStore;
     outputStore: AsyncPublishedOutputsStore;
     executionRequestStore: AsyncExecutionRequestStore;
+    activeTaskConfigs?: () => Record<string, Pick<TaskConfig, 'provides'>>;
   },
   taskCompletedFn: (taskName: string, data: Record<string, unknown>) => void,
   writeComputedValuesFn?: (cardId: string, values: Record<string, unknown>) => void,
@@ -231,6 +237,25 @@ function createAsyncCardHandlerFn(
     if (!card) return 'task-initiate-failure';
 
     const cardId = card.id as string;
+    if (cardId === SYS_KEYS_BOARD_STATE_INIT_CARD_ID) {
+      const activeTaskConfigs = adapters.activeTaskConfigs?.();
+      const data = {
+        [SYS_KEYS_BOARD_STATE]: activeTaskConfigs
+          ? buildSysKeysBoardStateFromTaskConfigs(
+              (await Promise.all(
+                Object.keys(activeTaskConfigs)
+                  .filter((taskName) => taskName !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID)
+                  .map((taskName) => adapters.cardStore.readCard(taskName)),
+              )).filter((entry): entry is LiveCard => !!entry),
+              activeTaskConfigs,
+            )
+          : await buildSysKeysBoardState(await adapters.cardStore.readAllCards()),
+      };
+      (writeDataObjectsFn ?? (() => undefined))(data);
+      taskCompletedFn(input.nodeId, data);
+      return 'task-initiated';
+    }
+
     const cardState = (card.card_data ?? {}) as Record<string, unknown>;
     const allSources = (card.source_defs ?? []) as ComputeSource[];
     const requiredSources = allSources;
@@ -474,38 +499,8 @@ export function createAsyncBoardLiveCardsPublic(
     return hostedTaskExecutorRef ?? await configStore().readTaskExecutorRef();
   }
 
-  function isControlplaneOnlyCard(card: unknown): boolean {
-    if (!card || typeof card !== 'object' || Array.isArray(card)) return false;
-    const priv = (card as { __private?: unknown }).__private;
-    return !!priv
-      && typeof priv === 'object'
-      && !Array.isArray(priv)
-      && (priv as Record<string, unknown>).visible_controlplane_only === true;
-  }
-
-  async function buildSysKeysBoardState(dataObjects: Record<string, unknown>): Promise<{ card_ids: string[]; data_object_keys: string[] }> {
-    const cards = await (await cardStore()).readAllCards();
-    const cardIds = [...new Set(
-      cards
-        .filter((card) => !isControlplaneOnlyCard(card))
-        .map((card) => card.id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0),
-    )].sort();
-    const dataObjectKeys = [...new Set(
-      Object.keys(dataObjects).filter((key) => key && key !== SYS_KEYS_BOARD_STATE),
-    )].sort();
-    return {
-      card_ids: cardIds,
-      data_object_keys: dataObjectKeys,
-    };
-  }
-
   async function readBoardDataObjects(): Promise<Record<string, unknown>> {
-    const storedDataObjects = await (await outputStore()).readAllDataObjects();
-    return {
-      ...storedDataObjects,
-      [SYS_KEYS_BOARD_STATE]: await buildSysKeysBoardState(storedDataObjects),
-    };
+    return filterPublicDataObjects(await (await outputStore()).readAllDataObjects());
   }
 
   async function appendJournalEvent(event: GraphEvent): Promise<void> {
@@ -606,6 +601,7 @@ export function createAsyncBoardLiveCardsPublic(
     const { events: undrained, newCursor } = await journalStore().readEntriesAfterCursor(envelope.lastDrainedJournalId);
     let tx: GraphEvent[] = undrained;
 
+    let getActiveTaskConfigs = () => live.config.tasks;
     const rg = createReactiveGraph(live, {
       handlers: {
         'card-handler': createAsyncCardHandlerFn(
@@ -617,6 +613,7 @@ export function createAsyncBoardLiveCardsPublic(
             fetchedSourcesStore: overlayFetchedSourcesStore,
             outputStore: resolvedOutputStore,
             executionRequestStore,
+            activeTaskConfigs: () => getActiveTaskConfigs(),
           },
           (taskName, data) => {
             tx.push({ type: 'task-completed', taskName, data, timestamp: nowIso() } as GraphEvent);
@@ -632,6 +629,7 @@ export function createAsyncBoardLiveCardsPublic(
         removedCards.add(cardId);
       },
     });
+    getActiveTaskConfigs = () => rg.getState().config.tasks;
 
     while (tx.length > 0) {
       const pending = tx;
@@ -656,7 +654,7 @@ export function createAsyncBoardLiveCardsPublic(
     for (const [cardId, state] of runtimeOverlay) await realCardRuntimeStore.writeRuntime(cardId, state);
     for (const staged of sourceCommits) await realFetchedSourcesStore.commitSourceData(staged.cardId, staged.outputFile, staged.deliveryToken);
 
-    const statusObj = buildBoardStatusObject(boardPath, finalLive);
+    const statusObj = sanitizePublishedBoardStatus(buildBoardStatusObject(boardPath, finalLive));
     await resolvedOutputStore.writeStatusSnapshot(statusObj);
 
     const notifications: BoardChangeNotification[] = [];
@@ -787,11 +785,7 @@ export function createAsyncBoardLiveCardsPublic(
     const ref = await configStore().readQueueStoreRef();
     if (!ref) throw new Error(`Board at ${baseRef.value} has no queue store configured. Run: init --queue-store-ref <b64-ref>`);
     const queue = adapter.queueStorageForRef(ref, 'process-accumulated');
-    if (queue.enqueueIfAbsent) {
-      await queue.enqueueIfAbsent({ boardRef: serializeRef(baseRef) }, `process-accumulated:${serializeRef(baseRef)}`);
-    } else {
-      await queue.enqueue({ boardRef: serializeRef(baseRef) });
-    }
+    await queue.enqueue({ boardRef: serializeRef(baseRef) });
     await adapter.requestProcessAccumulated?.();
   }
 
@@ -842,7 +836,18 @@ export function createAsyncBoardLiveCardsPublic(
         await cfg.writeFetchedSourcesStoreRef(fetchedSourcesStoreRef);
         await cfg.writeChatStoreRef(chatStoreRef);
         await cfg.writeArtifactsStoreRef(artifactsStoreRef);
-        await (await outputStore()).writeStatusSnapshot(buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph)));
+        await (await cardStore()).writeCard(SYS_KEYS_BOARD_STATE_INIT_CARD_ID, createSysKeysBoardStateInitCard());
+        const upsertKv = adapter.kvStorage('card-upsert');
+        const initCard = createSysKeysBoardStateInitCard();
+        const taskConfig = liveCardToTaskConfig(initCard);
+        const taskConfigHash = adapter.hashFn(taskConfig);
+        const existing = await upsertKv.read(SYS_KEYS_BOARD_STATE_INIT_CARD_ID) as CardUpsertIndexEntry | null;
+        const blobRef = existing?.blobRef ?? await (await cardStore()).readCardKey(SYS_KEYS_BOARD_STATE_INIT_CARD_ID) ?? SYS_KEYS_BOARD_STATE_INIT_CARD_ID;
+        await appendJournalEvent({ type: 'task-upsert', taskName: SYS_KEYS_BOARD_STATE_INIT_CARD_ID, taskConfig, timestamp: nowIso() });
+        await upsertKv.write(SYS_KEYS_BOARD_STATE_INIT_CARD_ID, { blobRef, taskConfigHash, updatedAt: nowIso() } satisfies CardUpsertIndexEntry);
+        await appendJournalEvent({ type: 'task-restart', taskName: SYS_KEYS_BOARD_STATE_INIT_CARD_ID, timestamp: nowIso() });
+        drainFireAndForget();
+        await (await outputStore()).writeStatusSnapshot(sanitizePublishedBoardStatus(buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph))));
         return ok();
       } catch (error) {
         return err(error);
@@ -854,7 +859,7 @@ export function createAsyncBoardLiveCardsPublic(
         const outputs = await outputStore();
         let statusObj = await outputs.readStatusSnapshot() as BoardStatusObject | null;
         if (!statusObj) {
-          statusObj = buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph));
+          statusObj = sanitizePublishedBoardStatus(buildBoardStatusObject(boardPath, restore((await loadEnvelope()).graph)));
           await outputs.writeStatusSnapshot(statusObj);
         }
         return ok(statusObj) as CommandResult<BoardStatusObject>;
@@ -951,6 +956,7 @@ export function createAsyncBoardLiveCardsPublic(
       try {
         const key = input.params?.['key'] as string | undefined;
         if (!key) return fail('getOutputsDataObject requires params.key');
+        if (key === SYS_KEYS_BOARD_STATE) return ok(null);
         const dataObjects = await readBoardDataObjects();
         return ok(dataObjects[key] ?? null);
       } catch (error) {
@@ -1021,7 +1027,8 @@ export function createAsyncBoardLiveCardsPublic(
 
     async buildSseOneShotPayload(_input: CommandInput): Promise<CommandResult<BoardSseOneShotPayload>> {
       try {
-        const cardDefinitions = await (await cardStore()).readAllCards() as Array<Record<string, unknown>>;
+        const cardDefinitions = (await (await cardStore()).readAllCards())
+          .filter((card) => card.id !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID) as Array<Record<string, unknown>>;
         const statusResult = await this.status({});
         if (statusResult.status !== 'success') return statusResult as unknown as CommandResult<BoardSseOneShotPayload>;
 
@@ -1081,6 +1088,9 @@ export function createAsyncBoardLiveCardsPublic(
         if (!id) return fail('removeCard requires params.id');
         try { await adapter.kvStorage('card-upsert').delete(id); } catch { /* best-effort */ }
         await appendJournalEvent({ type: 'task-removal', taskName: id, timestamp: nowIso() });
+        if (id !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID) {
+          await appendJournalEvent({ type: 'task-restart', taskName: SYS_KEYS_BOARD_STATE_INIT_CARD_ID, timestamp: nowIso() });
+        }
         drainFireAndForget();
         return ok();
       } catch (error) {
@@ -1119,6 +1129,7 @@ export function createAsyncBoardLiveCardsPublic(
         }
 
         const upsertKv = adapter.kvStorage('card-upsert');
+        let refreshBoardState = false;
         for (const id of ids) {
           const card = await cards.readCard(id);
           if (!card) continue;
@@ -1131,8 +1142,13 @@ export function createAsyncBoardLiveCardsPublic(
             const blobRef = existing?.blobRef ?? await cards.readCardKey(id) ?? id;
             await appendJournalEvent({ type: 'task-upsert', taskName: id, taskConfig, timestamp: nowIso() });
             await upsertKv.write(id, { blobRef, taskConfigHash, updatedAt: nowIso() } satisfies CardUpsertIndexEntry);
+            refreshBoardState = refreshBoardState || id !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID;
           }
           if (restart) await appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
+        }
+
+        if (refreshBoardState) {
+          await appendJournalEvent({ type: 'task-restart', taskName: SYS_KEYS_BOARD_STATE_INIT_CARD_ID, timestamp: nowIso() });
         }
 
         drainFireAndForget();

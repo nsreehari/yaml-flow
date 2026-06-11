@@ -691,19 +691,9 @@ describe('cloud storage adapters', () => {
       status: 'success',
       data: {
         payload: { value: 42 },
-        sys_keys_board_state: {
-          card_ids: ['card-1'],
-          data_object_keys: ['payload'],
-        },
       },
     });
-    expect(await board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({
-      status: 'success',
-      data: {
-        card_ids: ['card-1'],
-        data_object_keys: ['payload'],
-      },
-    });
+    expect(await board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({ status: 'success', data: null });
     expect(await board.getOutputsComputedValues({ params: { key: 'card-1' } })).toEqual({
       status: 'success',
       data: {},
@@ -759,10 +749,6 @@ describe('cloud storage adapters', () => {
       }));
       expect(oneShotResult.data.dataObjectsByToken).toEqual({
         payload: { value: 42 },
-        sys_keys_board_state: {
-          card_ids: ['card-1'],
-          data_object_keys: ['payload'],
-        },
       });
       expect(oneShotResult.data.cardRuntimeById).toEqual(expect.objectContaining({
         'card-1': expect.objectContaining({

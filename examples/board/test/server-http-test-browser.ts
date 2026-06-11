@@ -209,8 +209,15 @@ function reducePayload(payload) {
   if (payload && Array.isArray(payload.cardDefinitions)) {
     NS.latestFullPayload = payload;
     NS.boardState = buildBoardState(payload, NS.boardState, selectLiveCardModelFromPayload);
+    const publishedSummary = extractStatusSummaryFromPayload(payload);
+    if (publishedSummary) {
+      NS.statusSummary = publishedSummary;
+    }
     NS.statusGeneration += 1;
     syncProjectedStateFromBoardState();
+    if (publishedSummary) {
+      NS.statusSummary = publishedSummary;
+    }
     return [];
   }
 
@@ -231,6 +238,7 @@ function reducePayload(payload) {
 
   for (const notification of notifications) {
     if (notification?.kind === 'status' && notification.status?.summary) {
+      NS.statusSummary = notification.status.summary;
       NS.statusGeneration += 1;
     }
     if (notification && (notification.kind === 'card_removed' || notification.kind === 'card_refreshed') && notification.cardId) {

@@ -271,23 +271,24 @@ describe('BoardLiveCardsPublic — init and status', () => {
     }));
   });
 
-  it('getAllOutputsDataObjects({}) returns success with a map payload', () => {
+  it('getAllOutputsDataObjects({}) returns stored data objects only', async () => {
     const { board, boardDir } = freshBoard();
     board.init({ params: mkInitParams(boardDir) });
 
     const result = board.getAllOutputsDataObjects({});
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.data).toEqual({
-        sys_keys_board_state: {
-          card_ids: [],
-          data_object_keys: [],
-        },
-      });
+      expect(result.data).toEqual({});
     }
+
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+    expect(board.getAllOutputsDataObjects({})).toEqual({
+      status: 'success',
+      data: {},
+    });
   });
 
-  it('publishes sys_keys_board_state with public card ids and published token keys', async () => {
+  it('keeps sys_keys_board_state off the public output surface', async () => {
     const { boardDir, br } = freshBoard();
     const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
     const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
@@ -322,23 +323,13 @@ describe('BoardLiveCardsPublic — init and status', () => {
     expect(board.upsertCard({ params: { cardId: 'admin-card' } }).status).toBe('success');
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
 
-    expect(board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({
-      status: 'success',
-      data: {
-        card_ids: ['public-card'],
-        data_object_keys: ['payload'],
-      },
-    });
+    expect(board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({ status: 'success', data: null });
 
     const result = board.getAllOutputsDataObjects({});
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.data).toEqual({
         payload: { value: 42 },
-        sys_keys_board_state: {
-          card_ids: ['public-card'],
-          data_object_keys: ['payload'],
-        },
       });
     }
 
@@ -347,11 +338,121 @@ describe('BoardLiveCardsPublic — init and status', () => {
     if (oneShot.status === 'success') {
       expect(oneShot.data.dataObjectsByToken).toEqual({
         payload: { value: 42 },
-        sys_keys_board_state: {
-          card_ids: ['public-card'],
-          data_object_keys: ['payload'],
-        },
       });
+    }
+  });
+
+  it('feeds sys_keys_board_state back into board runtime for cards that require it', async () => {
+    const { boardDir, br } = freshBoard();
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
+      boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
+    });
+
+    board.init({ params: mkInitParams(boardDir) });
+    expect(nonCore.updatesInCardStore({
+      body: {
+        ops: [{
+          op: 'update',
+          id: 'consumer-card',
+          'card-content': minCard('consumer-card', {
+            requires: ['sys_keys_board_state'],
+            compute: [{ bindTo: 'publicCardCount', expr: '$count(requires.sys_keys_board_state.card_ids)' }],
+          }),
+        }],
+      },
+    }).status).toBe('success');
+
+    expect(board.upsertCard({ params: { cardId: 'consumer-card' } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    const oneShot = board.buildSseOneShotPayload({});
+    expect(oneShot.status).toBe('success');
+    if (oneShot.status === 'success') {
+      expect(oneShot.data.cardRuntimeById).toEqual(expect.objectContaining({
+        'consumer-card': expect.objectContaining({
+          computed_values: expect.objectContaining({ publicCardCount: 1 }),
+        }),
+      }));
+      expect(oneShot.data.dataObjectsByToken).toEqual({});
+    }
+  });
+
+  it('keeps sys_keys_board_state hidden from public outputs after board-shape mutations', async () => {
+    const { boardDir, br } = freshBoard();
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
+      boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
+    });
+
+    board.init({ params: mkInitParams(boardDir) });
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+    expect(board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({ status: 'success', data: null });
+
+    expect(nonCore.updatesInCardStore({
+      body: {
+        ops: [{
+          op: 'update',
+          id: 'shape-card',
+          'card-content': minCard('shape-card', {
+            provides: [{ bindTo: 'shape_payload', ref: 'card_data.shape_payload' }],
+          }),
+        }],
+      },
+    }).status).toBe('success');
+    expect(board.upsertCard({ params: { cardId: 'shape-card' } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    expect(board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({ status: 'success', data: null });
+    const publicOutputs = board.getAllOutputsDataObjects({});
+    expect(publicOutputs.status).toBe('success');
+    if (publicOutputs.status === 'success') {
+      expect(publicOutputs.data).not.toHaveProperty('sys_keys_board_state');
+    }
+
+    expect(board.removeCard({ params: { id: 'shape-card' } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+    expect(board.getOutputsDataObject({ params: { key: 'sys_keys_board_state' } })).toEqual({ status: 'success', data: null });
+  });
+
+  it('unblocks downstream cards specifically because sys_keys_board_state exists at init time', async () => {
+    const { boardDir, br } = freshBoard();
+    const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
+    const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
+    const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
+      boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
+    });
+
+    board.init({ params: mkInitParams(boardDir) });
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    expect(nonCore.updatesInCardStore({
+      body: {
+        ops: [{
+          op: 'update',
+          id: 'partially-unblocked-card',
+          'card-content': minCard('partially-unblocked-card', {
+            requires: ['sys_keys_board_state', 'missing_runtime_token'],
+          }),
+        }],
+      },
+    }).status).toBe('success');
+
+    expect(board.upsertCard({ params: { cardId: 'partially-unblocked-card' } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    const statusResult = board.status({});
+    expect(statusResult.status).toBe('success');
+    if (statusResult.status === 'success') {
+      const downstreamCard = statusResult.data.cards.find((card) => card.name === 'partially-unblocked-card');
+      expect(downstreamCard).toEqual(expect.objectContaining({
+        requires: ['sys_keys_board_state', 'missing_runtime_token'],
+        requires_satisfied: ['sys_keys_board_state'],
+        requires_missing: ['missing_runtime_token'],
+        blocked_by: ['missing_runtime_token'],
+      }));
     }
   });
 
@@ -389,12 +490,7 @@ describe('BoardLiveCardsPublic — init and status', () => {
       expect(result.data.statusSnapshot).toEqual(expect.objectContaining({
         summary: expect.objectContaining({ card_count: 1 }),
       }));
-      expect(result.data.dataObjectsByToken).toEqual({
-        sys_keys_board_state: {
-          card_ids: ['hydration-card'],
-          data_object_keys: [],
-        },
-      });
+      expect(result.data.dataObjectsByToken).toEqual({});
       expect(result.data.cardRuntimeById).toEqual(expect.objectContaining({
         'hydration-card': expect.objectContaining({
           card_id: 'hydration-card',

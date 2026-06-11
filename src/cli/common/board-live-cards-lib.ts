@@ -51,6 +51,87 @@ export interface LiveCard {
   [key: string]: unknown;
 }
 
+export const SYS_KEYS_BOARD_STATE = 'sys_keys_board_state';
+export const SYS_KEYS_BOARD_STATE_INIT_CARD_ID = '__sys_keys_board_state_init';
+
+export function isControlplaneOnlyCard(card: unknown): boolean {
+  if (!card || typeof card !== 'object' || Array.isArray(card)) return false;
+  const priv = (card as { __private?: unknown }).__private;
+  return !!priv
+    && typeof priv === 'object'
+    && !Array.isArray(priv)
+    && (priv as Record<string, unknown>).visible_controlplane_only === true;
+}
+
+export function buildSysKeysBoardState(
+  cards: Array<{ id?: unknown; __private?: unknown; provides?: unknown }>,
+): { card_ids: string[]; data_object_keys: string[] } {
+  const publicCards = cards.filter((card) => !isControlplaneOnlyCard(card));
+  const cardIds = [...new Set(
+    publicCards
+      .map((card) => card.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )].sort();
+  const publishedKeys = [...new Set(
+    publicCards
+      .flatMap((card) => Array.isArray(card.provides) ? card.provides : [])
+      .map((entry) => (
+        entry && typeof entry === 'object' && !Array.isArray(entry)
+          ? (entry as { bindTo?: unknown }).bindTo
+          : undefined
+      ))
+      .filter((key): key is string => typeof key === 'string' && key.length > 0 && key !== SYS_KEYS_BOARD_STATE),
+  )].sort();
+  return {
+    card_ids: cardIds,
+    data_object_keys: publishedKeys,
+  };
+}
+
+export function buildSysKeysBoardStateFromTaskConfigs(
+  cards: Array<{ id?: unknown; __private?: unknown }>,
+  taskConfigs: Record<string, Pick<TaskConfig, 'provides'>>,
+): { card_ids: string[]; data_object_keys: string[] } {
+  const publicCards = cards.filter((card) => !isControlplaneOnlyCard(card));
+  const cardIds = [...new Set(
+    publicCards
+      .map((card) => card.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )].sort();
+  const dataObjectKeys = [...new Set(
+    Object.entries(taskConfigs)
+      .filter(([taskName]) => taskName !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID)
+      .flatMap(([, cfg]) => Array.isArray(cfg.provides) ? cfg.provides : [])
+      .filter((key): key is string => typeof key === 'string' && key.length > 0 && key !== SYS_KEYS_BOARD_STATE),
+  )].sort();
+  return {
+    card_ids: cardIds,
+    data_object_keys: dataObjectKeys,
+  };
+}
+
+export function createSysKeysBoardStateInitCard(): LiveCard {
+  return {
+    id: SYS_KEYS_BOARD_STATE_INIT_CARD_ID,
+    meta: {
+      title: 'System Keys Board State',
+      synthetic: true,
+    },
+    provides: [
+      { bindTo: SYS_KEYS_BOARD_STATE, ref: `card_data.${SYS_KEYS_BOARD_STATE}` },
+    ],
+    card_data: {
+      [SYS_KEYS_BOARD_STATE]: {
+        card_ids: [],
+        data_object_keys: [],
+      },
+    },
+    __private: {
+      visible_controlplane_only: true,
+    },
+  };
+}
+
 export interface CardIndexEntry {
   /** Storage-specific address (file path, Cosmos doc id, localStorage key). */
   key: string;
@@ -643,6 +724,7 @@ export interface CardHandlerAdapters {
   fetchedSourcesStore: FetchedSourcesStore;
   outputStore: PublishedOutputsStore;
   executionRequestStore: ExecutionRequestStore;
+  activeTaskConfigs?: () => Record<string, Pick<TaskConfig, 'provides'>>;
 }
 
 export interface CommandResponse<T extends Record<string, unknown> = Record<string, unknown>> {
@@ -728,6 +810,51 @@ export interface BoardStatusObject {
     };
   };
   cards: BoardStatusCard[];
+}
+
+export function sanitizePublishedBoardStatus(status: BoardStatusObject): BoardStatusObject {
+  const cards = status.cards.filter((card) => card.name !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID);
+  if (cards.length === status.cards.length) return status;
+
+  const requiresTokens = new Set<string>();
+  for (const card of cards) {
+    for (const token of card.requires) requiresTokens.add(token);
+  }
+
+  const fanOut = cards
+    .map((card) => ({ name: card.name, fanOut: card.unblocks.length }))
+    .sort((a, b) => b.fanOut - a.fanOut || a.name.localeCompare(b.name));
+  const maxFanOut = fanOut.length > 0 ? fanOut[0] : { name: null, fanOut: 0 };
+
+  const countByStatus = (name: string): number => cards.filter((card) => card.status === name).length;
+  const orphanCards = cards.filter((card) => card.requires.length === 0 && card.unblocks.length === 0).length;
+
+  return {
+    ...status,
+    summary: {
+      ...status.summary,
+      card_count: cards.length,
+      completed: countByStatus('completed'),
+      eligible: countByStatus('eligible'),
+      pending: countByStatus('pending'),
+      blocked: countByStatus('blocked'),
+      unresolved: countByStatus('unresolved'),
+      failed: countByStatus('failed'),
+      in_progress: countByStatus('in-progress'),
+      orphan_cards: orphanCards,
+      topology: {
+        edge_count: requiresTokens.size,
+        max_fan_out_card: maxFanOut.name,
+        max_fan_out: maxFanOut.fanOut,
+      },
+    },
+    cards,
+  };
+}
+
+export function filterPublicDataObjects(dataObjects: Record<string, unknown>): Record<string, unknown> {
+  const { [SYS_KEYS_BOARD_STATE]: _hidden, ...publicDataObjects } = dataObjects;
+  return publicDataObjects;
 }
 
 export function buildBoardStatusObject(boardPath: string, live: LiveGraph): BoardStatusObject {
@@ -892,6 +1019,24 @@ export function createCardHandlerFn(
         if (!card) return 'task-initiate-failure';
 
         const cardId = card.id as string;
+        if (cardId === SYS_KEYS_BOARD_STATE_INIT_CARD_ID) {
+          const activeTaskConfigs = adapters.activeTaskConfigs?.();
+          const data = {
+            [SYS_KEYS_BOARD_STATE]: activeTaskConfigs
+              ? buildSysKeysBoardStateFromTaskConfigs(
+                  Object.keys(activeTaskConfigs)
+                    .filter((taskName) => taskName !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID)
+                    .map((taskName) => adapters.cardStore.readCard(taskName))
+                    .filter((card): card is LiveCard => !!card),
+                  activeTaskConfigs,
+                )
+              : buildSysKeysBoardState(adapters.cardStore.readAllCards()),
+          };
+          (writeDataObjectsFn ?? adapters.outputStore.writeDataObjects.bind(adapters.outputStore))(data);
+          taskCompletedFn(input.nodeId, data);
+          return 'task-initiated';
+        }
+
         const cardState = (card.card_data ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
         const requiredSources = allSources;

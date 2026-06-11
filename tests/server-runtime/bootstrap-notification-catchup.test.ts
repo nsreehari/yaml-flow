@@ -228,6 +228,7 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
   const kvStores = new Map<string, KVStorage>();
   const blobStores = new Map<string, BlobStorage>();
   const chatStores = new Map<string, ReturnType<typeof createInMemoryChatStorage>>();
+  const queueStores = new Map<string, QueueStorage>();
   const publishedBatches: BoardChangeNotification[][] = [];
 
   function getKv(ns: string): KVStorage {
@@ -243,6 +244,11 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
   function getChat(ns: string) {
     if (!chatStores.has(ns)) chatStores.set(ns, createInMemoryChatStorage());
     return chatStores.get(ns)!;
+  }
+
+  function getQueue(ns: string): QueueStorage {
+    if (!queueStores.has(ns)) queueStores.set(ns, createMemoryQueueStorage());
+    return queueStores.get(ns)!;
   }
 
   const journal = createMemoryJournalAdapter();
@@ -265,7 +271,11 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
     chatStorageForRef(ref: string) {
       return getChat(`_ref/${ref}`);
     },
+    queueStorageForRef(ref: string, lane: string) {
+      return getQueue(`_queue/${ref}/${lane}`);
+    },
     journalAdapter: () => journal,
+    journalAdapterForRef: (_ref: string) => journal,
     boardWorkerStore: () => createBoardWorkerStore(workerQueue),
     chatAgentStore: () => createBoardWorkerStore(chatQueue),
     processAccumulatedStore: () => processAccumulatedQueue,
@@ -391,14 +401,14 @@ function syntheticRequest(method: string, path: string): RuntimeRequest {
   };
 }
 
-function syntheticResponse(): { res: RuntimeResponse; body: () => unknown } {
+function syntheticResponse(): { res: RuntimeResponse; body: () => string } {
   let chunks: string[] = [];
   const res: RuntimeResponse = {
     writeHead() {},
     write(data) { chunks.push(typeof data === 'string' ? data : new TextDecoder().decode(data)); return true; },
     end(data?) { if (data) chunks.push(typeof data === 'string' ? data : new TextDecoder().decode(data as Uint8Array)); },
   };
-  return { res, body: () => { try { return JSON.parse(chunks.join('')); } catch { return chunks.join(''); } } };
+  return { res, body: () => chunks.join('') };
 }
 
 function parseSsePayload(raw: unknown): Record<string, unknown> {

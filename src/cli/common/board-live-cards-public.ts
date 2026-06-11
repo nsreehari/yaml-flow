@@ -49,6 +49,9 @@ import type { GraphEvent } from '../../event-graph/types.js';
 import { CardCompute } from '../../card-compute/index.js';
 import type { ComputeNode } from '../../card-compute/index.js';
 import {
+  SYS_KEYS_BOARD_STATE,
+  SYS_KEYS_BOARD_STATE_INIT_CARD_ID,
+  createSysKeysBoardStateInitCard,
   createCardStore,
   createJournalStore,
   createFetchedSourcesStore,
@@ -56,6 +59,8 @@ import {
   createBoardConfigStore,
   createStateSnapshotStore,
   buildBoardStatusObject,
+  filterPublicDataObjects,
+  sanitizePublishedBoardStatus,
   createCardHandlerFn,
   EMPTY_CONFIG,
   BOARD_GRAPH_KEY,
@@ -127,8 +132,6 @@ function ok<T>(data?: T): CommandResult<T> {
 }
 function fail(error: string): CommandResult { return { status: 'fail', error }; }
 function err(e: unknown): CommandResult { return { status: 'error', error: e instanceof Error ? e.message : String(e) }; }
-
-const SYS_KEYS_BOARD_STATE = 'sys_keys_board_state';
 
 // ============================================================================
 // BoardPlatformAdapter — the single injection point
@@ -620,12 +623,14 @@ export function createBoardLiveCardsPublic(
       },
     };
 
+    let getActiveTaskConfigs = () => live.config.tasks;
     const cardHandlerAdapters = {
       cardStore: cardStore(),
       cardRuntimeStore: overlayCardRuntimeStore,
       fetchedSourcesStore: overlayFetchedSourcesStore,
       outputStore: outputStore(),
       executionRequestStore,
+      activeTaskConfigs: () => getActiveTaskConfigs(),
     };
 
     let TX: GraphEvent[] = [];
@@ -661,6 +666,7 @@ export function createBoardLiveCardsPublic(
         RemX.add(cardId);
       },
     });
+    getActiveTaskConfigs = () => rg.getState().config.tasks;
 
     TX = undrained;
     while (TX.length > 0) {
@@ -692,7 +698,7 @@ export function createBoardLiveCardsPublic(
 
     let statusObj: unknown;
     try {
-      statusObj = buildBoardStatusObject(boardPath, finalLive);
+      statusObj = sanitizePublishedBoardStatus(buildBoardStatusObject(boardPath, finalLive));
       cardHandlerAdapters.outputStore.writeStatusSnapshot(statusObj);
     } catch (e) {
       warn(`[board-live-cards-public] status publish failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -804,11 +810,7 @@ export function createBoardLiveCardsPublic(
 
   function requestQueuedProcessAccumulated(): void {
     const queue = adapter.queueStorageForRef(queueStoreRef(), 'process-accumulated');
-    if (queue.enqueueIfAbsent) {
-      queue.enqueueIfAbsent({ boardRef: serializeRef(baseRef) }, `process-accumulated:${serializeRef(baseRef)}`);
-    } else {
-      queue.enqueue({ boardRef: serializeRef(baseRef) });
-    }
+    queue.enqueue({ boardRef: serializeRef(baseRef) });
     adapter.requestProcessAccumulated?.();
   }
 
@@ -879,7 +881,10 @@ export function createBoardLiveCardsPublic(
       cfg.writeFetchedSourcesStoreRef(fetchedSourcesStoreRef);
       cfg.writeChatStoreRef(chatStoreRef);
       cfg.writeArtifactsStoreRef(artifactsStoreRef);
-      try { outputStore().writeStatusSnapshot(buildBoardStatusObject(boardPath, restore(loadEnvelope().graph))); } catch { /* best-effort */ }
+      cardStore().writeCard(createSysKeysBoardStateInitCard().id, createSysKeysBoardStateInitCard());
+      const seedResult = upsertCard({ params: { cardId: createSysKeysBoardStateInitCard().id, restart: true } });
+      if (seedResult.status !== 'success') return seedResult;
+      try { outputStore().writeStatusSnapshot(sanitizePublishedBoardStatus(buildBoardStatusObject(boardPath, restore(loadEnvelope().graph)))); } catch { /* best-effort */ }
       return ok();
     } catch (e) { return err(e); }
   }
@@ -888,7 +893,7 @@ export function createBoardLiveCardsPublic(
     try {
       let s = outputStore().readStatusSnapshot() as BoardStatusObject | null;
       if (!s) {
-        s = buildBoardStatusObject(boardPath, restore(loadEnvelope().graph));
+        s = sanitizePublishedBoardStatus(buildBoardStatusObject(boardPath, restore(loadEnvelope().graph)));
         try { outputStore().writeStatusSnapshot(s); } catch { /* best-effort */ }
       }
       return ok(s);
@@ -901,6 +906,9 @@ export function createBoardLiveCardsPublic(
       if (!id) return fail('removeCard requires params.id');
       try { adapter.kvStorage('card-upsert').delete(id); } catch { /* best-effort */ }
       appendJournalEvent({ type: 'task-removal', taskName: id, timestamp: nowIso() });
+      if (id !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID) {
+        appendJournalEvent({ type: 'task-restart', taskName: SYS_KEYS_BOARD_STATE_INIT_CARD_ID, timestamp: nowIso() });
+      }
       drainFireAndForget();
       return ok();
     } catch (e) { return err(e); }
@@ -961,6 +969,7 @@ export function createBoardLiveCardsPublic(
         if (!cardStore().readCard(id)) return fail(`Card "${id}" not found in board at ${baseRef.value}`);
       }
 
+      let refreshBoardState = false;
       for (const id of ids) {
         const card = cardStore().readCard(id)!;
         const taskConfig = liveCardToTaskConfig(card);
@@ -975,8 +984,13 @@ export function createBoardLiveCardsPublic(
           const blobRef = existing?.blobRef ?? cardStore().readCardKey(id) ?? id;
           appendJournalEvent({ type: 'task-upsert', taskName: id, taskConfig, timestamp: nowIso() });
           upsertKv.write(id, { blobRef, taskConfigHash, updatedAt: nowIso() } satisfies CardUpsertIndexEntry);
+          refreshBoardState = refreshBoardState || id !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID;
         }
         if (restart) appendJournalEvent({ type: 'task-restart', taskName: id, timestamp: nowIso() });
+      }
+
+      if (refreshBoardState) {
+        appendJournalEvent({ type: 'task-restart', taskName: SYS_KEYS_BOARD_STATE_INIT_CARD_ID, timestamp: nowIso() });
       }
 
       drainFireAndForget();
@@ -1144,47 +1158,15 @@ export function createBoardLiveCardsPublic(
     try {
       const key = input.params?.['key'] as string | undefined;
       if (!key) return fail('getOutputsDataObject requires params.key');
-      const value = readBoardDataObjects()[key] ?? null;
+      if (key === SYS_KEYS_BOARD_STATE) return ok(null);
+      const value = outputStore().readDataObject(key);
       return ok(value);
     } catch (e) { return err(e); }
   }
 
-  function isControlplaneOnlyCard(card: unknown): boolean {
-    if (!card || typeof card !== 'object' || Array.isArray(card)) return false;
-    const priv = (card as { __private?: unknown }).__private;
-    return !!priv
-      && typeof priv === 'object'
-      && !Array.isArray(priv)
-      && (priv as Record<string, unknown>).visible_controlplane_only === true;
-  }
-
-  function buildSysKeysBoardState(dataObjects: Record<string, unknown>): { card_ids: string[]; data_object_keys: string[] } {
-    const cardIds = [...new Set(
-      cardStore().readAllCards()
-        .filter((card) => !isControlplaneOnlyCard(card))
-        .map((card) => card.id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0),
-    )].sort();
-    const dataObjectKeys = [...new Set(
-      Object.keys(dataObjects).filter((key) => key && key !== SYS_KEYS_BOARD_STATE),
-    )].sort();
-    return {
-      card_ids: cardIds,
-      data_object_keys: dataObjectKeys,
-    };
-  }
-
-  function readBoardDataObjects(): Record<string, unknown> {
-    const storedDataObjects = outputStore().readAllDataObjects();
-    return {
-      ...storedDataObjects,
-      [SYS_KEYS_BOARD_STATE]: buildSysKeysBoardState(storedDataObjects),
-    };
-  }
-
   function getAllOutputsDataObjects(_input: CommandInput): CommandResult<Record<string, unknown>> {
     try {
-      return ok(readBoardDataObjects()) as CommandResult<Record<string, unknown>>;
+      return ok(filterPublicDataObjects(outputStore().readAllDataObjects())) as CommandResult<Record<string, unknown>>;
     } catch (e) { return err(e) as CommandResult<Record<string, unknown>>; }
   }
 
@@ -1249,7 +1231,9 @@ export function createBoardLiveCardsPublic(
 
   function buildSseOneShotPayload(_input: CommandInput): CommandResult<BoardSseOneShotPayload> {
     try {
-      const cardDefinitions = cardStore().readAllCards() as Array<Record<string, unknown>>;
+      const cardDefinitions = cardStore()
+        .readAllCards()
+        .filter((card) => card.id !== SYS_KEYS_BOARD_STATE_INIT_CARD_ID) as Array<Record<string, unknown>>;
       const statusResult = status({});
       if (statusResult.status !== 'success') return statusResult as unknown as CommandResult<BoardSseOneShotPayload>;
 

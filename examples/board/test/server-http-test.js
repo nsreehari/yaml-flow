@@ -62,6 +62,7 @@ const T0_CARD_FILES = [
   'cardT-portfolio-value.json',
 ];
 const T0_EXPECTED_CARD_IDS = ['card-market-prices', 'card-portfolio', 'card-portfolio-value'];
+const BASE_RUNTIME_CARD_COUNT = T0_EXPECTED_CARD_IDS.length;
 const T2_FILE_CARD_ID = 'card-market-prices';
 const CHAT_CARD_ID = 'card-portfolio';
 
@@ -857,12 +858,12 @@ try {
     console.log(`[T0.2] upserted ${cardId}`);
   }
 
-  console.log('\n=== T0 Step 3: wait for all 3 cards to complete via SSE ===');
+  console.log(`\n=== T0 Step 3: wait for all ${BASE_RUNTIME_CARD_COUNT} runtime cards to complete via SSE ===`);
   const t0Summary = await waitUntil(() => {
     const s = NS.statusSummary;
-    if (s && s.card_count === 3 && s.completed === 3) return s;
+    if (s && s.card_count === BASE_RUNTIME_CARD_COUNT && s.completed === BASE_RUNTIME_CARD_COUNT) return s;
     return false;
-  }, 60_000, 'T0 initial completion (3 cards)');
+  }, 60_000, `T0 initial completion (${BASE_RUNTIME_CARD_COUNT} runtime cards)`);
   assert(t0Summary.failed === 0, `T0 expected failed=0, got ${t0Summary.failed}`);
   console.log(`[T0.3] completed: ${JSON.stringify(t0Summary)}`);
 
@@ -872,19 +873,14 @@ try {
   assert(statusMcpRes.data?.status === 'success', `inspect.board-runtime-status failed: ${JSON.stringify(statusMcpRes.data)}`);
   const mcpSummary = statusMcpRes.data?.data?.summary;
   assert(mcpSummary, 'summary missing from inspect.board-runtime-status');
-  assert(mcpSummary.card_count === T0_EXPECTED_CARD_IDS.length,
-    `expected card_count=${T0_EXPECTED_CARD_IDS.length}, got ${mcpSummary.card_count}`);
+  assert(mcpSummary.card_count === BASE_RUNTIME_CARD_COUNT,
+    `expected card_count=${BASE_RUNTIME_CARD_COUNT}, got ${mcpSummary.card_count}`);
   assert(mcpSummary.completed === mcpSummary.card_count, `not all complete: ${JSON.stringify(mcpSummary)}`);
   console.log(`[T0.4] board-status: ${JSON.stringify(mcpSummary)}`);
 
   const t0OneShotPayload = await waitForFirstSsePayload(`${BASE}/sse?one-shot`);
-  const t0SysKeysBoardState = t0OneShotPayload?.dataObjectsByToken?.sys_keys_board_state;
-  assert(t0SysKeysBoardState && typeof t0SysKeysBoardState === 'object',
-    `T0 sys_keys_board_state missing from one-shot payload: ${JSON.stringify(t0OneShotPayload?.dataObjectsByToken)}`);
-  assert(JSON.stringify(t0SysKeysBoardState) === JSON.stringify({
-    card_ids: T0_EXPECTED_CARD_IDS,
-    data_object_keys: ['holdings', 'positions', 'quotes'],
-  }), `T0 sys_keys_board_state mismatch: ${JSON.stringify(t0SysKeysBoardState)}`);
+  assert(!Object.prototype.hasOwnProperty.call(t0OneShotPayload?.dataObjectsByToken ?? {}, 'sys_keys_board_state'),
+    `T0 one-shot payload should not expose sys_keys_board_state: ${JSON.stringify(t0OneShotPayload?.dataObjectsByToken)}`);
 
   // Verify computed_values arrived for portfolio-value card
   const t0Positions = NS.computedValues['card-portfolio-value']?.positions;
@@ -1322,7 +1318,7 @@ try {
       assert(t3eUpsertOtherRes.data?.status === 'success', `T3e manage.upsert-card(${t3eOtherCardId}) failed: ${JSON.stringify(t3eUpsertOtherRes.data)}`);
       await waitUntil(() => {
         const s = NS.statusSummary;
-        if (s && s.card_count === T0_EXPECTED_CARD_IDS.length + 1) return s;
+        if (s && s.card_count === BASE_RUNTIME_CARD_COUNT + 1) return s;
         return false;
       }, 30_000, 'T3e extra chat card visible in board summary');
 
@@ -1436,9 +1432,9 @@ try {
         assert(t3eRemoveOtherRes.data?.status === 'success', `T3e manage.remove-card(${t3eOtherCardId}) failed: ${JSON.stringify(t3eRemoveOtherRes.data)}`);
         await waitUntil(() => {
           const s = NS.statusSummary;
-          if (s && s.card_count === T0_EXPECTED_CARD_IDS.length) return s;
+          if (s && s.card_count === BASE_RUNTIME_CARD_COUNT) return s;
           return false;
-        }, 30_000, 'T3e cleanup card_count back to 3');
+        }, 30_000, `T3e cleanup card_count back to ${BASE_RUNTIME_CARD_COUNT}`);
       }
     }
 
@@ -1540,7 +1536,7 @@ try {
 
       for (let idx = 0; idx < tsTempCards.length; idx += 1) {
         const tsCard = tsTempCards[idx];
-        const tsExpectedCardCount = T0_EXPECTED_CARD_IDS.length + idx + 1;
+        const tsExpectedCardCount = BASE_RUNTIME_CARD_COUNT + idx + 1;
         const tsFrameStart = tsRawFrames.length;
         const tsUpsertRes = await httpMcp('manage.upsert-card', {
           card_id: tsCard.id,
@@ -1596,9 +1592,9 @@ try {
       }
       await waitUntil(() => {
         const summary = NS.statusSummary;
-        if (summary && summary.card_count === T0_EXPECTED_CARD_IDS.length) return summary;
+        if (summary && summary.card_count === BASE_RUNTIME_CARD_COUNT) return summary;
         return false;
-      }, 30_000, 'TS cleanup card_count back to 3');
+      }, 30_000, `TS cleanup card_count back to ${BASE_RUNTIME_CARD_COUNT}`);
     } finally {
       tsDeltaClient.close();
     }
