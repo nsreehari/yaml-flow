@@ -496,7 +496,7 @@ export interface BoardRuntimeArtifactsPayload {
   cardDefinitions: LiveCard[];
   cardRuntimeById?: Record<string, CardRuntimeArtifact>;
   dataObjectsByToken?: Record<string, unknown>;
-  cardChatsByCardId?: Record<string, { messages: Array<{ role: string; text: string; files?: unknown[] }>; receiving?: boolean; processing?: boolean }>;
+  cardChatsByCardId?: Record<string, { messages: Array<{ role: string; text: string; files?: unknown[]; turn?: string }>; receiving?: boolean; processing?: boolean }>;
   statusSnapshot?: {
     cards?: Array<{
       name: string;

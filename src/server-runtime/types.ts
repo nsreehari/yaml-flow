@@ -168,6 +168,8 @@ export interface SingleBoardRuntimeOptions {
   apiBasePath?: string;
   corsHeaders?: Record<string, string>;
   boardId?: string;
+  /** Number of recent turns to include in SSE/bootstrap chat payloads. Defaults to 1. */
+  chatBootstrapTailTurns?: number;
 
   /** One or more board layers composing this board surface (e.g. base cards + admin cards). */
   boards: BoardContextConfig[];

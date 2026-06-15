@@ -30,8 +30,9 @@ export interface RuntimePayloadDeps {
   boardId: string;
   /** Live reference to the runtime's board-contexts array (read on each call). */
   boardContexts: ReadonlyArray<RuntimePayloadBoardContext>;
-  readChatRecords: (cardId: string) => Promise<Array<Record<string, unknown>>>;
+  readChatRecords: (cardId: string, opts?: { tailTurns?: number }) => Promise<Array<Record<string, unknown>>>;
   getChatProcessing: (cardId: string) => Promise<boolean>;
+  chatBootstrapTailTurns?: number;
 }
 
 export interface RuntimePayloadModule {
@@ -43,6 +44,18 @@ export interface RuntimePayloadModule {
 
 export function createRuntimePayloadModule(deps: RuntimePayloadDeps): RuntimePayloadModule {
   const { boardId, boardContexts, readChatRecords, getChatProcessing } = deps;
+  const chatBootstrapTailTurns = Number.isInteger(deps.chatBootstrapTailTurns) && (deps.chatBootstrapTailTurns as number) > 0
+    ? deps.chatBootstrapTailTurns as number
+    : 1;
+
+  function toPublishedChatMessage(record: Record<string, unknown>): Record<string, unknown> {
+    return {
+      role: String(record.role || 'system'),
+      text: String(record.text || ''),
+      files: Array.isArray(record.files) ? record.files : [],
+      ...(typeof record.turn === 'string' && record.turn ? { turn: record.turn } : {}),
+    };
+  }
 
   function mergeStatusSnapshots(statuses: unknown[]): unknown {
     if (statuses.length === 0) return null;
@@ -141,15 +154,11 @@ export function createRuntimePayloadModule(deps: RuntimePayloadDeps): RuntimePay
       if (!cardDef?.id) continue;
       const id = cardDef.id as string;
       try {
-        const records = await readChatRecords(id);
+        const records = await readChatRecords(id, { tailTurns: chatBootstrapTailTurns });
         const processing = await getChatProcessing(id);
         if (records.length > 0 || processing) {
           cardChatsByCardId[id] = {
-            messages: records.map((r) => ({
-              role: String(r.role || 'system'),
-              text: String(r.text || ''),
-              files: Array.isArray(r.files) ? r.files : [],
-            })),
+            messages: records.map((r) => toPublishedChatMessage(r)),
             receiving: false,
             processing,
           };

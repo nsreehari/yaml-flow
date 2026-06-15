@@ -210,6 +210,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const corsHeaders = { ...DEFAULT_CORS_HEADERS, ...(options.corsHeaders || {}) };
   const queueLaneTuning = options.queueLaneTuning ?? {};
   const boardId = options.boardId || '';
+  const chatBootstrapTailTurns = Number.isInteger(options.chatBootstrapTailTurns) && (options.chatBootstrapTailTurns as number) > 0
+    ? options.chatBootstrapTailTurns as number
+    : 1;
   const logger: RuntimeLogger = options.logger || { info: console.log, warn: console.warn, error: console.error };
   const invocationAdapter = options.invocationAdapter;
   const chatFlowRunner = options.chatFlowRunner || null;
@@ -829,8 +832,9 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   const runtimePayloadModule = createRuntimePayloadModule({
     boardId,
     boardContexts,
-    readChatRecords: (cardId) => readChatRecords(cardId),
+    readChatRecords: (cardId, opts) => readChatRecords(cardId, opts),
     getChatProcessing: (cardId) => getChatProcessing(cardId),
+    chatBootstrapTailTurns,
   });
 
   const readStatusSnapshot = runtimePayloadModule.readStatusSnapshot;
@@ -910,8 +914,20 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return String((result.data as { id?: unknown })?.id || '');
   }
 
-  async function readChatRecords(cardId: string): Promise<Array<Record<string, unknown>>> {
-    return await requireChatStorageForCard(cardId).readAll(cardId) as unknown as Array<Record<string, unknown>>;
+  async function readChatRecords(cardId: string, opts?: { tailTurns?: number }): Promise<Array<Record<string, unknown>>> {
+    const tailTurns = Number.isInteger(opts?.tailTurns) && (opts?.tailTurns as number) > 0
+      ? opts?.tailTurns as number
+      : undefined;
+    const result = await chatStorePublic.readAll({
+      params: { cardId },
+      ...(tailTurns === undefined ? {} : { body: { tailTurns } }),
+    });
+    if (result.status !== 'success') {
+      throw Object.assign(new Error(result.error || `Failed to read chat records for card: ${cardId}`), { statusCode: 500 });
+    }
+    return Array.isArray((result.data as { records?: unknown[] } | undefined)?.records)
+      ? ((result.data as { records: unknown[] }).records as Array<Record<string, unknown>>)
+      : [];
   }
 
   // File operations live in ./card-file-ops.ts. The factory takes narrow

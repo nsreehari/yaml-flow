@@ -954,6 +954,110 @@ process.exit(1);
     expect((chatsByCardId['card-1'] as Record<string, unknown> | undefined)?.processing ?? false).toBe(false);
   });
 
+  it('boots SSE chat state from the latest turn and preserves turn ids', async () => {
+    const runtime = createRuntime();
+
+    const addFirstRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        role: 'user',
+        text: 'first turn',
+        turn_id: 'turn-1',
+      },
+    }), addFirstRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(addFirstRes._status).toBe(200);
+
+    const addSecondRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        role: 'user',
+        text: 'second turn',
+        turn_id: 'turn-2',
+      },
+    }), addSecondRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(addSecondRes._status).toBe(200);
+
+    const inspectRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp', {
+      tool: 'inspect.chat-messages-on-cards',
+      args: { card_id: 'card-1', all_turns: true },
+    }), inspectRes, new URL('http://example.test/api/board/mcp'));
+    expect(inspectRes._status).toBe(200);
+    const inspectBody = parseJsonBody(inspectRes) as Record<string, unknown>;
+    const inspectMessages = (((inspectBody.data as Record<string, unknown>).messages) as Array<Record<string, unknown>>);
+    expect(inspectMessages.map((message) => message.turn)).toEqual(['turn-1', 'turn-2']);
+
+    const initRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('GET', '/api/board/sse?one-shot'), initRes, new URL('http://example.test/api/board/sse?one-shot'));
+    expect(initRes._status).toBe(200);
+    const initBody = parseSsePayload(initRes);
+    const messages = ((((initBody.cardChatsByCardId as Record<string, unknown>)['card-1'] as Record<string, unknown>).messages) as Array<Record<string, unknown>>);
+    expect(messages).toEqual([
+      expect.objectContaining({ role: 'user', text: 'second turn', turn: 'turn-2' }),
+    ]);
+  });
+
+  it('reconnect SSE bootstrap keeps the latest turn only and preserves turn ids', async () => {
+    const runtime = createRuntime();
+    const clientId = 'mcp-sse-reconnect-client';
+
+    const firstSseRes = makeResponse();
+    const firstHandled = await runtime.handleRuntimeApi(
+      makeRequest('GET', `/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+      firstSseRes,
+      new URL(`http://example.test/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+    );
+    expect(firstHandled).toBe(true);
+    expect(firstSseRes._status).toBe(200);
+    expect(parseSsePayload(firstSseRes)).toHaveProperty('cardDefinitions');
+
+    const addFirstRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        role: 'user',
+        text: 'first reconnect turn',
+        turn_id: 'turn-r1',
+      },
+    }), addFirstRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(addFirstRes._status).toBe(200);
+
+    const addSecondRes = makeResponse();
+    await runtime.handleRuntimeApi(makeRequest('POST', '/api/board/mcp-controlplane', {
+      tool: 'manage.add-chat-entry-and-any-attachments',
+      args: {
+        board_id: 'mcp-test-board',
+        card_id: 'card-1',
+        role: 'user',
+        text: 'second reconnect turn',
+        turn_id: 'turn-r2',
+      },
+    }), addSecondRes, new URL('http://example.test/api/board/mcp-controlplane'));
+    expect(addSecondRes._status).toBe(200);
+
+    const reconnectRes = makeResponse();
+    const reconnectHandled = await runtime.handleRuntimeApi(
+      makeRequest('GET', `/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+      reconnectRes,
+      new URL(`http://example.test/api/board/sse?clientId=${encodeURIComponent(clientId)}`),
+    );
+    expect(reconnectHandled).toBe(true);
+    expect(reconnectRes._status).toBe(200);
+    const reconnectBody = parseSsePayload(reconnectRes);
+    const messages = ((((reconnectBody.cardChatsByCardId as Record<string, unknown>)['card-1'] as Record<string, unknown>).messages) as Array<Record<string, unknown>>);
+    expect(messages).toEqual([
+      expect.objectContaining({ role: 'user', text: 'second reconnect turn', turn: 'turn-r2' }),
+    ]);
+  });
+
   it('routes sse.subscribe-chat and sse.unsubscribe-chat through /mcp-controlplane', async () => {
     const runtime = createRuntime();
     const clientId = 'mcp-sse-chat-client';

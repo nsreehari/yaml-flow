@@ -1582,7 +1582,7 @@ try {
     console.log('[T3c] ok: fresh /sse first payload hydrated the current board state');
 
     console.log('\n=== TS: one-shot, raw framing, replay, delta ordering, and chat hydration ===');
-    const tsExpectedChatRes = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, all_turns: true });
+    const tsExpectedChatRes = await httpMcp('inspect.chat-messages-on-cards', { card_id: CHAT_CARD_ID, tail_turns: 1 });
     assert(tsExpectedChatRes.status === 200, `TS inspect.chat-messages-on-cards returned ${tsExpectedChatRes.status}`);
     const tsExpectedChatMessages = normalizeHydratedChatMessages(tsExpectedChatRes.data?.data?.messages || []);
 
