@@ -3,7 +3,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { createCardStore } from '../../src/cli/common/board-live-cards-lib.js';
+import {
+  SYS_KEYS_BOARD_STATE_INIT_CARD_ID,
+  createCardStore,
+  createSysKeysBoardStateInitCard,
+} from '../../src/cli/common/board-live-cards-lib.js';
 import { createCardStorePublic } from '../../src/cli/common/card-store-lib-public.js';
 import { createFsCardStorageAdapter } from '../../src/cli/node/storage-fs-adapters.js';
 import { createFsJsonStorage } from '../../src/cli/node/storage-fs-adapters.js';
@@ -109,5 +113,28 @@ describe('card-store patch API', () => {
     expect(json.read('c1')).toBeNull();
     expect(store.get({ params: { id: 'c1' } }).status).toBe('error');
     expect(json.read('_index')).toEqual({});
+  });
+
+  it('blocks __sys_keys_board_state_init from public read-all and known-id reads', () => {
+    const store = freshStore();
+
+    expect(store.set({ body: createSysKeysBoardStateInitCard() }).status).toBe('success');
+    expect(store.set({ body: { id: 'public-card', card_data: { ok: true } } }).status).toBe('success');
+
+    const getAllResult = store.get({});
+    expect(getAllResult.status).toBe('success');
+    if (getAllResult.status === 'success') {
+      expect(getAllResult.data.cards.map((card) => card.id)).toEqual(['public-card']);
+    }
+
+    expect(store.get({ params: { id: SYS_KEYS_BOARD_STATE_INIT_CARD_ID } }).status).toBe('error');
+
+    const batchResult = store.buildNotificationBatch({});
+    expect(batchResult.status).toBe('success');
+    if (batchResult.status === 'success') {
+      expect(batchResult.data.notifications).toEqual([
+        expect.objectContaining({ kind: 'card_refreshed', cardId: 'public-card' }),
+      ]);
+    }
   });
 });

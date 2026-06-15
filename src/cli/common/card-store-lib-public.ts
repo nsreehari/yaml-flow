@@ -22,7 +22,11 @@
  */
 
 import type { CommandInput, CommandResult } from './board-live-cards-public.js';
-import type { CardAdminStore, LiveCard } from './board-live-cards-lib.js';
+import {
+  SYS_KEYS_BOARD_STATE_INIT_CARD_ID,
+  type CardAdminStore,
+  type LiveCard,
+} from './board-live-cards-lib.js';
 import {
   type CardStoreNotification,
   type NotificationEmitter,
@@ -91,10 +95,20 @@ export function createCardStorePublic(store: CardAdminStore, options: CardStoreP
     return { status: 'error', error: e instanceof Error ? e.message : String(e) } as CommandResult<T>;
   }
 
+  function isBlockedPublicCardId(id: unknown): boolean {
+    return id === SYS_KEYS_BOARD_STATE_INIT_CARD_ID;
+  }
+
   async function emitCardNotifications(notifications: CardStoreNotification[]): Promise<void> {
     const emitNotification = options.emitNotification;
     if (!emitNotification || notifications.length === 0) return;
-    const normalized = withRuntimeNotificationCategories(notifications);
+    const normalized = withRuntimeNotificationCategories(
+      notifications.filter((notification) => {
+        if (notification.kind !== 'card_refreshed') return true;
+        return !isBlockedPublicCardId(notification.cardId);
+      }),
+    );
+    if (normalized.length === 0) return;
     if (normalized.length === 1) {
       await emitNotification(normalized[0]);
       return;
@@ -105,17 +119,19 @@ export function createCardStorePublic(store: CardAdminStore, options: CardStoreP
   function readCardsFromInput(input: CommandInput): LiveCard[] {
     const id = input.params?.['id'] as string | undefined;
     if (id) {
+      if (isBlockedPublicCardId(id)) throw new Error(`card "${id}" not found`);
       const card = store.readCard(id);
       if (!card) throw new Error(`card "${id}" not found`);
       return [card];
     }
-    return store.readAllCards();
+    return store.readAllCards().filter((card) => !isBlockedPublicCardId(card.id));
   }
 
   function buildCardRefreshedBatch(cards: LiveCard[]): RuntimeNotificationBatch {
+    const visibleCards = cards.filter((card) => !isBlockedPublicCardId(card.id));
     return withRuntimeNotificationBatchCategories({
       kind: 'notification-batch',
-      notifications: withRuntimeNotificationCategories(cards.map((card) => ({
+      notifications: withRuntimeNotificationCategories(visibleCards.map((card) => ({
         kind: 'card_refreshed',
         cardId: card.id,
         card,

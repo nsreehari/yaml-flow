@@ -34,6 +34,7 @@ import type {
   AsyncScratchStorage,
 } from '../../src/cli/cloud/storage-async-interface.js';
 import { createHttpBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
+import { SYS_KEYS_BOARD_STATE_INIT_CARD_ID } from '../../src/cli/common/board-live-cards-lib.js';
 import { serializeRef } from '../../src/cli/common/storage-interface.js';
 
 class MemoryAsyncKVStorage implements AsyncKVStorage {
@@ -667,6 +668,7 @@ describe('cloud storage adapters', () => {
 
     expect(await board.upsertCard({ params: { cardId: 'card-1' } })).toEqual({ status: 'success' });
     expect((await board.processAccumulatedEvents({})).status).toBe('success');
+    expect(boardNotifications.some((note) => (note as { kind?: string; cardId?: string }).kind === 'card_refreshed' && (note as { kind?: string; cardId?: string }).cardId === SYS_KEYS_BOARD_STATE_INIT_CARD_ID)).toBe(false);
 
     const workerStore = createAsyncBoardWorkerStore(adapter.queueStorageForRef('queue-store-ref', 'task-executor'));
     const queued = await workerStore.peekActive();

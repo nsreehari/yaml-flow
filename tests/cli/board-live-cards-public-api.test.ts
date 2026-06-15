@@ -18,6 +18,7 @@ import {
   createBoardLiveCardsNonCorePublic,
 } from '../../src/cli/node/fs-board-adapter.js';
 import { createHttpBoardCallbackTransport } from '../../src/cli/common/board-callback-transport.js';
+import { SYS_KEYS_BOARD_STATE_INIT_CARD_ID } from '../../src/cli/common/board-live-cards-lib.js';
 import { parseRef, serializeRef } from '../../src/cli/common/storage-interface.js';
 import type { BoardPlatformAdapter } from '../../src/cli/common/board-live-cards-public.js';
 
@@ -290,8 +291,14 @@ describe('BoardLiveCardsPublic — init and status', () => {
 
   it('keeps sys_keys_board_state off the public output surface', async () => {
     const { boardDir, br } = freshBoard();
+    const notifications: Array<Array<{ kind: string; [key: string]: unknown }>> = [];
     const adapter = createFsBoardPlatformAdapter(br, cliDir, adapterOpts);
-    const board = createBoardLiveCardsPublic(br, adapter, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
+    const board = createBoardLiveCardsPublic(br, {
+      ...adapter,
+      publishBoardChangeNotifications(batch) {
+        notifications.push(batch);
+      },
+    }, { boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir) });
     const nonCore = createBoardLiveCardsNonCorePublic(br, createFsBoardNonCorePlatformAdapter(br, cliDir, adapterOpts), {
       boardRuntimeStoreRef: mkBoardRuntimeStoreRef(boardDir),
     });
@@ -318,6 +325,11 @@ describe('BoardLiveCardsPublic — init and status', () => {
         ],
       },
     }).status).toBe('success');
+
+    expect(board.upsertCard({ params: { all: true } }).status).toBe('success');
+    expect((await board.processAccumulatedEvents({})).status).toBe('success');
+
+    expect(notifications.flat().some((note) => note.kind === 'card_refreshed' && note.cardId === SYS_KEYS_BOARD_STATE_INIT_CARD_ID)).toBe(false);
 
     expect(board.upsertCard({ params: { cardId: 'public-card' } }).status).toBe('success');
     expect(board.upsertCard({ params: { cardId: 'admin-card' } }).status).toBe('success');

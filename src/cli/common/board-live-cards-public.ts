@@ -712,7 +712,10 @@ export function createBoardLiveCardsPublic(
         if (key) batch.push({ kind: 'data_object', key, payload });
       }
     }
-    for (const [cardId, card] of NX) batch.push({ kind: 'card_refreshed', cardId, card });
+    for (const [cardId, card] of NX) {
+      if (cardId === SYS_KEYS_BOARD_STATE_INIT_CARD_ID) continue;
+      batch.push({ kind: 'card_refreshed', cardId, card });
+    }
     for (const cardId of RemX) batch.push({ kind: 'card_removed', cardId });
     if (statusObj !== undefined) batch.push({ kind: 'status', status: statusObj });
     flushBoardChangeNotifications(batch);

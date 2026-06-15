@@ -662,7 +662,10 @@ export function createAsyncBoardLiveCardsPublic(
     for (const data of dataWrites) {
       for (const [key, payload] of Object.entries(data)) notifications.push({ kind: 'data_object', key, payload } satisfies BoardOutputNotification);
     }
-    for (const [cardId, card] of refreshedCards) notifications.push({ kind: 'card_refreshed', cardId, card });
+    for (const [cardId, card] of refreshedCards) {
+      if (cardId === SYS_KEYS_BOARD_STATE_INIT_CARD_ID) continue;
+      notifications.push({ kind: 'card_refreshed', cardId, card });
+    }
     for (const cardId of removedCards) notifications.push({ kind: 'card_removed', cardId });
     notifications.push({ kind: 'status', status: statusObj } satisfies BoardOutputNotification);
     await flushBoardChangeNotifications(notifications);
