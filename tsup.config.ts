@@ -57,6 +57,7 @@ export default defineConfig({
     'compute-jsonata/browser': 'src/compute-jsonata/browser.ts',
     'notification-consumer/index': 'src/notification-consumer/index.ts',
     'board-state-reducer': 'src/board-state-reducer.ts',
+    'board-sse-state': 'src/board-sse-state.ts',
     'card-compute/index': 'src/card-compute/index.ts',
     'card-validation': 'src/card-validation.ts',
     'board-live-cards-node': 'src/cli/node/fs-board-adapter.ts',

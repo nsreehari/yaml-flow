@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "8.11.5",
+  "version": "8.11.6",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -74,6 +74,11 @@
       "types": "./lib/board-state-reducer.d.ts",
       "import": "./lib/board-state-reducer.js",
       "require": "./lib/board-state-reducer.cjs"
+    },
+    "./board-sse-state": {
+      "types": "./lib/board-sse-state.d.ts",
+      "import": "./lib/board-sse-state.js",
+      "require": "./lib/board-sse-state.cjs"
     },
     "./browser/compute-jsonata": "./browser/compute-jsonata.js",
     "./browser/compute-jsonata.js": "./browser/compute-jsonata.js",
