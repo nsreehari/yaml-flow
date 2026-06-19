@@ -127,6 +127,16 @@ export default defineConfig([
     globalName: 'ComputeJsonata',
     esbuildPlugins: [browserStubPlugin],
   },
+  // ── board-sse-state — platform-free SSE-frame -> UI snapshot reducer ─────────────────
+  // Consumer brain (notification-consumer + board-state-reducer). No node:* and no
+  // jsonata dependency, so it loads self-contained into any lighter JS engine (V8).
+  // Global: globalThis.BoardSseState (applyBoardSseFrame, createEmptyBoardSnapshot).
+  {
+    ...sharedBrowserOptions,
+    entry: { 'board-sse-state': 'src/board-sse-state.ts' },
+    globalName: 'BoardSseState',
+    esbuildPlugins: [browserStubPlugin],
+  },
   // ── server-runtime-controlface — board control-plane runtime (browser edition) ────────
   // Platform-free: no node:* imports in the runtime or its transitive deps.
   // Use with a Firestore JS SDK adapter for in-browser board orchestration.
