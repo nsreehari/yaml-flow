@@ -152,6 +152,17 @@ export {
 export type { SchemaValidationResult as RuntimeArtifactValidationResult } from './runtime-artifacts/index.js';
 
 // ============================================================================
+// Board Container Lifecycle
+// ============================================================================
+export { createBoardContainerLifecycle } from './cli/common/board-container-lifecycle.js';
+export type {
+  BoardContainerArchiveResult,
+  BoardContainerProvisionOptions,
+  BoardContainerStorage,
+  CreateBoardContainerLifecycleOptions,
+} from './cli/common/board-container-lifecycle.js';
+
+// ============================================================================
 // Backward compat aliases (deprecated — use new names)
 // ============================================================================
 export { StepMachine as FlowEngine } from './step-machine/index.js';

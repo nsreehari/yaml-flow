@@ -65,6 +65,8 @@ import type { ChatStorage } from '../common/chat-storage-lib.js';
 
 export { createBoardLiveCardsPublic, createBoardLiveCardsNonCorePublic } from '../common/board-live-cards-public.js';
 export { createBoardLiveCardsMcp } from '../common/board-live-cards-mcp.js';
+export { createBoardContainerLifecycle } from '../common/board-container-lifecycle.js';
+export { createFsBoardContainerStorage } from './board-container-fs.js';
 export type {
   BoardPlatformAdapter,
   BoardNonCorePlatformAdapter,
@@ -83,6 +85,12 @@ export type {
   BoardLiveCardsMcpFileDownloadDescriptor,
   BoardLiveCardsMcpManageUpsertCardResult,
 } from '../common/board-live-cards-mcp.js';
+export type {
+  BoardContainerArchiveResult,
+  BoardContainerProvisionOptions,
+  BoardContainerStorage,
+  CreateBoardContainerLifecycleOptions,
+} from '../common/board-container-lifecycle.js';
 export { BOARD_GRAPH_KEY, SNAPSHOT_SCHEMA_VERSION_V1, EMPTY_CONFIG } from '../common/board-live-cards-public.js';
 export {
   parseRef,
