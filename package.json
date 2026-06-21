@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "8.11.6",
+  "version": "8.11.7",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
