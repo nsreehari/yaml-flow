@@ -20,6 +20,7 @@ import type {
   BoardPlatformAdapter,
   BoardChangeNotification,
 } from '../../src/cli/common/board-live-cards-public.js';
+import type { RuntimeNotification } from '../../src/cli/common/notification-interface.js';
 import type {
   KVStorage,
   BlobStorage,
@@ -222,14 +223,14 @@ function createMemoryQueueStorage(): QueueStorage {
 // Build a test platform adapter that also captures published notifications
 // ============================================================================
 
-function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[]) => void }): BoardPlatformAdapter & {
-  publishedBatches: BoardChangeNotification[][];
+function createTestAdapter(opts?: { onPublish?: (batch: RuntimeNotification[]) => void }): BoardPlatformAdapter & {
+  publishedBatches: RuntimeNotification[][];
 } {
   const kvStores = new Map<string, KVStorage>();
   const blobStores = new Map<string, BlobStorage>();
   const chatStores = new Map<string, ReturnType<typeof createInMemoryChatStorage>>();
   const queueStores = new Map<string, QueueStorage>();
-  const publishedBatches: BoardChangeNotification[][] = [];
+  const publishedBatches: RuntimeNotification[][] = [];
 
   function getKv(ns: string): KVStorage {
     if (!kvStores.has(ns)) kvStores.set(ns, createMemoryKvStorage());
@@ -257,7 +258,7 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
   const chatQueue = createMemoryQueueStorage();
   const processAccumulatedQueue = createMemoryQueueStorage();
 
-  const adapter: BoardPlatformAdapter & { publishedBatches: BoardChangeNotification[][] } = {
+  const adapter: BoardPlatformAdapter & { publishedBatches: RuntimeNotification[][] } = {
     publishedBatches,
     kvStorage: (ns) => getKv(ns),
     kvStorageForRef(ref: string) {
@@ -291,7 +292,7 @@ function createTestAdapter(opts?: { onPublish?: (batch: BoardChangeNotification[
     },
     genId() { return Math.random().toString(36).slice(2).padEnd(32, '0'); },
     onWarn: () => {},
-    publishBoardChangeNotifications(notifications: BoardChangeNotification[]) {
+    publishBoardChangeNotifications(notifications: RuntimeNotification[]) {
       publishedBatches.push([...notifications]);
       opts?.onPublish?.(notifications);
     },
@@ -541,5 +542,39 @@ describe('bootstrap notification catch-up', () => {
 
     const dataObjectKinds = catchUpNotifications.filter(n => n.kind === 'data_object');
     expect(dataObjectKinds.length).toBeGreaterThan(0);
+  });
+
+  it('mirrors chat and watchparty notifications to the external publisher after bootstrap', async () => {
+    const adapter = createTestAdapter();
+    const runtime = buildRuntime(adapter);
+
+    const bootstrapReq = syntheticRequest('GET', '/api/board/sse?one-shot');
+    const bootstrapRes = syntheticResponse();
+    await runtime.handleRuntimeApi(bootstrapReq, bootstrapRes.res, new URL('http://localhost/api/board/sse?one-shot'));
+
+    const baselineCount = adapter.publishedBatches.length;
+    runtime.emitNotification({
+      kind: 'chat_messages',
+      cardId: 'card-source',
+      messages: [{ role: 'user', text: 'hello' }],
+    });
+    runtime.emitNotification({
+      kind: 'chat_processing',
+      cardId: 'card-source',
+      active: true,
+      sentAtMs: Date.now(),
+    });
+    runtime.emitNotification({
+      kind: 'card_watchparty',
+      cardId: 'card-source',
+      channel: 'watchparty',
+      payload: { progress: 'working' },
+      sentAtMs: Date.now(),
+    });
+
+    const mirrored = adapter.publishedBatches.slice(baselineCount).flat();
+    expect(mirrored).toContainEqual(expect.objectContaining({ kind: 'chat_messages', cardId: 'card-source' }));
+    expect(mirrored).toContainEqual(expect.objectContaining({ kind: 'chat_processing', cardId: 'card-source', active: true }));
+    expect(mirrored).toContainEqual(expect.objectContaining({ kind: 'card_watchparty', cardId: 'card-source', channel: 'watchparty' }));
   });
 });
