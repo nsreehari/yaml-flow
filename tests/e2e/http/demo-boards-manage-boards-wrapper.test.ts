@@ -8,16 +8,29 @@ const YAML_FLOW_ROOT = path.resolve(__dirname, '..', '..', '..');
 const WORKSPACE_ROOT = path.resolve(YAML_FLOW_ROOT, '..');
 const DEMO_BOARDS_ROOT = path.join(WORKSPACE_ROOT, 'demo-boards-ns-code');
 const HAS_DEMO_BOARDS = fs.existsSync(path.join(DEMO_BOARDS_ROOT, 'package.json'));
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+function resolveNpmInvocation() {
+  if (process.platform !== 'win32') {
+    return { cmd: 'npm', prefixArgs: [] as string[] };
+  }
+
+  const npmCliPath = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (fs.existsSync(npmCliPath)) {
+    return { cmd: process.execPath, prefixArgs: [npmCliPath] };
+  }
+
+  return { cmd: 'npm.cmd', prefixArgs: [] as string[] };
+}
+
+const npmInvocation = resolveNpmInvocation();
 
 function run(cmd: string, args: string[], cwd: string, timeoutMs = 180_000) {
-  const useShell = process.platform === 'win32' && cmd === npmCmd;
   const result = spawnSync(cmd, args, {
     cwd,
     timeout: timeoutMs,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
-    shell: useShell,
+    shell: false,
   });
   return {
     status: result.status,
@@ -29,7 +42,7 @@ function run(cmd: string, args: string[], cwd: string, timeoutMs = 180_000) {
 
 describe.skipIf(!HAS_DEMO_BOARDS)('e2e: hosted demo-board manage-boards smoke', () => {
   it('MB1, MB2, and MB3 smoke checks pass', () => {
-    const start = run(npmCmd, ['run', 'start:hosted'], DEMO_BOARDS_ROOT, 180_000);
+    const start = run(npmInvocation.cmd, [...npmInvocation.prefixArgs, 'run', 'start:hosted'], DEMO_BOARDS_ROOT, 180_000);
     if (start.error) throw start.error;
     if (start.status !== 0) {
       console.error('[demo-boards-manage-boards start stdout]', start.stdout.slice(-4000));
@@ -54,7 +67,7 @@ describe.skipIf(!HAS_DEMO_BOARDS)('e2e: hosted demo-board manage-boards smoke', 
       expect(result.stdout).toContain('L-MB2');
       expect(result.stdout).toContain('L-MB3');
     } finally {
-      const stop = run(npmCmd, ['run', 'stop:hosted'], DEMO_BOARDS_ROOT, 90_000);
+      const stop = run(npmInvocation.cmd, [...npmInvocation.prefixArgs, 'run', 'stop:hosted'], DEMO_BOARDS_ROOT, 90_000);
       if (stop.status !== 0) {
         console.error('[demo-boards-manage-boards stop stdout]', stop.stdout.slice(-2000));
         console.error('[demo-boards-manage-boards stop stderr]', stop.stderr.slice(-2000));
