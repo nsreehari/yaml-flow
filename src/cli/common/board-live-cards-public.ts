@@ -267,7 +267,7 @@ export interface BoardPlatformAdapter {
    * Optional cross-process board change notification publisher (named pipe, webhook, pubsub, etc.).
    * Called once per drain cycle with the complete batch of notifications produced in that cycle.
    */
-  publishBoardChangeNotifications?(notifications: BoardChangeNotification[]): void | Promise<void>;
+  publishBoardChangeNotifications?(notifications: RuntimeNotification[]): void | Promise<void>;
 
   /** Optional warn sink — defaults to no-op. */
   onWarn?(msg: string): void;
@@ -436,8 +436,8 @@ export function createBoardLiveCardsPublic(
   const emitNotification = options.emitNotification ?? ((notification: RuntimeNotification | import('./notification-interface.js').RuntimeNotificationBatch) => {
     if (!adapter.publishBoardChangeNotifications) return;
     const notifications = notification.kind === 'notification-batch'
-      ? notification.notifications as BoardChangeNotification[]
-      : [notification as BoardChangeNotification];
+      ? notification.notifications as RuntimeNotification[]
+      : [notification as RuntimeNotification];
     return adapter.publishBoardChangeNotifications(notifications);
   });
 

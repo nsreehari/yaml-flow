@@ -91,7 +91,6 @@ import { createRoutesRuntimeApi } from './routes-runtime-api.js';
 import { createRoutesNotify } from './routes-notify.js';
 import { runtimeNotificationsFromUnknownEvent } from './runtime-notification-ingress.js';
 import {
-  type BoardChangeNotification,
   type BoardOutputNotification,
   type RuntimeNotification,
   type RuntimeNotificationBatch,
@@ -526,7 +525,10 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     if (options.mirrorExternal === false || !ctx?.boardAdapter.publishBoardChangeNotifications) return;
     try {
       const boardNotifications = normalized.filter(
-        (note): note is BoardChangeNotification => note.category === 'board-output' || note.category === 'card-store',
+        (note) => note.category === 'board-output'
+          || note.category === 'card-store'
+          || note.category === 'chat-store'
+          || note.category === 'hosted-runtime',
       );
       if (boardNotifications.length > 0) {
         ctx.boardAdapter.publishBoardChangeNotifications(boardNotifications);

@@ -1,4 +1,4 @@
-import type { BoardChangeNotification } from '../common/notification-interface.js';
+import type { BoardChangeNotification, RuntimeNotification } from '../common/notification-interface.js';
 import type { BoardCallbackTransport } from '../common/board-callback-transport.js';
 import type { ExecutionRef } from '../common/execution-interface.js';
 import { parseExecutionRef, serializeExecutionRef } from '../common/execution-interface.js';
@@ -90,7 +90,7 @@ export interface AsyncBoardPlatformAdapter {
   hashFn(value: unknown): string;
   genId(): string;
   requestProcessAccumulated?(): void | Promise<void>;
-  publishBoardChangeNotifications?(notifications: BoardChangeNotification[]): void | Promise<void>;
+  publishBoardChangeNotifications?(notifications: RuntimeNotification[]): void | Promise<void>;
   warn?: (msg: string) => void;
 }
 
