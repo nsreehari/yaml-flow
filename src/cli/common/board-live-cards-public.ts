@@ -1669,7 +1669,7 @@ export function createBoardLiveCardsNonCorePublic(
           sourceDefs as any,
           { card_data: cardData, requires: mockRequires },
         );
-        activeSources = enrichedSources.filter((src) => src['_skip_when'] !== true);
+        activeSources = enrichedSources.filter((src) => src['_skip'] !== true);
         // Detect projection resolution failures (undefined values for declared projections)
         for (const src of activeSources) {
           const projections = src['projections'] as Record<string, string> | undefined;
@@ -1702,7 +1702,7 @@ export function createBoardLiveCardsNonCorePublic(
       for (let i = 0; i < enrichedSources.length; i++) {
         const src = enrichedSources[i];
         const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : `source_${i}`;
-        if (src['_skip_when'] === true) {
+        if (src['_skip'] === true) {
           sourceProbes.push({ bindTo, skipped: true });
           continue;
         }

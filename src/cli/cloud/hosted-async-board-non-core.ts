@@ -265,7 +265,7 @@ export function createHostedAsyncBoardNonCorePublic(
       const projectionErrors: Array<{ bindTo: string; key: string; error: string }> = [];
       if (sourceDefs.length > 0) {
         enrichedSources = CardCompute.enrichSourcesSync(sourceDefs as any, { card_data: cardData, requires: mockRequires });
-        activeSources = enrichedSources.filter((src) => src._skip_when !== true);
+        activeSources = enrichedSources.filter((src) => src._skip !== true);
         for (const src of activeSources) {
           const projections = src.projections as Record<string, string> | undefined;
           const resolved = src._projections as Record<string, unknown> | undefined;
@@ -288,7 +288,7 @@ export function createHostedAsyncBoardNonCorePublic(
       for (let index = 0; index < enrichedSources.length; index += 1) {
         const src = enrichedSources[index];
         const bindTo = typeof src.bindTo === 'string' ? src.bindTo : `source_${index}`;
-        if (src._skip_when === true) {
+        if (src._skip === true) {
           sourceProbes.push({ bindTo, skipped: true });
           continue;
         }

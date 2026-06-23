@@ -1121,7 +1121,7 @@ export function createCardHandlerFn(
             requires,
           },
         ) as ComputeSource[];
-        const activeSources = enrichedSources.filter((src) => src._skip_when !== true);
+        const activeSources = enrichedSources.filter((src) => src._skip !== true);
         const requiredSources = activeSources;
 
         const sourcesData: Record<string, unknown> = {};

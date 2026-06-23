@@ -49,7 +49,7 @@ export interface ComputeSource {
   /** Ephemeral: resolved projections for the current cycle. */
   _projections?: Record<string, unknown>;
   /** Ephemeral: resolved skip decision for the current cycle. */
-  _skip_when?: boolean;
+  _skip?: boolean;
   [key: string]: unknown;
 }
 
@@ -394,16 +394,16 @@ async function enrichSources(
 
   return Promise.all(
     source_defs.map(async (src: any) => {
-      let _skip_when = false;
+      let _skip = false;
       if (typeof src.skip_when === 'string' && src.skip_when.trim().length > 0) {
         try {
-          _skip_when = !!(await jsonata(src.skip_when).evaluate(evalCtx));
+          _skip = !!(await jsonata(src.skip_when).evaluate(evalCtx));
         } catch {
-          _skip_when = false;
+          _skip = false;
         }
       }
       const _projections: Record<string, unknown> = {};
-      if (!_skip_when && src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
+      if (!_skip && src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
         for (const [key, expr] of Object.entries(src.projections as Record<string, string>)) {
           if (typeof expr === 'string' && expr.trim().length > 0) {
             try {
@@ -414,7 +414,7 @@ async function enrichSources(
           }
         }
       }
-      return { ...src, _projections, _skip_when };
+      return { ...src, _projections, _skip };
     })
   );
 }
@@ -434,16 +434,16 @@ function enrichSourcesSync(
   };
 
   return source_defs.map((src: any) => {
-    let _skip_when = false;
+    let _skip = false;
     if (typeof src.skip_when === 'string' && src.skip_when.trim().length > 0) {
       try {
-        _skip_when = !!jsonataSync(src.skip_when).evaluate(evalCtx);
+        _skip = !!jsonataSync(src.skip_when).evaluate(evalCtx);
       } catch {
-        _skip_when = false;
+        _skip = false;
       }
     }
     const _projections: Record<string, unknown> = {};
-    if (!_skip_when && src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
+    if (!_skip && src.projections && typeof src.projections === 'object' && !Array.isArray(src.projections)) {
       for (const [key, expr] of Object.entries(src.projections as Record<string, string>)) {
         if (typeof expr === 'string' && expr.trim().length > 0) {
           try {
@@ -454,7 +454,7 @@ function enrichSourcesSync(
         }
       }
     }
-    return { ...src, _projections, _skip_when };
+    return { ...src, _projections, _skip };
   });
 }
 

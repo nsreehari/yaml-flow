@@ -259,7 +259,7 @@
         },
         "skip_when": {
           "type": "string",
-          "description": "JSONata expression evaluated against { card_data, requires } before queueing. If truthy, this source_def is skipped for the current request cycle and is not added to the source fetch queue."
+          "description": "JSONata over card_data/requires. Truthy skips this source."
         },
         "timeout": {
           "type": "integer",
