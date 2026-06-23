@@ -1727,6 +1727,34 @@ describe('BoardLiveCardsNonCorePublic — simulateCardCycle', () => {
     }
   });
 
+  it('skips source probes when skip_when is truthy', async () => {
+    const { nonCore } = freshNonCore();
+    const card = {
+      ...minCard('skip-source-sim'),
+      card_data: { disabled: true },
+      source_defs: [{
+        bindTo: 'data',
+        outputFile: 'data.json',
+        cli: 'fetch.sh',
+        skip_when: 'card_data.disabled',
+      }],
+      compute: [{ bindTo: 'seen', expr: 'fetched_sources.data' }],
+    };
+    const result = await nonCore.simulateCardCycle({
+      body: {
+        'card-content': card,
+        'mock-fetched-sources': { data: { stale: true } },
+      },
+    });
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.data.ok).toBe(true);
+      expect(result.data.source_probes).toEqual([{ bindTo: 'data', skipped: true }]);
+      expect(result.data.fetched_sources).toEqual({});
+      expect(result.data.computed_values.seen).toBeUndefined();
+    }
+  });
+
   it('accepts flat card body (no card-content wrapper)', async () => {
     const { nonCore } = freshNonCore();
     const card = {

@@ -32,6 +32,7 @@ The delivery is identified by its `rqt` token.
 **Other lifecycle rules:**
 - A failed fetch is terminal for that request cycle: `lastCompletedToken = rqt` and `lastCompletionStatus = failure`.
 - Required sources must clear their queued request cycle before card completion. Optional sources do not block completion.
+- A `source_def` with truthy `skip_when` is excluded from that card run before any source-fetch request is queued.
 - A retrigger starts a fresh request cycle for the card's sources.
 
 

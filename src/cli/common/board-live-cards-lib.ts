@@ -1039,7 +1039,6 @@ export function createCardHandlerFn(
 
         const cardState = (card.card_data ?? {}) as Record<string, unknown>;
         const allSources: ComputeSource[] = (card.source_defs ?? []) as ComputeSource[];
-        const requiredSources = allSources;
 
         let state: CardRuntimeSnapshot = adapters.cardRuntimeStore.readRuntime(cardId);
         let dirty = false;
@@ -1105,16 +1104,6 @@ export function createCardHandlerFn(
           }
         }
 
-        const sourcesData: Record<string, unknown> = {};
-        for (const src of allSources) {
-          if (src.outputFile) {
-            const content = adapters.fetchedSourcesStore.readSourceData(cardId, src.outputFile as string);
-            if (content !== null) {
-              sourcesData[src.bindTo] = content;
-            }
-          }
-        }
-
         const requires: Record<string, unknown> = {};
         for (const [token, taskData] of Object.entries(input.state ?? {})) {
           if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
@@ -1122,6 +1111,26 @@ export function createCardHandlerFn(
             requires[token] = unwrapped !== undefined ? unwrapped : taskData;
           } else {
             requires[token] = taskData;
+          }
+        }
+
+        const enrichedSources = CardCompute.enrichSourcesSync(
+          Array.isArray(card.source_defs) ? card.source_defs : undefined,
+          {
+            card_data: cardState,
+            requires,
+          },
+        ) as ComputeSource[];
+        const activeSources = enrichedSources.filter((src) => src._skip_when !== true);
+        const requiredSources = activeSources;
+
+        const sourcesData: Record<string, unknown> = {};
+        for (const src of activeSources) {
+          if (src.outputFile) {
+            const content = adapters.fetchedSourcesStore.readSourceData(cardId, src.outputFile as string);
+            if (content !== null) {
+              sourcesData[src.bindTo] = content;
+            }
           }
         }
 
@@ -1140,21 +1149,14 @@ export function createCardHandlerFn(
         (writeComputedValuesFn ?? adapters.outputStore.writeComputedValues.bind(adapters.outputStore))(cardId, computeNode.computed_values ?? {});
 
         const enrichedCard = { ...card };
-        const enrichedSources = CardCompute.enrichSourcesSync(
-          Array.isArray(card.source_defs) ? card.source_defs : undefined,
-          {
-            card_data: card.card_data as Record<string, unknown>,
-            requires,
-          },
-        );
 
         const dir = baseRef.value;
-        enrichedCard.source_defs = Array.isArray(enrichedSources)
-          ? enrichedSources.map(src => ({
+        enrichedCard.source_defs = Array.isArray(activeSources)
+          ? activeSources.map(src => ({
               ...src,
               boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : dir,
             }))
-          : enrichedSources;
+          : activeSources;
 
         const now = nowHighRes();
         const runQueuedToken = input.update ? undefined : now;

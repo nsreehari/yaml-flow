@@ -258,7 +258,6 @@ function createAsyncCardHandlerFn(
 
     const cardState = (card.card_data ?? {}) as Record<string, unknown>;
     const allSources = (card.source_defs ?? []) as ComputeSource[];
-    const requiredSources = allSources;
 
     let state = await adapters.cardRuntimeStore.readRuntime(cardId);
     let dirty = false;
@@ -303,13 +302,6 @@ function createAsyncCardHandlerFn(
       }
     }
 
-    const sourcesData: Record<string, unknown> = {};
-    for (const src of allSources) {
-      if (!src.outputFile) continue;
-      const content = await adapters.fetchedSourcesStore.readSourceData(cardId, src.outputFile);
-      if (content !== null) sourcesData[src.bindTo] = content;
-    }
-
     const requires: Record<string, unknown> = {};
     for (const [token, taskData] of Object.entries(input.state ?? {})) {
       if (taskData !== null && typeof taskData === 'object' && !Array.isArray(taskData)) {
@@ -327,23 +319,33 @@ function createAsyncCardHandlerFn(
       source_defs: allSources,
       compute: card.compute as never,
     };
+
+    const enrichedSources = CardCompute.enrichSourcesSync(
+      Array.isArray(card.source_defs) ? card.source_defs : undefined,
+      { card_data: cardState, requires },
+    ) as ComputeSource[];
+    const activeSources = enrichedSources.filter((src) => src._skip_when !== true);
+    const requiredSources = activeSources;
+
+    const sourcesData: Record<string, unknown> = {};
+    for (const src of activeSources) {
+      if (!src.outputFile) continue;
+      const content = await adapters.fetchedSourcesStore.readSourceData(cardId, src.outputFile);
+      if (content !== null) sourcesData[src.bindTo] = content;
+    }
     computeNode._sourcesData = sourcesData;
     if (card.compute) CardCompute.runSync(computeNode, { sourcesData });
 
     (writeComputedValuesFn ?? (() => undefined))(cardId, computeNode.computed_values ?? {});
 
-    const enrichedSources = CardCompute.enrichSourcesSync(
-      Array.isArray(card.source_defs) ? card.source_defs : undefined,
-      { card_data: card.card_data as Record<string, unknown>, requires },
-    );
     const enrichedCard = {
       ...card,
-      source_defs: Array.isArray(enrichedSources)
-        ? enrichedSources.map((src) => ({
+      source_defs: Array.isArray(activeSources)
+        ? activeSources.map((src) => ({
             ...src,
             boardDir: typeof src.boardDir === 'string' && src.boardDir ? src.boardDir : baseRef.value,
           }))
-        : enrichedSources,
+        : activeSources,
     };
 
     const now = nowIso();

@@ -20,6 +20,7 @@
     {
       "bindTo": "rebalance",
       "outputFile": "card-rebalance-proposal.json",
+      "skip_when": "card_data.disable_rebalance_fetch = true",
       "projections": {
         "holdings": "requires.holdings",
         "positions": "requires.positions",
@@ -111,5 +112,7 @@
       }
     }
   },
-  "card_data": {}
+  "card_data": {
+    "disable_rebalance_fetch": false
+  }
 }

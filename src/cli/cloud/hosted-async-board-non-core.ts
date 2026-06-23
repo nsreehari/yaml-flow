@@ -261,10 +261,12 @@ export function createHostedAsyncBoardNonCorePublic(
       const sourceDefs = Array.isArray(card.source_defs) ? card.source_defs as Array<Record<string, unknown>> : [];
       const cardData = asRecord(card.card_data ?? {});
       let enrichedSources: Array<Record<string, unknown>> = [];
+      let activeSources: Array<Record<string, unknown>> = [];
       const projectionErrors: Array<{ bindTo: string; key: string; error: string }> = [];
       if (sourceDefs.length > 0) {
         enrichedSources = CardCompute.enrichSourcesSync(sourceDefs as any, { card_data: cardData, requires: mockRequires });
-        for (const src of enrichedSources) {
+        activeSources = enrichedSources.filter((src) => src._skip_when !== true);
+        for (const src of activeSources) {
           const projections = src.projections as Record<string, string> | undefined;
           const resolved = src._projections as Record<string, unknown> | undefined;
           if (projections && resolved) {
@@ -279,10 +281,17 @@ export function createHostedAsyncBoardNonCorePublic(
       }
 
       const sourceProbes: Array<{ bindTo: string; reachable?: unknown; latencyMs?: unknown; error?: string; skipped?: boolean }> = [];
-      const fetchedSources: Record<string, unknown> = { ...mockFetchedSources };
+      const activeBindTos = new Set(activeSources.map((src) => typeof src.bindTo === 'string' ? src.bindTo : ''));
+      const fetchedSources: Record<string, unknown> = Object.fromEntries(
+        Object.entries(mockFetchedSources).filter(([bindTo]) => activeBindTos.has(bindTo)),
+      );
       for (let index = 0; index < enrichedSources.length; index += 1) {
         const src = enrichedSources[index];
         const bindTo = typeof src.bindTo === 'string' ? src.bindTo : `source_${index}`;
+        if (src._skip_when === true) {
+          sourceProbes.push({ bindTo, skipped: true });
+          continue;
+        }
         if (!options.invokeExecutor || !await resolveTaskExecutorRef()) {
           sourceProbes.push({ bindTo, skipped: true, error: 'No task executor configured' });
           continue;

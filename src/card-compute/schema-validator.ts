@@ -223,7 +223,17 @@ export function validateLiveCardRuntimeExpressions(
   if (Array.isArray(source_defs)) {
     source_defs.forEach((srcDef, i) => {
       if (!srcDef || typeof srcDef !== 'object' || Array.isArray(srcDef)) return;
-      const projections = (srcDef as Record<string, unknown>).projections;
+      const sourceDef = srcDef as Record<string, unknown>;
+      const skipWhen = sourceDef.skip_when;
+      if (typeof skipWhen === 'string' && skipWhen.trim().length > 0) {
+        validateJsonataExprWithNamespaces(
+          skipWhen,
+          `/source_defs/${i}/skip_when`,
+          VALID_PROJECTION_NAMESPACES,
+          errors,
+        );
+      }
+      const projections = sourceDef.projections;
       if (!projections || typeof projections !== 'object' || Array.isArray(projections)) return;
       for (const [key, exprVal] of Object.entries(projections as Record<string, unknown>)) {
         if (typeof exprVal !== 'string' || exprVal.trim().length === 0) continue;

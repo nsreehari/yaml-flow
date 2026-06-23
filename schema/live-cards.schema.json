@@ -257,6 +257,10 @@
             "type": "string"
           }
         },
+        "skip_when": {
+          "type": "string",
+          "description": "JSONata expression evaluated against { card_data, requires } before queueing. If truthy, this source_def is skipped for the current request cycle and is not added to the source fetch queue."
+        },
         "timeout": {
           "type": "integer",
           "minimum": 0,

@@ -487,6 +487,48 @@ describe('validateLiveCardRuntimeExpressions', () => {
     expect(r.errors).toHaveLength(0);
   });
 
+  it('accepts valid skip_when expressions (card_data and requires)', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'ok-skip-when',
+      card_data: { enabled: false },
+      source_defs: [{
+        bindTo: 'quotes',
+        outputFile: 'quotes.json',
+        skip_when: 'not(card_data.enabled) or $count(requires.portfolio.holdings) = 0',
+      }],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('rejects skip_when expression using fetched_sources namespace', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-skip-when-fetched',
+      card_data: {},
+      source_defs: [{
+        bindTo: 'quotes',
+        outputFile: 'quotes.json',
+        skip_when: 'fetched_sources.previous.data',
+      }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/source_defs/0/skip_when') && e.includes('disallowed namespace "fetched_sources"'))).toBe(true);
+  });
+
+  it('rejects skip_when expression with invalid JSONata syntax', () => {
+    const r = validateLiveCardRuntimeExpressions({
+      id: 'bad-skip-when-syntax',
+      card_data: {},
+      source_defs: [{
+        bindTo: 'quotes',
+        outputFile: 'quotes.json',
+        skip_when: 'requires.holdings[[[',
+      }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some(e => e.includes('/source_defs/0/skip_when'))).toBe(true);
+  });
+
   it('rejects projections expression using fetched_sources namespace', () => {
     const r = validateLiveCardRuntimeExpressions({
       id: 'bad-projections-fetched',

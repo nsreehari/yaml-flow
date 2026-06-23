@@ -1662,14 +1662,16 @@ export function createBoardLiveCardsNonCorePublic(
       const sourceDefs = (card['source_defs'] ?? []) as Array<Record<string, unknown>>;
       const cardData = (card['card_data'] ?? {}) as Record<string, unknown>;
       let enrichedSources: Array<Record<string, unknown>> = [];
+      let activeSources: Array<Record<string, unknown>> = [];
       const projectionErrors: Array<{ bindTo: string; key: string; error: string }> = [];
       if (sourceDefs.length > 0) {
         enrichedSources = CardCompute.enrichSourcesSync(
           sourceDefs as any,
           { card_data: cardData, requires: mockRequires },
         );
+        activeSources = enrichedSources.filter((src) => src['_skip_when'] !== true);
         // Detect projection resolution failures (undefined values for declared projections)
-        for (const src of enrichedSources) {
+        for (const src of activeSources) {
           const projections = src['projections'] as Record<string, string> | undefined;
           const resolved = src['_projections'] as Record<string, unknown> | undefined;
           if (projections && resolved) {
@@ -1690,13 +1692,20 @@ export function createBoardLiveCardsNonCorePublic(
       //                                     initialised board runtime directory
       //    If no executor is available, probes are marked as skipped.
       const sourceProbes: SimulateResult['source_probes'] = [];
-      const fetchedSources: Record<string, unknown> = { ...mockFetchedSources };
+      const activeBindTos = new Set(activeSources.map((src) => typeof src['bindTo'] === 'string' ? src['bindTo'] : ''));
+      const fetchedSources: Record<string, unknown> = Object.fromEntries(
+        Object.entries(mockFetchedSources).filter(([bindTo]) => activeBindTos.has(bindTo)),
+      );
       const bodyTeRef = body['task-executor-ref'] as ExecutionRef | undefined;
       const teRef = (bodyTeRef?.howToRun && bodyTeRef?.whatToRun ? bodyTeRef : undefined)
         ?? resolveTaskExecutorRef();
       for (let i = 0; i < enrichedSources.length; i++) {
         const src = enrichedSources[i];
         const bindTo = typeof src['bindTo'] === 'string' ? src['bindTo'] : `source_${i}`;
+        if (src['_skip_when'] === true) {
+          sourceProbes.push({ bindTo, skipped: true });
+          continue;
+        }
         if (!teRef) {
           sourceProbes.push({ bindTo, skipped: true, error: 'No task executor configured' });
           continue;

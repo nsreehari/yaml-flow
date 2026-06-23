@@ -40,11 +40,13 @@ function makeAdapters(card: LiveCard): {
   runtimeStore: Map<string, CardRuntimeSnapshot>;
   stagedContent: Map<string, string>;
   committedContent: Map<string, unknown>;
+  requestEntries: Array<{ journalId: string; entries: Array<{ taskKind: string; payload: unknown }> }>;
 } {
   const completedCalls: Array<{ taskName: string; data: Record<string, unknown> }> = [];
   const runtimeStore = new Map<string, CardRuntimeSnapshot>();
   const stagedContent = new Map<string, string>();
   const committedContent = new Map<string, unknown>();
+  const requestEntries: Array<{ journalId: string; entries: Array<{ taskKind: string; payload: unknown }> }> = [];
 
   const adapters: CardHandlerAdapters = {
     cardStore: {
@@ -84,14 +86,14 @@ function makeAdapters(card: LiveCard): {
       readStatusSnapshot: () => null,
     },
     executionRequestStore: {
-      appendEntries: () => {},
+      appendEntries: (journalId, entries) => { requestEntries.push({ journalId, entries: entries as Array<{ taskKind: string; payload: unknown }> }); },
       dispatchEntriesForJournalId: () => {},
     },
   };
 
   // Wrap completedCalls collection into the adapters snapshot so callers can
   // pass their own taskCompletedFn while still using the same mocks.
-  return { adapters, completedCalls, runtimeStore, stagedContent, committedContent };
+  return { adapters, completedCalls, runtimeStore, stagedContent, committedContent, requestEntries };
 }
 
 const BASE_REF = { kind: 'fs-path' as const, value: '/tmp/test-board' };
@@ -373,6 +375,52 @@ describe('createCardHandlerFn — multi-source completion gating', () => {
     expect(identity?.lastCompletedToken).toBeUndefined();
     expect(manager?.lastRequestedToken).toBeDefined();
     expect(manager?.lastCompletedToken).toBeUndefined();
+  });
+
+  it('does not queue a source when skip_when is truthy', async () => {
+    const card: LiveCard = {
+      id: 'card-skip-queue',
+      card_data: { shouldSkip: true },
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt', skip_when: 'card_data.shouldSkip' },
+        { bindTo: 'manager', outputFile: 'manager.txt' },
+      ],
+    };
+
+    const { adapters, completedCalls, requestEntries } = makeAdapters(card);
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, (taskName, data) => {
+      completedCalls.push({ taskName, data });
+    }, () => {});
+
+    const result = await handler(makeInput('card-skip-queue'));
+
+    expect(result).toBe('task-initiated');
+    expect(completedCalls).toHaveLength(0);
+    expect(requestEntries).toHaveLength(1);
+    const payload = requestEntries[0].entries[0].payload as { enrichedCard: { source_defs: Array<{ bindTo: string }> } };
+    expect(payload.enrichedCard.source_defs.map((src) => src.bindTo)).toEqual(['manager']);
+  });
+
+  it('does not block completion when all sources are skipped', async () => {
+    const card: LiveCard = {
+      id: 'card-all-skipped',
+      card_data: { disabled: true },
+      source_defs: [
+        { bindTo: 'identity', outputFile: 'identity.txt', skip_when: 'card_data.disabled' },
+      ],
+    };
+
+    const { adapters, completedCalls, requestEntries } = makeAdapters(card);
+    const handler = createCardHandlerFn(BASE_REF, JOURNAL_ID, adapters, (taskName, data) => {
+      completedCalls.push({ taskName, data });
+    }, () => {});
+
+    const result = await handler(makeInput('card-all-skipped'));
+
+    expect(result).toBe('task-initiated');
+    expect(requestEntries).toHaveLength(0);
+    expect(completedCalls).toHaveLength(1);
+    expect(completedCalls[0].taskName).toBe('card-all-skipped');
   });
 
   /**
