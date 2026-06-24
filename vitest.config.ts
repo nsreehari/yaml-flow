@@ -11,9 +11,6 @@ export default defineConfig({
       'tests/examples/*e2e*.test.ts',
     ],
     forceExit: true,
-    environmentMatchGlobs: [
-      ['tests/browser/**', 'jsdom'],
-    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

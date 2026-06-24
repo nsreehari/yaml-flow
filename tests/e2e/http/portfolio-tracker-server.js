@@ -81,7 +81,7 @@ const INLINE_CARDS = [
     view: {
       elements: [
         { kind: 'table', label: 'Holdings',
-          data: { bind: 'card_data.holdings', columns: ['symbol', 'qty'] } },
+          data: { bind: 'card_data.holdings' }, spec: { columns: ['symbol', 'qty'] } },
       ],
     },
   },
@@ -117,7 +117,7 @@ const INLINE_CARDS = [
     view: {
       elements: [
         { kind: 'table', label: 'Portfolio Positions',
-          data: { bind: 'computed_values.table.rows', columns: ['symbol', 'qty', 'price', 'value'] } },
+          data: { bind: 'computed_values.table.rows' }, spec: { columns: ['symbol', 'qty', 'price', 'value'] } },
       ],
     },
   },

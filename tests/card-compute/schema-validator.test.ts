@@ -25,7 +25,7 @@ describe('validateLiveCardSchema', () => {
       const r = validateLiveCardSchema({
         id: 'card1',
         card_data: { status: 'fresh' },
-        view: { elements: [{ kind: 'metric' }] },
+        view: { elements: [{ kind: 'metric', data: { bind: 'card_data.total' } }] },
       });
       expect(r.ok).toBe(true);
     });
@@ -49,7 +49,7 @@ describe('validateLiveCardSchema', () => {
         view: {
           elements: [
             { kind: 'metric', data: { bind: 'card_data.total' } },
-            { kind: 'table', data: { bind: 'card_data.rows', columns: ['a', 'b'] } },
+            { kind: 'table', data: { bind: 'card_data.rows' }, spec: { columns: ['a', 'b'] } },
           ],
         },
         compute: [
@@ -97,17 +97,35 @@ describe('validateLiveCardSchema', () => {
     });
 
     it('all element kinds accepted', () => {
-      const kinds = [
-        'metric', 'table', 'chart', 'form', 'filter', 'list',
-        'notes', 'todo', 'alert', 'narrative', 'badge', 'text',
-        'markdown', 'custom', 'actions',
-      ];
-      for (const kind of kinds) {
+      // Each kind paired with a minimal valid element body for the new schema:
+      // display kinds require `data` (value_source); input/config kinds require their `spec`.
+      const elements: Record<string, unknown> = {
+        metric: { kind: 'metric', data: { bind: 'card_data.x' } },
+        table: { kind: 'table', data: { bind: 'card_data.x' } },
+        chart: { kind: 'chart', data: { bind: 'card_data.x' } },
+        list: { kind: 'list', data: { bind: 'card_data.x' } },
+        alert: { kind: 'alert', data: { bind: 'card_data.x' } },
+        badge: { kind: 'badge', data: { bind: 'card_data.x' } },
+        narrative: { kind: 'narrative', data: { bind: 'card_data.x' } },
+        text: { kind: 'text', data: { bind: 'card_data.x' } },
+        markdown: { kind: 'markdown', data: { bind: 'card_data.x' } },
+        markup: { kind: 'markup', data: { bind: 'card_data.x' } },
+        notes: { kind: 'notes' },
+        todo: { kind: 'todo' },
+        'editable-table': { kind: 'editable-table' },
+        custom: { kind: 'custom' },
+        actions: { kind: 'actions', spec: { buttons: [{ id: 'go', label: 'Go' }] } },
+        form: { kind: 'form', spec: { fields: { properties: {} } } },
+        selection: { kind: 'selection', spec: { fields: { properties: {} } } },
+        searchbox: { kind: 'searchbox', spec: { fields: { properties: {} } } },
+        query: { kind: 'query', spec: { fields: { properties: {} } } },
+      };
+      for (const [kind, element] of Object.entries(elements)) {
         const r = validateLiveCardSchema({
           id: `k-${kind}`, card_data: {},
-          view: { elements: [{ kind }] },
+          view: { elements: [element] },
         });
-        expect(r.ok, `kind "${kind}" should be valid`).toBe(true);
+        expect(r.ok, `kind "${kind}" should be valid: ${r.errors.join('; ')}`).toBe(true);
       }
     });
 

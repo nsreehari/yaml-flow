@@ -7,34 +7,6 @@
       "type": "string",
       "pattern": "^(card_data|requires|fetched_sources|computed_values)(\\.|$)"
     },
-    "bind_or_literal": {
-      "description": "A literal value or a bind reference object",
-      "oneOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "array"
-        },
-        {
-          "type": "object",
-          "properties": {
-            "bind": {
-              "$ref": "#/definitions/bind_ref"
-            }
-          },
-          "required": [
-            "bind"
-          ]
-        }
-      ]
-    },
     "compute_expr": {
       "description": "A declarative JSON compute expression",
       "type": "object",
@@ -278,11 +250,8 @@
       "required": [
         "kind"
       ],
+      "additionalProperties": false,
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Optional element ID for targeted updates"
-        },
         "kind": {
           "enum": [
             "metric",
@@ -290,7 +259,6 @@
             "editable-table",
             "chart",
             "form",
-            "filter",
             "list",
             "notes",
             "todo",
@@ -299,163 +267,456 @@
             "badge",
             "text",
             "markdown",
+            "markup",
+            "selection",
+            "searchbox",
+            "query",
             "ref",
             "custom",
             "actions"
           ]
         },
+        "id": {
+          "type": "string",
+          "description": "Optional element ID for targeted updates and action routing"
+        },
         "label": {
           "type": "string",
-          "description": "Heading above this element"
+          "description": "Heading above this element (also the metric/alert title)"
         },
         "className": {
           "type": "string",
           "description": "Bootstrap grid class, e.g. 'col-12 col-md-6'"
+        },
+        "containerStyle": {
+          "type": "object",
+          "description": "Inline style applied to the element container"
         },
         "visible": {
           "type": "string",
           "description": "card_data/requires/fetched_sources/computed_values path — element shown only if truthy"
         },
         "data": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/value_source"
+            }
+          ],
+          "description": "The element value: { bind } (dynamic) or { value } (static literal)"
+        },
+        "writeTo": {
+          "$ref": "#/definitions/write_ref"
+        },
+        "spec": {
           "type": "object",
-          "properties": {
-            "bind": {
-              "$ref": "#/definitions/bind_ref",
-              "description": "card_data/requires/fetched_sources/computed_values path to read data from"
-            },
-            "writeTo": {
-              "$ref": "#/definitions/bind_ref",
-              "description": "card_data path for user input (form, filter, todo, notes)"
-            },
-            "columns": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "table: visible columns"
-            },
-            "maxRows": {
-              "type": "integer",
-              "description": "table/list: max rows to display"
-            },
-            "sortable": {
-              "type": "boolean",
-              "default": true,
-              "description": "table: enable click-to-sort"
-            },
-            "placeholder": {
-              "type": "string",
-              "description": "Empty-state message"
-            },
-            "chartType": {
-              "enum": [
-                "bar",
-                "line",
-                "pie",
-                "doughnut"
-              ]
-            },
-            "chartOptions": {
-              "type": "object",
-              "description": "Chart.js options passthrough"
-            },
-            "fields": {
-              "type": "object",
-              "description": "JSON Schema for form/filter fields"
-            },
-            "thresholds": {
-              "type": "object",
-              "properties": {
-                "green": {
-                  "type": "string"
-                },
-                "amber": {
-                  "type": "string"
-                }
+          "description": "Per-kind static configuration (constrained per kind below)"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "metric"
               }
             },
-            "colorMap": {
-              "type": "object",
-              "description": "badge: value → Bootstrap color"
-            },
-            "style": {
-              "enum": [
-                "heading",
-                "muted",
-                "default"
-              ],
-              "description": "text: display style"
-            },
-            "upload": {
-              "type": "boolean",
-              "default": true,
-              "description": "file-upload: show drop zone (false = read-only file list)"
-            },
-            "accept": {
-              "type": "array",
-              "items": {
-                "type": "string"
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_empty"
               },
-              "description": "file-upload: allowed extensions"
+              "writeTo": false
             },
-            "multiple": {
-              "type": "boolean",
-              "default": true,
-              "description": "file-upload: allow multiple files"
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "table"
+              }
             },
-            "fileAttach": {
-              "type": "boolean",
-              "default": false,
-              "description": "chat: enable inline file attachments"
-            },
-            "fileAccept": {
-              "type": "array",
-              "items": {
-                "type": "string"
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_table"
               },
-              "description": "chat: allowed attachment extensions"
+              "writeTo": false
             },
-            "buttons": {
-              "type": "array",
-              "description": "actions: button definitions",
-              "items": {
-                "type": "object",
-                "required": [
-                  "id",
-                  "label"
-                ],
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "style": {
-                    "type": "string",
-                    "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'"
-                  },
-                  "size": {
-                    "type": "string",
-                    "default": "sm"
-                  },
-                  "disabled": {
-                    "oneOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "string",
-                        "description": "card_data/requires/fetched_sources/computed_values path — truthy = disabled"
-                      }
-                    ]
-                  }
-                }
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "list"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_table"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "chart"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_chart"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "alert"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_alert"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "badge"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_badge"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "narrative"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_empty"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "text"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_text"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "markdown"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_empty"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "markup"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_empty"
+              },
+              "writeTo": false
+            },
+            "required": [
+              "data"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "actions"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_actions"
+              },
+              "data": false,
+              "writeTo": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "selection"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_single_field"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "searchbox"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_searchbox"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "query"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_searchbox"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "form"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_form"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "notes"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_empty"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "todo"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_empty"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "editable-table"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_editable_table"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ref"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "$ref": "#/definitions/spec_ref"
               }
             }
           }
         }
-      }
+      ]
     },
     "view": {
       "type": "object",
@@ -469,6 +730,370 @@
           "items": {
             "$ref": "#/definitions/render_element"
           }
+        }
+      }
+    },
+    "value_source": {
+      "description": "Element value source. Exactly one of `bind` (dynamic path) or `value` (static inline literal).",
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "bind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "bind": {
+              "$ref": "#/definitions/bind_ref",
+              "description": "card_data/requires/fetched_sources/computed_values path to read the value from"
+            }
+          }
+        },
+        {
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "description": "Static inline literal value (no binding)."
+            }
+          }
+        }
+      ]
+    },
+    "write_ref": {
+      "type": "string",
+      "pattern": "^card_data(\\.|$)",
+      "description": "card_data path the element writes user input to (input kinds only)"
+    },
+    "spec_empty": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "spec_table": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Visible columns, in order"
+        },
+        "maxRows": {
+          "type": "integer",
+          "description": "Max rows to display"
+        },
+        "sortable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable click-to-sort"
+        },
+        "placeholder": {
+          "type": "string",
+          "description": "Empty-state message"
+        }
+      }
+    },
+    "spec_chart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "chartType": {
+          "enum": [
+            "bar",
+            "line",
+            "area",
+            "scatter",
+            "pie",
+            "doughnut"
+          ],
+          "description": "Explicit chart type (else auto-detected)"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "First column is the label/x axis; rest are series"
+        },
+        "labelKey": {
+          "type": "string",
+          "description": "Row key to use as the category/x label"
+        },
+        "xKey": {
+          "type": "string",
+          "description": "Row key to use as the x axis (line charts)"
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Row keys to plot as series"
+        },
+        "stacked": {
+          "type": "boolean",
+          "description": "Stack bar/area series"
+        },
+        "legend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the legend"
+        },
+        "grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the cartesian grid"
+        },
+        "height": {
+          "type": "integer",
+          "default": 220,
+          "description": "Chart height in pixels"
+        }
+      }
+    },
+    "spec_alert": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "green": {
+              "type": "string",
+              "description": "Comparison expr, e.g. '>=80'"
+            },
+            "amber": {
+              "type": "string",
+              "description": "Comparison expr, e.g. '>=50'"
+            }
+          }
+        }
+      }
+    },
+    "spec_badge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "colorMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "value → tone/Bootstrap color"
+        }
+      }
+    },
+    "spec_text": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "enum": [
+            "default",
+            "file-links"
+          ],
+          "description": "'file-links' renders the bound file array as download links"
+        },
+        "style": {
+          "enum": [
+            "default",
+            "muted",
+            "muted-italic",
+            "heading"
+          ],
+          "description": "Display style"
+        },
+        "hideIfEmpty": {
+          "type": "boolean",
+          "description": "Render nothing when the value is empty"
+        }
+      }
+    },
+    "spec_actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "buttons"
+      ],
+      "properties": {
+        "buttons": {
+          "type": "array",
+          "description": "Button definitions; clicks emit an action save keyed by element id + button id",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "style": {
+                "type": "string",
+                "description": "Bootstrap button variant, e.g. 'success', 'outline-danger'"
+              },
+              "size": {
+                "type": "string",
+                "default": "sm"
+              },
+              "disabled": {
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "description": "card_data/requires/fetched_sources/computed_values path — truthy = disabled"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "spec_form": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields"
+      ],
+      "properties": {
+        "fields": {
+          "type": "object",
+          "description": "JSON-Schema-ish { properties, required } describing the form fields"
+        },
+        "discardLabel": {
+          "type": "string"
+        },
+        "saveLabel": {
+          "type": "string"
+        },
+        "validators": {
+          "type": "array",
+          "description": "Cross-field validation rules. Each item is a [jsonataExpr, errorMessage] pair; the expr is evaluated against { data: <current field values> } and must return true to pass. Required-field emptiness is already handled by fields.required, so validators are for format/relationship rules. Runs on blur and submit.",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "spec_single_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields"
+      ],
+      "properties": {
+        "fields": {
+          "type": "object",
+          "description": "Single-property JSON-Schema-ish { properties, required } for the control"
+        }
+      }
+    },
+    "spec_searchbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields"
+      ],
+      "properties": {
+        "fields": {
+          "type": "object",
+          "description": "Single-property JSON-Schema-ish { properties, required } for the query field"
+        },
+        "actionLabel": {
+          "type": "string",
+          "description": "Submit button label (default 'Search')"
+        }
+      }
+    },
+    "spec_editable_table": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "type": "object",
+          "description": "JSON-Schema-ish { properties } describing per-column cell types"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit column order"
+        },
+        "addRow": {
+          "type": "boolean",
+          "default": true
+        },
+        "deleteRow": {
+          "type": "boolean",
+          "default": true
+        },
+        "placeholder": {
+          "type": "string"
+        }
+      }
+    },
+    "spec_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "viewBind"
+      ],
+      "properties": {
+        "viewBind": {
+          "$ref": "#/definitions/bind_ref",
+          "description": "Path to a computed view descriptor { kind, data?, spec? } selecting the effective kind at runtime"
+        },
+        "fallbackKind": {
+          "enum": [
+            "metric",
+            "table",
+            "editable-table",
+            "chart",
+            "form",
+            "list",
+            "notes",
+            "todo",
+            "alert",
+            "narrative",
+            "badge",
+            "text",
+            "markdown",
+            "markup",
+            "selection",
+            "searchbox",
+            "query",
+            "ref",
+            "custom",
+            "actions"
+          ],
+          "description": "Kind to use when viewBind is absent/unresolved"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Columns to forward to the resolved table/list view"
         }
       }
     }

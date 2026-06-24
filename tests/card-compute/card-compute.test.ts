@@ -354,7 +354,7 @@ describe('CardCompute.validate', () => {
   });
 
   it('accepts all valid view element kinds', () => {
-    const kinds = ['metric','table','chart','form','filter','list','notes','todo','alert','narrative','badge','text','markdown','custom'];
+    const kinds = ['metric','table','editable-table','chart','form','list','notes','todo','alert','narrative','badge','text','markdown','markup','selection','searchbox','query','ref','custom','actions'];
     for (const kind of kinds) {
       const r = CardCompute.validate({ id: `k-${kind}`, card_data: {}, view: { elements: [{ kind }] } });
       expect(r.ok, `kind "${kind}" should be valid`).toBe(true);

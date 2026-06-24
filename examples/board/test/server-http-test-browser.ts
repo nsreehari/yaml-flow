@@ -600,7 +600,9 @@ function buildChatProbeCard(cardId, label) {
           label: 'Holdings',
           data: {
             bind: 'card_data.holdings',
-            writeTo: 'card_data.holdings',
+          },
+          writeTo: 'card_data.holdings',
+          spec: {
             columns: ['ticker', 'quantity', 'cost_basis'],
             schema: {
               properties: {

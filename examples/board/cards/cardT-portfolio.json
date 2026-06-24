@@ -20,8 +20,10 @@
         "kind": "editable-table",
         "label": "Holdings",
         "data": {
-          "bind": "card_data.holdings",
-          "writeTo": "card_data.holdings",
+          "bind": "card_data.holdings"
+        },
+        "writeTo": "card_data.holdings",
+        "spec": {
           "columns": [
             "ticker",
             "quantity",

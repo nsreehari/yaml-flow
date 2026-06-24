@@ -63,7 +63,7 @@ const CARD_PORTFOLIO_FORM = {
   view: {
     elements: [
       { kind: 'table', label: 'Holdings',
-        data: { bind: 'card_data.holdings', columns: ['symbol', 'qty'] } }
+        data: { bind: 'card_data.holdings' }, spec: { columns: ['symbol', 'qty'] } }
     ]
   }
 };
@@ -99,7 +99,7 @@ const CARD_HOLDINGS_TABLE = {
   view: {
     elements: [
       { kind: 'table', label: 'Portfolio Positions',
-        data: { bind: 'computed_values.table.rows', columns: ['symbol', 'qty', 'price', 'value'] } }
+        data: { bind: 'computed_values.table.rows' }, spec: { columns: ['symbol', 'qty', 'price', 'value'] } }
     ]
   }
 };

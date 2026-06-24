@@ -59,7 +59,9 @@
         "kind": "table",
         "label": "Positions",
         "data": {
-          "bind": "computed_values.positions",
+          "bind": "computed_values.positions"
+        },
+        "spec": {
           "columns": [
             "ticker",
             "value",

@@ -323,11 +323,14 @@ function materializeView(card: UnknownRecord, runtimeNode: UnknownRecord): Board
     elements: elements.map((element, index) => {
       const elementObj = ensureRecord(element);
       const dataObj = ensureRecord(elementObj.data);
+      const specObj = ensureRecord(elementObj.spec);
       const visible = typeof elementObj.visible === 'string'
         ? Boolean(getAtPath(runtimeNode, elementObj.visible))
         : true;
       const bind = typeof dataObj.bind === 'string' ? dataObj.bind : undefined;
-      const maxRows = typeof dataObj.maxRows === 'number' ? dataObj.maxRows : undefined;
+      const maxRows = typeof specObj.maxRows === 'number'
+        ? specObj.maxRows
+        : (typeof dataObj.maxRows === 'number' ? dataObj.maxRows : undefined);
       const resolved = bind ? getAtPath(runtimeNode, bind) : undefined;
       const model: BoardLiveCardsMcpRenderedViewElement = {
         id: typeof elementObj.id === 'string' && elementObj.id ? elementObj.id : `element-${index}`,
@@ -426,9 +429,13 @@ function applyManageCardPatch(card: UnknownRecord, patch: UnknownRecord): Unknow
     const view = ensureRecord(nextCard.view);
     const elements = ensureArray(view.elements);
     for (const rawElement of elements) {
-      const data = ensureRecord(ensureRecord(rawElement).data);
-      if (typeof data.writeTo === 'string' && data.writeTo) {
-        writeTo = data.writeTo;
+      const elementObj = ensureRecord(rawElement);
+      const data = ensureRecord(elementObj.data);
+      const elementWriteTo = typeof elementObj.writeTo === 'string' && elementObj.writeTo
+        ? elementObj.writeTo
+        : (typeof data.writeTo === 'string' ? data.writeTo : '');
+      if (elementWriteTo) {
+        writeTo = elementWriteTo;
         break;
       }
     }

@@ -54,10 +54,12 @@
         "kind": "ref",
         "label": "Proposed Trades",
         "data": {
-          "bind": "computed_values.proposed_trades",
+          "bind": "computed_values.proposed_trades"
+        },
+        "writeTo": "card_data.proposed_trades",
+        "spec": {
           "viewBind": "computed_values._view",
           "fallbackKind": "editable-table",
-          "writeTo": "card_data.proposed_trades",
           "columns": [
             "ticker",
             "direction",
@@ -93,9 +95,9 @@
         "kind": "notes",
         "label": "Notes",
         "data": {
-          "bind": "card_data.notes",
-          "writeTo": "card_data.notes"
-        }
+          "bind": "card_data.notes"
+        },
+        "writeTo": "card_data.notes"
       }
     ],
     "layout": {

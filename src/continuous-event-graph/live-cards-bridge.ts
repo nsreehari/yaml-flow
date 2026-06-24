@@ -81,8 +81,8 @@ export interface LiveCard {
 
 /**
  * A Board is a named container of live card nodes.
- * Matches the shape used by LiveCard.Board() in browser/live-cards.js:
- *   LiveCard.Board(engine, el, { nodes, positions?, mode, canvas, ... })
+ * The board carries its card/source nodes plus board-level metadata:
+ *   { nodes, positions?, mode, canvas, ... }
  *
  * The `nodes` array contains the card/source JSON objects.
  * Board-level metadata (id, title, settings) is carried through to the

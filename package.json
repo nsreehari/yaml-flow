@@ -1,6 +1,6 @@
 {
   "name": "yaml-flow",
-  "version": "8.11.8",
+  "version": "8.11.9",
   "description": "Unified workflow engine: step-machine (sequential) + event-graph (stateless DAG) with pluggable storage",
   "author": "",
   "license": "MIT",
@@ -154,6 +154,7 @@
     "browser",
     "!browser/card-compute.js",
     "!browser/board-livegraph-engine.js",
+    "!browser/live-cards.js",
     "!lib/**/*.map",
     "!browser/**/*.map",
     "!examples/**/.demo-setup/**",

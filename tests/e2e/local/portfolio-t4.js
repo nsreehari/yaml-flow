@@ -56,7 +56,7 @@ const CARD_PORTFOLIO_FORM = {
   meta: { title: 'Portfolio Holdings Form' },
   provides: [{ bindTo: 'holdings', ref: 'card_data.holdings' }],
   card_data: { holdings: [] },
-  view: { elements: [{ kind: 'table', label: 'Holdings', data: { bind: 'card_data.holdings', columns: ['symbol', 'qty'] } }] }
+  view: { elements: [{ kind: 'table', label: 'Holdings', data: { bind: 'card_data.holdings' }, spec: { columns: ['symbol', 'qty'] } }] }
 };
 
 const CARD_PRICE_FETCH = {
@@ -82,7 +82,7 @@ const CARD_HOLDINGS_TABLE = {
     bindTo: 'table',
     expr: '{ "rows": $map(requires.holdings, function($h) { { "symbol": $h.symbol, "qty": $h.qty, "price": $lookup(requires.prices, $h.symbol), "value": $h.qty * $lookup(requires.prices, $h.symbol) } }) }'
   }],
-  view: { elements: [{ kind: 'table', label: 'Portfolio Positions', data: { bind: 'computed_values.table.rows', columns: ['symbol', 'qty', 'price', 'value'] } }] }
+  view: { elements: [{ kind: 'table', label: 'Portfolio Positions', data: { bind: 'computed_values.table.rows' }, spec: { columns: ['symbol', 'qty', 'price', 'value'] } }] }
 };
 
 const CARD_PORTFOLIO_VALUE = {
