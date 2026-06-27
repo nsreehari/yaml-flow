@@ -481,6 +481,73 @@ describe('platform-free server runtime (Node host)', () => {
     expect(uploaded?.chat).toBe(false);
   });
 
+  it('manage.upload-card-file-multiple uploads files and appends a filegroup', async () => {
+    const initData = await fetchOneShotPayload(`${API_BASE}/sse?one-shot`);
+    const cardDefs = initData.cardDefinitions as Array<Record<string, unknown>>;
+    const cardId = cardDefs[0].id as string;
+
+    const res = await fetch(`${API_BASE}/mcp-controlplane`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'manage.upload-card-file-multiple',
+        args: {
+          board_id: 'test-board',
+          card_id: cardId,
+          message: 'batch upload',
+          files: [
+            { file_name: 'multi-a.txt', content_type: 'text/plain', text: 'alpha' },
+            { file_name: 'multi-b.txt', content_type: 'text/plain', text: 'bravo' },
+          ],
+        },
+      }),
+    });
+    expect(res.ok).toBe(true);
+    const resp = await res.json() as {
+      status: string;
+      data: {
+        ok: boolean;
+        files: Array<Record<string, unknown>>;
+        file_idxs: number[];
+        filegroup: Record<string, unknown>;
+      };
+    };
+    expect(resp.status).toBe('success');
+    expect(resp.data.ok).toBe(true);
+    expect(resp.data.files).toHaveLength(2);
+    expect(resp.data.file_idxs).toHaveLength(2);
+    expect(resp.data.file_idxs[0]).toBeLessThan(resp.data.file_idxs[1]);
+
+    const filegroup = resp.data.filegroup;
+    expect(filegroup).not.toHaveProperty('id');
+    expect(filegroup).toHaveProperty('message', 'batch upload');
+    expect(filegroup.file_idxs).toEqual(resp.data.file_idxs);
+    expect(filegroup).toHaveProperty('created_at');
+
+    const cardRes = await fetch(`${API_BASE}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'manage.read-card', args: { card_id: cardId } }),
+    });
+    expect(cardRes.ok).toBe(true);
+    const cardResp = await cardRes.json() as {
+      status: string;
+      data: Array<{ card_data?: { files?: Array<Record<string, unknown>>; filegroups?: Array<Record<string, unknown>> } }>;
+    };
+    const cardData = cardResp.data?.[0]?.card_data;
+    const files = Array.isArray(cardData?.files) ? cardData!.files! : [];
+    for (const idx of resp.data.file_idxs) {
+      expect(files[idx]).toBeTruthy();
+      expect(files[idx]?.chat).toBe(false);
+    }
+    const filegroups = Array.isArray(cardData?.filegroups) ? cardData!.filegroups! : [];
+    const persistedGroup = filegroups.find(
+      (group) => Array.isArray(group?.file_idxs) && (group.file_idxs as number[]).join(',') === resp.data.file_idxs.join(','),
+    );
+    expect(persistedGroup).toBeTruthy();
+    expect(persistedGroup?.message).toBe('batch upload');
+  });
+
   it('GET /api/board/sse returns event-stream', async () => {
     const controller = new AbortController();
     const res = await fetch(`${API_BASE}/sse?clientId=test-sse-1`, { signal: controller.signal });

@@ -822,6 +822,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
     return createMcpControlplaneToolRegistryImpl({
       boardId,
       uploadCardFile,
+      uploadCardFilesMultiple,
       getMcpFacade: () => createMcpFacade(),
       controlplane: controlplaneToolHandlers,
     });
@@ -944,6 +945,7 @@ export function createSingleBoardServerRuntime(options: SingleBoardRuntimeOption
   });
 
   const uploadCardFile = cardFileOps.uploadCardFile;
+  const uploadCardFilesMultiple = cardFileOps.uploadCardFilesMultiple;
 
   async function resolveChatHandlerTarget(cardId: string): Promise<{
     ctx: BoardContext;

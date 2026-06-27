@@ -150,9 +150,17 @@ type UploadCardFile = (
   opts?: { inChat?: boolean },
 ) => unknown | Promise<unknown>;
 
+/** Per-board batch upload entry point as exposed by createCardFileOps. */
+type UploadCardFilesMultiple = (
+  cardId: string,
+  files: Array<{ requestedName: string; contentType: string; buffer: Uint8Array }>,
+  opts?: { message?: string },
+) => unknown | Promise<unknown>;
+
 export interface McpControlplaneRegistryDeps {
   boardId: string;
   uploadCardFile: UploadCardFile;
+  uploadCardFilesMultiple: UploadCardFilesMultiple;
   /** Resolves the (lazy) per-board MCP facade for admin tool dispatch. */
   getMcpFacade: () => Pick<McpFacadeForRegistry, 'listRuntimeCards' | 'adminReadCard' | 'adminUpsertCard' | 'manageAddChatAttachment' | 'manageAddChatEntryAndAnyAttachments' | 'managePatchCard' | 'manageRemoveCard' | 'manageUpsertCard'>;
   controlplane: {
@@ -168,7 +176,7 @@ export interface McpControlplaneRegistryDeps {
 }
 
 export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryDeps): ToolRegistry {
-  const { boardId, uploadCardFile, getMcpFacade, controlplane } = deps;
+  const { boardId, uploadCardFile, uploadCardFilesMultiple, getMcpFacade, controlplane } = deps;
 
   function requireBoardId(args: Record<string, unknown>, toolName: string): void {
     const requestBoardId = getMcpArgString(args, 'board_id');
@@ -221,6 +229,30 @@ export function createMcpControlplaneToolRegistry(deps: McpControlplaneRegistryD
       if (!bytes) throw Object.assign(new Error('manage.upload-card-file requires args.bytes, args.text, or args.base64'), { statusCode: 400 });
 
       return uploadCardFile(cardId, fileName, contentType, bytes, { inChat: false });
+    },
+    'manage.upload-card-file-multiple': (args) => {
+      const cardId = getMcpArgString(args, 'card_id');
+      const message = getMcpArgString(args, 'message');
+      const rawFiles = Array.isArray(args.files) ? args.files as unknown[] : [];
+
+      requireBoardId(args, 'manage.upload-card-file-multiple');
+      if (!cardId) throw Object.assign(new Error('manage.upload-card-file-multiple requires card_id'), { statusCode: 400 });
+      if (rawFiles.length === 0) throw Object.assign(new Error('manage.upload-card-file-multiple requires a non-empty files array'), { statusCode: 400 });
+
+      const files = rawFiles.map((raw, index) => {
+        const entry = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+        const fileName = getMcpArgString(entry, 'file_name');
+        if (!fileName) throw Object.assign(new Error(`manage.upload-card-file-multiple files[${index}] requires file_name`), { statusCode: 400 });
+        const bytes = parseMcpUploadBytes(entry);
+        if (!bytes) throw Object.assign(new Error(`manage.upload-card-file-multiple files[${index}] requires bytes, text, or base64`), { statusCode: 400 });
+        return {
+          requestedName: fileName,
+          contentType: getMcpArgString(entry, 'content_type') || 'application/octet-stream',
+          buffer: bytes,
+        };
+      });
+
+      return uploadCardFilesMultiple(cardId, files, message ? { message } : undefined);
     },
     'manage.add-chat-attachment': (args) => handleAddChatAttachment(args, 'manage.add-chat-attachment'),
     'manage.add-chat-attachement': (args) => handleAddChatAttachment(args, 'manage.add-chat-attachement'),

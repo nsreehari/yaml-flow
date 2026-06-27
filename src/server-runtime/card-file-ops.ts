@@ -32,6 +32,12 @@ export interface CardFileOpsDeps {
   writeChatRecord: (cardId: string, role: string, text: string, files: unknown[], turnId: string) => unknown | Promise<unknown>;
 }
 
+export interface UploadCardFilesMultipleInput {
+  requestedName: string;
+  contentType: string;
+  buffer: Uint8Array;
+}
+
 export interface CardFileOps {
   uploadCardFile: (
     cardId: string,
@@ -40,6 +46,16 @@ export interface CardFileOps {
     buffer: Uint8Array,
     opts?: { inChat?: boolean; turnId?: string; suppressChatRecordWrite?: boolean },
   ) => Promise<{ ok: true; file: Record<string, unknown> }>;
+  uploadCardFilesMultiple: (
+    cardId: string,
+    files: UploadCardFilesMultipleInput[],
+    opts?: { message?: string },
+  ) => Promise<{
+    ok: true;
+    files: Record<string, unknown>[];
+    file_idxs: number[];
+    filegroup: Record<string, unknown>;
+  }>;
   readCardStoredFileNames: (cardId: string) => Promise<string[]>;
 }
 
@@ -78,12 +94,15 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
     requestedName: string,
     contentType: string,
     buffer: Uint8Array,
+    seedCount?: number,
   ): Promise<Record<string, unknown>> {
     const sid = safeCardId(cardId);
     const stores = artifactsStores(cardId);
     const displayName = normalizeDisplayFileName(requestedName);
-    const existingNames = await readCardStoredFileNames(cardId);
-    const serial = String(existingNames.length + 1).padStart(3, '0');
+    const existingCount = typeof seedCount === 'number'
+      ? seedCount
+      : (await readCardStoredFileNames(cardId)).length;
+    const serial = String(existingCount + 1).padStart(3, '0');
     const storedName = `${serial}-${displayName}`.slice(-(MAX_STORED_FILE_NAME_LEN + 4));
 
     if (!stores.files) {
@@ -149,5 +168,78 @@ export function createCardFileOps(deps: CardFileOpsDeps): CardFileOps {
     };
   }
 
-  return { uploadCardFile, readCardStoredFileNames };
+  async function uploadCardFilesMultiple(
+    cardId: string,
+    files: UploadCardFilesMultipleInput[],
+    opts?: { message?: string },
+  ): Promise<{ ok: true; files: Record<string, unknown>[]; file_idxs: number[]; filegroup: Record<string, unknown> }> {
+    if (!Array.isArray(files) || files.length === 0) {
+      throw Object.assign(new Error('uploadCardFilesMultiple requires at least one file'), { statusCode: 400 });
+    }
+    for (const entry of files) {
+      if (!entry.buffer.length) {
+        throw Object.assign(new Error('Empty upload body'), { statusCode: 400 });
+      }
+    }
+
+    // Persist sequentially, seeding the serial from the current stored-file
+    // count once and bumping per file. The metadata merge that makes these
+    // files visible to readCardStoredFileNames only happens below, so without
+    // an explicit seed every file in the batch would collide on the same
+    // serial / index.
+    const seedNames = await readCardStoredFileNames(cardId);
+    let seed = seedNames.length;
+    const persisted: Record<string, unknown>[] = [];
+    for (const entry of files) {
+      const file = await persistUploadedFile(cardId, entry.requestedName, entry.contentType, entry.buffer, seed);
+      persisted.push(file);
+      seed += 1;
+    }
+
+    const message = typeof opts?.message === 'string' ? opts.message : '';
+    const fileIdxs: number[] = [];
+    let filegroup: Record<string, unknown> = {};
+
+    // Merge all file metadata and append the filegroup in a single update so
+    // the batch lands atomically (no separate lost-update patch).
+    await updateCardLocalOnly(cardId, (card) => {
+      const now = new Date().toISOString();
+      const cardData = card.card_data && typeof card.card_data === 'object' ? card.card_data as Record<string, unknown> : {};
+      card.card_data = cardData;
+
+      const incoming = cardFileMetadataStore().normalizeIncoming(persisted.map((file) => ({
+        name: file.name,
+        stored_name: file.stored_name,
+        size: file.size,
+        mime_type: file.mime_type,
+        uploaded_at: file.uploaded_at || now,
+        chat: false,
+      })), now);
+      const merged = cardFileMetadataStore().merge(cardData, incoming);
+
+      fileIdxs.length = 0;
+      for (const file of persisted) {
+        fileIdxs.push(merged.findIndex((metaEntry) => metaEntry.stored_name === file.stored_name));
+      }
+
+      const groups = Array.isArray(cardData.filegroups) ? cardData.filegroups as unknown[] : [];
+      filegroup = {
+        message,
+        file_idxs: fileIdxs.slice(),
+        created_at: now,
+      };
+      groups.push(filegroup);
+      cardData.filegroups = groups;
+      return card;
+    });
+
+    return {
+      ok: true,
+      files: persisted.map((file, index) => ({ ...file, file_idx: fileIdxs[index], chat: false })),
+      file_idxs: fileIdxs.slice(),
+      filegroup,
+    };
+  }
+
+  return { uploadCardFile, uploadCardFilesMultiple, readCardStoredFileNames };
 }

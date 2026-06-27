@@ -273,7 +273,8 @@
             "query",
             "ref",
             "custom",
-            "actions"
+            "actions",
+            "multi-file-upload"
           ]
         },
         "id": {
@@ -1084,7 +1085,8 @@
             "query",
             "ref",
             "custom",
-            "actions"
+            "actions",
+            "multi-file-upload"
           ],
           "description": "Kind to use when viewBind is absent/unresolved"
         },
@@ -1173,6 +1175,35 @@
               "chat": {
                 "type": "boolean",
                 "description": "Whether this file entry is associated with a chat interaction"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "filegroups": {
+          "type": "array",
+          "description": "Optional grouped multi-file upload submissions maintained by host handlers. Each entry references files in card_data.files by index and carries an optional message. Identified by array position.",
+          "items": {
+            "type": "object",
+            "required": [
+              "file_idxs"
+            ],
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "Optional message associated with the upload group; empty string when none."
+              },
+              "file_idxs": {
+                "type": "array",
+                "description": "Indexes into card_data.files identifying the files in this group, in upload order.",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
               }
             },
             "additionalProperties": false
