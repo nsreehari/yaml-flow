@@ -18,3 +18,8 @@ export {
   createSingleBoardServerRuntime,
   createMultiBoardServerRuntime,
 } from '../server-runtime/index.js';
+
+export type { HostedBoardQueueLaneRegistryOptions } from '../server-runtime/queue-lanes.js';
+export { createHostedBoardQueueLaneRegistry } from '../server-runtime/queue-lanes.js';
+
+export { drainQueueLaneOnce, drainQueueLaneToIdle } from '../cli/node/queue-runners.js';
