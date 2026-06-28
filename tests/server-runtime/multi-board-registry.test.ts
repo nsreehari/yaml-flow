@@ -136,6 +136,41 @@ describe('multi-board registry', () => {
     expect(persisted.boards.some((b: any) => b.id === 'alpha')).toBe(true);
   });
 
+  it('MB1 list/add flow stays fully in-repo via the multi-board runtime registry', async () => {
+    const initialReq = makeRequest('GET', '/api/boards');
+    const initialRes = makeResponse();
+    await runtime.handleApi(initialReq, initialRes, new URL('http://localhost/api/boards'));
+    expect(initialRes._status).toBe(200);
+    const initialBoards = (parseBody(initialRes).boards as Array<Record<string, unknown>>).map((board) => String(board.id || ''));
+    expect(initialBoards).toEqual(['default']);
+
+    const addReq = makeRequest('POST', '/api/boards', JSON.stringify({
+      id: 'live',
+      label: 'Live',
+      ai: 'copilot',
+      refsTemplate: 'localfs-default',
+      uiTemplate: 'default',
+    }));
+    const addRes = makeResponse();
+    await runtime.handleApi(addReq, addRes, new URL('http://localhost/api/boards'));
+    expect(addRes._status).toBe(200);
+    expect(parseBody(addRes).ok).toBe(true);
+
+    const listReq = makeRequest('GET', '/api/boards');
+    const listRes = makeResponse();
+    await runtime.handleApi(listReq, listRes, new URL('http://localhost/api/boards'));
+    expect(listRes._status).toBe(200);
+    const boards = parseBody(listRes).boards as Array<Record<string, unknown>>;
+    expect(boards.map((board) => String(board.id || ''))).toContain('live');
+    expect(boards.find((board) => board.id === 'live')).toMatchObject({
+      id: 'live',
+      label: 'Live',
+      ai: 'copilot',
+      refsTemplate: 'localfs-default',
+      uiTemplate: 'default',
+    });
+  });
+
   it('registry survives runtime reconstruction (persistence)', async () => {
     // Register a board
     const req1 = makeRequest('POST', '/api/boards', JSON.stringify({ id: 'persist-test' }));

@@ -29,6 +29,9 @@ export type {
   SingleBoardRuntime,
   MultiBoardRuntime,
 } from '../server-runtime/index.js';
+export type { HostedBoardQueueLaneRegistryOptions } from '../server-runtime/queue-lanes.js';
+export { createHostedBoardQueueLaneRegistry } from '../server-runtime/queue-lanes.js';
+export { drainQueueLaneOnce, drainQueueLaneToIdle, startQueueLaneRunners } from '../cli/node/queue-runners.js';
 
 const MCP_ONLY_SUFFIXES = ['/mcp', '/mcp-raw', '/mcp-actions', '/mcp-controlplane', '/mcp-webhooks', '/notify-q'] as const;
 

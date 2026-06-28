@@ -6,3 +6,4 @@
  */
 export type { HostedBoardQueueLaneRegistryOptions } from '../server-runtime/queue-lanes.js';
 export { createHostedBoardQueueLaneRegistry } from '../server-runtime/queue-lanes.js';
+export { drainQueueLaneOnce, drainQueueLaneToIdle, startQueueLaneRunners } from '../cli/node/queue-runners.js';
